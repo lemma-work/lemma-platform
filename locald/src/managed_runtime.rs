@@ -154,9 +154,8 @@ impl ManagedRuntimeController {
             32,
             "booting the app-owned Linux appliance",
         );
-        let status = self.runtime.start().map_err(|error| {
+        let status = self.runtime.start().inspect_err(|_error| {
             let _ = self.runtime.capture_diagnostics();
-            error
         })?;
         let parameters = json!({
             "images": self.spec.images,

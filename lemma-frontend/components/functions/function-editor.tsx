@@ -168,7 +168,7 @@ export function FunctionEditor({
     });
     const sortedRuns = useMemo(() => {
         return [...(runs as FunctionRun[])].sort(
-            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+            (a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''),
         );
     }, [runs]);
     const runsScrollRef = useRef<HTMLDivElement | null>(null);
@@ -689,7 +689,7 @@ export function FunctionEditor({
                                                         {run.status}
                                                     </Badge>
                                                 </div>
-                                                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{formatRunTime(run.created_at)}</p>
+                                                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{formatRunTime(run.created_at ?? '')}</p>
                                             </button>
                                         ))}
 

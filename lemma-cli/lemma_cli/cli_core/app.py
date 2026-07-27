@@ -24,6 +24,12 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     # .commands.daemon test-compat shim, which eagerly loads the whole daemon
     # implementation (runner, harnesses, MCP — asyncio + http.server).
     "daemon": ("lemma_cli.daemon.commands", "app", "Run the Lemma user daemon.", False),
+    "agent-host": (
+        "lemma_cli.agent_host.commands",
+        "app",
+        "Manage the durable local Agent Host.",
+        False,
+    ),
     "runtime": (f"{_CMD}.runtime", "app", "Agent runtime profiles and daemon harnesses.", False),
     "org": (f"{_CMD}.organizations", "app", "Organization commands.", False),
     "orgs": (f"{_CMD}.organizations", "app", "Organization commands.", False),

@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class RuntimeProfileProtocol(str, Enum):
+    AGENT_HOST_V2 = "AGENT_HOST_V2"
     ANTHROPIC_COMPATIBLE = "ANTHROPIC_COMPATIBLE"
     ANTIGRAVITY = "ANTIGRAVITY"
     AZURE_OPENAI = "AZURE_OPENAI"

@@ -314,6 +314,7 @@ def _run_start_payload(
     options: HarnessOptions,
     agent_run_id: UUID,
     harness_kind: HarnessKind,
+    runtime_instructions: str | None = None,
 ) -> JsonObject:
     current_messages = _current_turn_messages(messages)
     session_id = _local_daemon_session_id(
@@ -336,6 +337,7 @@ def _run_start_payload(
             messages=current_messages,
             ctx=ctx,
             session_id=session_id,
+            runtime_instructions=runtime_instructions,
         ),
         "agent": agent.model_dump(mode="json"),
         "conversation": conversation.model_dump(mode="json", exclude={"messages", "agent_runs"}),
@@ -471,6 +473,7 @@ def _prompt_payload(
     messages: Sequence[Message],
     ctx: AgentContext,
     session_id: str | None,
+    runtime_instructions: str | None = None,
 ) -> JsonObject:
     instructions = build_agent_instructions(agent=agent, conversation=conversation, ctx=ctx)
     user_prompt = _render_history(messages)
@@ -481,11 +484,14 @@ def _prompt_payload(
     # (the Working Directory section); here we only add the daemon-specific note that
     # tools run there and the provider's own process cwd is not the workspace.
     session_sections.append(
-        "# Runtime\n"
-        "You are running through a Lemma user daemon. Use the Lemma MCP tools "
-        "(the lemma_* tools) for file and command execution; they run in your "
-        "workspace working directory (see the Working Directory section). Any "
-        "provider process cwd is daemon scratch space, not the workspace."
+        runtime_instructions
+        or (
+            "# Runtime\n"
+            "You are running through a Lemma user daemon. Use the Lemma MCP tools "
+            "(the lemma_* tools) for file and command execution; they run in your "
+            "workspace working directory (see the Working Directory section). Any "
+            "provider process cwd is daemon scratch space, not the workspace."
+        )
     )
     output_contract = _output_contract(agent=agent, conversation=conversation)
     if output_contract:

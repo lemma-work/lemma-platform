@@ -32,6 +32,15 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "workspace.",       # workspace runtime is driven by the backend
     "channel.",
     "app.public",
+    # Agent Host device control-plane operations are reserved for the signed
+    # native binary. The user-facing management operations have a typed facade.
+    "agent.host.events.",
+    "agent.host.integrations.publish",
+    "agent.host.mcp_route.",
+    "agent.host.pairing.complete",
+    "agent.host.poll",
+    "agent.host.self_revoke",
+    "agent.host.token.",
     "health_check",     # liveness probe
     # OAuth/consent browser callbacks — never called by a client
     "connector.oauth.callback",

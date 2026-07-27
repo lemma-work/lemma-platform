@@ -4,18 +4,29 @@ import Image from 'next/image';
 import { useState } from 'react';
 import { RuntimeProfileScope } from 'lemma-sdk';
 import type {
+    AgentHostConfigOption,
+    AgentHostIntegrationResponse,
+    AgentHostResponse,
     AgentHarnessInfo,
     AgentHarnessListResponse,
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
 } from 'lemma-sdk';
-import { Check, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare } from '@/components/ui/icons';
+import { Check, Copy, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useCreateAgentRuntime } from '@/lib/hooks/use-agent-runtime';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+    useAgentHostIntegrations,
+    useAgentHosts,
+    useCreateAgentHostPairing,
+    useCreateAgentRuntime,
+    useRevokeAgentHost,
+} from '@/lib/hooks/use-agent-runtime';
+import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { useProfile } from '@/lib/hooks/use-user';
 import { cn } from '@/lib/utils';
 import {
@@ -124,10 +135,18 @@ export function ModelsSettings({
 
             <LocalAgentsSection
                 organizationId={organizationId}
-                harnesses={detectedLocalAgents}
-                savedDaemonScopeByKey={savedDaemonScopeByKey}
+                profiles={catalog?.items ?? []}
                 onRefresh={onRefresh}
             />
+
+            {detectedLocalAgents.length > 0 || savedDaemonScopeByKey.size > 0 ? (
+                <LegacyLocalAgentsSection
+                    organizationId={organizationId}
+                    harnesses={detectedLocalAgents}
+                    savedDaemonScopeByKey={savedDaemonScopeByKey}
+                    onRefresh={onRefresh}
+                />
+            ) : null}
         </div>
     );
 }
@@ -366,6 +385,404 @@ function ConnectProviderForm({
 
 function LocalAgentsSection({
     organizationId,
+    profiles,
+    onRefresh,
+}: {
+    organizationId: string;
+    profiles: AgentRuntimeProfileResponse[];
+    onRefresh?: () => void | Promise<void>;
+}) {
+    const hosts = useAgentHosts();
+    const pairing = useCreateAgentHostPairing();
+    const [pairingResult, setPairingResult] = useState<{
+        pairing_code: string;
+        expires_at: string;
+        display_name: string;
+    } | null>(null);
+    const [displayName, setDisplayName] = useState('My computer');
+
+    const createPairing = async () => {
+        const name = displayName.trim();
+        if (!name) return toast.error('Name this computer');
+        try {
+            const result = await pairing.mutateAsync({
+                organizationId,
+                displayName: name,
+            });
+            setPairingResult({ ...result, display_name: name });
+        } catch (error) {
+            toast.error(`Couldn't create pairing code: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
+    const activeHosts = (hosts.data?.items ?? []).filter((host) => host.status !== 'REVOKED');
+
+    return (
+        <section>
+            <SectionHeader
+                icon={<TerminalSquare className="size-4" />}
+                title="Local agents"
+                hint="Your computer runs the provider agent. Lemma sends durable jobs over outbound HTTPS; credentials stay on this machine."
+            />
+            <div className="flex flex-col gap-3">
+                {activeHosts.map((host) => (
+                    <AgentHostCard
+                        key={host.id}
+                        host={host}
+                        profiles={profiles}
+                        organizationId={organizationId}
+                        onRefresh={onRefresh}
+                    />
+                ))}
+
+                {pairingResult ? (
+                    <PairingInstructions
+                        pairing={pairingResult}
+                        onDone={() => {
+                            setPairingResult(null);
+                            void hosts.refetch();
+                        }}
+                    />
+                ) : (
+                    <div className="flex flex-col gap-3 rounded-md border border-dashed border-[var(--border-strong)] p-4">
+                        <div>
+                            <div className="text-sm font-medium text-[var(--text-primary)]">
+                                {activeHosts.length ? 'Connect another computer' : 'Connect this computer'}
+                            </div>
+                            <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+                                Pair once, then Agent Host discovers Codex, Claude Code, OpenCode, and Cursor through ACP.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap items-end gap-2">
+                            <Field label="Computer name">
+                                <Input
+                                    value={displayName}
+                                    onChange={(event) => setDisplayName(event.target.value)}
+                                    className="w-64"
+                                />
+                            </Field>
+                            <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => void createPairing()}
+                                loading={pairing.isPending}
+                                loadingLabel="Creating code"
+                            >
+                                Create pairing code
+                            </Button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
+
+function PairingInstructions({
+    pairing,
+    onDone,
+}: {
+    pairing: { pairing_code: string; expires_at: string; display_name: string };
+    onDone: () => void;
+}) {
+    const command = `lemma agent-host connect --url ${getLemmaApiBaseUrl()} --pairing-code ${pairing.pairing_code} --name "${pairing.display_name.replaceAll('"', '\\"')}"`;
+    const expiresAt = new Date(pairing.expires_at);
+    const copy = async () => {
+        await navigator.clipboard.writeText(command);
+        toast.success('Pairing command copied');
+    };
+    return (
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
+            <div className="text-sm font-medium text-[var(--text-primary)]">Run this command on the computer</div>
+            <div className="mt-2 flex items-start gap-2">
+                <code className="min-w-0 flex-1 overflow-x-auto rounded bg-[var(--surface-2)] px-3 py-2 font-mono text-xs text-[var(--text-secondary)]">
+                    {command}
+                </code>
+                <Button type="button" variant="ghost" size="sm" onClick={() => void copy()} aria-label="Copy pairing command">
+                    <Copy className="size-4" />
+                </Button>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-[var(--text-tertiary)]">
+                    One-time code expires {Number.isNaN(expiresAt.valueOf()) ? 'soon' : expiresAt.toLocaleTimeString()}.
+                </p>
+                <Button type="button" size="sm" onClick={onDone}>I ran the command</Button>
+            </div>
+        </div>
+    );
+}
+
+function AgentHostCard({
+    host,
+    profiles,
+    organizationId,
+    onRefresh,
+}: {
+    host: AgentHostResponse;
+    profiles: AgentRuntimeProfileResponse[];
+    organizationId: string;
+    onRefresh?: () => void | Promise<void>;
+}) {
+    const integrations = useAgentHostIntegrations(host.id);
+    const revoke = useRevokeAgentHost();
+    const capacity = host.capacity as Record<string, unknown>;
+    const activeRuns = typeof capacity.active_runs === 'number' ? capacity.active_runs : 0;
+    const maxRuns = typeof capacity.max_runs === 'number' ? capacity.max_runs : null;
+    const statusTone = host.status === 'ONLINE' ? 'ok' : 'muted';
+
+    const disconnect = async () => {
+        if (!window.confirm(`Disconnect ${host.display_name}? New runs will stop immediately.`)) return;
+        try {
+            await revoke.mutateAsync(host.id);
+            toast.success(`${host.display_name} disconnected`);
+            void onRefresh?.();
+        } catch (error) {
+            toast.error(`Couldn't disconnect: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
+    return (
+        <div className="rounded-md border border-[var(--border-subtle)]">
+            <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
+                    <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
+                </span>
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{host.display_name}</div>
+                    <div className="text-xs text-[var(--text-tertiary)]">
+                        Agent Host {host.host_release} · {activeRuns}{maxRuns === null ? '' : `/${maxRuns}`} active
+                        {host.last_seen_at ? ` · seen ${new Date(host.last_seen_at).toLocaleTimeString()}` : ''}
+                    </div>
+                </div>
+                <StatusBadge label={host.status.replaceAll('_', ' ')} tone={statusTone} />
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void integrations.refetch()}
+                    disabled={integrations.isFetching}
+                    aria-label={`Refresh ${host.display_name}`}
+                >
+                    <RefreshCw className={cn('size-4', integrations.isFetching && 'animate-spin')} />
+                </Button>
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void disconnect()}
+                    loading={revoke.isPending}
+                    aria-label={`Disconnect ${host.display_name}`}
+                >
+                    <Trash2 className="size-4" />
+                </Button>
+            </div>
+            <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
+                {integrations.isLoading ? (
+                    <p className="px-1 text-xs text-[var(--text-tertiary)]">Discovering local agents…</p>
+                ) : null}
+                {(integrations.data?.items ?? []).map((integration) => (
+                    <AgentHostIntegrationRow
+                        key={integration.id}
+                        integration={integration}
+                        host={host}
+                        profiles={profiles}
+                        organizationId={organizationId}
+                        onRefresh={onRefresh}
+                    />
+                ))}
+                {!integrations.isLoading && !(integrations.data?.items.length ?? 0) ? (
+                    <p className="px-1 text-xs text-[var(--text-tertiary)]">
+                        No integrations published yet. Run <code>lemma agent-host refresh</code> on this computer.
+                    </p>
+                ) : null}
+            </div>
+        </div>
+    );
+}
+
+function AgentHostIntegrationRow({
+    integration,
+    host,
+    profiles,
+    organizationId,
+    onRefresh,
+}: {
+    integration: AgentHostIntegrationResponse;
+    host: AgentHostResponse;
+    profiles: AgentRuntimeProfileResponse[];
+    organizationId: string;
+    onRefresh?: () => void | Promise<void>;
+}) {
+    const [configuring, setConfiguring] = useState(false);
+    const savedProfiles = profiles.filter((profile) => profile.host_integration_id === integration.id);
+    const ready = integration.health === 'READY' && host.status === 'ONLINE';
+    const optionCount = (integration.config_options as AgentHostConfigOption[]).reduce(
+        (count, option) => count + (option.category === 'model' ? option.options?.length ?? 0 : 0),
+        0,
+    );
+
+    return (
+        <div className="rounded-md bg-[var(--surface-1)] px-3 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{integration.display_name}</div>
+                    <div className="text-xs text-[var(--text-tertiary)]">
+                        ACP · adapter {integration.adapter_version}
+                        {integration.upstream_version ? ` · provider ${integration.upstream_version}` : ''}
+                        {optionCount ? ` · ${optionCount} models` : ''}
+                    </div>
+                </div>
+                {savedProfiles.length ? (
+                    <StatusBadge label={`${savedProfiles.length} saved`} tone="ok" />
+                ) : null}
+                <StatusBadge label={integration.health.replaceAll('_', ' ')} tone={ready ? 'ok' : 'muted'} />
+                {ready ? (
+                    <Button type="button" size="sm" onClick={() => setConfiguring((value) => !value)}>
+                        {configuring ? 'Close' : 'Add profile'}
+                    </Button>
+                ) : null}
+            </div>
+            {integration.stale_reason ? (
+                <p className="mt-2 text-xs text-[var(--state-danger,var(--text-tertiary))]">{integration.stale_reason}</p>
+            ) : null}
+            {configuring ? (
+                <AddAgentHostProfileForm
+                    integration={integration}
+                    profiles={profiles}
+                    organizationId={organizationId}
+                    onCancel={() => setConfiguring(false)}
+                    onSaved={() => {
+                        setConfiguring(false);
+                        void onRefresh?.();
+                    }}
+                />
+            ) : null}
+        </div>
+    );
+}
+
+function AddAgentHostProfileForm({
+    integration,
+    profiles,
+    organizationId,
+    onCancel,
+    onSaved,
+}: {
+    integration: AgentHostIntegrationResponse;
+    profiles: AgentRuntimeProfileResponse[];
+    organizationId: string;
+    onCancel: () => void;
+    onSaved: () => void;
+}) {
+    const createRuntime = useCreateAgentRuntime();
+    const options = integration.config_options as AgentHostConfigOption[];
+    const [name, setName] = useState(integration.display_name);
+    const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.PERSONAL);
+    const [selections, setSelections] = useState<Record<string, string>>(() =>
+        Object.fromEntries(options.map((option) => [option.id, 'FOLLOW_ADAPTER_DEFAULT'])),
+    );
+    const [fallbackProfileId, setFallbackProfileId] = useState('none');
+    const fallbackProfiles = profiles.filter(
+        (profile) => profile.protocol !== 'AGENT_HOST_V2' && profile.status === 'ACTIVE',
+    );
+
+    const save = async () => {
+        const trimmedName = name.trim();
+        if (!trimmedName) return toast.error('Name this local agent profile');
+        try {
+            await createRuntime.mutateAsync({
+                organizationId,
+                request: {
+                    source: 'AGENT_HOST',
+                    host_integration_id: integration.id,
+                    integration_snapshot_revision: integration.config_revision,
+                    config_selections: selections,
+                    fallback_profile_id: fallbackProfileId === 'none' ? null : fallbackProfileId,
+                    scope,
+                    name: trimmedName,
+                },
+            });
+            toast.success(`${trimmedName} added`);
+            onSaved();
+        } catch (error) {
+            toast.error(`Couldn't add profile: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
+    return (
+        <div className="mt-3 flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-3">
+            <Field label="Profile name">
+                <Input value={name} onChange={(event) => setName(event.target.value)} />
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2">
+                {options.map((option) => {
+                    const values = agentHostOptionValues(option);
+                    if (!values.length) return null;
+                    return (
+                        <Field key={option.id} label={option.name} hint={option.description ?? undefined}>
+                            <Select
+                                value={selections[option.id] ?? 'FOLLOW_ADAPTER_DEFAULT'}
+                                onValueChange={(value) => setSelections((current) => ({ ...current, [option.id]: value }))}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="FOLLOW_ADAPTER_DEFAULT">Adapter default</SelectItem>
+                                    {values.map((item) => (
+                                        <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </Field>
+                    );
+                })}
+                {fallbackProfiles.length ? (
+                    <Field label="If this computer is offline" hint="Optional explicit fallback">
+                        <Select value={fallbackProfileId} onValueChange={setFallbackProfileId}>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="none">Fail after wait</SelectItem>
+                                {fallbackProfiles.map((profile) => (
+                                    <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </Field>
+                ) : null}
+            </div>
+            <div className="flex flex-wrap items-end justify-between gap-3">
+                <ScopeChooser value={scope} onChange={setScope} />
+                <div className="flex items-center gap-2">
+                    <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+                    <Button type="button" size="sm" onClick={() => void save()} loading={createRuntime.isPending} loadingLabel="Adding">
+                        Add profile
+                    </Button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function agentHostOptionValues(option: AgentHostConfigOption): Array<{ value: string; label: string }> {
+    return (option.options ?? []).flatMap((raw) => {
+        const value = typeof raw.value === 'string'
+            ? raw.value
+            : typeof raw.id === 'string'
+                ? raw.id
+                : null;
+        if (!value || value === 'FOLLOW_ADAPTER_DEFAULT') return [];
+        const label = typeof raw.name === 'string'
+            ? raw.name
+            : typeof raw.label === 'string'
+                ? raw.label
+                : value;
+        return [{ value, label }];
+    });
+}
+
+function LegacyLocalAgentsSection({
+    organizationId,
     harnesses,
     savedDaemonScopeByKey,
     onRefresh,
@@ -429,8 +846,8 @@ function LocalAgentsSection({
         <section>
             <SectionHeader
                 icon={<TerminalSquare className="size-4" />}
-                title="Local agents"
-                hint="Terminal coding agents that run on your machine. Start the Lemma daemon to detect the ones you have installed."
+                title="Legacy daemon connections"
+                hint="Existing v1 connections remain visible during migration. New connections should use Agent Host above."
             />
             <div className="flex flex-col gap-2">
                 {rows.map((row) => {

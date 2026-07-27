@@ -4,6 +4,7 @@ import type { AgentHarnessListResponse } from "../openapi_client/models/AgentHar
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateAnthropicCompatibleRuntimeProfileRequest.js";
+import type { CreateAgentHostRuntimeProfileRequest } from "../openapi_client/models/CreateAgentHostRuntimeProfileRequest.js";
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateOpenAICompatibleRuntimeProfileRequest.js";
 import type { CreateUserDaemonRuntimeProfileRequest } from "../openapi_client/models/CreateUserDaemonRuntimeProfileRequest.js";
 import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
@@ -11,7 +12,8 @@ import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeServ
 export type CreateAgentRuntimeProfileRequest =
   | CreateUserDaemonRuntimeProfileRequest
   | CreateOpenAICompatibleRuntimeProfileRequest
-  | CreateAnthropicCompatibleRuntimeProfileRequest;
+  | CreateAnthropicCompatibleRuntimeProfileRequest
+  | CreateAgentHostRuntimeProfileRequest;
 
 export type CreateAgentRuntimeRequest = CreateAgentRuntimeProfileRequest;
 export type AgentRuntimeListResponse = AgentRuntimeProfileListResponse;

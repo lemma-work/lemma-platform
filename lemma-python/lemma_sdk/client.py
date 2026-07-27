@@ -11,6 +11,7 @@ from .transport import LemmaTransport
 if TYPE_CHECKING:
     from .pod import Pod
     from .resources import (
+        AgentHosts,
         BoundConnectors,
         BoundOrg,
         BoundOrgRuntime,
@@ -57,6 +58,12 @@ class Lemma:
     # Resources are exposed as cached properties so a command only imports and
     # instantiates the handful it touches, instead of loading every resource
     # module (and its generated API/model slice) on client construction.
+    @cached_property
+    def agent_hosts(self) -> "AgentHosts":
+        from .resources import AgentHosts
+
+        return AgentHosts(self._transport)
+
     @cached_property
     def orgs(self) -> "Orgs":
         from .resources import Orgs

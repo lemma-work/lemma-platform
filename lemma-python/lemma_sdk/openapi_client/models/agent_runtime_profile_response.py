@@ -47,6 +47,13 @@ class AgentRuntimeProfileResponse:
         default_model_name (None | str | Unset):
         description (None | str | Unset):
         has_credentials (bool | Unset):  Default: False.
+        host_display_name (None | str | Unset):
+        host_id (None | Unset | UUID):
+        host_integration_id (None | Unset | UUID):
+        host_status (None | str | Unset):
+        integration_config_revision (None | str | Unset):
+        integration_health (None | str | Unset):
+        integration_key (None | str | Unset):
         metadata (AgentRuntimeProfileResponseMetadata | Unset):
         model_catalog (list[RuntimeModelCatalogEntry] | Unset):
         organization_id (None | Unset | UUID):
@@ -69,6 +76,13 @@ class AgentRuntimeProfileResponse:
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
     has_credentials: bool | Unset = False
+    host_display_name: None | str | Unset = UNSET
+    host_id: None | Unset | UUID = UNSET
+    host_integration_id: None | Unset | UUID = UNSET
+    host_status: None | str | Unset = UNSET
+    integration_config_revision: None | str | Unset = UNSET
+    integration_health: None | str | Unset = UNSET
+    integration_key: None | str | Unset = UNSET
     metadata: AgentRuntimeProfileResponseMetadata | Unset = UNSET
     model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
     organization_id: None | Unset | UUID = UNSET
@@ -140,6 +154,52 @@ class AgentRuntimeProfileResponse:
 
         has_credentials = self.has_credentials
 
+        host_display_name: None | str | Unset
+        if isinstance(self.host_display_name, Unset):
+            host_display_name = UNSET
+        else:
+            host_display_name = self.host_display_name
+
+        host_id: None | str | Unset
+        if isinstance(self.host_id, Unset):
+            host_id = UNSET
+        elif isinstance(self.host_id, UUID):
+            host_id = str(self.host_id)
+        else:
+            host_id = self.host_id
+
+        host_integration_id: None | str | Unset
+        if isinstance(self.host_integration_id, Unset):
+            host_integration_id = UNSET
+        elif isinstance(self.host_integration_id, UUID):
+            host_integration_id = str(self.host_integration_id)
+        else:
+            host_integration_id = self.host_integration_id
+
+        host_status: None | str | Unset
+        if isinstance(self.host_status, Unset):
+            host_status = UNSET
+        else:
+            host_status = self.host_status
+
+        integration_config_revision: None | str | Unset
+        if isinstance(self.integration_config_revision, Unset):
+            integration_config_revision = UNSET
+        else:
+            integration_config_revision = self.integration_config_revision
+
+        integration_health: None | str | Unset
+        if isinstance(self.integration_health, Unset):
+            integration_health = UNSET
+        else:
+            integration_health = self.integration_health
+
+        integration_key: None | str | Unset
+        if isinstance(self.integration_key, Unset):
+            integration_key = UNSET
+        else:
+            integration_key = self.integration_key
+
         metadata: dict[str, Any] | Unset = UNSET
         if not isinstance(self.metadata, Unset):
             metadata = self.metadata.to_dict()
@@ -198,6 +258,20 @@ class AgentRuntimeProfileResponse:
             field_dict["description"] = description
         if has_credentials is not UNSET:
             field_dict["has_credentials"] = has_credentials
+        if host_display_name is not UNSET:
+            field_dict["host_display_name"] = host_display_name
+        if host_id is not UNSET:
+            field_dict["host_id"] = host_id
+        if host_integration_id is not UNSET:
+            field_dict["host_integration_id"] = host_integration_id
+        if host_status is not UNSET:
+            field_dict["host_status"] = host_status
+        if integration_config_revision is not UNSET:
+            field_dict["integration_config_revision"] = integration_config_revision
+        if integration_health is not UNSET:
+            field_dict["integration_health"] = integration_health
+        if integration_key is not UNSET:
+            field_dict["integration_key"] = integration_key
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
         if model_catalog is not UNSET:
@@ -322,6 +396,91 @@ class AgentRuntimeProfileResponse:
 
         has_credentials = d.pop("has_credentials", UNSET)
 
+        def _parse_host_display_name(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        host_display_name = _parse_host_display_name(d.pop("host_display_name", UNSET))
+
+        def _parse_host_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                host_id_type_0 = UUID(data)
+
+                return host_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        host_id = _parse_host_id(d.pop("host_id", UNSET))
+
+        def _parse_host_integration_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                host_integration_id_type_0 = UUID(data)
+
+                return host_integration_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        host_integration_id = _parse_host_integration_id(
+            d.pop("host_integration_id", UNSET)
+        )
+
+        def _parse_host_status(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        host_status = _parse_host_status(d.pop("host_status", UNSET))
+
+        def _parse_integration_config_revision(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        integration_config_revision = _parse_integration_config_revision(
+            d.pop("integration_config_revision", UNSET)
+        )
+
+        def _parse_integration_health(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        integration_health = _parse_integration_health(
+            d.pop("integration_health", UNSET)
+        )
+
+        def _parse_integration_key(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        integration_key = _parse_integration_key(d.pop("integration_key", UNSET))
+
         _metadata = d.pop("metadata", UNSET)
         metadata: AgentRuntimeProfileResponseMetadata | Unset
         if isinstance(_metadata, Unset):
@@ -391,6 +550,13 @@ class AgentRuntimeProfileResponse:
             default_model_name=default_model_name,
             description=description,
             has_credentials=has_credentials,
+            host_display_name=host_display_name,
+            host_id=host_id,
+            host_integration_id=host_integration_id,
+            host_status=host_status,
+            integration_config_revision=integration_config_revision,
+            integration_health=integration_health,
+            integration_key=integration_key,
             metadata=metadata,
             model_catalog=model_catalog,
             organization_id=organization_id,

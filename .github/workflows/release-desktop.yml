@@ -202,10 +202,12 @@ jobs:
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
           locald="${app}/Contents/MacOS/lemma-locald"
+          agent_host="${app}/Contents/MacOS/lemma-agent-host"
           runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
           vz="${app}/Contents/Resources/lemma-vz"
 
           test -x "${locald}"
+          test -x "${agent_host}"
           test -x "${runtime_bridge}"
           test -x "${vz}"
           test ! -e "${app}/Contents/MacOS/lemma-vz"
@@ -215,6 +217,7 @@ jobs:
           test "${app_bytes}" -le "$((25 * 1024 * 1024))"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign --verify --strict --verbose=2 "${locald}"
+          codesign --verify --strict --verbose=2 "${agent_host}"
           codesign --verify --strict --verbose=2 "${runtime_bridge}"
           codesign --verify --strict --verbose=2 "${vz}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
@@ -422,6 +425,7 @@ jobs:
           $paths = @(
             "desktop/target/release/lemma-desktop.exe",
             "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-agent-host-x86_64-pc-windows-msvc.exe",
             "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe"
           )
           $installers = Get-ChildItem `
@@ -443,6 +447,7 @@ jobs:
           $paths = @(
             "desktop/target/release/lemma-desktop.exe",
             "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-agent-host-x86_64-pc-windows-msvc.exe",
             "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
             "desktop/runtime/lemma-local.json"
           )

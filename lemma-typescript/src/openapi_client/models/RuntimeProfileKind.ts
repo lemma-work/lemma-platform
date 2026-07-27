@@ -5,4 +5,5 @@
 export enum RuntimeProfileKind {
     MODEL_PROVIDER = 'MODEL_PROVIDER',
     HARNESS = 'HARNESS',
+    EXTERNAL_AGENT = 'EXTERNAL_AGENT',
 }

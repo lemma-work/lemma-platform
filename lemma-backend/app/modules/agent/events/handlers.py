@@ -42,6 +42,7 @@ from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import AgentRunStatus
 from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.infrastructure.harnesses import (
+    AgentHostHarness,
     DaemonHarness,
     HarnessRegistry,
     PydanticAIHarness,
@@ -82,6 +83,7 @@ def build_harness_registry() -> HarnessRegistry:
     return HarnessRegistry(
         [
             PydanticAIHarness(),
+            AgentHostHarness(provide_uow_factory()),
             DaemonHarness(
                 HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds
             ),

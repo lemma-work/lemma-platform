@@ -1,3 +1,4 @@
+pub mod agent_host;
 pub mod daemon;
 pub mod host_process;
 pub mod managed_runtime;

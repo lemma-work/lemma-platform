@@ -66,6 +66,7 @@ EXCLUDED_PATHS = (
     "/webhooks",
     "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
+    "/agent-host/v2/",  # Agent Host endpoints validate pairing proof or scoped device tokens
 )
 
 

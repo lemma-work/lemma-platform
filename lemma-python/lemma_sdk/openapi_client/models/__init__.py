@@ -26,6 +26,47 @@ _NAME_TO_MODULE = {
     'AgentDetailResponseOutputSchemaType0': 'agent_detail_response_output_schema_type_0',
     'AgentHarnessInfo': 'agent_harness_info',
     'AgentHarnessListResponse': 'agent_harness_list_response',
+    'AgentHostAdapterProtocol': 'agent_host_adapter_protocol',
+    'AgentHostCapacity': 'agent_host_capacity',
+    'AgentHostCheckpoint': 'agent_host_checkpoint',
+    'AgentHostCommand': 'agent_host_command',
+    'AgentHostCommandKind': 'agent_host_command_kind',
+    'AgentHostCommandPayload': 'agent_host_command_payload',
+    'AgentHostConfigOption': 'agent_host_config_option',
+    'AgentHostConfigOptionMetadata': 'agent_host_config_option_metadata',
+    'AgentHostConfigOptionOptionsItem': 'agent_host_config_option_options_item',
+    'AgentHostEvent': 'agent_host_event',
+    'AgentHostEventAck': 'agent_host_event_ack',
+    'AgentHostEventBatch': 'agent_host_event_batch',
+    'AgentHostEventPayload': 'agent_host_event_payload',
+    'AgentHostEventType': 'agent_host_event_type',
+    'AgentHostIntegrationCapabilities': 'agent_host_integration_capabilities',
+    'AgentHostIntegrationHealth': 'agent_host_integration_health',
+    'AgentHostIntegrationListResponse': 'agent_host_integration_list_response',
+    'AgentHostIntegrationPublishRequest': 'agent_host_integration_publish_request',
+    'AgentHostIntegrationPublishResponse': 'agent_host_integration_publish_response',
+    'AgentHostIntegrationResponse': 'agent_host_integration_response',
+    'AgentHostIntegrationResponseCapabilities': 'agent_host_integration_response_capabilities',
+    'AgentHostIntegrationResponseMetadata': 'agent_host_integration_response_metadata',
+    'AgentHostIntegrationSnapshot': 'agent_host_integration_snapshot',
+    'AgentHostIntegrationSnapshotMetadata': 'agent_host_integration_snapshot_metadata',
+    'AgentHostListResponse': 'agent_host_list_response',
+    'AgentHostMcpRouteResponse': 'agent_host_mcp_route_response',
+    'AgentHostMcpRouteResponseMcp': 'agent_host_mcp_route_response_mcp',
+    'AgentHostPairingComplete': 'agent_host_pairing_complete',
+    'AgentHostPairingCompleted': 'agent_host_pairing_completed',
+    'AgentHostPairingCreate': 'agent_host_pairing_create',
+    'AgentHostPairingCreated': 'agent_host_pairing_created',
+    'AgentHostPollRequest': 'agent_host_poll_request',
+    'AgentHostPollResponse': 'agent_host_poll_response',
+    'AgentHostResponse': 'agent_host_response',
+    'AgentHostResponseCapacity': 'agent_host_response_capacity',
+    'AgentHostRunCheckpoint': 'agent_host_run_checkpoint',
+    'AgentHostRunCheckpointDetail': 'agent_host_run_checkpoint_detail',
+    'AgentHostRunState': 'agent_host_run_state',
+    'AgentHostStatus': 'agent_host_status',
+    'AgentHostTokenExchange': 'agent_host_token_exchange',
+    'AgentHostTokenResponse': 'agent_host_token_response',
     'AgentListResponse': 'agent_list_response',
     'AgentMessageResponse': 'agent_message_response',
     'AgentNode': 'agent_node',
@@ -106,6 +147,8 @@ _NAME_TO_MODULE = {
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
     'ConversationType': 'conversation_type',
+    'CreateAgentHostRuntimeProfileRequest': 'create_agent_host_runtime_profile_request',
+    'CreateAgentHostRuntimeProfileRequestConfigSelections': 'create_agent_host_runtime_profile_request_config_selections',
     'CreateAgentRequest': 'create_agent_request',
     'CreateAgentRequestInputSchemaType0': 'create_agent_request_input_schema_type_0',
     'CreateAgentRequestMetadataType0': 'create_agent_request_metadata_type_0',
@@ -119,7 +162,6 @@ _NAME_TO_MODULE = {
     'CreateConversationRequestMetadataType0': 'create_conversation_request_metadata_type_0',
     'CreateFolderRequest': 'create_folder_request',
     'CreateFunctionRequest': 'create_function_request',
-    'CreateFunctionRequestConfigType0': 'create_function_request_config_type_0',
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders': 'create_open_ai_compatible_runtime_profile_request_headers',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
@@ -163,7 +205,6 @@ _NAME_TO_MODULE = {
     'EventWorkflowStartInput': 'event_workflow_start_input',
     'EventWorkflowStartOutput': 'event_workflow_start_output',
     'ExecuteFunctionRequest': 'execute_function_request',
-    'ExecuteFunctionRequestInputData': 'execute_function_request_input_data',
     'ExportProgressResponse': 'export_progress_response',
     'ExportStartRequest': 'export_start_request',
     'ExportStatus': 'export_status',
@@ -194,15 +235,7 @@ _NAME_TO_MODULE = {
     'FormNodeResponse': 'form_node_response',
     'FormNodeResponsePositionType0': 'form_node_response_position_type_0',
     'FunctionActionResponse': 'function_action_response',
-    'FunctionActionResponseConfigSchemaType0': 'function_action_response_config_schema_type_0',
-    'FunctionActionResponseConfigType0': 'function_action_response_config_type_0',
-    'FunctionActionResponseInputSchema': 'function_action_response_input_schema',
-    'FunctionActionResponseOutputSchema': 'function_action_response_output_schema',
     'FunctionDetailResponse': 'function_detail_response',
-    'FunctionDetailResponseConfigSchemaType0': 'function_detail_response_config_schema_type_0',
-    'FunctionDetailResponseConfigType0': 'function_detail_response_config_type_0',
-    'FunctionDetailResponseInputSchema': 'function_detail_response_input_schema',
-    'FunctionDetailResponseOutputSchema': 'function_detail_response_output_schema',
     'FunctionListResponse': 'function_list_response',
     'FunctionMessageResponse': 'function_message_response',
     'FunctionNode': 'function_node',
@@ -217,15 +250,13 @@ _NAME_TO_MODULE = {
     'FunctionResourcePermissionResponse': 'function_resource_permission_response',
     'FunctionRunListResponse': 'function_run_list_response',
     'FunctionRunResponse': 'function_run_response',
-    'FunctionRunResponseInputDataType0': 'function_run_response_input_data_type_0',
-    'FunctionRunResponseOutputDataType0': 'function_run_response_output_data_type_0',
     'FunctionRunStatus': 'function_run_status',
     'FunctionRunSummaryResponse': 'function_run_summary_response',
     'FunctionStatus': 'function_status',
     'FunctionSummaryResponse': 'function_summary_response',
-    'FunctionSummaryResponseConfigType0': 'function_summary_response_config_type_0',
     'FunctionType': 'function_type',
     'HarnessKind': 'harness_kind',
+    'HostHello': 'host_hello',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'ImportPlanResponse': 'import_plan_response',
@@ -233,6 +264,7 @@ _NAME_TO_MODULE = {
     'ImportStatus': 'import_status',
     'ImportStatusResponse': 'import_status_response',
     'InstalledAppSummary': 'installed_app_summary',
+    'JsonObject': 'json_object',
     'LemmaProviderCapabilityResponseSchema': 'lemma_provider_capability_response_schema',
     'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0': 'lemma_provider_capability_response_schema_auth_config_schema_type_0',
     'LemmaProviderCapabilityResponseSchemaCredentialSchemaType0': 'lemma_provider_capability_response_schema_credential_schema_type_0',
@@ -395,7 +427,6 @@ _NAME_TO_MODULE = {
     'UpdateConversationRequest': 'update_conversation_request',
     'UpdateConversationRequestMetadataType0': 'update_conversation_request_metadata_type_0',
     'UpdateFunctionRequest': 'update_function_request',
-    'UpdateFunctionRequestConfigType0': 'update_function_request_config_type_0',
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateRecordRequest': 'update_record_request',
     'UpdateRecordRequestData': 'update_record_request_data',
@@ -483,6 +514,47 @@ if TYPE_CHECKING:
     from .agent_detail_response_output_schema_type_0 import AgentDetailResponseOutputSchemaType0
     from .agent_harness_info import AgentHarnessInfo
     from .agent_harness_list_response import AgentHarnessListResponse
+    from .agent_host_adapter_protocol import AgentHostAdapterProtocol
+    from .agent_host_capacity import AgentHostCapacity
+    from .agent_host_checkpoint import AgentHostCheckpoint
+    from .agent_host_command import AgentHostCommand
+    from .agent_host_command_kind import AgentHostCommandKind
+    from .agent_host_command_payload import AgentHostCommandPayload
+    from .agent_host_config_option import AgentHostConfigOption
+    from .agent_host_config_option_metadata import AgentHostConfigOptionMetadata
+    from .agent_host_config_option_options_item import AgentHostConfigOptionOptionsItem
+    from .agent_host_event import AgentHostEvent
+    from .agent_host_event_ack import AgentHostEventAck
+    from .agent_host_event_batch import AgentHostEventBatch
+    from .agent_host_event_payload import AgentHostEventPayload
+    from .agent_host_event_type import AgentHostEventType
+    from .agent_host_integration_capabilities import AgentHostIntegrationCapabilities
+    from .agent_host_integration_health import AgentHostIntegrationHealth
+    from .agent_host_integration_list_response import AgentHostIntegrationListResponse
+    from .agent_host_integration_publish_request import AgentHostIntegrationPublishRequest
+    from .agent_host_integration_publish_response import AgentHostIntegrationPublishResponse
+    from .agent_host_integration_response import AgentHostIntegrationResponse
+    from .agent_host_integration_response_capabilities import AgentHostIntegrationResponseCapabilities
+    from .agent_host_integration_response_metadata import AgentHostIntegrationResponseMetadata
+    from .agent_host_integration_snapshot import AgentHostIntegrationSnapshot
+    from .agent_host_integration_snapshot_metadata import AgentHostIntegrationSnapshotMetadata
+    from .agent_host_list_response import AgentHostListResponse
+    from .agent_host_mcp_route_response import AgentHostMcpRouteResponse
+    from .agent_host_mcp_route_response_mcp import AgentHostMcpRouteResponseMcp
+    from .agent_host_pairing_complete import AgentHostPairingComplete
+    from .agent_host_pairing_completed import AgentHostPairingCompleted
+    from .agent_host_pairing_create import AgentHostPairingCreate
+    from .agent_host_pairing_created import AgentHostPairingCreated
+    from .agent_host_poll_request import AgentHostPollRequest
+    from .agent_host_poll_response import AgentHostPollResponse
+    from .agent_host_response import AgentHostResponse
+    from .agent_host_response_capacity import AgentHostResponseCapacity
+    from .agent_host_run_checkpoint import AgentHostRunCheckpoint
+    from .agent_host_run_checkpoint_detail import AgentHostRunCheckpointDetail
+    from .agent_host_run_state import AgentHostRunState
+    from .agent_host_status import AgentHostStatus
+    from .agent_host_token_exchange import AgentHostTokenExchange
+    from .agent_host_token_response import AgentHostTokenResponse
     from .agent_list_response import AgentListResponse
     from .agent_message_response import AgentMessageResponse
     from .agent_node import AgentNode
@@ -563,6 +635,8 @@ if TYPE_CHECKING:
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
     from .conversation_type import ConversationType
+    from .create_agent_host_runtime_profile_request import CreateAgentHostRuntimeProfileRequest
+    from .create_agent_host_runtime_profile_request_config_selections import CreateAgentHostRuntimeProfileRequestConfigSelections
     from .create_agent_request import CreateAgentRequest
     from .create_agent_request_input_schema_type_0 import CreateAgentRequestInputSchemaType0
     from .create_agent_request_metadata_type_0 import CreateAgentRequestMetadataType0
@@ -576,7 +650,6 @@ if TYPE_CHECKING:
     from .create_conversation_request_metadata_type_0 import CreateConversationRequestMetadataType0
     from .create_folder_request import CreateFolderRequest
     from .create_function_request import CreateFunctionRequest
-    from .create_function_request_config_type_0 import CreateFunctionRequestConfigType0
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
     from .create_open_ai_compatible_runtime_profile_request_headers import CreateOpenAICompatibleRuntimeProfileRequestHeaders
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
@@ -620,7 +693,6 @@ if TYPE_CHECKING:
     from .event_workflow_start_input import EventWorkflowStartInput
     from .event_workflow_start_output import EventWorkflowStartOutput
     from .execute_function_request import ExecuteFunctionRequest
-    from .execute_function_request_input_data import ExecuteFunctionRequestInputData
     from .export_progress_response import ExportProgressResponse
     from .export_start_request import ExportStartRequest
     from .export_status import ExportStatus
@@ -651,15 +723,7 @@ if TYPE_CHECKING:
     from .form_node_response import FormNodeResponse
     from .form_node_response_position_type_0 import FormNodeResponsePositionType0
     from .function_action_response import FunctionActionResponse
-    from .function_action_response_config_schema_type_0 import FunctionActionResponseConfigSchemaType0
-    from .function_action_response_config_type_0 import FunctionActionResponseConfigType0
-    from .function_action_response_input_schema import FunctionActionResponseInputSchema
-    from .function_action_response_output_schema import FunctionActionResponseOutputSchema
     from .function_detail_response import FunctionDetailResponse
-    from .function_detail_response_config_schema_type_0 import FunctionDetailResponseConfigSchemaType0
-    from .function_detail_response_config_type_0 import FunctionDetailResponseConfigType0
-    from .function_detail_response_input_schema import FunctionDetailResponseInputSchema
-    from .function_detail_response_output_schema import FunctionDetailResponseOutputSchema
     from .function_list_response import FunctionListResponse
     from .function_message_response import FunctionMessageResponse
     from .function_node import FunctionNode
@@ -674,15 +738,13 @@ if TYPE_CHECKING:
     from .function_resource_permission_response import FunctionResourcePermissionResponse
     from .function_run_list_response import FunctionRunListResponse
     from .function_run_response import FunctionRunResponse
-    from .function_run_response_input_data_type_0 import FunctionRunResponseInputDataType0
-    from .function_run_response_output_data_type_0 import FunctionRunResponseOutputDataType0
     from .function_run_status import FunctionRunStatus
     from .function_run_summary_response import FunctionRunSummaryResponse
     from .function_status import FunctionStatus
     from .function_summary_response import FunctionSummaryResponse
-    from .function_summary_response_config_type_0 import FunctionSummaryResponseConfigType0
     from .function_type import FunctionType
     from .harness_kind import HarnessKind
+    from .host_hello import HostHello
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .import_plan_response import ImportPlanResponse
@@ -690,6 +752,7 @@ if TYPE_CHECKING:
     from .import_status import ImportStatus
     from .import_status_response import ImportStatusResponse
     from .installed_app_summary import InstalledAppSummary
+    from .json_object import JsonObject
     from .lemma_provider_capability_response_schema import LemmaProviderCapabilityResponseSchema
     from .lemma_provider_capability_response_schema_auth_config_schema_type_0 import LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0
     from .lemma_provider_capability_response_schema_credential_schema_type_0 import LemmaProviderCapabilityResponseSchemaCredentialSchemaType0
@@ -852,7 +915,6 @@ if TYPE_CHECKING:
     from .update_conversation_request import UpdateConversationRequest
     from .update_conversation_request_metadata_type_0 import UpdateConversationRequestMetadataType0
     from .update_function_request import UpdateFunctionRequest
-    from .update_function_request_config_type_0 import UpdateFunctionRequestConfigType0
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_record_request import UpdateRecordRequest
     from .update_record_request_data import UpdateRecordRequestData
@@ -953,6 +1015,47 @@ __all__ = [
     'AgentDetailResponseOutputSchemaType0',
     'AgentHarnessInfo',
     'AgentHarnessListResponse',
+    'AgentHostAdapterProtocol',
+    'AgentHostCapacity',
+    'AgentHostCheckpoint',
+    'AgentHostCommand',
+    'AgentHostCommandKind',
+    'AgentHostCommandPayload',
+    'AgentHostConfigOption',
+    'AgentHostConfigOptionMetadata',
+    'AgentHostConfigOptionOptionsItem',
+    'AgentHostEvent',
+    'AgentHostEventAck',
+    'AgentHostEventBatch',
+    'AgentHostEventPayload',
+    'AgentHostEventType',
+    'AgentHostIntegrationCapabilities',
+    'AgentHostIntegrationHealth',
+    'AgentHostIntegrationListResponse',
+    'AgentHostIntegrationPublishRequest',
+    'AgentHostIntegrationPublishResponse',
+    'AgentHostIntegrationResponse',
+    'AgentHostIntegrationResponseCapabilities',
+    'AgentHostIntegrationResponseMetadata',
+    'AgentHostIntegrationSnapshot',
+    'AgentHostIntegrationSnapshotMetadata',
+    'AgentHostListResponse',
+    'AgentHostMcpRouteResponse',
+    'AgentHostMcpRouteResponseMcp',
+    'AgentHostPairingComplete',
+    'AgentHostPairingCompleted',
+    'AgentHostPairingCreate',
+    'AgentHostPairingCreated',
+    'AgentHostPollRequest',
+    'AgentHostPollResponse',
+    'AgentHostResponse',
+    'AgentHostResponseCapacity',
+    'AgentHostRunCheckpoint',
+    'AgentHostRunCheckpointDetail',
+    'AgentHostRunState',
+    'AgentHostStatus',
+    'AgentHostTokenExchange',
+    'AgentHostTokenResponse',
     'AgentListResponse',
     'AgentMessageResponse',
     'AgentNode',
@@ -1033,6 +1136,8 @@ __all__ = [
     'ConversationResponseMetadataType0',
     'ConversationStatus',
     'ConversationType',
+    'CreateAgentHostRuntimeProfileRequest',
+    'CreateAgentHostRuntimeProfileRequestConfigSelections',
     'CreateAgentRequest',
     'CreateAgentRequestInputSchemaType0',
     'CreateAgentRequestMetadataType0',
@@ -1046,7 +1151,6 @@ __all__ = [
     'CreateConversationRequestMetadataType0',
     'CreateFolderRequest',
     'CreateFunctionRequest',
-    'CreateFunctionRequestConfigType0',
     'CreateOpenAICompatibleRuntimeProfileRequest',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
@@ -1090,7 +1194,6 @@ __all__ = [
     'EventWorkflowStartInput',
     'EventWorkflowStartOutput',
     'ExecuteFunctionRequest',
-    'ExecuteFunctionRequestInputData',
     'ExportProgressResponse',
     'ExportStartRequest',
     'ExportStatus',
@@ -1121,15 +1224,7 @@ __all__ = [
     'FormNodeResponse',
     'FormNodeResponsePositionType0',
     'FunctionActionResponse',
-    'FunctionActionResponseConfigSchemaType0',
-    'FunctionActionResponseConfigType0',
-    'FunctionActionResponseInputSchema',
-    'FunctionActionResponseOutputSchema',
     'FunctionDetailResponse',
-    'FunctionDetailResponseConfigSchemaType0',
-    'FunctionDetailResponseConfigType0',
-    'FunctionDetailResponseInputSchema',
-    'FunctionDetailResponseOutputSchema',
     'FunctionListResponse',
     'FunctionMessageResponse',
     'FunctionNode',
@@ -1144,15 +1239,13 @@ __all__ = [
     'FunctionResourcePermissionResponse',
     'FunctionRunListResponse',
     'FunctionRunResponse',
-    'FunctionRunResponseInputDataType0',
-    'FunctionRunResponseOutputDataType0',
     'FunctionRunStatus',
     'FunctionRunSummaryResponse',
     'FunctionStatus',
     'FunctionSummaryResponse',
-    'FunctionSummaryResponseConfigType0',
     'FunctionType',
     'HarnessKind',
+    'HostHello',
     'IconUploadRequest',
     'IconUploadResponse',
     'ImportPlanResponse',
@@ -1160,6 +1253,7 @@ __all__ = [
     'ImportStatus',
     'ImportStatusResponse',
     'InstalledAppSummary',
+    'JsonObject',
     'LemmaProviderCapabilityResponseSchema',
     'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0',
     'LemmaProviderCapabilityResponseSchemaCredentialSchemaType0',
@@ -1322,7 +1416,6 @@ __all__ = [
     'UpdateConversationRequest',
     'UpdateConversationRequestMetadataType0',
     'UpdateFunctionRequest',
-    'UpdateFunctionRequestConfigType0',
     'UpdateMemberRoleRequest',
     'UpdateRecordRequest',
     'UpdateRecordRequestData',

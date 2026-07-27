@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.6.4",
+    VERSION: "0.6.5",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10685,6 +10685,231 @@ var LemmaClient = (() => {
       return Promise.reject(new Error(
         "agentRuntime.updateDefault is no longer supported. Update pod config.default_profile_id instead."
       ));
+    }
+  };
+
+  // src/openapi_client/services/AgentHostService.ts
+  var AgentHostService = class {
+    /**
+     * Append Agent Host Events
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostEventAck Successful Response
+     * @throws ApiError
+     */
+    static agentHostEventsAppend(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/v2/events:append",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Publish Agent Host Integrations
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostIntegrationPublishResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostIntegrationsPublish(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/agent-host/v2/integrations",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Resolve Agent Host Mcp Route
+     * @param routeId
+     * @param authorization
+     * @returns AgentHostMcpRouteResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostMcpRouteResolve(routeId, authorization) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/agent-host/v2/mcp-routes/{route_id}",
+        path: {
+          "route_id": routeId
+        },
+        headers: {
+          "authorization": authorization
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Complete Agent Host Pairing
+     * @param requestBody
+     * @returns AgentHostPairingCompleted Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingComplete(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/v2/pairings:complete",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Poll Agent Host Commands
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostPollResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostPoll(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/v2/poll",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Self Revoke Agent Host
+     * Revoke the calling device before its local identity is removed.
+     * @param authorization
+     * @returns void
+     * @throws ApiError
+     */
+    static agentHostSelfRevoke(authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/v2/revoke",
+        headers: {
+          "authorization": authorization
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Exchange Agent Host Token
+     * @param requestBody
+     * @returns AgentHostTokenResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostTokenExchange(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/v2/token:exchange",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Hosts
+     * @returns AgentHostListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostList() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/agent-hosts"
+      });
+    }
+    /**
+     * Create Agent Host Pairing
+     * @param requestBody
+     * @returns AgentHostPairingCreated Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingCreate(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/me/agent-hosts/pairings",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Revoke Agent Host
+     * @param hostId
+     * @returns AgentHostResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostRevoke(hostId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/me/agent-hosts/{host_id}",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Host Integrations
+     * @param hostId
+     * @returns AgentHostIntegrationListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostIntegrationsList(hostId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/agent-hosts/{host_id}/integrations",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/agent-host.ts
+  var AgentHostNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    list() {
+      return this.client.request(() => AgentHostService.agentHostList());
+    }
+    createPairing(request2) {
+      return this.client.request(() => AgentHostService.agentHostPairingCreate(request2));
+    }
+    listIntegrations(hostId) {
+      return this.client.request(() => AgentHostService.agentHostIntegrationsList(hostId));
+    }
+    revoke(hostId) {
+      return this.client.request(() => AgentHostService.agentHostRevoke(hostId));
     }
   };
 
@@ -12279,7 +12504,9 @@ var LemmaClient = (() => {
       });
       __publicField(this, "runs", {
         create: (name, options = {}) => this.client.request(() => {
-          const payload = { input_data: options.input };
+          const payload = {
+            input_data: options.input
+          };
           return FunctionsService.functionRun(this.podId(), name, payload);
         }),
         list: (name, params = {}) => this.client.request(() => {
@@ -15975,6 +16202,7 @@ var LemmaClient = (() => {
       __publicField(this, "functions");
       __publicField(this, "agents");
       __publicField(this, "agentRuntime");
+      __publicField(this, "agentHost");
       __publicField(this, "conversations");
       __publicField(this, "workflows");
       __publicField(this, "apps");
@@ -16023,6 +16251,7 @@ var LemmaClient = (() => {
       this.functions = new FunctionsNamespace(this._generated, podIdFn);
       this.agents = new AgentsNamespace(this._generated, podIdFn, () => this.conversations);
       this.agentRuntime = new AgentRuntimeNamespace(this._generated);
+      this.agentHost = new AgentHostNamespace(this._generated);
       this.conversations = new ConversationsNamespace(this._http, podIdFn);
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);

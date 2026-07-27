@@ -486,6 +486,7 @@ fn download_client() -> io::Result<Client> {
         .map_err(|error| io::Error::other(format!("artifact HTTP client failed: {error}")))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn download_artifact(
     client: &Client,
     artifact: &ArtifactRef,
@@ -844,6 +845,7 @@ fn hash_prefix(path: &Path, bytes: u64, digest: &mut Sha256) -> io::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_archive(
     path: &Path,
     destination: &Path,
@@ -996,7 +998,7 @@ fn available_space(path: &Path) -> io::Result<u64> {
     }
     // SAFETY: statvfs initialized `stats` when it returned success.
     let stats = unsafe { stats.assume_init() };
-    Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+    Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize))
 }
 
 #[cfg(windows)]

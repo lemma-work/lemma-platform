@@ -7,6 +7,7 @@
  */
 export enum HarnessKind {
     LEMMA = 'LEMMA',
+    AGENT_HOST = 'AGENT_HOST',
     CODEX = 'CODEX',
     CLAUDE_CODE = 'CLAUDE_CODE',
     OPENCODE = 'OPENCODE',

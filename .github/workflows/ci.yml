@@ -25,6 +25,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      agent_host: ${{ steps.filter.outputs.agent_host }}
       agentbox: ${{ steps.filter.outputs.agentbox }}
     steps:
       - uses: actions/checkout@v7
@@ -63,11 +64,20 @@ jobs:
               - '.github/workflows/ci.yml'
             desktop:
               - 'desktop/**'
+              - 'agent-host/**'
+              - 'locald/**'
               - 'lemma-stack/**'
               - 'lemma-frontend/lib/education/concepts.ts'
               - '.github/actions/setup-apple-signing/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-desktop.yml'
+            agent_host:
+              - 'agent-host/**'
+              - 'locald/src/agent_host.rs'
+              - 'locald/src/daemon.rs'
+              - 'locald/src/lib.rs'
+              - 'locald/src/main.rs'
+              - '.github/workflows/ci.yml'
             agentbox:
               - 'agentbox/**'
               - 'agentbox-client/**'
@@ -181,6 +191,33 @@ jobs:
             lemma-backend/coverage-backend/coverage.xml
             lemma-backend/coverage-backend/html
           if-no-files-found: ignore
+
+  agent-host:
+    name: Agent Host (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.agent_host == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: agent-host
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Rust format
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --check
+      - name: Strict Clippy
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Unit and boundary integration tests
+        run: cargo test --locked --all-targets
   backend-lint:
     name: lemma-backend quality gates
     needs: changes
@@ -581,11 +618,13 @@ jobs:
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
           locald="${app}/Contents/MacOS/lemma-locald"
+          agent_host="${app}/Contents/MacOS/lemma-agent-host"
           runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
           vz="${app}/Contents/Resources/lemma-vz"
 
           test -d "${app}"
           test -x "${locald}"
+          test -x "${agent_host}"
           test -x "${runtime_bridge}"
           test -x "${vz}"
           test -f "${app}/Contents/Resources/lemma-local.json"
@@ -593,6 +632,7 @@ jobs:
           test ! -e "${app}/Contents/MacOS/uv"
           codesign --verify --deep --strict --verbose=2 "${app}"
           codesign --verify --strict --verbose=2 "${locald}"
+          codesign --verify --strict --verbose=2 "${agent_host}"
           codesign --verify --strict --verbose=2 "${runtime_bridge}"
           codesign --verify --strict --verbose=2 "${vz}"
           codesign -d --entitlements :- "${vz}" 2>/dev/null \

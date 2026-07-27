@@ -8,6 +8,9 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.agent_runtime_profile_response import AgentRuntimeProfileResponse
+from ...models.create_agent_host_runtime_profile_request import (
+    CreateAgentHostRuntimeProfileRequest,
+)
 from ...models.create_anthropic_compatible_runtime_profile_request import (
     CreateAnthropicCompatibleRuntimeProfileRequest,
 )
@@ -24,7 +27,8 @@ from ...types import Response
 def _get_kwargs(
     org_id: UUID,
     *,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
     | CreateUserDaemonRuntimeProfileRequest,
 ) -> dict[str, Any]:
@@ -40,6 +44,8 @@ def _get_kwargs(
     if isinstance(body, CreateUserDaemonRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
     elif isinstance(body, CreateOpenAICompatibleRuntimeProfileRequest):
+        _kwargs["json"] = body.to_dict()
+    elif isinstance(body, CreateAnthropicCompatibleRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
     else:
         _kwargs["json"] = body.to_dict()
@@ -84,7 +90,8 @@ def sync_detailed(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
     | CreateUserDaemonRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
@@ -92,7 +99,8 @@ def sync_detailed(
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
 
     Raises:
@@ -119,7 +127,8 @@ def sync(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
     | CreateUserDaemonRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
@@ -127,7 +136,8 @@ def sync(
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
 
     Raises:
@@ -149,7 +159,8 @@ async def asyncio_detailed(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
     | CreateUserDaemonRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
@@ -157,7 +168,8 @@ async def asyncio_detailed(
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
 
     Raises:
@@ -182,7 +194,8 @@ async def asyncio(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
     | CreateUserDaemonRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
@@ -190,7 +203,8 @@ async def asyncio(
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
             CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
 
     Raises:

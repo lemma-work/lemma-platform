@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import type { JsonObject } from 'lemma-sdk';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { ConnectorMode, ResourceType, TableAccessMode, type ConnectorAccessConfig, type CreateFunctionData, type Function as FunctionType, type FunctionRun, type ResourcePermissionGrant, type TableAccessEntry, type UpdateFunctionData } from '@/lib/types';
 
@@ -132,14 +133,14 @@ function normalizeFunction(raw: Record<string, unknown>): FunctionType {
 }
 
 function normalizeFunctionRun(raw: Record<string, unknown>): FunctionRun {
-    let outputData: Record<string, unknown> | null = null;
+    let outputData: JsonObject | null = null;
     if (raw.output_data && typeof raw.output_data === 'object' && !Array.isArray(raw.output_data)) {
-        outputData = raw.output_data as Record<string, unknown>;
+        outputData = raw.output_data as JsonObject;
     } else if (typeof raw.output_data === 'string') {
         try {
             const parsed = JSON.parse(raw.output_data);
             outputData = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-                ? parsed as Record<string, unknown>
+                ? parsed as JsonObject
                 : { value: raw.output_data };
         } catch {
             outputData = { value: raw.output_data };
@@ -150,7 +151,7 @@ function normalizeFunctionRun(raw: Record<string, unknown>): FunctionRun {
         id: String(raw.id || ''),
         function_id: String(raw.function_id || ''),
         user_id: String(raw.user_id || ''),
-        input_data: (raw.input_data as Record<string, unknown> | null | undefined) ?? null,
+        input_data: (raw.input_data as JsonObject | null | undefined) ?? null,
         output_data: outputData,
         status: raw.status as FunctionRun['status'],
         error: (raw.error as string | null | undefined) ?? null,

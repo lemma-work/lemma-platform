@@ -11,6 +11,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 _NAME_TO_MODULE = {
+    "AgentHosts": "agent_hosts",
     "PodAgents": "agents",
     "PodConversations": "conversations",
     "PodQueries": "data",
@@ -36,6 +37,7 @@ _NAME_TO_MODULE = {
 }
 
 if TYPE_CHECKING:
+    from .agent_hosts import AgentHosts
     from .agents import PodAgents
     from .conversations import PodConversations
     from .data import PodQueries, PodRecords, PodTables, Table
@@ -68,6 +70,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "AgentHosts",
     "BoundConnectors",
     "BoundOrg",
     "BoundPods",

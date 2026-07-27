@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Generic, TypeVar
@@ -25,6 +25,7 @@ class HarnessKind(str, Enum):
     """Runtime framework used to execute an agent."""
 
     LEMMA = "LEMMA"
+    AGENT_HOST = "AGENT_HOST"
     CODEX = "CODEX"
     CLAUDE_CODE = "CLAUDE_CODE"
     OPENCODE = "OPENCODE"
@@ -40,6 +41,8 @@ class HarnessKind(str, Enum):
             "pydantic_ai": cls.LEMMA,
             "PYDANTIC_AI": cls.LEMMA,
             "lemma": cls.LEMMA,
+            "agent_host": cls.AGENT_HOST,
+            "agent-host": cls.AGENT_HOST,
             "codex": cls.CODEX,
             "claude_code": cls.CLAUDE_CODE,
             "opencode": cls.OPENCODE,
@@ -527,6 +530,11 @@ class HarnessOptions:
         DEFAULT_HISTORY_SUMMARIZATION_KEEP_MESSAGES
     )
     should_stop: Callable[[], Awaitable[bool]] | None = None
+    # Explicitly injected by the runner for Agent Host profiles that name a
+    # fallback runtime. Keeping this callback on the execution options lets the
+    # durable host harness own its bounded wait while the runner still owns
+    # profile resolution, tooling, credentials, and usage accounting.
+    fallback_run: Callable[[str], AsyncIterator[AgentEvent]] | None = None
     extra: JsonObject = field(default_factory=dict)
 
 

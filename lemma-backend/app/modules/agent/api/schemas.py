@@ -276,6 +276,7 @@ class AgentRuntimeProfileResponse(BaseModel):
     organization_id: UUID | None = None
     user_id: UUID | None = None
     daemon_id: UUID | None = None
+    host_integration_id: UUID | None = None
     scope: RuntimeProfileScope
     kind: RuntimeProfileKind
     protocol: RuntimeProfileProtocol
@@ -291,6 +292,12 @@ class AgentRuntimeProfileResponse(BaseModel):
     daemon_display_name: str | None = None
     daemon_status: str | None = None
     daemon_harness_available: bool | None = None
+    host_id: UUID | None = None
+    host_display_name: str | None = None
+    host_status: str | None = None
+    integration_key: str | None = None
+    integration_health: str | None = None
+    integration_config_revision: str | None = None
     availability_status: str | None = None
 
 
@@ -333,10 +340,23 @@ class CreateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
     model_settings: JsonObject = Field(default_factory=dict)
 
 
+class CreateAgentHostRuntimeProfileRequest(BaseModel):
+    source: Literal["AGENT_HOST"] = "AGENT_HOST"
+    host_integration_id: UUID
+    scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    integration_snapshot_revision: str = Field(min_length=1, max_length=255)
+    config_selections: JsonObject = Field(default_factory=dict)
+    host_wait_timeout_seconds: int = Field(default=300, ge=1, le=3600)
+    fallback_profile_id: str | None = Field(default=None, min_length=1)
+
+
 CreateAgentRuntimeProfileRequest = Annotated[
     CreateUserDaemonRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
-    | CreateAnthropicCompatibleRuntimeProfileRequest,
+    | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateAgentHostRuntimeProfileRequest,
     Field(discriminator="source"),
 ]
 

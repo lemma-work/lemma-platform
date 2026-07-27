@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -133,6 +134,22 @@ class _DaemonRepository:
         return None
 
 
+class _HostRepository:
+    def __init__(self, *, host, integration):
+        self.host = host
+        self.integration = integration
+
+    async def get_integration(self, *, integration_id):
+        if integration_id == self.integration.id:
+            return self.integration
+        return None
+
+    async def get_for_user(self, *, host_id, user_id):
+        if self.host.id == host_id and self.host.user_id == user_id:
+            return self.host
+        return None
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
@@ -178,6 +195,121 @@ async def test_runtime_resolves_org_profile_model_override():
     assert resolved_default.model_name_for_harness == "provider/org-default"
     assert resolved_override.model.name == "deepseek-v4-pro"
     assert resolved_override.model_name_for_harness == "provider/org-default/deepseek"
+
+
+@pytest.mark.asyncio
+async def test_agent_host_profile_uses_live_opaque_configuration() -> None:
+    now = datetime.now(timezone.utc)
+    org_id = uuid4()
+    user_id = uuid4()
+    host_id = uuid4()
+    integration_id = uuid4()
+    host = SimpleNamespace(
+        id=host_id,
+        user_id=user_id,
+        organization_id=org_id,
+        revoked_at=None,
+        status="ONLINE",
+        last_seen_at=now,
+    )
+    integration = SimpleNamespace(
+        id=integration_id,
+        host_id=host_id,
+        health="READY",
+        stale_after=now + timedelta(hours=1),
+        config_revision="revision-42",
+        integration_key="codex",
+        config_options=[
+            {
+                "id": "model",
+                "category": "model",
+                "options": [
+                    {"value": "gpt-fast", "name": "GPT Fast"},
+                    {"value": "gpt-pro", "name": "GPT Pro"},
+                ],
+            }
+        ],
+    )
+    fallback = _test_profile(
+        scope=RuntimeProfileScope.ORGANIZATION,
+        organization_id=org_id,
+        name="cloud-fallback",
+    )
+    repository = _ProfileRepository([fallback])
+    service = AgentRuntimeProfileService(
+        repository,
+        host_repository=_HostRepository(host=host, integration=integration),
+    )
+
+    profile = await service.create_agent_host_profile(
+        organization_id=org_id,
+        user_id=user_id,
+        host_integration_id=integration_id,
+        scope=RuntimeProfileScope.PERSONAL,
+        name="Local Codex",
+        integration_snapshot_revision="revision-42",
+        config_selections={"model": "gpt-pro"},
+        fallback_profile_id=fallback.id,
+    )
+    resolved = await service.resolve(
+        runtime=AgentRuntimeConfig(profile_id=profile.id),
+        organization_id=org_id,
+        user_id=user_id,
+    )
+
+    assert profile.kind is RuntimeProfileKind.EXTERNAL_AGENT
+    assert profile.model_catalog == []
+    assert profile.config.integration_snapshot_revision == "revision-42"
+    assert profile.config.fallback_profile_id == fallback.id
+    assert resolved.harness_kind is HarnessKind.AGENT_HOST
+    assert resolved.model_name_for_harness == "gpt-pro"
+
+
+@pytest.mark.asyncio
+async def test_agent_host_profile_rejects_removed_model_selection() -> None:
+    now = datetime.now(timezone.utc)
+    org_id = uuid4()
+    user_id = uuid4()
+    host_id = uuid4()
+    integration_id = uuid4()
+    host = SimpleNamespace(
+        id=host_id,
+        user_id=user_id,
+        organization_id=org_id,
+        revoked_at=None,
+        status="ONLINE",
+        last_seen_at=now,
+    )
+    integration = SimpleNamespace(
+        id=integration_id,
+        host_id=host_id,
+        health="READY",
+        stale_after=now + timedelta(hours=1),
+        config_revision="revision-42",
+        integration_key="codex",
+        config_options=[
+            {
+                "id": "model",
+                "category": "model",
+                "options": [{"value": "gpt-fast"}],
+            }
+        ],
+    )
+    service = AgentRuntimeProfileService(
+        _ProfileRepository([]),
+        host_repository=_HostRepository(host=host, integration=integration),
+    )
+
+    with pytest.raises(ValueError, match="Invalid value"):
+        await service.create_agent_host_profile(
+            organization_id=org_id,
+            user_id=user_id,
+            host_integration_id=integration_id,
+            scope=RuntimeProfileScope.PERSONAL,
+            name="Removed model",
+            integration_snapshot_revision="revision-42",
+            config_selections={"model": "gpt-removed"},
+        )
 
 
 def test_runtime_credentials_are_redacted_in_repr_but_revealable():

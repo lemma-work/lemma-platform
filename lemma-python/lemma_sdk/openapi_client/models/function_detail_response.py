@@ -1,30 +1,21 @@
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+from dateutil.parser import isoparse
 
 from ..models.function_status import FunctionStatus
 from ..models.function_type import FunctionType
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.function_detail_response_config_schema_type_0 import (
-        FunctionDetailResponseConfigSchemaType0,
-    )
-    from ..models.function_detail_response_config_type_0 import (
-        FunctionDetailResponseConfigType0,
-    )
-    from ..models.function_detail_response_input_schema import (
-        FunctionDetailResponseInputSchema,
-    )
-    from ..models.function_detail_response_output_schema import (
-        FunctionDetailResponseOutputSchema,
-    )
     from ..models.function_permissions_response import FunctionPermissionsResponse
+    from ..models.json_object import JsonObject
 
 
 T = TypeVar("T", bound="FunctionDetailResponse")
@@ -34,62 +25,58 @@ T = TypeVar("T", bound="FunctionDetailResponse")
 class FunctionDetailResponse:
     """
     Attributes:
-        created_at (Any):
+        created_at (datetime.datetime | None):
         id (UUID):
-        input_schema (FunctionDetailResponseInputSchema): Input JSON schema derived from the function code.
+        input_schema (JsonObject):
         name (str):
-        output_schema (FunctionDetailResponseOutputSchema): Output JSON schema derived from the function code.
+        output_schema (JsonObject):
         permissions (FunctionPermissionsResponse):
         pod_id (UUID):
         status (FunctionStatus): Status of a function.
         type_ (FunctionType): Execution mode for a function.
-        updated_at (Any):
+        updated_at (datetime.datetime | None):
         user_id (UUID):
         allowed_actions (list[str] | Unset):
         code (None | str | Unset):
-        code_hash (None | str | Unset):
         code_path (None | str | Unset):
-        config (FunctionDetailResponseConfigType0 | None | Unset):
-        config_schema (FunctionDetailResponseConfigSchemaType0 | None | Unset): Optional configuration schema derived
-            from the function code.
+        config (JsonObject | None | Unset):
+        config_schema (JsonObject | None | Unset): Optional configuration schema derived from the function code.
         description (None | str | Unset):
         icon_url (None | str | Unset):
-        python_packages (list[str] | Unset): pip dependencies declared in the code's #python_packages header.
+        revision_hash (None | str | Unset):
         visibility (str | Unset):  Default: 'POD'.
     """
 
-    created_at: Any
+    created_at: datetime.datetime | None
     id: UUID
-    input_schema: FunctionDetailResponseInputSchema
+    input_schema: JsonObject
     name: str
-    output_schema: FunctionDetailResponseOutputSchema
+    output_schema: JsonObject
     permissions: FunctionPermissionsResponse
     pod_id: UUID
     status: FunctionStatus
     type_: FunctionType
-    updated_at: Any
+    updated_at: datetime.datetime | None
     user_id: UUID
     allowed_actions: list[str] | Unset = UNSET
     code: None | str | Unset = UNSET
-    code_hash: None | str | Unset = UNSET
     code_path: None | str | Unset = UNSET
-    config: FunctionDetailResponseConfigType0 | None | Unset = UNSET
-    config_schema: FunctionDetailResponseConfigSchemaType0 | None | Unset = UNSET
+    config: JsonObject | None | Unset = UNSET
+    config_schema: JsonObject | None | Unset = UNSET
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
-    python_packages: list[str] | Unset = UNSET
+    revision_hash: None | str | Unset = UNSET
     visibility: str | Unset = "POD"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.function_detail_response_config_schema_type_0 import (
-            FunctionDetailResponseConfigSchemaType0,
-        )
-        from ..models.function_detail_response_config_type_0 import (
-            FunctionDetailResponseConfigType0,
-        )
+        from ..models.json_object import JsonObject
 
-        created_at = self.created_at
+        created_at: None | str
+        if isinstance(self.created_at, datetime.datetime):
+            created_at = self.created_at.isoformat()
+        else:
+            created_at = self.created_at
 
         id = str(self.id)
 
@@ -107,7 +94,11 @@ class FunctionDetailResponse:
 
         type_ = self.type_.value
 
-        updated_at = self.updated_at
+        updated_at: None | str
+        if isinstance(self.updated_at, datetime.datetime):
+            updated_at = self.updated_at.isoformat()
+        else:
+            updated_at = self.updated_at
 
         user_id = str(self.user_id)
 
@@ -121,12 +112,6 @@ class FunctionDetailResponse:
         else:
             code = self.code
 
-        code_hash: None | str | Unset
-        if isinstance(self.code_hash, Unset):
-            code_hash = UNSET
-        else:
-            code_hash = self.code_hash
-
         code_path: None | str | Unset
         if isinstance(self.code_path, Unset):
             code_path = UNSET
@@ -136,7 +121,7 @@ class FunctionDetailResponse:
         config: dict[str, Any] | None | Unset
         if isinstance(self.config, Unset):
             config = UNSET
-        elif isinstance(self.config, FunctionDetailResponseConfigType0):
+        elif isinstance(self.config, JsonObject):
             config = self.config.to_dict()
         else:
             config = self.config
@@ -144,7 +129,7 @@ class FunctionDetailResponse:
         config_schema: dict[str, Any] | None | Unset
         if isinstance(self.config_schema, Unset):
             config_schema = UNSET
-        elif isinstance(self.config_schema, FunctionDetailResponseConfigSchemaType0):
+        elif isinstance(self.config_schema, JsonObject):
             config_schema = self.config_schema.to_dict()
         else:
             config_schema = self.config_schema
@@ -161,9 +146,11 @@ class FunctionDetailResponse:
         else:
             icon_url = self.icon_url
 
-        python_packages: list[str] | Unset = UNSET
-        if not isinstance(self.python_packages, Unset):
-            python_packages = self.python_packages
+        revision_hash: None | str | Unset
+        if isinstance(self.revision_hash, Unset):
+            revision_hash = UNSET
+        else:
+            revision_hash = self.revision_hash
 
         visibility = self.visibility
 
@@ -188,8 +175,6 @@ class FunctionDetailResponse:
             field_dict["allowed_actions"] = allowed_actions
         if code is not UNSET:
             field_dict["code"] = code
-        if code_hash is not UNSET:
-            field_dict["code_hash"] = code_hash
         if code_path is not UNSET:
             field_dict["code_path"] = code_path
         if config is not UNSET:
@@ -200,8 +185,8 @@ class FunctionDetailResponse:
             field_dict["description"] = description
         if icon_url is not UNSET:
             field_dict["icon_url"] = icon_url
-        if python_packages is not UNSET:
-            field_dict["python_packages"] = python_packages
+        if revision_hash is not UNSET:
+            field_dict["revision_hash"] = revision_hash
         if visibility is not UNSET:
             field_dict["visibility"] = visibility
 
@@ -209,34 +194,33 @@ class FunctionDetailResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.function_detail_response_config_schema_type_0 import (
-            FunctionDetailResponseConfigSchemaType0,
-        )
-        from ..models.function_detail_response_config_type_0 import (
-            FunctionDetailResponseConfigType0,
-        )
-        from ..models.function_detail_response_input_schema import (
-            FunctionDetailResponseInputSchema,
-        )
-        from ..models.function_detail_response_output_schema import (
-            FunctionDetailResponseOutputSchema,
-        )
         from ..models.function_permissions_response import FunctionPermissionsResponse
+        from ..models.json_object import JsonObject
 
         d = dict(src_dict)
-        created_at = d.pop("created_at")
+
+        def _parse_created_at(data: object) -> datetime.datetime | None:
+            if data is None:
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                created_at_type_0 = isoparse(data)
+
+                return created_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None, data)
+
+        created_at = _parse_created_at(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
 
-        input_schema = FunctionDetailResponseInputSchema.from_dict(
-            d.pop("input_schema")
-        )
+        input_schema = JsonObject.from_dict(d.pop("input_schema"))
 
         name = d.pop("name")
 
-        output_schema = FunctionDetailResponseOutputSchema.from_dict(
-            d.pop("output_schema")
-        )
+        output_schema = JsonObject.from_dict(d.pop("output_schema"))
 
         permissions = FunctionPermissionsResponse.from_dict(d.pop("permissions"))
 
@@ -246,7 +230,20 @@ class FunctionDetailResponse:
 
         type_ = FunctionType(d.pop("type"))
 
-        updated_at = d.pop("updated_at")
+        def _parse_updated_at(data: object) -> datetime.datetime | None:
+            if data is None:
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                updated_at_type_0 = isoparse(data)
+
+                return updated_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None, data)
+
+        updated_at = _parse_updated_at(d.pop("updated_at"))
 
         user_id = UUID(d.pop("user_id"))
 
@@ -261,15 +258,6 @@ class FunctionDetailResponse:
 
         code = _parse_code(d.pop("code", UNSET))
 
-        def _parse_code_hash(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        code_hash = _parse_code_hash(d.pop("code_hash", UNSET))
-
         def _parse_code_path(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -279,9 +267,7 @@ class FunctionDetailResponse:
 
         code_path = _parse_code_path(d.pop("code_path", UNSET))
 
-        def _parse_config(
-            data: object,
-        ) -> FunctionDetailResponseConfigType0 | None | Unset:
+        def _parse_config(data: object) -> JsonObject | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -289,18 +275,16 @@ class FunctionDetailResponse:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                config_type_0 = FunctionDetailResponseConfigType0.from_dict(data)
+                config_type_0 = JsonObject.from_dict(data)
 
                 return config_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
-            return cast(FunctionDetailResponseConfigType0 | None | Unset, data)
+            return cast(JsonObject | None | Unset, data)
 
         config = _parse_config(d.pop("config", UNSET))
 
-        def _parse_config_schema(
-            data: object,
-        ) -> FunctionDetailResponseConfigSchemaType0 | None | Unset:
+        def _parse_config_schema(data: object) -> JsonObject | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -308,14 +292,12 @@ class FunctionDetailResponse:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                config_schema_type_0 = (
-                    FunctionDetailResponseConfigSchemaType0.from_dict(data)
-                )
+                config_schema_type_0 = JsonObject.from_dict(data)
 
                 return config_schema_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
-            return cast(FunctionDetailResponseConfigSchemaType0 | None | Unset, data)
+            return cast(JsonObject | None | Unset, data)
 
         config_schema = _parse_config_schema(d.pop("config_schema", UNSET))
 
@@ -337,7 +319,14 @@ class FunctionDetailResponse:
 
         icon_url = _parse_icon_url(d.pop("icon_url", UNSET))
 
-        python_packages = cast(list[str], d.pop("python_packages", UNSET))
+        def _parse_revision_hash(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        revision_hash = _parse_revision_hash(d.pop("revision_hash", UNSET))
 
         visibility = d.pop("visibility", UNSET)
 
@@ -355,13 +344,12 @@ class FunctionDetailResponse:
             user_id=user_id,
             allowed_actions=allowed_actions,
             code=code,
-            code_hash=code_hash,
             code_path=code_path,
             config=config,
             config_schema=config_schema,
             description=description,
             icon_url=icon_url,
-            python_packages=python_packages,
+            revision_hash=revision_hash,
             visibility=visibility,
         )
 

@@ -8,6 +8,11 @@ export const agentRuntimeQueryKey = (organizationId?: string | null) =>
 export const availableAgentRuntimeHarnessesQueryKey = () =>
     ['agent-runtime', 'available-harnesses'] as const;
 
+export const agentHostsQueryKey = () => ['agent-hosts'] as const;
+
+export const agentHostIntegrationsQueryKey = (hostId?: string | null) =>
+    ['agent-hosts', hostId ?? null, 'integrations'] as const;
+
 export const useAvailableAgentRuntimeHarnesses = () => {
     return useQuery({
         queryKey: availableAgentRuntimeHarnessesQueryKey(),
@@ -28,6 +33,54 @@ export const useAgentRuntimes = (organizationId?: string | null) => {
 };
 
 export const useAgentRuntimeCatalog = useAgentRuntimes;
+
+export const useAgentHosts = () => {
+    return useQuery({
+        queryKey: agentHostsQueryKey(),
+        queryFn: () => getLemmaClient().agentHost.list(),
+        staleTime: 15000,
+        refetchInterval: 30000,
+        refetchOnWindowFocus: true,
+    });
+};
+
+export const useAgentHostIntegrations = (hostId?: string | null) => {
+    return useQuery({
+        queryKey: agentHostIntegrationsQueryKey(hostId),
+        queryFn: () => getLemmaClient().agentHost.listIntegrations(hostId!),
+        enabled: Boolean(hostId),
+        staleTime: 15000,
+        refetchInterval: 30000,
+        refetchOnWindowFocus: true,
+    });
+};
+
+export const useCreateAgentHostPairing = () => {
+    return useMutation({
+        mutationFn: ({
+            organizationId,
+            displayName,
+        }: {
+            organizationId: string;
+            displayName: string;
+        }) => getLemmaClient().agentHost.createPairing({
+            organization_id: organizationId,
+            display_name: displayName,
+        }),
+    });
+};
+
+export const useRevokeAgentHost = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (hostId: string) => getLemmaClient().agentHost.revoke(hostId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: agentHostsQueryKey() });
+            queryClient.invalidateQueries({ queryKey: ['agent-runtime', 'runtimes'] });
+        },
+    });
+};
 
 export const useCreateAgentRuntime = () => {
     const queryClient = useQueryClient();

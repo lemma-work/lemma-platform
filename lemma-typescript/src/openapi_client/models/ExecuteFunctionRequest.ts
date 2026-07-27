@@ -2,9 +2,10 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { JsonObject } from './JsonObject.js';
 /**
  * Request to execute a function.
  */
 export type ExecuteFunctionRequest = {
-    input_data?: Record<string, any>;
+    input_data?: JsonObject;
 };

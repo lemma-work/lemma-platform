@@ -17,6 +17,9 @@ from ..openapi_client.models.agent_runtime_profile_response import (
 from ..openapi_client.models.create_anthropic_compatible_runtime_profile_request import (
     CreateAnthropicCompatibleRuntimeProfileRequest,
 )
+from ..openapi_client.models.create_agent_host_runtime_profile_request import (
+    CreateAgentHostRuntimeProfileRequest,
+)
 from ..openapi_client.models.create_open_ai_compatible_runtime_profile_request import (
     CreateOpenAICompatibleRuntimeProfileRequest,
 )
@@ -26,6 +29,7 @@ from ..openapi_client.models.create_user_daemon_runtime_profile_request import (
 from .base import BoundResource, Resource
 
 _CREATE_MODELS = {
+    "AGENT_HOST": CreateAgentHostRuntimeProfileRequest,
     "USER_DAEMON": CreateUserDaemonRuntimeProfileRequest,
     "OPENAI_COMPATIBLE": CreateOpenAICompatibleRuntimeProfileRequest,
     "ANTHROPIC_COMPATIBLE": CreateAnthropicCompatibleRuntimeProfileRequest,

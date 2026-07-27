@@ -12,4 +12,5 @@ export enum RuntimeProfileProtocol {
     OPENCODE = 'OPENCODE',
     CURSOR = 'CURSOR',
     ANTIGRAVITY = 'ANTIGRAVITY',
+    AGENT_HOST_V2 = 'AGENT_HOST_V2',
 }

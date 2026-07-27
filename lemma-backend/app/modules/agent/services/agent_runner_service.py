@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Awaitable, Callable, Protocol
+from typing import AsyncIterator, Awaitable, Callable, Protocol
 from uuid import UUID
 
 import anyio
@@ -326,6 +326,129 @@ class AgentRunnerService:
                 runtime_profile=runtime_profile_snapshot,
             )
             enforced_usage_limits = self.fixed_usage_limits
+
+            async def _run_explicit_fallback(
+                fallback_profile_id: str,
+            ) -> AsyncIterator[AgentEvent]:
+                """Run the one configured fallback after an unaccepted timeout.
+
+                This callback is invoked only by ``AgentHostHarness`` and only
+                before the host has durably accepted the turn. Once ACCEPTED is
+                observed, retrying elsewhere would risk duplicate provider work
+                and is forbidden by the lease protocol.
+                """
+
+                nonlocal runtime_profile_snapshot, usage_reservation
+                fallback_runtime = await self._resolve_agent_runtime(
+                    AgentRuntimeConfig(profile_id=fallback_profile_id),
+                    user_id=user_id,
+                    organization_id=conversation.organization_id,
+                )
+                if fallback_runtime.harness_kind is HarnessKind.AGENT_HOST:
+                    raise RuntimeError(
+                        "Agent Host fallback chains are not supported"
+                    )
+
+                primary_profile_id = runtime_profile_snapshot.get("profile_id")
+                fallback_snapshot = fallback_runtime.public_snapshot()
+                fallback_snapshot["fallback_from_profile_id"] = primary_profile_id
+                fallback_credentials = fallback_runtime.credentials or {}
+                fallback_ctx = ctx.model_copy(
+                    update={
+                        "runtime_profile": fallback_snapshot,
+                        "runtime_credentials": fallback_credentials,
+                        "supports_pause_signal": (
+                            fallback_runtime.harness_kind is HarnessKind.LEMMA
+                        ),
+                    }
+                )
+
+                fallback_toolsets = list(full_toolsets)
+                fallback_supports_vision = (
+                    fallback_runtime.model is not None
+                    and RuntimeModelCapability.VISION
+                    in fallback_runtime.model.capabilities
+                )
+                if (
+                    fallback_supports_vision
+                    and view_image_toolset not in fallback_toolsets
+                ):
+                    fallback_toolsets.append(view_image_toolset)
+
+                fallback_capabilities: list[object] = []
+                fallback_model_settings: JsonObject | None = None
+                if fallback_runtime.harness_kind is HarnessKind.LEMMA:
+                    fallback_model_settings = _profile_model_settings(
+                        fallback_snapshot
+                    )
+                    fallback_capabilities = await build_lemma_harness_tooling(
+                        uow_factory=self.uow_factory,
+                        agent=agent,
+                        ctx=fallback_ctx,
+                        full_toolsets=fallback_toolsets,
+                        agent_run_id=agent_run_id,
+                        model_name=fallback_runtime.model_name_for_harness,
+                        enable_prompt_caching=(
+                            fallback_runtime.profile.protocol
+                            is RuntimeProfileProtocol.OPENAI_COMPATIBLE
+                            and settings.lemma_llm_caching_enabled
+                        ),
+                    )
+                    fallback_toolsets = []
+
+                await self.usage_recorder.release(usage_reservation)
+                usage_reservation = None
+                usage_reservation = await self.usage_recorder.reserve(
+                    organization_id=conversation.organization_id,
+                    user_id=user_id,
+                    runtime_profile=fallback_snapshot,
+                )
+                runtime_profile_snapshot = fallback_snapshot
+                fallback_options = HarnessOptions(
+                    model_name=fallback_runtime.model_name_for_harness,
+                    toolsets=fallback_toolsets,
+                    capabilities=fallback_capabilities,
+                    model_settings=fallback_model_settings,
+                    usage_limits=enforced_usage_limits,
+                    output_type=self._resolve_output_type(agent, conversation),
+                    should_stop=self._make_stop_checker(agent_run_id),
+                    extra={
+                        "runtime_profile": fallback_snapshot,
+                        "runtime_credentials": fallback_credentials,
+                    },
+                )
+                logger.warning(
+                    "agent.agent_runner_service.agent_host_fallback_started",
+                    agent_run_id=agent_run_id,
+                    primary_profile_id=primary_profile_id,
+                    fallback_profile_id=fallback_profile_id,
+                    fallback_harness=fallback_runtime.harness_kind.value,
+                )
+                yield AgentEvent(
+                    type=AgentEventType.STATUS,
+                    data={
+                        "status": "agent_host.fallback.started",
+                        "fallback_profile_id": fallback_profile_id,
+                    },
+                    agent_run_id=agent_run_id,
+                )
+                fallback_harness = self.harness_registry.get(
+                    fallback_runtime.harness_kind
+                )
+                fallback_agent = self._agent_with_resolved_runtime_metadata(
+                    agent,
+                    resolved_runtime=fallback_runtime,
+                )
+                async for fallback_event in fallback_harness.run(
+                    agent=fallback_agent,
+                    conversation=conversation,
+                    messages=messages,
+                    ctx=fallback_ctx,
+                    options=fallback_options,
+                    agent_run_id=agent_run_id,
+                ):
+                    yield fallback_event
+
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
@@ -334,6 +457,11 @@ class AgentRunnerService:
                 usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=self._make_stop_checker(agent_run_id),
+                fallback_run=(
+                    _run_explicit_fallback
+                    if resolved_runtime.harness_kind is HarnessKind.AGENT_HOST
+                    else None
+                ),
                 extra={
                     "runtime_profile": runtime_profile_snapshot,
                     "runtime_credentials": runtime_credentials,

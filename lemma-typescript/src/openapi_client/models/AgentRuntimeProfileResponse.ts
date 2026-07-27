@@ -19,7 +19,14 @@ export type AgentRuntimeProfileResponse = {
     derived_harness_kind: HarnessKind;
     description?: (string | null);
     has_credentials?: boolean;
+    host_display_name?: (string | null);
+    host_id?: (string | null);
+    host_integration_id?: (string | null);
+    host_status?: (string | null);
     id: string;
+    integration_config_revision?: (string | null);
+    integration_health?: (string | null);
+    integration_key?: (string | null);
     kind: RuntimeProfileKind;
     metadata?: Record<string, any>;
     model_catalog?: Array<RuntimeModelCatalogEntry>;

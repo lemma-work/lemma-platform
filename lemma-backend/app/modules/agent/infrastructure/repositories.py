@@ -109,6 +109,7 @@ class AgentRuntimeProfileRepository:
             organization_id=entity.organization_id,
             user_id=entity.user_id,
             daemon_id=entity.daemon_id,
+            host_integration_id=entity.host_integration_id,
             scope=entity.scope.value,
             kind=entity.kind.value,
             protocol=entity.protocol.value,

@@ -8,6 +8,7 @@ import os
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -22,6 +23,7 @@ from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
+    AgentHostRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
     OpenAICompatibleRuntimeConfig,
@@ -33,7 +35,19 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
     reveal_credentials,
 )
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
+from app.modules.agent.domain.value_objects import (
+    AgentRuntimeConfig,
+    HarnessKind,
+    JsonObject,
+)
+from app.modules.agent.domain.agent_host import (
+    FOLLOW_ADAPTER_DEFAULT,
+    AgentHostIntegrationHealth,
+    AgentHostStatus,
+    effective_agent_host_status,
+    validate_agent_host_selections,
+)
+from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
@@ -190,6 +204,11 @@ class ResolvedAgentRuntime:
             "daemon_id": str(self.profile.daemon_id)
             if self.profile.daemon_id
             else None,
+            "host_integration_id": (
+                str(self.profile.host_integration_id)
+                if self.profile.host_integration_id
+                else None
+            ),
             "scope": self.profile.scope.value,
             "protocol": self.profile.protocol.value,
             "model_name": self.model.name if self.model else None,
@@ -205,9 +224,11 @@ class AgentRuntimeProfileService:
         self,
         repository: AgentRuntimeProfileRepository | None = None,
         daemon_repository: AgentRuntimeDaemonRepository | None = None,
+        host_repository: AgentHostRepository | None = None,
     ):
         self.repository = repository
         self.daemon_repository = daemon_repository
+        self.host_repository = host_repository
 
     def system_profiles(self) -> list[AgentRuntimeProfile]:
         profile = _system_lemma_profile()
@@ -298,6 +319,109 @@ class AgentRuntimeProfileService:
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "USER_DAEMON",
+            },
+        )
+        return await self.repository.create(profile)
+
+    async def create_agent_host_profile(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        host_integration_id: UUID,
+        scope: RuntimeProfileScope,
+        name: str,
+        integration_snapshot_revision: str,
+        config_selections: JsonObject,
+        description: str | None = None,
+        host_wait_timeout_seconds: int = 300,
+        fallback_profile_id: str | None = None,
+    ) -> AgentRuntimeProfile:
+        if self.repository is None or self.host_repository is None:
+            raise RuntimeError("Agent Host and runtime profile repositories are required")
+        if scope not in {
+            RuntimeProfileScope.ORGANIZATION,
+            RuntimeProfileScope.PERSONAL,
+        }:
+            raise ValueError(
+                "Agent Host profile scope must be ORGANIZATION or PERSONAL"
+            )
+        integration = await self.host_repository.get_integration(
+            integration_id=host_integration_id
+        )
+        if integration is None:
+            raise ValueError("Agent Host integration is not available")
+        host = await self.host_repository.get_for_user(
+            host_id=integration.host_id,
+            user_id=user_id,
+        )
+        if host is None or host.revoked_at is not None:
+            raise ValueError("Agent Host integration is not owned by the current user")
+        if host.organization_id not in {None, organization_id}:
+            raise ValueError("Agent Host is paired to a different organization")
+        if (
+            effective_agent_host_status(host.status, host.last_seen_at)
+            is not AgentHostStatus.ONLINE
+        ):
+            raise ValueError("Agent Host is offline or not accepting new runs")
+        if integration.health != AgentHostIntegrationHealth.READY.value:
+            raise ValueError(
+                f"Agent Host integration is not ready: {integration.health}"
+            )
+        if integration.stale_after <= datetime.now(timezone.utc):
+            raise ValueError("Agent Host integration snapshot is stale; refresh it")
+        if integration.config_revision != integration_snapshot_revision:
+            raise ValueError(
+                "Agent Host integration changed; refresh configuration before saving"
+            )
+        if fallback_profile_id is not None:
+            fallback = await self.get_profile(
+                profile_id=fallback_profile_id,
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+            if fallback is None:
+                raise ValueError("Fallback runtime profile is not available")
+            if fallback.status is not RuntimeProfileStatus.ACTIVE:
+                raise ValueError("Fallback runtime profile is not active")
+            if fallback.protocol is RuntimeProfileProtocol.AGENT_HOST_V2:
+                raise ValueError(
+                    "Fallback runtime profile cannot use Agent Host; "
+                    "fallback chains are intentionally unsupported"
+                )
+        normalized_selections = validate_agent_host_selections(
+            config_options=integration.config_options or [],
+            selections=config_selections,
+        )
+        normalized_name = _normalize_profile_name(name)
+        selected_model = normalized_selections.get("model")
+        profile = AgentRuntimeProfile(
+            id=str(uuid4()),
+            organization_id=organization_id,
+            user_id=user_id,
+            host_integration_id=host_integration_id,
+            scope=scope,
+            kind=RuntimeProfileKind.EXTERNAL_AGENT,
+            protocol=RuntimeProfileProtocol.AGENT_HOST_V2,
+            name=normalized_name,
+            description=description.strip() if description else None,
+            default_model_name=(
+                selected_model
+                if isinstance(selected_model, str)
+                and selected_model != FOLLOW_ADAPTER_DEFAULT
+                else FOLLOW_ADAPTER_DEFAULT
+            ),
+            model_catalog=[],
+            config=AgentHostRuntimeConfig(
+                integration_snapshot_revision=integration.config_revision,
+                config_selections=normalized_selections,
+                host_wait_timeout_seconds=host_wait_timeout_seconds,
+                fallback_profile_id=fallback_profile_id,
+            ),
+            status=RuntimeProfileStatus.ACTIVE,
+            metadata={
+                "source": "AGENT_HOST",
+                "integration_key": integration.integration_key,
             },
         )
         return await self.repository.create(profile)
@@ -958,6 +1082,29 @@ def _selected_model(
     profile: AgentRuntimeProfile,
     requested_model_name: str | None,
 ) -> RuntimeModelCatalogEntry | None:
+    if profile.kind is RuntimeProfileKind.EXTERNAL_AGENT:
+        config = _config_dict(profile.config)
+        selections = config.get("config_selections")
+        configured_model = (
+            selections.get("model") if isinstance(selections, dict) else None
+        )
+        model_name = requested_model_name or configured_model or FOLLOW_ADAPTER_DEFAULT
+        if not isinstance(model_name, str) or not model_name.strip():
+            return None
+        return RuntimeModelCatalogEntry(
+            name=model_name,
+            display_name=(
+                "Adapter default"
+                if model_name == FOLLOW_ADAPTER_DEFAULT
+                else model_name
+            ),
+            provider_model_name=model_name,
+            capabilities=[
+                RuntimeModelCapability.TEXT,
+                RuntimeModelCapability.TOOLS,
+            ],
+            metadata={"dynamic_agent_host_selection": True},
+        )
     model_name = requested_model_name or profile.default_model_name
     if not model_name:
         return None

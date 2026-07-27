@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -27,6 +28,7 @@ from app.modules.agent.api.schemas import (
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
     CreateAnthropicCompatibleRuntimeProfileRequest,
+    CreateAgentHostRuntimeProfileRequest,
     CreateAgentRuntimeProfileRequest,
     CreateOpenAICompatibleRuntimeProfileRequest,
     CreateUserDaemonRuntimeProfileRequest,
@@ -34,10 +36,17 @@ from app.modules.agent.api.schemas import (
 from app.modules.agent.agent_runtime_defaults import AgentRuntimeDefaultService
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import HarnessKind
+from app.modules.agent.domain.agent_host import (
+    AgentHostIntegrationHealth,
+    AgentHostStatus,
+    effective_agent_host_status,
+    validate_agent_host_selections,
+)
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
+    RuntimeProfileScope,
 )
 from app.modules.agent.infrastructure.daemon_hub import (
     agent_runtime_daemon_hub,
@@ -50,6 +59,7 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
 )
+from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
 from app.modules.agent.services.runtime_profile_service import (
     AgentRuntimeProfileService,
 )
@@ -86,6 +96,7 @@ def _runtime_profile_service(uow: UoWDep) -> AgentRuntimeProfileService:
             encryption=get_secret_cipher(),
         ),
         daemon_repository=AgentRuntimeDaemonRepository(uow),
+        host_repository=AgentHostRepository(uow),
     )
 
 
@@ -104,6 +115,14 @@ async def _profile_responses_with_daemon_status(
                 await _daemon_status_payload(
                     profile,
                     daemon_repo=daemon_repo,
+                    user_id=user_id,
+                )
+            )
+        if profile.host_integration_id is not None:
+            payload.update(
+                await _agent_host_status_payload(
+                    profile,
+                    host_repo=AgentHostRepository(uow),
                     user_id=user_id,
                 )
             )
@@ -152,6 +171,109 @@ async def _daemon_status_payload(
     }
 
 
+async def _agent_host_status_payload(
+    profile: AgentRuntimeProfile,
+    *,
+    host_repo: AgentHostRepository,
+    user_id: UUID,
+) -> dict[str, object]:
+    if profile.host_integration_id is None:
+        return {"availability_status": "UNAVAILABLE"}
+    integration = await host_repo.get_integration(
+        integration_id=profile.host_integration_id
+    )
+    if integration is None:
+        return {"availability_status": "UNAVAILABLE"}
+    host = await host_repo.get_for_user(
+        host_id=integration.host_id,
+        user_id=user_id,
+    )
+    if host is None:
+        return {
+            "host_id": integration.host_id,
+            "integration_key": integration.integration_key,
+            "integration_health": integration.health,
+            "integration_config_revision": integration.config_revision,
+            "availability_status": "UNAVAILABLE_FOR_YOU",
+        }
+    config = (
+        profile.config.model_dump(mode="json")
+        if hasattr(profile.config, "model_dump")
+        else profile.config
+    )
+    host_status = effective_agent_host_status(host.status, host.last_seen_at)
+    if host.revoked_at is not None or host_status is AgentHostStatus.REVOKED:
+        availability = "REVOKED"
+    elif host_status is not AgentHostStatus.ONLINE:
+        availability = host_status.value
+    elif integration.health != AgentHostIntegrationHealth.READY.value:
+        availability = integration.health
+    elif integration.stale_after <= datetime.now(timezone.utc):
+        availability = "STALE"
+    else:
+        selections = config.get("config_selections") if isinstance(config, dict) else {}
+        try:
+            validate_agent_host_selections(
+                config_options=integration.config_options or [],
+                selections=selections if isinstance(selections, dict) else {},
+            )
+        except ValueError:
+            availability = "CONFIG_INVALID"
+        else:
+            availability = "READY"
+    return {
+        "host_id": host.id,
+        "host_display_name": host.display_name,
+        "host_status": host_status.value,
+        "integration_key": integration.integration_key,
+        "integration_health": integration.health,
+        "integration_config_revision": integration.config_revision,
+        "model_catalog": _agent_host_model_catalog(integration),
+        "availability_status": availability,
+    }
+
+
+def _agent_host_model_catalog(integration: object) -> list[RuntimeModelCatalogEntry]:
+    """Project the provider-owned live model option into the generic picker."""
+    capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
+    raw_capabilities = getattr(integration, "capabilities", None)
+    if isinstance(raw_capabilities, dict) and raw_capabilities.get("images") is True:
+        capabilities.append(RuntimeModelCapability.VISION)
+    for option in getattr(integration, "config_options", None) or []:
+        if not isinstance(option, dict):
+            continue
+        if option.get("category") != "model" and option.get("id") != "model":
+            continue
+        catalog: list[RuntimeModelCatalogEntry] = []
+        for raw_value in option.get("options") or []:
+            if not isinstance(raw_value, dict):
+                continue
+            value = raw_value.get("value", raw_value.get("id"))
+            if not isinstance(value, str) or not value.strip():
+                continue
+            display_name = raw_value.get("name", raw_value.get("label"))
+            catalog.append(
+                RuntimeModelCatalogEntry(
+                    name=value,
+                    display_name=(
+                        display_name.strip()
+                        if isinstance(display_name, str) and display_name.strip()
+                        else value
+                    ),
+                    provider_model_name=value,
+                    capabilities=capabilities,
+                    metadata={
+                        "dynamic_agent_host_selection": True,
+                        "config_revision": getattr(
+                            integration, "config_revision", ""
+                        ),
+                    },
+                )
+            )
+        return catalog
+    return []
+
+
 @router.get(
     "/organizations/{org_id}/agent-runtime/profiles",
     response_model=AgentRuntimeProfileListResponse,
@@ -194,10 +316,13 @@ async def create_runtime_profile(
     uow: UoWDep,
     ctx: OrgContextDep,
 ) -> AgentRuntimeProfileResponse:
-    # Creating an ORGANIZATION-scoped runtime profile registers an org-wide model
-    # provider (a caller-controlled base_url/api_key) usable by every member's
-    # agent runs, so it must require org editor/owner — not mere membership.
-    await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
+    # Personal daemon/Agent Host profiles are private to the current user and
+    # require membership only. Organization profiles and provider credentials
+    # are shared with every member, so they require org editor/owner.
+    await _ensure_org_member(org_id=org_id, user=user, uow=uow)
+    requested_scope = getattr(data, "scope", RuntimeProfileScope.ORGANIZATION)
+    if requested_scope is RuntimeProfileScope.ORGANIZATION:
+        await ctx.require(Permissions.ORG_UPDATE, ResourceRef.organization(org_id))
     service = _runtime_profile_service(uow)
     try:
         if isinstance(data, CreateUserDaemonRuntimeProfileRequest):
@@ -210,6 +335,19 @@ async def create_runtime_profile(
                 scope=data.scope,
                 description=data.description,
                 default_model_name=data.default_model_name,
+            )
+        elif isinstance(data, CreateAgentHostRuntimeProfileRequest):
+            profile = await service.create_agent_host_profile(
+                organization_id=org_id,
+                user_id=user.id,
+                host_integration_id=data.host_integration_id,
+                scope=data.scope,
+                name=data.name,
+                description=data.description,
+                integration_snapshot_revision=data.integration_snapshot_revision,
+                config_selections=data.config_selections,
+                host_wait_timeout_seconds=data.host_wait_timeout_seconds,
+                fallback_profile_id=data.fallback_profile_id,
             )
         elif isinstance(data, CreateOpenAICompatibleRuntimeProfileRequest):
             profile = await service.create_openai_compatible_profile(

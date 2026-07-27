@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class HarnessKind(str, Enum):
+    AGENT_HOST = "AGENT_HOST"
     ANTIGRAVITY = "ANTIGRAVITY"
     CLAUDE_CODE = "CLAUDE_CODE"
     CODEX = "CODEX"

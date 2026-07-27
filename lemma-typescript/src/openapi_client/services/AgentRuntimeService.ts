@@ -5,6 +5,7 @@
 import type { AgentHarnessListResponse } from '../models/AgentHarnessListResponse.js';
 import type { AgentRuntimeProfileListResponse } from '../models/AgentRuntimeProfileListResponse.js';
 import type { AgentRuntimeProfileResponse } from '../models/AgentRuntimeProfileResponse.js';
+import type { CreateAgentHostRuntimeProfileRequest } from '../models/CreateAgentHostRuntimeProfileRequest.js';
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from '../models/CreateAnthropicCompatibleRuntimeProfileRequest.js';
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from '../models/CreateOpenAICompatibleRuntimeProfileRequest.js';
 import type { CreateUserDaemonRuntimeProfileRequest } from '../models/CreateUserDaemonRuntimeProfileRequest.js';
@@ -52,7 +53,7 @@ export class AgentRuntimeService {
      */
     public static agentRuntimeProfilesCreate(
         orgId: string,
-        requestBody: (CreateUserDaemonRuntimeProfileRequest | CreateOpenAICompatibleRuntimeProfileRequest | CreateAnthropicCompatibleRuntimeProfileRequest),
+        requestBody: (CreateUserDaemonRuntimeProfileRequest | CreateOpenAICompatibleRuntimeProfileRequest | CreateAnthropicCompatibleRuntimeProfileRequest | CreateAgentHostRuntimeProfileRequest),
     ): CancelablePromise<AgentRuntimeProfileResponse> {
         return __request(OpenAPI, {
             method: 'POST',

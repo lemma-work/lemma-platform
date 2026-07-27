@@ -15,7 +15,7 @@ export const DEFAULT_VALUE = '__default_runtime__';
 // machine) rather than plain model providers. Single source of truth shared by
 // the Models settings page and the model picker so the two can't disagree about
 // where, say, Cursor belongs.
-export const CODING_AGENT_KINDS = new Set(['CLAUDE_CODE', 'CODEX', 'OPENCODE', 'ANTIGRAVITY', 'CURSOR']);
+export const CODING_AGENT_KINDS = new Set(['AGENT_HOST', 'CLAUDE_CODE', 'CODEX', 'OPENCODE', 'ANTIGRAVITY', 'CURSOR']);
 
 export function isCodingAgentKind(kind?: string | null): boolean {
     return kind ? CODING_AGENT_KINDS.has(kind) : false;

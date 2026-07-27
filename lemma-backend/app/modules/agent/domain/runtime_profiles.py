@@ -28,6 +28,7 @@ class RuntimeProfileScope(str, Enum):
 class RuntimeProfileKind(str, Enum):
     MODEL_PROVIDER = "MODEL_PROVIDER"
     HARNESS = "HARNESS"
+    EXTERNAL_AGENT = "EXTERNAL_AGENT"
 
 
 class RuntimeProfileProtocol(str, Enum):
@@ -40,6 +41,7 @@ class RuntimeProfileProtocol(str, Enum):
     OPENCODE = "OPENCODE"
     CURSOR = "CURSOR"
     ANTIGRAVITY = "ANTIGRAVITY"
+    AGENT_HOST_V2 = "AGENT_HOST_V2"
 
 
 class RuntimeProfileStatus(str, Enum):
@@ -171,8 +173,16 @@ class OpenCodeRuntimeConfig(BaseModel):
     binary: str = "opencode"
 
 
+class AgentHostRuntimeConfig(BaseModel):
+    integration_snapshot_revision: str = Field(min_length=1, max_length=255)
+    config_selections: JsonObject = Field(default_factory=dict)
+    host_wait_timeout_seconds: int = Field(default=300, ge=1, le=3600)
+    fallback_profile_id: str | None = Field(default=None, min_length=1)
+
+
 RuntimeProfileConfig = (
-    OpenAICompatibleRuntimeConfig
+    AgentHostRuntimeConfig
+    | OpenAICompatibleRuntimeConfig
     | AnthropicCompatibleRuntimeConfig
     | AzureOpenAIRuntimeConfig
     | GoogleVertexRuntimeConfig
@@ -192,6 +202,7 @@ class AgentRuntimeProfile(BaseModel):
     organization_id: UUID | None = None
     user_id: UUID | None = None
     daemon_id: UUID | None = None
+    host_integration_id: UUID | None = None
     scope: RuntimeProfileScope
     kind: RuntimeProfileKind
     protocol: RuntimeProfileProtocol
@@ -223,6 +234,22 @@ class AgentRuntimeProfile(BaseModel):
         if self.kind is RuntimeProfileKind.HARNESS:
             if self.protocol not in HARNESS_PROTOCOLS:
                 raise ValueError("HARNESS profile has invalid protocol")
+        if self.kind is RuntimeProfileKind.EXTERNAL_AGENT:
+            if self.protocol is not RuntimeProfileProtocol.AGENT_HOST_V2:
+                raise ValueError("EXTERNAL_AGENT profile has invalid protocol")
+            if self.host_integration_id is None:
+                raise ValueError(
+                    "EXTERNAL_AGENT profile requires host_integration_id"
+                )
+            if self.daemon_id is not None:
+                raise ValueError("EXTERNAL_AGENT profile cannot reference a daemon")
+            if not isinstance(self.config, AgentHostRuntimeConfig):
+                raw_config = (
+                    self.config.model_dump(mode="json")
+                    if isinstance(self.config, BaseModel)
+                    else self.config
+                )
+                self.config = AgentHostRuntimeConfig.model_validate(raw_config)
         if (
             self.scope in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}
             and self.organization_id is None
@@ -241,6 +268,8 @@ class AgentRuntimeProfile(BaseModel):
     def derived_harness_kind(self) -> HarnessKind:
         if self.protocol in MODEL_PROVIDER_PROTOCOLS:
             return HarnessKind.LEMMA
+        if self.protocol is RuntimeProfileProtocol.AGENT_HOST_V2:
+            return HarnessKind.AGENT_HOST
         if self.protocol is RuntimeProfileProtocol.CODEX_APP_SERVER:
             return HarnessKind.CODEX
         if self.protocol is RuntimeProfileProtocol.CLAUDE_CODE:

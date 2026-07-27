@@ -227,6 +227,7 @@ export { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
 
 // Namespace types (for advanced usage)
 export type { AgentRuntimeNamespace } from "./namespaces/agent-runtime.js";
+export type { AgentHostNamespace } from "./namespaces/agent-host.js";
 export type { AgentsNamespace } from "./namespaces/agents.js";
 export type { DatastoreNamespace } from "./namespaces/datastore.js";
 export type { ConversationsNamespace } from "./namespaces/conversations.js";
