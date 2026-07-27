@@ -71,6 +71,7 @@ async def ensure_sandbox(
         request.profile.to_domain(),
         admission_class=request.admission_class,
         deadline_at=request.deadline_at,
+        verify_ready=request.verify_ready,
     )
     response = SandboxHandleResponse.from_domain(handle)
     if handle.ready:

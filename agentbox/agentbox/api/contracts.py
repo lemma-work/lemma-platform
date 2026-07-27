@@ -60,6 +60,7 @@ class EnsureSandboxRequest(StrictApiModel):
     profile: ProfileRefModel
     admission_class: AdmissionClass
     deadline_at: datetime
+    verify_ready: bool = False
 
     @field_validator("deadline_at")
     @classmethod

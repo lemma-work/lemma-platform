@@ -90,6 +90,8 @@ from agentbox.profiles import ProfileRegistry
 
 _PROCESS_ROOT = "/tmp/.agentbox/processes"
 _OPERATION_ENV = "AGENTBOX_OPERATION_ID"
+_WORKSPACE_ROOT = "/workspace"
+_FUNCTION_RUNTIME_PORT = 8090
 
 
 class E2BSandboxType(Protocol):
@@ -268,10 +270,12 @@ class E2BSandboxAdapter:
         config: E2BAdapterConfig,
         *,
         sandbox_class: type[Any] = AsyncSandbox,
+        http_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._profiles = profiles
         self._config = config
         self._sandbox_class = sandbox_class
+        self._http_transport = http_transport
         self.scope = config.scope
         self._sandboxes: dict[str, E2BSandboxType] = {}
         self._processes: dict[tuple[str, str], _ProcessBuffer] = {}
@@ -369,6 +373,17 @@ class E2BSandboxAdapter:
                 request_timeout=self._request_timeout(deadline_at)
             ):
                 raise ProviderNotReady("E2B sandbox is not running", retry_after_ms=250)
+            if allocation.key.workload_kind == WorkloadKind.WORKSPACE:
+                await self._verify_workspace_filesystem(
+                    sandbox,
+                    allocation,
+                    deadline_at=deadline_at,
+                )
+            else:
+                await self._wait_function_runtime_ready(
+                    sandbox,
+                    deadline_at=deadline_at,
+                )
         except ProviderNotReady:
             raise
         except (TimeoutException, httpx.TimeoutException) as exc:
@@ -378,6 +393,72 @@ class E2BSandboxAdapter:
         return ProviderReadyResult(
             provider_id=allocation.provider_id,
             provider_instance_id=allocation.provider_id,
+        )
+
+    async def _verify_workspace_filesystem(
+        self,
+        sandbox: E2BSandboxType,
+        allocation: ProviderAllocationRef,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        marker = (
+            f"{_WORKSPACE_ROOT}/.agentbox-readiness-"
+            f"{allocation.allocation_token.hex}"
+        )
+        payload = allocation.allocation_token.bytes
+        try:
+            await sandbox.files.write(
+                marker,
+                payload,
+                request_timeout=self._request_timeout(deadline_at),
+                use_octet_stream=True,
+            )
+            observed = await sandbox.files.read(
+                marker,
+                format="bytes",
+                request_timeout=self._request_timeout(deadline_at),
+            )
+            if bytes(observed) != payload:
+                raise ProviderAllocationFailed(
+                    "E2B workspace filesystem readiness marker did not round-trip"
+                )
+        finally:
+            await sandbox.files.remove(
+                marker,
+                request_timeout=self._request_timeout(deadline_at),
+            )
+
+    async def _wait_function_runtime_ready(
+        self,
+        sandbox: E2BSandboxType,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        headers = (
+            {"E2B-Traffic-Access-Token": sandbox.traffic_access_token}
+            if sandbox.traffic_access_token
+            else {}
+        )
+        async with httpx.AsyncClient(
+            transport=self._http_transport,
+            timeout=httpx.Timeout(2),
+            follow_redirects=False,
+        ) as client:
+            while datetime.now(timezone.utc) < deadline_at:
+                try:
+                    response = await client.get(
+                        f"https://{sandbox.get_host(_FUNCTION_RUNTIME_PORT)}/healthz",
+                        headers=headers,
+                    )
+                    if response.status_code == 200 and response.json().get("ready"):
+                        return
+                except (httpx.TransportError, ValueError):
+                    pass
+                await asyncio.sleep(0.1)
+        raise ProviderNotReady(
+            "E2B function runtime is still starting",
+            retry_after_ms=250,
         )
 
     async def release_allocation(
@@ -390,7 +471,7 @@ class E2BSandboxAdapter:
             sandbox = await self._connect(allocation, deadline_at=deadline_at)
             await self._quiesce(sandbox, allocation.provider_id, deadline_at)
             await sandbox.pause(
-                keep_memory=True,
+                keep_memory=False,
                 request_timeout=self._request_timeout(deadline_at),
             )
             self._sandboxes.pop(allocation.provider_id, None)

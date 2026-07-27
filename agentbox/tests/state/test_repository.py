@@ -180,6 +180,7 @@ class MissingNativeWorkspaceProvider(FakeProvider):
     def __init__(self, database: StateDatabase) -> None:
         super().__init__(database)
         self.destroy_calls: list[ProviderAllocationRef] = []
+        self.release_calls: list[ProviderAllocationRef] = []
 
     async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
         assert self.database.active_units_of_work == 0
@@ -221,6 +222,16 @@ class MissingNativeWorkspaceProvider(FakeProvider):
         del deadline_at
         assert self.database.active_units_of_work == 0
         self.destroy_calls.append(allocation)
+
+    async def release_allocation(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        del deadline_at
+        assert self.database.active_units_of_work == 0
+        self.release_calls.append(allocation)
 
 
 async def test_logical_namespace_is_composite(database: StateDatabase):
@@ -275,6 +286,35 @@ async def test_ensure_commits_before_provider_io_and_creates_once(
     assert storage is not None
     assert storage.state == StorageState.READY
     assert storage.provider_storage_id is not None
+
+
+async def test_verified_ensure_rechecks_active_without_changing_epoch(
+    database: StateDatabase,
+):
+    provider = FakeProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    created = await service.ensure(
+        key,
+        profile(),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    verified = await service.ensure(
+        key,
+        profile(),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+        verify_ready=True,
+    )
+
+    assert verified.ready is True
+    assert verified.allocation_id == created.allocation_id
+    assert verified.allocation_epoch == created.allocation_epoch
+    assert len(provider.create_calls) == 1
+    assert provider.ready_calls == 2
 
 
 async def test_lost_create_response_is_not_replayed(database: StateDatabase):
@@ -599,6 +639,120 @@ async def test_missing_sandbox_native_workspace_rebinds_to_new_allocation(
         AllocationState.ACTIVE,
     ]
     assert allocations[1].provider_id == "sandbox-2"
+
+
+async def test_storage_bind_conflict_fences_new_provider_and_returns_retryable_error(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    provider = MissingNativeWorkspaceProvider(database)
+    provider.ready_calls = 1
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    async def conflict(*_args, **_kwargs):
+        raise AgentBoxError(
+            ErrorCode.OPERATION_CONFLICT,
+            "workspace storage is already bound to another provider resource",
+            retry=RetryDisposition.DO_NOT_RETRY,
+            status_code=409,
+        )
+
+    monkeypatch.setattr(AgentBoxRepository, "bind_workspace_storage", conflict)
+
+    with pytest.raises(AgentBoxError) as raised:
+        await service.ensure(
+            key,
+            profile(),
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+        )
+
+    assert raised.value.code == ErrorCode.PROVIDER_UNAVAILABLE
+    assert raised.value.retry == RetryDisposition.SAFE_SAME_OPERATION
+    assert "already bound" not in str(raised.value)
+    assert [item.provider_id for item in provider.destroy_calls] == ["sandbox-1"]
+
+
+async def test_released_native_workspace_with_new_profile_is_retired_and_rebound(
+    database: StateDatabase,
+):
+    provider = MissingNativeWorkspaceProvider(database)
+    provider.ready_calls = 1
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    first = await service.ensure(
+        key,
+        profile(),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    await service.release(key, deadline_at=deadline)
+    second = await service.ensure(
+        key,
+        profile(name="workspace-python-v2", fill="b"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+
+    assert second.ready is True
+    assert second.allocation_id != first.allocation_id
+    assert [item.provider_id for item in provider.release_calls] == ["sandbox-1"]
+    assert [item.provider_id for item in provider.destroy_calls] == ["sandbox-1"]
+    async with database.uow() as uow:
+        storage = await uow.repository.get_workspace_storage(key)
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
+    assert storage is not None
+    assert storage.provider_storage_id == "sandbox-2"
+    assert storage.bound_allocation_id == second.allocation_id
+    assert storage.content_generation == 1
+    assert [item.state for item in allocations] == [
+        AllocationState.ERROR,
+        AllocationState.ACTIVE,
+    ]
+
+
+async def test_active_native_workspace_with_new_profile_is_fenced_and_rebound(
+    database: StateDatabase,
+):
+    provider = MissingNativeWorkspaceProvider(database)
+    provider.ready_calls = 1
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    first = await service.ensure(
+        key,
+        profile(),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    second = await service.ensure(
+        key,
+        profile(name="workspace-python-v2", fill="b"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+
+    assert second.ready is True
+    assert second.allocation_id != first.allocation_id
+    assert [item.provider_id for item in provider.release_calls] == ["sandbox-1"]
+    assert [item.provider_id for item in provider.destroy_calls] == ["sandbox-1"]
+    async with database.uow() as uow:
+        storage = await uow.repository.get_workspace_storage(key)
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
+    assert storage is not None
+    assert storage.provider_storage_id == "sandbox-2"
+    assert storage.content_generation == 1
+    assert [item.state for item in allocations] == [
+        AllocationState.ERROR,
+        AllocationState.ACTIVE,
+    ]
 
 
 async def test_active_sandbox_native_workspace_cannot_be_rebound(

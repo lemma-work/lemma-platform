@@ -21,6 +21,7 @@ from agentbox.domain import (
     SandboxKey,
     SandboxMaintenanceClaim,
     SandboxProfileRef,
+    StorageKind,
     WorkloadKind,
 )
 from agentbox.observability import create_inherited_task
@@ -68,7 +69,7 @@ class SandboxLifecycleService:
         provider: SandboxProviderPort,
         admission_policy: ProviderAdmissionPolicy | None = None,
         *,
-        workspace_retention_seconds: float = 7 * 24 * 60 * 60,
+        workspace_retention_seconds: float = 48 * 60 * 60,
     ) -> None:
         self._database = database
         self._provider = provider
@@ -84,6 +85,7 @@ class SandboxLifecycleService:
         *,
         admission_class: AdmissionClass,
         deadline_at: datetime,
+        verify_ready: bool = False,
     ) -> SandboxHandle:
         self._check_deadline(deadline_at)
         request_hash = self._create_request_hash(
@@ -100,6 +102,7 @@ class SandboxLifecycleService:
         intent = None
         resumed = None
         storage = None
+        superseded_native_allocation = None
         try:
             async with self._database.uow() as uow:
                 logical = await uow.repository.ensure_logical(key, profile)
@@ -124,6 +127,30 @@ class SandboxLifecycleService:
                 )
                 if allocation_for_admission is None:  # pragma: no cover
                     raise RuntimeError("ensure produced no allocation for admission")
+                if (
+                    storage is not None
+                    and storage.storage_kind == StorageKind.SANDBOX_NATIVE
+                    and storage.bound_allocation_id is not None
+                    and storage.bound_allocation_id
+                    != allocation_for_admission.allocation_id
+                ):
+                    bound_allocation = await uow.repository.get_allocation_by_id(
+                        storage.bound_allocation_id
+                    )
+                    if (
+                        bound_allocation is not None
+                        and bound_allocation.state
+                        in {
+                            AllocationState.ACTIVE,
+                            AllocationState.DRAINING,
+                            AllocationState.RELEASED,
+                        }
+                    ):
+                        superseded_native_allocation = bound_allocation
+                        if bound_allocation.state == AllocationState.ACTIVE:
+                            await uow.repository.mark_allocation_draining(
+                                bound_allocation.allocation_id
+                            )
                 pending_retry = (
                     intent is not None
                     and intent.allocation.state == AllocationState.RESERVED
@@ -155,6 +182,12 @@ class SandboxLifecycleService:
         if not decision.accepted:
             raise self._admission_error(decision)
 
+        if superseded_native_allocation is not None:
+            await self._retire_superseded_native_workspace(
+                superseded_native_allocation,
+                deadline_at=deadline_at,
+            )
+
         if resumed is not None:
             return await self._wait_and_publish(
                 logical,
@@ -166,6 +199,13 @@ class SandboxLifecycleService:
             raise RuntimeError("allocation intent was not created")
 
         if intent.allocation.state == AllocationState.ACTIVE:
+            if verify_ready:
+                return await self._wait_and_publish(
+                    intent.logical,
+                    intent.allocation,
+                    profile=profile,
+                    deadline_at=deadline_at,
+                )
             return self._handle(intent.logical, intent.allocation)
         if pending_retry:
             return self._handle(intent.logical, intent.allocation)
@@ -337,29 +377,78 @@ class SandboxLifecycleService:
                 status_code=500,
             )
         # Transaction 3: persist provider acceptance before any readiness I/O.
-        async with self._database.uow() as uow:
-            allocation = await uow.repository.acknowledge_create(
-                intent.allocation.allocation_token,
-                provider_id=created.provider_id,
-                provider_instance_id=created.provider_instance_id,
-                provider_request_id=created.provider_request_id,
-            )
-            if created.workspace_storage is not None:
-                await uow.repository.bind_workspace_storage(
-                    key,
-                    provider_storage_id=created.workspace_storage.provider_storage_id,
-                    allocation_id=(
-                        intent.allocation.allocation_id
-                        if created.workspace_storage.bound_to_allocation
-                        else None
-                    ),
-                )
-            if contract_error is not None:
-                await uow.repository.mark_create_failed(
+        try:
+            async with self._database.uow() as uow:
+                allocation = await uow.repository.acknowledge_create(
                     intent.allocation.allocation_token,
-                    error_code=contract_error.code.value,
+                    provider_id=created.provider_id,
+                    provider_instance_id=created.provider_instance_id,
+                    provider_request_id=created.provider_request_id,
                 )
-            await uow.commit()
+                if created.workspace_storage is not None:
+                    await uow.repository.bind_workspace_storage(
+                        key,
+                        provider_storage_id=(
+                            created.workspace_storage.provider_storage_id
+                        ),
+                        allocation_id=(
+                            intent.allocation.allocation_id
+                            if created.workspace_storage.bound_to_allocation
+                            else None
+                        ),
+                    )
+                if contract_error is not None:
+                    await uow.repository.mark_create_failed(
+                        intent.allocation.allocation_token,
+                        error_code=contract_error.code.value,
+                    )
+                await uow.commit()
+        except AgentBoxError as exc:
+            if (
+                exc.code != ErrorCode.OPERATION_CONFLICT
+                or created.workspace_storage is None
+            ):
+                raise
+            cleanup_pending = False
+            try:
+                await self._provider.destroy_allocation(
+                    ProviderAllocationRef(
+                        provider_id=created.provider_id,
+                        provider_instance_id=created.provider_instance_id,
+                        allocation_id=intent.allocation.allocation_id,
+                        allocation_token=intent.allocation.allocation_token,
+                        key=key,
+                    ),
+                    deadline_at=deadline_at,
+                )
+            except ProviderLifecycleError:
+                cleanup_pending = True
+                await self._mark_create_unknown_durably(
+                    intent.allocation.allocation_token
+                )
+            else:
+                await self._mark_create_failed_durably(
+                    intent.allocation.allocation_token,
+                    error_code=ErrorCode.PROVIDER_UNAVAILABLE,
+                )
+            raise AgentBoxError(
+                ErrorCode.PROVIDER_UNAVAILABLE,
+                (
+                    "workspace storage reconciliation is pending"
+                    if cleanup_pending
+                    else "stale workspace storage binding was fenced"
+                ),
+                retry=(
+                    RetryDisposition.WAIT
+                    if cleanup_pending
+                    else RetryDisposition.SAFE_SAME_OPERATION
+                ),
+                status_code=503,
+                retry_after_ms=1000 if cleanup_pending else None,
+                context=ProviderErrorContext(
+                    kind="provider", provider_name=self._provider.name
+                ),
+            ) from exc
         if contract_error is not None:
             raise contract_error
 
@@ -473,6 +562,9 @@ class SandboxLifecycleService:
                 ),
             )
 
+        if allocation.state == AllocationState.ACTIVE:
+            return self._handle(logical, allocation)
+
         # Transaction 4: publish only the exact allocation proven ready.
         async with self._database.uow() as uow:
             allocation = await uow.repository.acknowledge_create(
@@ -488,6 +580,55 @@ class SandboxLifecycleService:
         if logical is None:  # pragma: no cover - state corruption
             raise RuntimeError("logical sandbox disappeared after publication")
         return self._handle(logical, allocation)
+
+    async def _retire_superseded_native_workspace(
+        self,
+        allocation: PhysicalAllocation,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        """Fence and discard sandbox-native storage before rebinding its workspace."""
+
+        if allocation.provider_id is not None:
+            try:
+                if allocation.state != AllocationState.RELEASED:
+                    await self._provider.release_allocation(
+                        ProviderAllocationRef(
+                            provider_id=allocation.provider_id,
+                            provider_instance_id=allocation.provider_instance_id,
+                            allocation_id=allocation.allocation_id,
+                            allocation_token=allocation.allocation_token,
+                            key=allocation.key,
+                        ),
+                        deadline_at=deadline_at,
+                    )
+                await self._provider.destroy_allocation(
+                    ProviderAllocationRef(
+                        provider_id=allocation.provider_id,
+                        provider_instance_id=allocation.provider_instance_id,
+                        allocation_id=allocation.allocation_id,
+                        allocation_token=allocation.allocation_token,
+                        key=allocation.key,
+                    ),
+                    deadline_at=deadline_at,
+                )
+            except ProviderLifecycleError as exc:
+                raise AgentBoxError(
+                    ErrorCode.PROVIDER_UNAVAILABLE,
+                    "superseded sandbox-native workspace cleanup is pending",
+                    retry=RetryDisposition.WAIT,
+                    status_code=503,
+                    retry_after_ms=1000,
+                    context=ProviderErrorContext(
+                        kind="provider", provider_name=self._provider.name
+                    ),
+                ) from exc
+        async with self._database.uow() as uow:
+            await uow.repository.mark_create_failed(
+                allocation.allocation_token,
+                error_code=ErrorCode.PROVIDER_UNAVAILABLE.value,
+            )
+            await uow.commit()
 
     async def inspect(self, key: SandboxKey) -> SandboxHandle | None:
         """Read durable state only; provider inventory is never on this path."""
@@ -569,11 +710,15 @@ class SandboxLifecycleService:
         _claim: SandboxMaintenanceClaim | None = None,
     ) -> bool:
         self._check_deadline(deadline_at)
+        recreate_on_ensure = (
+            _claim is not None and key.workload_kind == WorkloadKind.WORKSPACE
+        )
         async with self._database.uow() as uow:
             claim, _logical, allocation, storage = await uow.repository.begin_destroy(
                 key,
                 claimed_until=deadline_at,
                 claim=_claim,
+                recreate_on_ensure=recreate_on_ensure,
             )
             await uow.commit()
         try:
@@ -620,6 +765,7 @@ class SandboxLifecycleService:
                     allocation.allocation_id if allocation is not None else None
                 ),
                 claim_token=claim.token,
+                recreate_on_ensure=recreate_on_ensure,
             )
             await uow.commit()
         return True

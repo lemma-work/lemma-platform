@@ -61,6 +61,7 @@ class AgentBoxSandbox(ISandbox):
                     profile=profile,
                     admission_class=AdmissionClass.INTERACTIVE,
                     deadline_at=deadline_at,
+                    verify_ready=True,
                 )
             except AgentBoxApiError as exc:
                 if exc.retry not in (

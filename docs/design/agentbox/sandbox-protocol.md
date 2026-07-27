@@ -716,10 +716,16 @@ scheduler.
 4. Terminate remaining managed processes and Python contexts.
 5. Clear dynamic session data and provider port grants.
 6. Invoke provider release.
-7. Mark `RELEASED`, record retention deadline, and release active provider capacity.
+7. Mark `RELEASED`, record a hard-expiry deadline 48 hours after the last accepted
+   activity, and release active provider capacity.
 
 If the deadline expires before safe quiescence, release fails and leaves the
 allocation active or explicitly degraded; it never pauses behind an active process.
+
+At hard expiry, AgentBox destroys the exact allocation and workspace storage but
+retains a recreatable logical workspace. The next ensure creates a new allocation
+and storage generation. An explicit delete is different: it permanently tombstones
+the logical workspace and future ensure returns `SANDBOX_NOT_FOUND`.
 
 ### 7.3 Function idle destruction
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import struct
 from uuid import UUID, uuid4
 
@@ -61,12 +62,14 @@ async def test_client_uses_typed_workload_route_and_absolute_deadline() -> None:
         profile=ProfileRef(name="workspace-python-v1", digest=f"sha256:{'a' * 64}"),
         admission_class=AdmissionClass.INTERACTIVE,
         deadline_at=deadline(),
+        verify_ready=True,
     )
 
     assert result.ready is True
     assert captured[0].url.path == f"/sandboxes/workspace/{logical_id}"
     assert captured[0].headers["X-API-Key"] == "secret"
     assert b'"deadline_at"' in captured[0].content
+    assert json.loads(captured[0].content)["verify_ready"] is True
     await http.aclose()
 
 

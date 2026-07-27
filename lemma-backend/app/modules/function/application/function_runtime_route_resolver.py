@@ -150,6 +150,7 @@ class FunctionRuntimeRouteResolver:
                         else AdmissionClass.BATCH
                     ),
                     deadline_at=deadline_at,
+                    verify_ready=True,
                 )
             except AgentBoxApiError as exc:
                 if str(getattr(exc, "code", "")).upper() == "CAPACITY_EXHAUSTED":

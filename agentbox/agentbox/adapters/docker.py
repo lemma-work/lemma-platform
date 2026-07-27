@@ -314,6 +314,8 @@ class DockerSandboxAdapter:
                 raise ProviderAllocationFailed(
                     "Docker container image does not match profile artifact"
                 )
+            if workload_kind == WorkloadKind.WORKSPACE:
+                self._validate_workspace_mount(inspected)
             if artifact.runtime_port is not None:
                 if workload_kind == WorkloadKind.FUNCTION:
                     await self._wait_function_runtime_ready(
@@ -324,6 +326,12 @@ class DockerSandboxAdapter:
                 else:
                     await self._wait_runtime_ready(
                         inspected,
+                        runtime_port=artifact.runtime_port,
+                        deadline_at=deadline_at,
+                    )
+                    await self._verify_workspace_filesystem(
+                        inspected,
+                        allocation,
                         runtime_port=artifact.runtime_port,
                         deadline_at=deadline_at,
                     )
@@ -352,6 +360,79 @@ class DockerSandboxAdapter:
             provider_id=allocation.provider_id,
             provider_instance_id=allocation.provider_id,
         )
+
+    @staticmethod
+    def _validate_workspace_mount(inspected: DockerContainerInspect) -> None:
+        storage_id = inspected.config.labels.get("workspace-storage-id")
+        if not storage_id:
+            raise ProviderAllocationFailed(
+                "Docker workspace has no persisted storage identity"
+            )
+        mounted_storage_ids = {
+            source
+            for binding in inspected.host_config.binds
+            for source, separator, target_and_mode in (binding.partition(":"),)
+            if separator
+            and target_and_mode.split(":", 1)[0].rstrip("/") == "/workspace"
+        }
+        if mounted_storage_ids != {storage_id}:
+            raise ProviderAllocationFailed(
+                "Docker workspace mount does not match persisted storage identity"
+            )
+
+    async def _verify_workspace_filesystem(
+        self,
+        inspected: DockerContainerInspect,
+        allocation: ProviderAllocationRef,
+        *,
+        runtime_port: int,
+        deadline_at: datetime,
+    ) -> None:
+        if self._runtime_credentials is None:  # pragma: no cover - checked earlier
+            raise ProviderAllocationFailed(
+                "Docker workspace runtime credentials are not configured"
+            )
+        marker = f"/workspace/.agentbox-readiness-{allocation.allocation_token.hex}"
+        payload = allocation.allocation_token.bytes
+
+        async def chunks() -> AsyncIterator[bytes]:
+            yield payload
+
+        client = self._runtime_client_from_inspect(
+            inspected,
+            runtime_port=runtime_port,
+            token=self._runtime_credentials.token(inspected.container_id),
+            private_network=self._config.private_network,
+        )
+        try:
+            await client.write_file(
+                marker,
+                chunks(),
+                expected_sha256=None,
+                deadline_at=deadline_at,
+            )
+            stream = await client.open_file(
+                marker,
+                ByteRange(offset=0, length=None),
+                deadline_at=deadline_at,
+            )
+            observed = b"".join([chunk async for chunk in stream])
+            if observed != payload:
+                raise ProviderAllocationFailed(
+                    "Docker workspace filesystem readiness marker did not round-trip"
+                )
+        except WorkspaceRuntimeError as exc:
+            raise ProviderAllocationFailed(str(exc)) from exc
+        finally:
+            try:
+                await client.delete_file(
+                    marker,
+                    recursive=False,
+                    deadline_at=deadline_at,
+                )
+            except WorkspaceRuntimeError:
+                pass
+            await client.close()
 
     async def start_process(
         self, request: ProviderProcessStartRequest

@@ -167,6 +167,33 @@ async def test_ensure_and_inspect_use_typed_canonical_routes(api):
     assert database.active_units_of_work == 0
 
 
+async def test_ensure_can_revalidate_an_active_provider_allocation(api):
+    client, provider, database = api
+    logical_id = "d5f4ba6c-27c2-4b07-9eac-b4c8c4b95f83"
+    headers = {"X-API-Key": API_KEY}
+
+    created = await client.put(
+        f"/sandboxes/workspace/{logical_id}",
+        headers=headers,
+        json=ensure_body(),
+    )
+    verify_body = ensure_body()
+    verify_body["verify_ready"] = True
+    verified = await client.put(
+        f"/sandboxes/workspace/{logical_id}",
+        headers=headers,
+        json=verify_body,
+    )
+
+    assert created.status_code == 200
+    assert verified.status_code == 200
+    assert verified.json()["allocation_id"] == created.json()["allocation_id"]
+    assert verified.json()["allocation_epoch"] == created.json()["allocation_epoch"]
+    assert provider.create_calls == 1
+    assert provider.ready_calls == 2
+    assert database.active_units_of_work == 0
+
+
 async def test_unknown_fields_and_naive_deadlines_are_rejected(api):
     client, provider, _database = api
     logical_id = "693006b8-712e-44e3-9e90-6fa7e9eb0154"
@@ -229,6 +256,34 @@ async def test_ambiguous_create_returns_typed_error_and_is_not_replayed(
     assert provider.create_calls == 1
     assert database.active_units_of_work == 0
     await database.dispose()
+
+
+async def test_explicit_destroy_remains_permanent(api):
+    client, _provider, _database = api
+    logical_id = "fd727488-07e2-46fe-a58d-9684c46bb002"
+    headers = {"X-API-Key": API_KEY}
+    deadline = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
+
+    created = await client.put(
+        f"/sandboxes/workspace/{logical_id}",
+        headers=headers,
+        json=ensure_body(),
+    )
+    destroyed = await client.delete(
+        f"/sandboxes/workspace/{logical_id}",
+        headers=headers,
+        params={"deadline_at": deadline},
+    )
+    recreated = await client.put(
+        f"/sandboxes/workspace/{logical_id}",
+        headers=headers,
+        json=ensure_body(),
+    )
+
+    assert created.status_code == 200
+    assert destroyed.status_code == 204
+    assert recreated.status_code == 404
+    assert recreated.json()["error"]["code"] == "SANDBOX_NOT_FOUND"
 
 
 async def test_release_resume_reuses_exact_workspace_and_destroy_removes_storage(api):

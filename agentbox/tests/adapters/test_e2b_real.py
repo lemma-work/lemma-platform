@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
 from agentbox.api.port_proxy import access_router, create_port_proxy_http_client
 from agentbox.domain import (
     AdmissionClass,
+    AgentBoxError,
     ByteRange,
     CreatePythonSessionRequest,
     EnvironmentVariable,
@@ -23,6 +25,7 @@ from agentbox.domain import (
     ProcessState,
     PythonExecutionState,
     PythonSessionState,
+    RetryDisposition,
     SandboxCapability,
     SandboxKey,
     SandboxProfileRef,
@@ -32,6 +35,7 @@ from agentbox.domain import (
 )
 from agentbox.filesystem import FilesystemService
 from agentbox.lifecycle import SandboxLifecycleService
+from agentbox.maintenance import SandboxMaintenanceWorker
 from agentbox.persistence.uow import StateDatabase
 from agentbox.port_access import PortAccessService, PortAccessSigner
 from agentbox.ports import ProviderAllocationRef
@@ -429,6 +433,168 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
     finally:
         provider_id = provider_id or await _provider_id(database, key)
         await _kill_exact(provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+async def test_real_e2b_missing_workspace_is_fenced_and_recreated(
+    tmp_path: Path,
+) -> None:
+    profile = _workspace_profile()
+    adapter = _adapter(
+        ProfileRegistry((profile,)),
+        scope=f"e2b:workspace-recovery-test:{uuid4()}",
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(database, adapter)
+    filesystem = FilesystemService(database, adapter)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
+    original_provider_id: str | None = None
+    recovered_provider_id: str | None = None
+
+    try:
+        created = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+        )
+        original_provider_id = await _provider_id(database, key)
+        assert created.ready is True
+        assert original_provider_id is not None
+        await filesystem.write(
+            key,
+            "/workspace/will-be-discarded",
+            b"old-generation",
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
+
+        await _kill_exact(original_provider_id)
+        with pytest.raises(AgentBoxError) as raised:
+            await lifecycle.ensure(
+                key,
+                profile.ref,
+                admission_class=AdmissionClass.INTERACTIVE,
+                deadline_at=deadline,
+                verify_ready=True,
+            )
+        assert raised.value.retry == RetryDisposition.SAFE_SAME_OPERATION
+
+        recovered = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        recovered_provider_id = await _provider_id(database, key)
+        assert recovered.ready is True
+        assert recovered.allocation_id != created.allocation_id
+        assert recovered_provider_id is not None
+        assert recovered_provider_id != original_provider_id
+        await filesystem.write(
+            key,
+            "/workspace/new-generation",
+            b"fresh",
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
+        assert (
+            await filesystem.read(
+                key,
+                "/workspace/new-generation",
+                ByteRange(offset=0, length=None),
+                deadline_at=deadline,
+            )
+            == b"fresh"
+        )
+        assert await lifecycle.destroy(key, deadline_at=deadline)
+    finally:
+        await _kill_exact(original_provider_id)
+        await _kill_exact(recovered_provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+async def test_real_e2b_hard_expiry_allows_fresh_workspace(
+    tmp_path: Path,
+) -> None:
+    profile = _workspace_profile()
+    replacement_profile = replace(
+        profile,
+        ref=SandboxProfileRef(
+            name="workspace-python-v2",
+            digest=f"sha256:{'d' * 64}",
+        ),
+    )
+    adapter = _adapter(
+        ProfileRegistry((profile, replacement_profile)),
+        scope=f"e2b:workspace-expiry-test:{uuid4()}",
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(
+        database,
+        adapter,
+        workspace_retention_seconds=0,
+    )
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
+    original_provider_id: str | None = None
+    fresh_provider_id: str | None = None
+    replacement_provider_id: str | None = None
+
+    try:
+        await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+        )
+        original_provider_id = await _provider_id(database, key)
+        assert original_provider_id is not None
+
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+
+        fresh = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        fresh_provider_id = await _provider_id(database, key)
+        assert fresh.ready is True
+        assert fresh_provider_id is not None
+        assert fresh_provider_id != original_provider_id
+
+        replacement = await lifecycle.ensure(
+            key,
+            replacement_profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        replacement_provider_id = await _provider_id(database, key)
+        assert replacement.ready is True
+        assert replacement_provider_id is not None
+        assert replacement_provider_id != fresh_provider_id
+        assert await lifecycle.destroy(key, deadline_at=deadline)
+    finally:
+        await _kill_exact(original_provider_id)
+        await _kill_exact(fresh_provider_id)
+        await _kill_exact(replacement_provider_id)
         await adapter.close()
         await database.dispose()
 
