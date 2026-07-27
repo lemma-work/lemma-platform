@@ -190,7 +190,8 @@ case IDs become mandatory for Kubernetes before that adapter is enabled.
 - Docker-volume profile replacement preserves files while changing allocation epoch.
 - E2B-native profile replacement fences and removes the old exact sandbox, then
   publishes a fresh storage generation.
-- Activity before 48 hours of total inactivity resumes the exact paused workspace.
+- Activity before the configured total-inactivity deadline resumes the exact paused
+  workspace.
 - Retention expiry removes compute and storage but the next operation recreates
   the logical workspace with a fresh disk.
 - Explicit delete prevents a late event/inventory item from resurrecting state.

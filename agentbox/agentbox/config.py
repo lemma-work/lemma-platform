@@ -152,7 +152,7 @@ class Settings(BaseSettings):
     )
     agentbox_reconcile_claim_seconds: float = Field(default=30, ge=5, le=300)
     agentbox_workspace_retention_seconds: float = Field(
-        default=48 * 60 * 60,
+        default=7 * 24 * 60 * 60,
         ge=1,
         description=(
             "Total workspace inactivity before physical sandbox and storage "

@@ -433,7 +433,7 @@ the filesystem data plane with a temporary write/read/delete marker before
 publication. See [persistence](https://e2b.dev/docs/sandbox/persistence).
 
 Paused E2B sandboxes are retained indefinitely by the provider, so AgentBox's
-48-hour inactivity worker must explicitly kill them.
+configured retention worker must explicitly kill them.
 
 ### 7.3 Workspace profile replacement
 

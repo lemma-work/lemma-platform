@@ -69,7 +69,7 @@ class SandboxLifecycleService:
         provider: SandboxProviderPort,
         admission_policy: ProviderAdmissionPolicy | None = None,
         *,
-        workspace_retention_seconds: float = 48 * 60 * 60,
+        workspace_retention_seconds: float = 7 * 24 * 60 * 60,
     ) -> None:
         self._database = database
         self._provider = provider
