@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import {
@@ -45,8 +45,10 @@ import {
     useDeletePodSurface,
     usePodSurfaces,
     useSendSurfaceMessage,
+    useStartTelegramManagedBotSetup,
     useSurfaceChannels,
     useSurfaceSetup,
+    useTelegramManagedBotSetup,
     useTogglePodSurface,
     useUpdatePodSurface,
 } from '@/lib/hooks/use-pod-surfaces';
@@ -60,10 +62,11 @@ import type {
     SurfacePlatform,
     SurfaceSetupAction,
     SurfaceSetupActionField,
+    TelegramManagedBotSetupResponse,
 } from 'lemma-sdk';
 import { cn } from '@/lib/utils';
 
-type IdentityMode = 'BUILT_IN' | 'CONNECTED';
+type IdentityMode = 'BUILT_IN' | 'MANAGED' | 'CONNECTED';
 type SurfaceTone = 'success' | 'warning' | 'muted' | 'danger' | 'info';
 type SurfacePanelMode = 'index' | 'create';
 type ChannelDraft = { channel_id: string; channel_name: string; agent_name: string | null };
@@ -168,11 +171,12 @@ export function PodSurfacesPanel({
     const { data: surfaces = [], isLoading: isLoadingSurfaces, refetch, isFetching } = usePodSurfaces(podId);
     const { data: assistantsData, isLoading: isLoadingAssistants } = useAssistants(podId);
     const { data: pod } = usePod(podId);
-    const { data: accounts = [], isLoading: isLoadingAccounts } = useAccounts({ organizationId: pod?.organization_id, limit: 200 });
+    const { data: accounts = [], isLoading: isLoadingAccounts, refetch: refetchAccounts } = useAccounts({ organizationId: pod?.organization_id, limit: 200 });
     const { mutate: toggleSurface, isPending: isToggling } = useTogglePodSurface();
     const { mutate: createSurface, isPending: isCreating } = useCreatePodSurface();
     const { mutate: updateSurface, isPending: isUpdating } = useUpdatePodSurface();
     const { mutate: deleteSurface, isPending: isDeleting } = useDeletePodSurface();
+    const { mutateAsync: startTelegramBotSetup, isPending: isStartingTelegramBotSetup } = useStartTelegramManagedBotSetup();
 
     const [editTarget, setEditTarget] = useState<SurfaceEditTarget | null>(null);
     const [sendTarget, setSendTarget] = useState<SurfaceSendTarget | null>(null);
@@ -184,6 +188,9 @@ export function PodSurfacesPanel({
     const [draftAllowedDomains, setDraftAllowedDomains] = useState('');
     const [draftAllowedEmails, setDraftAllowedEmails] = useState('');
     const [draftAllowSend, setDraftAllowSend] = useState(false);
+    const [telegramSetupId, setTelegramSetupId] = useState<string | null>(null);
+    const [telegramLaunchUrl, setTelegramLaunchUrl] = useState<string | null>(null);
+    const { data: telegramSetup } = useTelegramManagedBotSetup(podId, telegramSetupId);
 
     const assistants = assistantsData?.items ?? [];
     const isLoading = isLoadingSurfaces || isLoadingAssistants || isLoadingAccounts;
@@ -214,7 +221,10 @@ export function PodSurfacesPanel({
         ? draftAgentName
         : null;
     const requiresAccount = editingDefinition
-        ? platformRequiresAccount(editingDefinition.platform) || (platformSupportsManagedIdentity(editingDefinition.platform) && draftIdentityMode === 'CONNECTED')
+        ? platformRequiresAccount(editingDefinition.platform) || (
+              platformSupportsManagedIdentity(editingDefinition.platform) &&
+              draftIdentityMode === 'CONNECTED'
+          )
         : false;
     const supportsChannelRoutes = editingDefinition ? platformSupportsChannelRoutes(editingDefinition.platform) : false;
     // Channels can only be enumerated once the surface exists (we need its
@@ -245,7 +255,26 @@ export function PodSurfacesPanel({
         nameValid &&
         (!requiresAccount || Boolean(draftAccountId)) &&
         draftChannels.every((route) => Boolean(route.channel_id));
-    const isSaving = isCreating || isUpdating;
+    const isSaving = isCreating || isUpdating || isStartingTelegramBotSetup;
+
+    useEffect(() => {
+        if (!telegramSetupId || telegramSetup?.status !== 'COMPLETE') return;
+
+        const completionTimer = window.setTimeout(() => {
+            setTelegramSetupId(null);
+            setTelegramLaunchUrl(null);
+            setEditTarget(null);
+            toast.success(
+                telegramSetup.bot_username
+                    ? `@${telegramSetup.bot_username} is connected`
+                    : 'Telegram bot is connected'
+            );
+            void refetch();
+            void refetchAccounts();
+        }, 0);
+
+        return () => window.clearTimeout(completionTimer);
+    }, [telegramSetup, telegramSetupId, refetch, refetchAccounts]);
 
     const addRoute = () => {
         const next = remainingChannels[0];
@@ -271,7 +300,15 @@ export function PodSurfacesPanel({
         setDraftName(existing?.name || '');
         setDraftAgentName(existing?.agent_name || DEFAULT_AGENT_VALUE);
         setDraftAccountId(accountId);
-        setDraftIdentityMode(platformSupportsManagedIdentity(definition.platform) && existing?.account_id ? 'CONNECTED' : 'BUILT_IN');
+        setDraftIdentityMode(
+            definition.platform === 'TELEGRAM'
+                ? existing
+                    ? 'CONNECTED'
+                    : 'MANAGED'
+                : platformSupportsManagedIdentity(definition.platform) && existing?.account_id
+                    ? 'CONNECTED'
+                    : 'BUILT_IN'
+        );
         setDraftChannels(
             channels.map((route) => ({
                 channel_id: route.channel_id || '',
@@ -285,6 +322,8 @@ export function PodSurfacesPanel({
     };
 
     const openCreate = (definition: SurfaceDefinition) => {
+        setTelegramSetupId(null);
+        setTelegramLaunchUrl(null);
         loadDraftsFromSurface(definition, undefined);
         setEditTarget({ mode: 'create', platform: definition.platform });
     };
@@ -294,7 +333,11 @@ export function PodSurfacesPanel({
         setEditTarget({ mode: 'edit', platform: definition.platform, surfaceName: surface.name });
     };
 
-    const closeConfig = () => setEditTarget(null);
+    const closeConfig = () => {
+        setTelegramSetupId(null);
+        setTelegramLaunchUrl(null);
+        setEditTarget(null);
+    };
 
     const handleToggle = (surfaceName: string, isCurrentlyActive: boolean) => {
         toggleSurface(
@@ -320,7 +363,7 @@ export function PodSurfacesPanel({
         );
     };
 
-    const handleSaveSurface = () => {
+    const handleSaveSurface = async () => {
         if (!editingDefinition) return;
         if (requiresAccount && !draftAccountId) {
             toast.error(`Connect ${editingDefinition.label} first`);
@@ -350,6 +393,39 @@ export function PodSurfacesPanel({
                 : {}),
             send_policy: { allow_send: draftAllowSend },
         };
+
+        if (
+            isCreatingSurface &&
+            editingDefinition.platform === 'TELEGRAM' &&
+            draftIdentityMode === 'MANAGED'
+        ) {
+            try {
+                const setup = await startTelegramBotSetup({
+                    podId,
+                    data: {
+                        name: draftName.trim() || undefined,
+                        default_agent_name: selectedAssistantName,
+                        config,
+                        is_enabled: true,
+                    },
+                });
+                setTelegramSetupId(setup.setup_id);
+                setTelegramLaunchUrl(setup.launch_url);
+                const telegramWindow = window.open(setup.launch_url, '_blank');
+                if (telegramWindow) {
+                    telegramWindow.opener = null;
+                } else {
+                    toast.info('Open Telegram from the button below to continue.');
+                }
+            } catch (error) {
+                toast.error(
+                    `Could not start Telegram setup: ${
+                        error instanceof Error ? error.message : 'Unknown error'
+                    }`
+                );
+            }
+            return;
+        }
 
         // Shared by create and update; the surface's platform and name are set
         // once at creation and are immutable thereafter.
@@ -502,7 +578,12 @@ export function PodSurfacesPanel({
                                             {getIdentityFieldLabel(editingDefinition)} identity
                                         </label>
                                         <div className="grid gap-2 sm:grid-cols-2">
-                                            {(['BUILT_IN', 'CONNECTED'] as IdentityMode[]).map((identityMode) => {
+                                            {(editingDefinition.platform === 'TELEGRAM'
+                                                ? (isCreatingSurface
+                                                    ? (['MANAGED', 'CONNECTED'] as IdentityMode[])
+                                                    : (['CONNECTED'] as IdentityMode[]))
+                                                : (['BUILT_IN', 'CONNECTED'] as IdentityMode[])
+                                            ).map((identityMode) => {
                                                 const selected = draftIdentityMode === identityMode;
                                                 return (
                                                     <button
@@ -515,7 +596,7 @@ export function PodSurfacesPanel({
                                                         )}
                                                     >
                                                         <span className="surface-choice-icon">
-                                                            {identityMode === 'BUILT_IN' ? <Bot className="h-4 w-4" /> : <Plug className="h-4 w-4" />}
+                                                            {identityMode === 'CONNECTED' ? <Plug className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
                                                         </span>
                                                         <span className="min-w-0 flex-1">
                                                             <span className="surface-choice-title">{getIdentityOptionLabel(editingDefinition, identityMode)}</span>
@@ -526,6 +607,17 @@ export function PodSurfacesPanel({
                                             })}
                                         </div>
                                     </div>
+                                ) : null}
+
+                                {editingDefinition.platform === 'TELEGRAM' && telegramSetupId ? (
+                                    <ManagedTelegramSetupCard
+                                        setup={telegramSetup}
+                                        launchUrl={telegramLaunchUrl}
+                                        onRetry={() => {
+                                            setTelegramSetupId(null);
+                                            setTelegramLaunchUrl(null);
+                                        }}
+                                    />
                                 ) : null}
 
                                 {requiresAccount ? (
@@ -689,9 +781,13 @@ export function PodSurfacesPanel({
                                 ) : <span />}
                                 <div className="flex items-center gap-2">
                                     <Button variant="outline" onClick={closeConfig} disabled={isSaving || isDeleting}>Cancel</Button>
-                                    <Button onClick={handleSaveSurface} disabled={!canSave || isSaving || isDeleting}>
+                                    <Button onClick={() => void handleSaveSurface()} disabled={!canSave || isSaving || isDeleting || Boolean(telegramSetupId)}>
                                         {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                        Save and turn on
+                                        {telegramSetupId
+                                            ? 'Waiting for Telegram'
+                                            : isCreatingSurface && editingDefinition.platform === 'TELEGRAM' && draftIdentityMode === 'MANAGED'
+                                                ? 'Create bot in Telegram'
+                                                : 'Save and turn on'}
                                     </Button>
                                 </div>
                             </DialogFooter>
@@ -965,6 +1061,51 @@ function StatusPill({ label, tone }: { label: string; tone: SurfaceTone }) {
     );
 }
 
+function ManagedTelegramSetupCard({
+    setup,
+    launchUrl,
+    onRetry,
+}: {
+    setup: TelegramManagedBotSetupResponse | undefined;
+    launchUrl: string | null;
+    onRetry: () => void;
+}) {
+    if (setup?.status === 'FAILED') {
+        return (
+            <div className="surface-inline-callout">
+                <p className="text-sm font-medium text-[var(--state-error)]">Could not finish connecting the bot</p>
+                <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                    {setup.error || 'Return to Telegram and try the setup again.'}
+                </p>
+                <Button type="button" variant="outline" size="sm" className="mt-3" onClick={onRetry}>
+                    Try again
+                </Button>
+            </div>
+        );
+    }
+
+    return (
+        <div className="surface-inline-callout">
+            <div className="flex items-start gap-2.5">
+                <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-[var(--action-primary)]" />
+                <div>
+                    <p className="text-sm font-medium text-[var(--text-primary)]">Finish creating the bot in Telegram</p>
+                    <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                        Telegram will ask for the bot name and username. Keep this window open; the surface turns on automatically when you confirm.
+                    </p>
+                </div>
+            </div>
+            {launchUrl ? (
+                <Button asChild variant="outline" size="sm" className="mt-3">
+                    <a href={launchUrl} target="_blank" rel="noreferrer">
+                        Open Telegram <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                    </a>
+                </Button>
+            ) : null}
+        </div>
+    );
+}
+
 function SurfaceSetupSection({ podId, surfaceName }: { podId: string; surfaceName: string }) {
     const { data: setup, isLoading } = useSurfaceSetup(podId, surfaceName);
 
@@ -1130,7 +1271,7 @@ function getConfigurationDescription(platform: SurfacePlatformValue) {
     if (platformIsEmailSurface(platform)) {
         return 'Choose the mailbox and default agent for emails that should become pod work.';
     }
-    if (platform === 'TELEGRAM') return 'Choose Lemma bot or your own Telegram bot.';
+    if (platform === 'TELEGRAM') return 'Create a dedicated Telegram bot or connect one you already own.';
     if (platform === 'WHATSAPP') return 'Choose Lemma number or your own WhatsApp account.';
     return 'Choose how this surface should reach the pod.';
 }
@@ -1141,12 +1282,13 @@ function getSurfaceNuance(platform: SurfacePlatformValue) {
     if (platform === 'GMAIL') return 'Routes all eligible inbox events into the pod.';
     if (platform === 'OUTLOOK') return 'Routes all eligible mailbox messages into the pod.';
     if (platform === 'RESEND') return 'Managed email via Resend — no mailbox to connect.';
-    if (platform === 'TELEGRAM') return 'Identity: Lemma bot by default.';
+    if (platform === 'TELEGRAM') return 'A dedicated Telegram bot for each surface.';
     if (platform === 'WHATSAPP') return 'Identity: WhatsApp webhook setup and default responder.';
     return 'Configure this platform before turning it on.';
 }
 
 function getSurfaceEmptyDetail(platform: SurfacePlatformValue) {
+    if (platform === 'TELEGRAM') return 'Not connected yet. Lemma can create a dedicated bot for this surface.';
     if (platformRequiresAccount(platform)) return 'Not connected yet. Add a surface to choose an account and configure rules.';
     return 'Not connected yet. Add a surface to configure the default responder.';
 }
@@ -1226,16 +1368,16 @@ function getIdentityFieldLabel(definition: SurfaceDefinition) {
 }
 
 function getIdentityOptionLabel(definition: SurfaceDefinition, mode: IdentityMode) {
-    if (definition.platform === 'TELEGRAM') return mode === 'BUILT_IN' ? 'Lemma bot' : 'Your bot';
+    if (definition.platform === 'TELEGRAM') return mode === 'MANAGED' ? 'Create a new bot' : 'Connect an existing bot';
     if (definition.platform === 'WHATSAPP') return mode === 'BUILT_IN' ? 'Lemma number' : 'Your number';
     return mode === 'BUILT_IN' ? 'Lemma' : 'Connected';
 }
 
 function getIdentityOptionHelpText(definition: SurfaceDefinition, mode: IdentityMode) {
     if (definition.platform === 'TELEGRAM') {
-        return mode === 'BUILT_IN'
-            ? 'Use Lemma’s shared Telegram bot.'
-            : 'Use a Telegram bot account from Connectors.';
+        return mode === 'MANAGED'
+            ? 'Telegram creates it under your account; Lemma connects it automatically.'
+            : 'Use a Telegram bot account already connected in Lemma.';
     }
     if (definition.platform === 'WHATSAPP') {
         return mode === 'BUILT_IN'

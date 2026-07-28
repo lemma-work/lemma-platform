@@ -11,6 +11,8 @@ import type {
     SurfacePlatformSetupGuide,
     SurfaceSetupResponse,
     SurfaceUpdateRequest,
+    TelegramManagedBotSetupRequest,
+    TelegramManagedBotSetupResponse,
     UserSurfacesResponse,
 } from 'lemma-sdk';
 
@@ -25,6 +27,11 @@ export interface UpdatePodSurfaceInput {
     podId: string;
     surfaceName: string;
     data: SurfaceUpdateRequest;
+}
+
+export interface StartTelegramManagedBotSetupInput {
+    podId: string;
+    data: TelegramManagedBotSetupRequest;
 }
 
 const surfacesKey = (podId: string) => ['pod-surfaces', podId];
@@ -117,6 +124,37 @@ export const useCreatePodSurface = () => {
         mutationFn: ({ podId, data }: CreatePodSurfaceInput) =>
             getLemmaClient().podSurfaces.create(podId, data),
         onSuccess: (_data, vars) => invalidatePodSurfaces(queryClient, vars.podId),
+    });
+};
+
+export const useStartTelegramManagedBotSetup = () => {
+    return useMutation({
+        mutationFn: ({ podId, data }: StartTelegramManagedBotSetupInput) =>
+            getLemmaClient().podSurfaces.startTelegramBotSetup(
+                podId,
+                data,
+            ) as Promise<TelegramManagedBotSetupResponse>,
+    });
+};
+
+export const useTelegramManagedBotSetup = (
+    podId: string,
+    setupId: string | null | undefined,
+) => {
+    return useQuery({
+        queryKey: ['telegram-managed-bot-setup', podId, setupId],
+        queryFn: () =>
+            getLemmaClient().podSurfaces.getTelegramBotSetup(
+                podId,
+                setupId as string,
+            ) as Promise<TelegramManagedBotSetupResponse>,
+        enabled: Boolean(podId && setupId),
+        refetchInterval: (query) => {
+            const status = query.state.data?.status;
+            if (status === 'COMPLETE' || status === 'FAILED') return false;
+            return 1500;
+        },
+        refetchIntervalInBackground: true,
     });
 };
 

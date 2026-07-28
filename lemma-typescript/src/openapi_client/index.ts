@@ -287,6 +287,8 @@ export type { SurfaceUpdateRequest } from './models/SurfaceUpdateRequest.js';
 export type { TableDetailResponse } from './models/TableDetailResponse.js';
 export type { TableListResponse } from './models/TableListResponse.js';
 export type { TableSummaryResponse } from './models/TableSummaryResponse.js';
+export type { TelegramManagedBotSetupRequest } from './models/TelegramManagedBotSetupRequest.js';
+export type { TelegramManagedBotSetupResponse } from './models/TelegramManagedBotSetupResponse.js';
 export type { update } from './models/update.js';
 export type { UpdateAgentRequest } from './models/UpdateAgentRequest.js';
 export type { UpdateAppRequest } from './models/UpdateAppRequest.js';

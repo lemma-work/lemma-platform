@@ -155,6 +155,30 @@ class SurfaceUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TelegramManagedBotSetupRequest(BaseModel):
+    name: str | None = Field(
+        default=None,
+        description="Pod-unique surface name. Defaults to telegram.",
+    )
+    default_agent_name: str | None = None
+    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    is_enabled: bool = True
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TelegramManagedBotSetupResponse(BaseModel):
+    setup_id: str
+    status: str
+    launch_url: str
+    manager_bot_username: str
+    expires_at: str
+    account_id: UUID | None = None
+    surface_id: UUID | None = None
+    bot_username: str | None = None
+    error: str | None = None
+
+
 class SurfaceReach(BaseModel):
     """How a human reaches this surface.
 

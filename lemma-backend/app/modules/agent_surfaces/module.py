@@ -18,6 +18,9 @@ def _routers():
     from app.modules.agent_surfaces.api.controllers.user_surfaces_controller import (
         router as user_surfaces,
     )
+    from app.modules.agent_surfaces.api.controllers.telegram_manager_controller import (
+        router as telegram_manager,
+    )
     from app.modules.agent_surfaces.api.controllers.webhook_controller import (
         router as surface_public,
     )
@@ -26,6 +29,7 @@ def _routers():
         surface,
         surface_setup_guide,
         surface_catalog,
+        telegram_manager,
         user_surfaces,
         surface_public,
     ]
@@ -55,6 +59,16 @@ async def _dedup_store_lifespan(app):
 
 
 @asynccontextmanager
+async def _telegram_manager_webhook_lifespan(app):
+    from app.modules.agent_surfaces.services.telegram_manager_receiver import (
+        register_telegram_manager_webhook,
+    )
+
+    await register_telegram_manager_webhook()
+    yield
+
+
+@asynccontextmanager
 async def _surface_event_receiver(context):
     """Worker process: run native surface event receivers (Telegram polling /
     Slack socket mode) and close the dedupe store on shutdown."""
@@ -63,19 +77,35 @@ async def _surface_event_receiver(context):
     from app.modules.agent_surfaces.services.event_receiver_service import (
         SurfaceEventReceiverService,
     )
+    from app.modules.agent_surfaces.services.telegram_manager_receiver import (
+        TelegramManagerPollingReceiver,
+    )
 
     receiver = SurfaceEventReceiverService(uow_factory=context.uow_factory)
+    manager_receiver = TelegramManagerPollingReceiver(
+        uow_factory=context.uow_factory
+    )
     task = (
         create_background_task(receiver.run(), name="surface-event-receiver")
         if receiver.should_start()
         else None
     )
+    manager_task = (
+        create_background_task(
+            manager_receiver.run(),
+            name="telegram-manager-receiver",
+        )
+        if manager_receiver.should_start()
+        else None
+    )
     try:
         yield
     finally:
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        tasks = [candidate for candidate in (task, manager_task) if candidate]
+        for candidate in tasks:
+            candidate.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         await _close_dedup_store()
 
 
@@ -83,7 +113,10 @@ module = LemmaModule(
     name="agent_surfaces",
     routers=_routers,
     event_routers=_event_routers,
-    api_lifespans=(_dedup_store_lifespan,),
+    api_lifespans=(
+        _dedup_store_lifespan,
+        _telegram_manager_webhook_lifespan,
+    ),
     worker_lifespans=(_surface_event_receiver,),
     stream_groups=(
         ("surface_events", "surface-webhook-events"),
