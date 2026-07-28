@@ -520,6 +520,63 @@ async def test_cancelled_dispatch_transaction_releases_capacity(
     assert database.active_units_of_work == 0
 
 
+async def test_predispatch_generation_race_is_safe_to_retry(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    original = AgentBoxRepository.mark_create_dispatched
+
+    async def release_before_dispatch(
+        repository: AgentBoxRepository,
+        allocation_token,
+        *,
+        expected_resource_generation,
+        now=None,
+    ) -> bool:
+        timestamp = now or datetime.now(timezone.utc)
+        await repository.begin_release(
+            key,
+            claimed_until=timestamp + timedelta(seconds=30),
+            retention_seconds=0,
+            now=timestamp,
+        )
+        return await original(
+            repository,
+            allocation_token,
+            expected_resource_generation=expected_resource_generation,
+            now=timestamp,
+        )
+
+    monkeypatch.setattr(
+        AgentBoxRepository,
+        "mark_create_dispatched",
+        release_before_dispatch,
+    )
+
+    with pytest.raises(AgentBoxError) as raised:
+        await service.ensure(
+            key,
+            profile("function-python-v1", "b"),
+            admission_class=AdmissionClass.BATCH,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+
+    assert raised.value.code == ErrorCode.ALLOCATION_CHANGED
+    assert raised.value.retry == RetryDisposition.SAFE_SAME_OPERATION
+    assert raised.value.retry_after_ms == 250
+    assert provider.create_calls == []
+    async with database.uow() as uow:
+        attempts = await uow.repository.list_allocations(key)
+        active, reserved = await uow.repository._admission_counts(provider.scope)
+        await uow.commit()
+    assert [item.state for item in attempts] == [AllocationState.ERROR]
+    assert (active, reserved) == (0, 0)
+    assert database.active_units_of_work == 0
+
+
 async def test_cancelled_admission_transaction_does_not_leak_capacity(
     database: StateDatabase,
     monkeypatch: pytest.MonkeyPatch,
