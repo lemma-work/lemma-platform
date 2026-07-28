@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ from agentbox.domain import (
     PythonExecutionState,
     PythonResult,
     PythonSessionRef,
+    PythonSessionState,
     SandboxKey,
     SandboxProfileRef,
     StorageKind,
@@ -59,8 +61,11 @@ class Provider:
     def __init__(self, database: StateDatabase) -> None:
         self._database = database
         self.execution_calls = 0
+        self.python_create_calls = 0
+        self.delete_calls = 0
         self.ambiguous_execution = False
         self.reject_execution_once = False
+        self.reject_delete = False
 
     def _outside_transaction(self) -> None:
         assert self._database.active_units_of_work == 0
@@ -96,6 +101,15 @@ class Provider:
             provider_instance_id=allocation.provider_instance_id,
         )
 
+    async def release_allocation(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        del allocation, deadline_at
+        self._outside_transaction()
+
     async def create_python_session(
         self,
         allocation: ProviderAllocationRef,
@@ -103,6 +117,7 @@ class Provider:
     ) -> ProviderPythonSessionCreateResult:
         del allocation
         self._outside_transaction()
+        self.python_create_calls += 1
         return ProviderPythonSessionCreateResult(
             provider_context_id=str(request.session_id)
         )
@@ -154,9 +169,41 @@ class Provider:
     ) -> None:
         del allocation, session, deadline_at
         self._outside_transaction()
+        self.delete_calls += 1
+        if self.reject_delete:
+            raise RuntimeError("context cleanup failed")
 
     async def close(self) -> None:
         return None
+
+
+class BlockingProvider(Provider):
+    def __init__(self, database: StateDatabase) -> None:
+        super().__init__(database)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def execute_python(
+        self,
+        allocation: ProviderAllocationRef,
+        session: PythonSessionRef,
+        request: ExecutePythonRequest,
+    ) -> PythonResult:
+        del allocation, session
+        self.execution_calls += 1
+        self.started.set()
+        await self.release.wait()
+        return PythonResult(
+            operation_id=request.operation_id,
+            state=PythonExecutionState.SUCCEEDED,
+            stdout="",
+            stderr="",
+            result="42",
+            error_name=None,
+            error_message=None,
+            traceback=None,
+            output_truncated=False,
+        )
 
 
 async def provision(
@@ -181,7 +228,7 @@ async def provision(
     return key, service, request
 
 
-async def test_python_execution_is_durable_deduplicated_and_outside_uow(
+async def test_python_execution_is_incarnation_local_and_deduplicated(
     database: StateDatabase,
 ) -> None:
     provider = Provider(database)
@@ -206,15 +253,48 @@ async def test_python_execution_is_durable_deduplicated_and_outside_uow(
     assert first_created is True
     assert second_created is False
     assert provider.execution_calls == 1
-    async with database.uow() as uow:
-        session = await uow.repository.get_python_session(
-            key, session_request.session_id
-        )
-        await uow.commit()
-    assert session is not None
+    session = await service.inspect(key, session_request.session_id)
     assert session.environment_keys == ("SESSION_TOKEN",)
     assert "never-persist" not in repr(session)
     assert database.active_units_of_work == 0
+
+    with pytest.raises(AgentBoxError) as changed_secret:
+        await service.execute(
+            key,
+            session_request.session_id,
+            replace(
+                request,
+                environment=(
+                    EnvironmentVariable("SESSION_TOKEN", "rotated-secret"),
+                ),
+            ),
+        )
+    assert changed_secret.value.code == ErrorCode.OPERATION_CONFLICT
+
+
+async def test_inspect_marks_session_stale_after_allocation_resume(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key, service, session_request = await provision(database, provider)
+    lifecycle = SandboxLifecycleService(database, provider)
+    original = await service.inspect(key, session_request.session_id)
+
+    await lifecycle.release(key, deadline_at=session_request.deadline_at)
+    resumed = await lifecycle.ensure(
+        key,
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=session_request.deadline_at,
+    )
+    stale = await service.inspect(key, session_request.session_id)
+    replacement, created = await service.create(key, session_request)
+
+    assert resumed.allocation_id == original.allocation_id
+    assert resumed.allocation_epoch == original.allocation_epoch + 1
+    assert stale.state == PythonSessionState.STALE
+    assert created is True
+    assert replacement.allocation_epoch == resumed.allocation_epoch
 
 
 async def test_unknown_execution_is_never_replayed(database: StateDatabase) -> None:
@@ -231,10 +311,159 @@ async def test_unknown_execution_is_never_replayed(database: StateDatabase) -> N
 
     with pytest.raises(AgentBoxError) as raised:
         await service.execute(key, session_request.session_id, request)
-    existing, created = await service.execute(key, session_request.session_id, request)
+    with pytest.raises(AgentBoxError) as repeated:
+        await service.execute(key, session_request.session_id, request)
 
     assert raised.value.code == ErrorCode.UNKNOWN_DISPATCH
-    assert existing.state == PythonExecutionState.UNKNOWN
+    assert repeated.value.code == ErrorCode.UNKNOWN_DISPATCH
+    assert raised.value.retry.value == "do_not_retry"
+    assert provider.execution_calls == 1
+    assert provider.delete_calls == 1
+
+    # The exact abandoned interpreter was removed, so a later explicit agent
+    # retry can recreate the deterministic session without a concurrent fork.
+    provider.ambiguous_execution = False
+    recreated, created = await service.create(key, session_request)
+    assert created is True
+    assert recreated.session_id == session_request.session_id
+    assert provider.python_create_calls == 2
+
+
+async def test_failed_unknown_execution_cleanup_is_fenced_until_allocation_changes(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    provider.ambiguous_execution = True
+    provider.reject_delete = True
+    key, service, session_request = await provision(database, provider)
+
+    with pytest.raises(AgentBoxError) as lost:
+        await service.execute(
+            key,
+            session_request.session_id,
+            ExecutePythonRequest(
+                operation_id=uuid4(),
+                code="side_effect()",
+                environment=(),
+                output_limit_bytes=1024,
+                deadline_at=session_request.deadline_at,
+            ),
+        )
+    with pytest.raises(AgentBoxError) as fenced:
+        await service.create(key, session_request)
+    with pytest.raises(AgentBoxError) as allocation_fenced:
+        await service.create(
+            key,
+            replace(session_request, session_id=uuid4()),
+        )
+
+    assert lost.value.code == ErrorCode.UNKNOWN_DISPATCH
+    assert fenced.value.code == ErrorCode.UNKNOWN_DISPATCH
+    assert allocation_fenced.value.code == ErrorCode.UNKNOWN_DISPATCH
+
+    provider.ambiguous_execution = False
+    provider.reject_delete = False
+    await SandboxLifecycleService(database, provider).ensure(
+        key,
+        SandboxProfileRef("workspace-python-v2", f"sha256:{'b' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=session_request.deadline_at,
+    )
+    recreated, created = await service.create(key, session_request)
+
+    assert created is True
+    assert recreated.session_id == session_request.session_id
+
+
+async def test_conflicting_inflight_python_request_does_not_coalesce(
+    database: StateDatabase,
+) -> None:
+    provider = BlockingProvider(database)
+    key, service, session_request = await provision(database, provider)
+    request = ExecutePythonRequest(
+        operation_id=uuid4(),
+        code="slow_side_effect()",
+        environment=(),
+        output_limit_bytes=1024,
+        deadline_at=session_request.deadline_at,
+    )
+    first = asyncio.create_task(
+        service.execute(key, session_request.session_id, request)
+    )
+    await provider.started.wait()
+
+    with pytest.raises(AgentBoxError) as raised:
+        await service.execute(
+            key,
+            session_request.session_id,
+            replace(request, code="different_side_effect()"),
+        )
+
+    provider.release.set()
+    _ = await first
+    assert raised.value.code == ErrorCode.OPERATION_CONFLICT
+    assert provider.execution_calls == 1
+
+
+async def test_cancelled_python_waiter_does_not_leak_inflight_capacity(
+    database: StateDatabase,
+) -> None:
+    provider = BlockingProvider(database)
+    key, service, session_request = await provision(database, provider)
+    request = ExecutePythonRequest(
+        operation_id=uuid4(),
+        code="slow_side_effect()",
+        environment=(),
+        output_limit_bytes=1024,
+        deadline_at=session_request.deadline_at,
+    )
+    pending = asyncio.create_task(
+        service.execute(key, session_request.session_id, request)
+    )
+    await provider.started.wait()
+
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        _ = await pending
+    provider.release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert service._inflight_executions == {}
+
+
+async def test_live_python_result_is_never_evicted_and_replayed(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key, _old_service, session_request = await provision(database, provider)
+    service = PythonSessionService(
+        database,
+        provider,
+        max_execution_results=1,
+    )
+    await service.create(key, session_request)
+    request = ExecutePythonRequest(
+        operation_id=uuid4(),
+        code="side_effect()",
+        environment=(),
+        output_limit_bytes=1024,
+        deadline_at=session_request.deadline_at,
+    )
+    first, _ = await service.execute(key, session_request.session_id, request)
+
+    with pytest.raises(AgentBoxError) as full:
+        await service.execute(
+            key,
+            session_request.session_id,
+            replace(request, operation_id=uuid4()),
+        )
+    repeated, created = await service.execute(
+        key, session_request.session_id, request
+    )
+
+    assert full.value.code == ErrorCode.CAPACITY_EXHAUSTED
+    assert repeated == first
     assert created is False
     assert provider.execution_calls == 1
 
@@ -261,5 +490,29 @@ async def test_definitive_execution_rejection_allows_same_operation_retry(
 
     assert raised.value.retry.value == "safe_same_operation"
     assert result.state == PythonExecutionState.SUCCEEDED
-    assert created is False
+    assert created is True
     assert provider.execution_calls == 2
+
+
+async def test_manager_restart_explicitly_loses_python_session(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key, _service, session_request = await provision(database, provider)
+    replacement = PythonSessionService(database, provider)
+
+    with pytest.raises(AgentBoxError) as raised:
+        await replacement.execute(
+            key,
+            session_request.session_id,
+            ExecutePythonRequest(
+                operation_id=uuid4(),
+                code="42",
+                environment=(),
+                output_limit_bytes=1024,
+                deadline_at=session_request.deadline_at,
+            ),
+        )
+
+    assert raised.value.code == ErrorCode.ALLOCATION_CHANGED
+    assert raised.value.retry.value == "do_not_retry"

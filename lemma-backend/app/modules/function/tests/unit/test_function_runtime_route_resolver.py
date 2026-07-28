@@ -50,7 +50,7 @@ async def test_execution_endpoint_ensures_once_and_caches_exact_grant() -> None:
     dispatch = _dispatch()
     grant = SimpleNamespace(
         url="https://agentbox.test/exact/",
-        expires_at=dispatch.deadline_at,
+        expires_at=dispatch.deadline_at + timedelta(minutes=2),
     )
     client = SimpleNamespace(
         ensure_sandbox=AsyncMock(

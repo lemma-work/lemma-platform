@@ -138,6 +138,7 @@ class ErrorCode(StrEnum):
     SANDBOX_NOT_FOUND = "SANDBOX_NOT_FOUND"
     FILE_NOT_FOUND = "FILE_NOT_FOUND"
     FILE_CONFLICT = "FILE_CONFLICT"
+    PROCESS_NOT_RUNNING = "PROCESS_NOT_RUNNING"
     INVALID_REQUEST = "INVALID_REQUEST"
     INTERNAL = "INTERNAL"
 
@@ -270,6 +271,7 @@ class LogicalSandbox:
     desired_state: SandboxDesiredState
     profile: SandboxProfileRef
     current_allocation_id: UUID | None
+    resource_generation: int
     allocation_epoch: int
     last_used_at: datetime
     protected_until: datetime | None
@@ -297,6 +299,7 @@ class PhysicalAllocation:
     profile_name: str
     profile_digest: str
     state: AllocationState
+    resource_generation: int
     allocation_epoch: int | None
     retry_after: datetime | None
 
@@ -331,25 +334,6 @@ class AllocationIntent:
     allocation: PhysicalAllocation
     dispatch_state: DispatchState
     should_dispatch_create: bool
-
-
-@dataclass(frozen=True, slots=True)
-class ProcessIntent:
-    key: SandboxKey
-    operation_id: UUID
-    allocation_id: UUID
-    allocation_epoch: int
-    request_hash: str
-    state: ProcessState
-    provider_process_id: str | None
-    provider_tag: str | None
-    cwd: str
-    tty: bool
-    output_limit_bytes: int
-    deadline_at: datetime
-    started_at: datetime | None
-    completed_at: datetime | None
-    exit_code: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,8 +389,8 @@ class ExecutePythonRequest:
     def __post_init__(self) -> None:
         if not self.code:
             raise ValueError("Python code cannot be empty")
-        if not 1 <= self.output_limit_bytes <= 64 * 1024 * 1024:
-            raise ValueError("output_limit_bytes must be in 1..67108864")
+        if not 1 <= self.output_limit_bytes <= 2 * 1024 * 1024:
+            raise ValueError("output_limit_bytes must be in 1..2097152")
         names = tuple(item.name for item in self.environment)
         if len(names) != len(set(names)):
             raise ValueError("environment variable names must be unique")
@@ -458,8 +442,8 @@ class StartProcessRequest:
             raise ValueError("argv must contain non-empty arguments")
         if not self.cwd.startswith("/"):
             raise ValueError("process cwd must be absolute")
-        if not 1 <= self.output_limit_bytes <= 64 * 1024 * 1024:
-            raise ValueError("output_limit_bytes must be in 1..67108864")
+        if not 1 <= self.output_limit_bytes <= 2 * 1024 * 1024:
+            raise ValueError("output_limit_bytes must be in 1..2097152")
         if self.initial_input is not None and len(self.initial_input) > 1024 * 1024:
             raise ValueError("initial process input exceeds 1048576 bytes")
         names = tuple(item.name for item in self.environment)

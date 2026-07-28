@@ -12,8 +12,9 @@ from agentbox.domain import (
     AdmissionClass,
     AgentBoxError,
     AllocationState,
+    DispatchState,
     ErrorCode,
-    ProcessState,
+    ProviderAdmissionPolicy,
     RetryDisposition,
     SandboxKey,
     SandboxProfileRef,
@@ -253,6 +254,63 @@ async def test_logical_namespace_is_composite(database: StateDatabase):
     assert function_record.profile.name == "function-python-v1"
 
 
+async def test_destroy_generation_fences_late_create_acknowledgement(
+    database: StateDatabase,
+):
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    async with database.uow() as uow:
+        await uow.repository.ensure_logical(
+            key, profile("function-python-v1", "a")
+        )
+        intent = await uow.repository.begin_allocation(
+            key,
+            profile("function-python-v1", "a"),
+            provider_name="fake",
+            provider_scope="fake:test",
+            admission_class=AdmissionClass.INTERACTIVE.value,
+            request_hash="a" * 64,
+        )
+        decision = await uow.repository.reserve_provider_capacity(
+            intent.allocation.allocation_id,
+            admission_class=AdmissionClass.INTERACTIVE,
+            policy=ProviderAdmissionPolicy.permissive_for_tests(),
+        )
+        assert decision.accepted
+        assert await uow.repository.mark_create_dispatched(
+            intent.allocation.allocation_token,
+            expected_resource_generation=intent.allocation.resource_generation,
+        )
+        await uow.commit()
+
+    async with database.uow() as uow:
+        await uow.repository.begin_destroy(key, claimed_until=deadline)
+        await uow.commit()
+
+    async with database.uow() as uow:
+        with pytest.raises(AgentBoxError) as raised:
+            await uow.repository.acknowledge_create(
+                intent.allocation.allocation_token,
+                provider_id="late-provider-object",
+                expected_resource_generation=intent.allocation.resource_generation,
+                provider_instance_id="late-provider-object",
+            )
+        await uow.rollback()
+
+    assert raised.value.code == ErrorCode.ALLOCATION_CHANGED
+    async with database.uow() as uow:
+        logical = await uow.repository.get_logical(key)
+        allocation = await uow.repository.get_allocation_by_token(
+            intent.allocation.allocation_token
+        )
+        await uow.commit()
+    assert logical is not None
+    assert allocation is not None
+    assert logical.resource_generation > allocation.resource_generation
+    assert allocation.provider_id is None
+
+
 async def test_ensure_commits_before_provider_io_and_creates_once(
     database: StateDatabase,
 ):
@@ -360,6 +418,7 @@ async def test_repeatedly_cancelled_create_becomes_durably_reconcilable(
         *,
         reconcile_after,
         error_code,
+        expected_resource_generation=None,
         now=None,
     ) -> None:
         durable_write_started.set()
@@ -369,6 +428,7 @@ async def test_repeatedly_cancelled_create_becomes_durably_reconcilable(
             allocation_token,
             reconcile_after=reconcile_after,
             error_code=error_code,
+            expected_resource_generation=expected_resource_generation,
             now=now,
         )
 
@@ -399,7 +459,11 @@ async def test_repeatedly_cancelled_create_becomes_durably_reconcilable(
 
     pending = await service.inspect(key)
     assert pending is not None
-    assert pending.allocation_state == AllocationState.UNKNOWN
+    assert pending.allocation_state is None
+    async with database.uow() as uow:
+        attempts = await uow.repository.list_allocations(key)
+        await uow.commit()
+    assert [item.state for item in attempts] == [AllocationState.UNKNOWN]
     assert len(provider.create_calls) == 1
     assert database.active_units_of_work == 0
 
@@ -417,9 +481,15 @@ async def test_cancelled_dispatch_transaction_releases_capacity(
         repository: AgentBoxRepository,
         allocation_token,
         *,
+        expected_resource_generation,
         now=None,
     ) -> bool:
-        dispatched = await original(repository, allocation_token, now=now)
+        dispatched = await original(
+            repository,
+            allocation_token,
+            expected_resource_generation=expected_resource_generation,
+            now=now,
+        )
         current_task = asyncio.current_task()
         assert current_task is not None
         current_task.cancel()
@@ -441,7 +511,11 @@ async def test_cancelled_dispatch_transaction_releases_capacity(
 
     failed = await service.inspect(key)
     assert failed is not None
-    assert failed.allocation_state == AllocationState.ERROR
+    assert failed.allocation_state is None
+    async with database.uow() as uow:
+        attempts = await uow.repository.list_allocations(key)
+        await uow.commit()
+    assert [item.state for item in attempts] == [AllocationState.ERROR]
     assert provider.create_calls == []
     assert database.active_units_of_work == 0
 
@@ -491,7 +565,7 @@ async def test_cancelled_admission_transaction_does_not_leak_capacity(
 
     allocation = await service.inspect(key)
     if allocation is not None:
-        assert allocation.allocation_state == AllocationState.ERROR
+        assert allocation.allocation_state is None
     async with database.uow() as uow:
         active, reserved = await uow.repository._admission_counts(provider.scope)
         await uow.commit()
@@ -529,6 +603,105 @@ async def test_acknowledged_create_resumes_readiness_without_recreate(
     assert len(provider.create_calls) == 1
     assert provider.ready_calls == 2
     assert database.active_units_of_work == 0
+
+
+async def test_released_workspace_resume_is_durably_reconcilable(
+    database: StateDatabase,
+) -> None:
+    provider = FakeProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    selected_profile = profile()
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    created = await service.ensure(
+        key,
+        selected_profile,
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    assert created.allocation_id is not None
+
+    release_at = datetime.now(timezone.utc)
+    async with database.uow() as uow:
+        claim, _, allocation = await uow.repository.begin_release(
+            key,
+            claimed_until=deadline,
+            retention_seconds=3600,
+            now=release_at,
+        )
+        assert allocation is not None
+        await uow.repository.complete_release(
+            key,
+            allocation.allocation_id,
+            claim_token=claim.token,
+            now=release_at,
+        )
+        resumed = await uow.repository.resume_released_allocation(
+            key,
+            selected_profile,
+            now=release_at + timedelta(seconds=1),
+        )
+        candidates = await uow.repository.list_due_create_reconciliation(
+            provider.scope,
+            stale_reserved_before=release_at,
+            stale_dispatched_before=release_at,
+            now=release_at + timedelta(seconds=2),
+        )
+        await uow.commit()
+
+    assert resumed is not None
+    assert resumed.state == AllocationState.PROVISIONING
+    assert len(candidates) == 1
+    assert candidates[0].dispatch_state == DispatchState.ACKNOWLEDGED
+    assert candidates[0].allocation.allocation_id == created.allocation_id
+
+
+async def test_destroy_generation_fence_prevents_reserved_create_dispatch(
+    database: StateDatabase,
+) -> None:
+    provider = FakeProvider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    selected_profile = profile("function-python-v1", "b")
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    async with database.uow() as uow:
+        await uow.repository.ensure_logical(key, selected_profile)
+        intent = await uow.repository.begin_allocation(
+            key,
+            selected_profile,
+            provider_name=provider.name,
+            provider_scope=provider.scope,
+            admission_class=AdmissionClass.BATCH.value,
+            request_hash="d" * 64,
+        )
+        assert (
+            await uow.repository.reserve_provider_capacity(
+                intent.allocation.allocation_id,
+                admission_class=AdmissionClass.BATCH,
+                policy=ProviderAdmissionPolicy.permissive_for_tests(),
+            )
+        ).accepted
+        await uow.repository.begin_destroy(
+            key,
+            claimed_until=deadline,
+        )
+        with pytest.raises(AgentBoxError) as stale:
+            await uow.repository.mark_create_dispatched(
+                intent.allocation.allocation_token,
+                expected_resource_generation=intent.allocation.resource_generation,
+            )
+        await uow.commit()
+
+    assert stale.value.code == ErrorCode.ALLOCATION_CHANGED
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        active, reserved = await uow.repository._admission_counts(provider.scope)
+        await uow.commit()
+    assert [allocation.state for allocation in allocations] == [
+        AllocationState.ERROR
+    ]
+    assert (active, reserved) == (0, 0)
+    assert provider.create_calls == []
 
 
 async def test_failed_readiness_destroys_exact_allocation_before_releasing_state(
@@ -586,6 +759,7 @@ async def test_failed_readiness_cleanup_failure_remains_reconcilable(
             allocations[0].allocation_id,
             retry_after=datetime.now(timezone.utc) - timedelta(seconds=1),
             error_code=ErrorCode.PROVIDER_UNAVAILABLE.value,
+            expected_resource_generation=allocations[0].resource_generation,
         )
         await uow.commit()
     reconciled = await AgentBoxReconciler(database, provider).reconcile_once(
@@ -813,64 +987,6 @@ async def test_profile_change_replaces_and_fences_allocation(
         AllocationState.DRAINING,
         AllocationState.ACTIVE,
     ]
-
-
-async def test_process_operation_id_is_typed_and_deduplicated(
-    database: StateDatabase,
-):
-    provider = FakeProvider(database)
-    service = SandboxLifecycleService(database, provider)
-    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
-    await service.ensure(
-        key,
-        profile(name="function-python-v1", fill="b"),
-        admission_class=AdmissionClass.LATENCY,
-        deadline_at=deadline,
-    )
-    operation_id = uuid4()
-
-    async with database.uow() as uow:
-        first, first_created = await uow.repository.reserve_process(
-            key,
-            operation_id=operation_id,
-            request_hash="1" * 64,
-            env_keys=("ATTEMPT_TICKET",),
-            cwd="/tmp",
-            tty=False,
-            output_limit_bytes=1024 * 1024,
-            deadline_at=deadline,
-        )
-        second, second_created = await uow.repository.reserve_process(
-            key,
-            operation_id=operation_id,
-            request_hash="1" * 64,
-            env_keys=("ATTEMPT_TICKET",),
-            cwd="/tmp",
-            tty=False,
-            output_limit_bytes=1024 * 1024,
-            deadline_at=deadline,
-        )
-        await uow.commit()
-
-    assert first == second
-    assert first.state == ProcessState.RESERVED
-    assert first_created is True
-    assert second_created is False
-
-    async with database.uow() as uow:
-        with pytest.raises(AgentBoxError) as raised:
-            await uow.repository.reserve_process(
-                key,
-                operation_id=operation_id,
-                request_hash="2" * 64,
-                env_keys=("ATTEMPT_TICKET",),
-                cwd="/tmp",
-                tty=False,
-                output_limit_bytes=1024 * 1024,
-                deadline_at=deadline,
-            )
-    assert raised.value.code == ErrorCode.OPERATION_CONFLICT
 
 
 async def test_uncommitted_unit_of_work_rolls_back(database: StateDatabase):

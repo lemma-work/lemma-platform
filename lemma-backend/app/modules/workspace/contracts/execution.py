@@ -16,6 +16,8 @@ class SandboxInfo:
     created_at: str | None = None
     endpoint: str | None = None
     name: str | None = None
+    allocation_id: str | None = None
+    allocation_epoch: int | None = None
 
     @property
     def container_name(self) -> str:

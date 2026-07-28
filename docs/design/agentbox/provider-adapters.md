@@ -33,7 +33,7 @@ one monolithic provider class is not required or preferred.
 | Native stateful Python contexts | No | No | Yes |
 | Native file API | Archive API is insufficient | No | Yes |
 | Workspace control runtime required | Yes | Yes | No |
-| Provider-native auto-resume | No | No | Yes, workspace only |
+| Provider-native auto-resume | No | No | Disabled; lifecycle is explicit |
 | Strong production isolation | No | With approved RuntimeClass | Managed microVM boundary |
 | Public ingress for functions | Disabled | Disabled | Disabled |
 | Provider create rate admission | Configured local limit | Configured pool/resource limit | E2B project limit |
@@ -391,12 +391,12 @@ the template build.
 
 ### 7.2 Workspace lifecycle
 
-Use full-memory pause and auto-resume:
+Use explicit pause with provider auto-resume disabled:
 
 ```python
 lifecycle={
     "on_timeout": "pause",
-    "auto_resume": True,
+    "auto_resume": False,
 }
 ```
 
@@ -412,25 +412,17 @@ release, AgentBox:
 5. clears ephemeral credentials and browser state;
 6. calls exact sandbox pause.
 
-The E2B timeout is a longer safety bound than the five-minute logical threshold, and
-delegated credentials expire before that bound. If E2B auto-pauses first during an
-AgentBox outage, reconciliation does not publish that allocation directly as clean:
-it fences new work, connects/resumes internally, performs the same quiesce/scrub,
-and pauses it again before normal ensure may return it. This keeps provider timeout
-from bypassing the portable release contract.
+The E2B timeout is a longer safety bound than the five-minute logical threshold,
+and delegated credentials expire before that bound. Provider timeout is a safety
+fallback, not a second lifecycle controller.
 
-Thus the E2B snapshot contains the static clean template/runtime state plus workspace
-files, not live delegated credentials. AgentBox pauses with `keep_memory=False`:
-E2B drops the memory snapshot and cold-boots the same sandbox from its persisted
-filesystem on reconnect.
-
-With auto-resume enabled, native commands, file operations, and authenticated tunnel
-traffic can resume a paused sandbox. An adapter operation may use its cached handle;
-otherwise it connects by exact provider ID. It does not call list/status first.
-E2B documents that filesystem-only pause preserves disk while dropping running
-processes and open connections. AgentBox reconnects by exact sandbox ID and proves
-the filesystem data plane with a temporary write/read/delete marker before
-publication. See [persistence](https://e2b.dev/docs/sandbox/persistence).
+Thus the paused sandbox contains the static clean template/runtime state plus
+workspace files, not live delegated credentials. Resume is an explicit AgentBox
+operation against the exact sandbox ID and produces a new allocation epoch before
+new data-plane work is accepted. Native file or command traffic cannot silently
+resume a sandbox behind the lifecycle controller. See
+[persistence](https://e2b.dev/docs/sandbox/persistence) and
+[automatic resume](https://e2b.dev/docs/sandbox/auto-resume).
 
 Paused E2B sandboxes are retained indefinitely by the provider, so AgentBox's
 configured retention worker must explicitly kill them.
@@ -465,9 +457,10 @@ custom process tags; its PTY API supports reconnect and resize. See
 [Process Start API](https://e2b.dev/docs/api-reference/process/start), and
 [interactive PTY](https://e2b.dev/docs/sandbox/pty).
 
-Use `operation_id` as the provider process tag when supported. Persist the PID only
-after acknowledgment. On ambiguous start, search the exact sandbox's process list
-for that tag; never submit another start solely because the PID response was lost.
+Use `operation_id` as the provider process tag when supported. The bounded
+manager-local handle records the acknowledged PID. Every stdin/resize/terminate
+operation verifies that the PID still carries the expected operation tag. An
+ambiguous start is reported as `UNKNOWN_DISPATCH` and is never resubmitted.
 
 One E2B Code Interpreter context maps to one AgentBox session. Context cwd matches
 the session cwd; context restart maps to session restart. See

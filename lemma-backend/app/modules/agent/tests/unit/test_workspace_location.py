@@ -11,6 +11,10 @@ from app.modules.agent.services.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
 )
+from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.agent.tools.workspace_cli.workspace_cli import (
+    workspace_runtime_context,
+)
 
 
 def test_defaults_to_pretty_conversation_scoped_cwd_and_single_workspace():
@@ -23,6 +27,16 @@ def test_defaults_to_pretty_conversation_scoped_cwd_and_single_workspace():
     # /workspace/c/{date}/{slug}
     assert location.cwd.count("/") == 4
     assert location.workspace_id == "default"
+
+
+def test_legacy_conversation_without_cwd_resolves_stably():
+    conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
+
+    first = resolve_workspace_location(conversation)
+    second = resolve_workspace_location(conversation)
+
+    assert first.cwd == second.cwd
+    assert first.cwd.endswith(conversation.id.hex[:8])
 
 
 def test_conversation_metadata_overrides_cwd_and_workspace():
@@ -76,6 +90,33 @@ def test_pod_cwd_from_workspace_cwd_edge_cases():
     assert pod_cwd_from_workspace_cwd("/workspace/a/b") == "/me/a/b"
     # A cwd not under /workspace is placed under /me as-is (defensive).
     assert pod_cwd_from_workspace_cwd("/other/x") == "/me/other/x"
+
+
+def test_python_runtime_identity_tracks_conversation_working_directory():
+    conversation_id = uuid4()
+    common = {
+        "user_id": uuid4(),
+        "org_id": uuid4(),
+        "pod_id": uuid4(),
+        "conversation_id": conversation_id,
+        "agent_name": "builder",
+    }
+    first = workspace_runtime_context(
+        BaseAgentContext(
+            **common,
+            workspace_cwd="/workspace/conversations/first",
+        )
+    )
+    second = workspace_runtime_context(
+        BaseAgentContext(
+            **common,
+            workspace_cwd="/workspace/conversations/second",
+        )
+    )
+
+    assert first.initial_cwd == "/workspace/conversations/first"
+    assert second.initial_cwd == "/workspace/conversations/second"
+    assert first.default_python_session_id != second.default_python_session_id
 
 
 def test_generate_cwd_slug_is_short_and_alphanumeric():

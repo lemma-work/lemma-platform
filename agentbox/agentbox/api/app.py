@@ -433,6 +433,9 @@ async def lifespan(app: FastAPI):
                 api_key=settings.agentbox_e2b_api_key,
                 scope=settings.agentbox_e2b_scope,
                 request_timeout_seconds=(settings.agentbox_e2b_request_timeout_seconds),
+                workspace_timeout_seconds=(
+                    settings.agentbox_e2b_workspace_timeout_seconds
+                ),
                 function_allow_out=(settings.agentbox_e2b_function_allow_out_hosts),
                 max_file_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
             ),
@@ -476,8 +479,8 @@ async def lifespan(app: FastAPI):
     reconciler = AgentBoxReconciler(
         database,
         provider,
-        create_absence_grace_seconds=(
-            settings.agentbox_ambiguous_create_absence_grace_seconds
+        reserved_create_stale_seconds=(
+            settings.agentbox_reserved_create_stale_seconds
         ),
         dispatched_create_stale_seconds=(
             settings.agentbox_dispatched_create_stale_seconds

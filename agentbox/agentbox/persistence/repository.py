@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, and_, case, exists, func, or_, select, update
+from sqlalchemy import Select, and_, case, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,16 +20,9 @@ from agentbox.domain import (
     ErrorCode,
     LogicalSandbox,
     MaintenanceAction,
-    OperationConflictContext,
     PhysicalAllocation,
     ProviderAdmissionDecision,
     ProviderAdmissionPolicy,
-    ProcessIntent,
-    ProcessState,
-    PythonExecutionState,
-    PythonResult,
-    PythonSessionRef,
-    PythonSessionState,
     RetryDisposition,
     SandboxDesiredState,
     SandboxKey,
@@ -46,10 +39,7 @@ from .models import (
     AllocationRow,
     CreateAttemptRow,
     LogicalSandboxRow,
-    ProcessIntentRow,
     ProviderAdmissionRow,
-    PythonExecutionRow,
-    SessionRow,
     WorkspaceStorageRow,
 )
 
@@ -68,14 +58,6 @@ TERMINAL_ALLOCATION_STATES = (
     AllocationState.DESTROYED.value,
     AllocationState.ERROR.value,
 )
-
-NONTERMINAL_PROCESS_STATES = (
-    ProcessState.RESERVED.value,
-    ProcessState.STARTING.value,
-    ProcessState.UNKNOWN.value,
-    ProcessState.RUNNING.value,
-)
-
 
 def _aware(value: datetime | None) -> datetime | None:
     if value is None or value.tzinfo is not None:
@@ -108,6 +90,7 @@ class AgentBoxRepository:
             "desired_state": SandboxDesiredState.PRESENT.value,
             "profile_name": profile.name,
             "profile_digest": profile.digest,
+            "resource_generation": 1,
             "allocation_epoch": 0,
             "last_used_at": timestamp,
             "created_at": timestamp,
@@ -147,6 +130,12 @@ class AgentBoxRepository:
                 status_code=409,
                 retry_after_ms=1000,
             )
+        desired_changed = (
+            row.desired_state != SandboxDesiredState.PRESENT.value
+            or row.profile_digest != profile.digest
+        )
+        if desired_changed:
+            row.resource_generation += 1
         if row.profile_digest != profile.digest:
             row.profile_name = profile.name
             row.profile_digest = profile.digest
@@ -161,7 +150,7 @@ class AgentBoxRepository:
         row = await self._select_logical(key, for_update=for_update)
         return self._logical(row) if row is not None else None
 
-    async def protect_port_access(
+    async def protect_activity(
         self,
         key: SandboxKey,
         *,
@@ -169,6 +158,19 @@ class AgentBoxRepository:
         now: datetime | None = None,
     ) -> LogicalSandbox:
         timestamp = now or utc_now()
+        maximum_until = timestamp + timedelta(hours=24)
+        if (
+            until.tzinfo is None
+            or until.utcoffset() is None
+            or until <= timestamp
+            or until > maximum_until
+        ):
+            raise AgentBoxError(
+                ErrorCode.INVALID_REQUEST,
+                "activity protection must be a future absolute deadline within 24 hours",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=422,
+            )
         row = await self._select_logical(key, for_update=True)
         if row is None:
             raise AgentBoxError(
@@ -177,6 +179,17 @@ class AgentBoxRepository:
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=404,
             )
+        if (
+            row.desired_state != SandboxDesiredState.PRESENT.value
+            or row.maintenance_action is not None
+        ):
+            raise AgentBoxError(
+                ErrorCode.SANDBOX_QUIESCING,
+                "sandbox lifecycle maintenance has already started",
+                retry=RetryDisposition.WAIT,
+                status_code=409,
+                retry_after_ms=1000,
+            )
         current = _aware(row.protected_until)
         if current is None or until > current:
             row.protected_until = until
@@ -184,6 +197,17 @@ class AgentBoxRepository:
         row.updated_at = timestamp
         await self._session.flush()
         return self._logical(row)
+
+    async def protect_port_access(
+        self,
+        key: SandboxKey,
+        *,
+        until: datetime,
+        now: datetime | None = None,
+    ) -> LogicalSandbox:
+        """Compatibility wrapper for the original port-only activity lease."""
+
+        return await self.protect_activity(key, until=until, now=now)
 
     async def _select_logical(
         self, key: SandboxKey, *, for_update: bool
@@ -223,6 +247,7 @@ class AgentBoxRepository:
                 AllocationRow.workload_kind == key.workload_kind.value,
                 AllocationRow.logical_id == key.logical_id,
                 AllocationRow.profile_digest == profile.digest,
+                AllocationRow.resource_generation == logical_row.resource_generation,
                 AllocationRow.state.in_(NONTERMINAL_ALLOCATION_STATES),
             )
             .order_by(AllocationRow.created_at.desc())
@@ -252,6 +277,7 @@ class AgentBoxRepository:
             provider_scope=provider_scope,
             profile_name=profile.name,
             profile_digest=profile.digest,
+            resource_generation=logical_row.resource_generation,
             state=AllocationState.RESERVED.value,
             admission_class=admission_class,
             admission_state=AdmissionState.UNRESERVED.value,
@@ -622,31 +648,64 @@ class AgentBoxRepository:
         return self._storage(row) if row is not None else None
 
     async def mark_create_dispatched(
-        self, allocation_token: UUID, *, now: datetime | None = None
+        self,
+        allocation_token: UUID,
+        *,
+        expected_resource_generation: int,
+        now: datetime | None = None,
     ) -> bool:
         timestamp = now or utc_now()
-        result = await self._session.execute(
-            update(CreateAttemptRow)
-            .where(
-                CreateAttemptRow.allocation_token == allocation_token,
-                CreateAttemptRow.dispatch_state == DispatchState.RESERVED.value,
-            )
-            .values(
-                dispatch_state=DispatchState.DISPATCHED.value,
-                dispatch_started_at=timestamp,
-                updated_at=timestamp,
-            )
+        allocation = await self._session.scalar(
+            select(AllocationRow)
+            .where(AllocationRow.allocation_token == allocation_token)
+            .with_for_update()
         )
-        if result.rowcount != 1:
+        if allocation is None:
             return False
-        await self._session.execute(
-            update(AllocationRow)
-            .where(
-                AllocationRow.allocation_token == allocation_token,
-                AllocationRow.state == AllocationState.RESERVED.value,
-            )
-            .values(state=AllocationState.PROVISIONING.value, updated_at=timestamp)
+        logical = await self._select_logical(
+            SandboxKey(
+                workload_kind=WorkloadKind(allocation.workload_kind),
+                logical_id=allocation.logical_id,
+            ),
+            for_update=True,
         )
+        attempt = await self._session.get(CreateAttemptRow, allocation_token)
+        if (
+            logical is None
+            or logical.desired_state != SandboxDesiredState.PRESENT.value
+            or logical.maintenance_action is not None
+            or logical.resource_generation != expected_resource_generation
+            or allocation.resource_generation != expected_resource_generation
+        ):
+            if (
+                attempt is not None
+                and attempt.dispatch_state == DispatchState.RESERVED.value
+            ):
+                attempt.dispatch_state = DispatchState.RESOLVED.value
+                attempt.reconcile_after = None
+                attempt.updated_at = timestamp
+                allocation.state = AllocationState.ERROR.value
+                allocation.last_error_code = ErrorCode.ALLOCATION_CHANGED.value
+                allocation.updated_at = timestamp
+                await self._set_admission_state(
+                    allocation, AdmissionState.RELEASED, now=timestamp
+                )
+            raise AgentBoxError(
+                ErrorCode.ALLOCATION_CHANGED,
+                "allocation create dispatch belongs to a stale lifecycle generation",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=409,
+            )
+        if allocation.state != AllocationState.RESERVED.value:
+            return False
+        if attempt is None or attempt.dispatch_state != DispatchState.RESERVED.value:
+            return False
+        attempt.dispatch_state = DispatchState.DISPATCHED.value
+        attempt.dispatch_started_at = timestamp
+        attempt.updated_at = timestamp
+        allocation.state = AllocationState.PROVISIONING.value
+        allocation.updated_at = timestamp
+        await self._session.flush()
         return True
 
     async def mark_create_unknown(
@@ -655,9 +714,28 @@ class AgentBoxRepository:
         *,
         reconcile_after: datetime,
         error_code: str,
+        expected_resource_generation: int | None = None,
         now: datetime | None = None,
     ) -> None:
         timestamp = now or utc_now()
+        allocation = await self._session.scalar(
+            select(AllocationRow)
+            .where(AllocationRow.allocation_token == allocation_token)
+            .with_for_update()
+        )
+        if allocation is None:
+            return
+        if (
+            expected_resource_generation is not None
+            and allocation.resource_generation != expected_resource_generation
+        ):
+            return
+        if allocation.state not in {
+            AllocationState.RESERVED.value,
+            AllocationState.PROVISIONING.value,
+            AllocationState.UNKNOWN.value,
+        }:
+            return
         result = await self._session.execute(
             update(CreateAttemptRow)
             .where(
@@ -696,12 +774,21 @@ class AgentBoxRepository:
         self,
         provider_scope: str,
         *,
+        stale_reserved_before: datetime,
         stale_dispatched_before: datetime,
         now: datetime | None = None,
         limit: int = 100,
     ) -> tuple[CreateReconcileCandidate, ...]:
         timestamp = now or utc_now()
         due_reconciliation = or_(
+            and_(
+                CreateAttemptRow.dispatch_state == DispatchState.RESERVED.value,
+                CreateAttemptRow.created_at <= stale_reserved_before,
+                or_(
+                    CreateAttemptRow.reconcile_after.is_(None),
+                    CreateAttemptRow.reconcile_after <= timestamp,
+                ),
+            ),
             and_(
                 CreateAttemptRow.dispatch_state.in_(
                     (
@@ -762,11 +849,20 @@ class AgentBoxRepository:
         allocation_token: UUID,
         *,
         claimed_until: datetime,
+        stale_reserved_before: datetime,
         stale_dispatched_before: datetime,
         now: datetime | None = None,
     ) -> bool:
         timestamp = now or utc_now()
         due_reconciliation = or_(
+            and_(
+                CreateAttemptRow.dispatch_state == DispatchState.RESERVED.value,
+                CreateAttemptRow.created_at <= stale_reserved_before,
+                or_(
+                    CreateAttemptRow.reconcile_after.is_(None),
+                    CreateAttemptRow.reconcile_after <= timestamp,
+                ),
+            ),
             and_(
                 CreateAttemptRow.dispatch_state.in_(
                     (
@@ -862,9 +958,22 @@ class AgentBoxRepository:
         allocation_token: UUID,
         *,
         reconcile_after: datetime,
+        expected_resource_generation: int | None = None,
         now: datetime | None = None,
     ) -> None:
         timestamp = now or utc_now()
+        allocation = await self._session.scalar(
+            select(AllocationRow)
+            .where(AllocationRow.allocation_token == allocation_token)
+            .with_for_update()
+        )
+        if allocation is None:
+            return
+        if (
+            expected_resource_generation is not None
+            and allocation.resource_generation != expected_resource_generation
+        ):
+            return
         await self._session.execute(
             update(CreateAttemptRow)
             .where(
@@ -946,9 +1055,22 @@ class AgentBoxRepository:
         allocation_token: UUID,
         *,
         error_code: str,
+        expected_resource_generation: int | None = None,
         now: datetime | None = None,
     ) -> None:
         timestamp = now or utc_now()
+        allocation = await self._session.scalar(
+            select(AllocationRow)
+            .where(AllocationRow.allocation_token == allocation_token)
+            .with_for_update()
+        )
+        if allocation is None:
+            return
+        if (
+            expected_resource_generation is not None
+            and allocation.resource_generation != expected_resource_generation
+        ):
+            return
         result = await self._session.execute(
             update(CreateAttemptRow)
             .where(
@@ -971,18 +1093,12 @@ class AgentBoxRepository:
         )
         if result.rowcount != 1:
             return
-        allocation = await self._session.scalar(
-            select(AllocationRow).where(
-                AllocationRow.allocation_token == allocation_token
-            )
+        allocation.state = AllocationState.ERROR.value
+        allocation.last_error_code = error_code
+        allocation.updated_at = timestamp
+        await self._set_admission_state(
+            allocation, AdmissionState.RELEASED, now=timestamp
         )
-        if allocation is not None:
-            allocation.state = AllocationState.ERROR.value
-            allocation.last_error_code = error_code
-            allocation.updated_at = timestamp
-            await self._set_admission_state(
-                allocation, AdmissionState.RELEASED, now=timestamp
-            )
 
     async def mark_allocation_provisioning_retry(
         self,
@@ -990,6 +1106,7 @@ class AgentBoxRepository:
         *,
         retry_after: datetime,
         error_code: str,
+        expected_resource_generation: int,
         now: datetime | None = None,
     ) -> PhysicalAllocation:
         timestamp = now or utc_now()
@@ -1000,6 +1117,20 @@ class AgentBoxRepository:
                 "allocation does not exist",
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=404,
+            )
+        if (
+            row.resource_generation != expected_resource_generation
+            or row.state
+            not in {
+                AllocationState.PROVISIONING.value,
+                AllocationState.UNKNOWN.value,
+            }
+        ):
+            raise AgentBoxError(
+                ErrorCode.ALLOCATION_CHANGED,
+                "provisioning retry belongs to a stale allocation generation",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=409,
             )
         row.state = AllocationState.PROVISIONING.value
         row.retry_after = retry_after
@@ -1034,11 +1165,62 @@ class AgentBoxRepository:
             await self._session.flush()
         return self._allocation(row)
 
+    async def list_draining_allocations(
+        self,
+        provider_scope: str,
+        *,
+        limit: int = 100,
+    ) -> tuple[PhysicalAllocation, ...]:
+        """Return exact superseded provider objects awaiting final cleanup."""
+
+        rows = await self._session.scalars(
+            select(AllocationRow)
+            .where(
+                AllocationRow.provider_scope == provider_scope,
+                AllocationRow.state == AllocationState.DRAINING.value,
+                AllocationRow.provider_id.is_not(None),
+            )
+            .order_by(AllocationRow.updated_at.asc())
+            .limit(limit)
+        )
+        return tuple(self._allocation(row) for row in rows)
+
+    async def complete_draining_allocation(
+        self,
+        allocation_id: UUID,
+        *,
+        expected_resource_generation: int,
+        now: datetime | None = None,
+    ) -> bool:
+        """Finalize cleanup only for the exact draining allocation generation."""
+
+        timestamp = now or utc_now()
+        row = await self._session.scalar(
+            select(AllocationRow)
+            .where(AllocationRow.allocation_id == allocation_id)
+            .with_for_update()
+        )
+        if (
+            row is None
+            or row.state != AllocationState.DRAINING.value
+            or row.resource_generation != expected_resource_generation
+        ):
+            return False
+        row.state = AllocationState.DESTROYED.value
+        row.destroyed_at = timestamp
+        row.updated_at = timestamp
+        await self._set_admission_state(
+            row, AdmissionState.RELEASED, now=timestamp
+        )
+        await self._session.flush()
+        return True
+
     async def acknowledge_create(
         self,
         allocation_token: UUID,
         *,
         provider_id: str,
+        expected_resource_generation: int,
         provider_instance_id: str | None = None,
         provider_request_id: str | None = None,
         now: datetime | None = None,
@@ -1055,6 +1237,36 @@ class AgentBoxRepository:
                 "allocation token is unknown",
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=404,
+            )
+        key = SandboxKey(
+            workload_kind=WorkloadKind(allocation.workload_kind),
+            logical_id=allocation.logical_id,
+        )
+        logical = await self._select_logical(key, for_update=True)
+        if (
+            logical is None
+            or logical.desired_state != SandboxDesiredState.PRESENT.value
+            or logical.maintenance_action is not None
+            or allocation.resource_generation != expected_resource_generation
+            or logical.resource_generation != allocation.resource_generation
+            or logical.profile_digest != allocation.profile_digest
+            or allocation.state
+            not in {
+                AllocationState.RESERVED.value,
+                AllocationState.PROVISIONING.value,
+                AllocationState.UNKNOWN.value,
+            }
+        ):
+            raise AgentBoxError(
+                ErrorCode.ALLOCATION_CHANGED,
+                "allocation create acknowledgement belongs to a stale lifecycle generation",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=409,
+                context=AllocationErrorContext(
+                    kind="allocation",
+                    allocation_id=allocation.allocation_id,
+                    allocation_epoch=allocation.allocation_epoch,
+                ),
             )
         if allocation.provider_id not in (None, provider_id):
             raise AgentBoxError(
@@ -1082,7 +1294,11 @@ class AgentBoxRepository:
         return self._allocation(allocation)
 
     async def publish_allocation(
-        self, allocation_token: UUID, *, now: datetime | None = None
+        self,
+        allocation_token: UUID,
+        *,
+        expected_resource_generation: int,
+        now: datetime | None = None,
     ) -> PhysicalAllocation:
         timestamp = now or utc_now()
         allocation = await self._session.scalar(
@@ -1104,6 +1320,25 @@ class AgentBoxRepository:
         logical = await self._select_logical(key, for_update=True)
         if logical is None:  # pragma: no cover - state invariant
             raise RuntimeError("allocation owner does not exist")
+        if (
+            logical.desired_state != SandboxDesiredState.PRESENT.value
+            or logical.maintenance_action is not None
+            or allocation.resource_generation != expected_resource_generation
+            or logical.resource_generation != allocation.resource_generation
+            or logical.profile_digest != allocation.profile_digest
+            or allocation.state != AllocationState.PROVISIONING.value
+        ):
+            raise AgentBoxError(
+                ErrorCode.ALLOCATION_CHANGED,
+                "allocation readiness belongs to a stale lifecycle generation",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=409,
+                context=AllocationErrorContext(
+                    kind="allocation",
+                    allocation_id=allocation.allocation_id,
+                    allocation_epoch=allocation.allocation_epoch,
+                ),
+            )
 
         previous_id = logical.current_allocation_id
         if previous_id == allocation.allocation_id and allocation.state == "active":
@@ -1120,7 +1355,6 @@ class AgentBoxRepository:
 
         logical.allocation_epoch += 1
         logical.current_allocation_id = allocation.allocation_id
-        logical.desired_state = SandboxDesiredState.PRESENT.value
         logical.released_at = None
         logical.delete_after = None
         logical.last_used_at = timestamp
@@ -1172,8 +1406,18 @@ class AgentBoxRepository:
         ):
             return None
         allocation.state = AllocationState.PROVISIONING.value
+        allocation.resource_generation = logical.resource_generation
         allocation.retry_after = None
         allocation.updated_at = timestamp
+        attempt = await self._session.get(
+            CreateAttemptRow, allocation.allocation_token
+        )
+        if attempt is None:  # pragma: no cover - FK invariant
+            raise RuntimeError("released allocation is missing create attempt")
+        attempt.dispatch_state = DispatchState.ACKNOWLEDGED.value
+        attempt.reconcile_after = timestamp
+        attempt.last_reconcile_at = None
+        attempt.updated_at = timestamp
         logical.desired_state = SandboxDesiredState.PRESENT.value
         logical.last_used_at = timestamp
         logical.updated_at = timestamp
@@ -1192,13 +1436,6 @@ class AgentBoxRepository:
         """Claim due lifecycle work without keeping a DB session over provider I/O."""
 
         timestamp = now or utc_now()
-        active_process = exists(
-            select(ProcessIntentRow.operation_id).where(
-                ProcessIntentRow.workload_kind == LogicalSandboxRow.workload_kind,
-                ProcessIntentRow.logical_id == LogicalSandboxRow.logical_id,
-                ProcessIntentRow.state.in_(NONTERMINAL_PROCESS_STATES),
-            )
-        )
         expired_claim = and_(
             LogicalSandboxRow.maintenance_action.is_not(None),
             or_(
@@ -1215,7 +1452,6 @@ class AgentBoxRepository:
                 LogicalSandboxRow.protected_until.is_(None),
                 LogicalSandboxRow.protected_until <= timestamp,
             ),
-            ~active_process,
         )
         idle_function = and_(
             LogicalSandboxRow.workload_kind == WorkloadKind.FUNCTION.value,
@@ -1226,7 +1462,6 @@ class AgentBoxRepository:
                 LogicalSandboxRow.protected_until.is_(None),
                 LogicalSandboxRow.protected_until <= timestamp,
             ),
-            ~active_process,
         )
         expired_workspace = and_(
             LogicalSandboxRow.workload_kind == WorkloadKind.WORKSPACE.value,
@@ -1356,6 +1591,8 @@ class AgentBoxRepository:
             claim=claim,
             now=timestamp,
         )
+        if logical.desired_state != SandboxDesiredState.RELEASED.value:
+            logical.resource_generation += 1
         logical.desired_state = SandboxDesiredState.RELEASED.value
         logical.released_at = timestamp
         idle_since = _aware(logical.last_used_at) or timestamp
@@ -1376,17 +1613,6 @@ class AgentBoxRepository:
             }:
                 allocation.state = AllocationState.QUIESCING.value
                 allocation.updated_at = timestamp
-        await self._session.execute(
-            update(SessionRow)
-            .where(
-                SessionRow.workload_kind == key.workload_kind.value,
-                SessionRow.logical_id == key.logical_id,
-                SessionRow.state.not_in(
-                    [PythonSessionState.DELETED.value, PythonSessionState.STALE.value]
-                ),
-            )
-            .values(state=PythonSessionState.STALE.value, updated_at=timestamp)
-        )
         await self._session.flush()
         return (
             maintenance_claim,
@@ -1444,18 +1670,6 @@ class AgentBoxRepository:
             await self._set_admission_state(
                 allocation, AdmissionState.RELEASED, now=timestamp
             )
-            await self._session.execute(
-                update(ProcessIntentRow)
-                .where(
-                    ProcessIntentRow.allocation_id == allocation_id,
-                    ProcessIntentRow.state.in_(NONTERMINAL_PROCESS_STATES),
-                )
-                .values(
-                    state=ProcessState.CANCELLED.value,
-                    completed_at=timestamp,
-                    updated_at=timestamp,
-                )
-            )
         logical.maintenance_action = None
         logical.maintenance_token = None
         logical.maintenance_claimed_until = None
@@ -1495,11 +1709,14 @@ class AgentBoxRepository:
             claim=claim,
             now=timestamp,
         )
-        logical.desired_state = (
+        next_desired_state = (
             SandboxDesiredState.RELEASED.value
             if recreate_on_ensure
             else SandboxDesiredState.DELETED.value
         )
+        if logical.desired_state != next_desired_state:
+            logical.resource_generation += 1
+        logical.desired_state = next_desired_state
         logical.delete_after = None
         logical.updated_at = timestamp
         allocation: AllocationRow | None = None
@@ -1522,14 +1739,6 @@ class AgentBoxRepository:
         if storage_row is not None and storage_row.state != StorageState.DELETED.value:
             storage_row.state = StorageState.DELETING.value
             storage_row.updated_at = timestamp
-        await self._session.execute(
-            update(SessionRow)
-            .where(
-                SessionRow.workload_kind == key.workload_kind.value,
-                SessionRow.logical_id == key.logical_id,
-            )
-            .values(state=PythonSessionState.DELETED.value, updated_at=timestamp)
-        )
         await self._session.flush()
         return (
             maintenance_claim,
@@ -1632,623 +1841,6 @@ class AgentBoxRepository:
         ).all()
         return tuple(self._allocation(row) for row in allocations)
 
-    async def reserve_process(
-        self,
-        key: SandboxKey,
-        *,
-        operation_id: UUID,
-        request_hash: str,
-        env_keys: tuple[str, ...],
-        cwd: str,
-        tty: bool,
-        output_limit_bytes: int,
-        deadline_at: datetime,
-        now: datetime | None = None,
-    ) -> tuple[ProcessIntent, bool]:
-        timestamp = now or utc_now()
-        logical = await self._select_logical(key, for_update=True)
-        if logical is None or logical.current_allocation_id is None:
-            raise AgentBoxError(
-                ErrorCode.SANDBOX_NOT_FOUND,
-                "sandbox has no current allocation",
-                retry=RetryDisposition.WAIT,
-                status_code=404,
-            )
-        if logical.desired_state != SandboxDesiredState.PRESENT.value:
-            raise AgentBoxError(
-                ErrorCode.SANDBOX_QUIESCING,
-                "sandbox is not accepting new processes",
-                retry=RetryDisposition.WAIT,
-                status_code=409,
-            )
-        allocation = await self._session.get(
-            AllocationRow, logical.current_allocation_id
-        )
-        if allocation is None or allocation.state != AllocationState.ACTIVE.value:
-            raise AgentBoxError(
-                ErrorCode.PROVISIONING,
-                "sandbox allocation is not ready for processes",
-                retry=RetryDisposition.WAIT,
-                status_code=409,
-            )
-        existing = await self._session.get(
-            ProcessIntentRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if existing is not None:
-            if existing.request_hash != request_hash:
-                raise AgentBoxError(
-                    ErrorCode.OPERATION_CONFLICT,
-                    "operation ID was reused with a different request",
-                    retry=RetryDisposition.DO_NOT_RETRY,
-                    status_code=409,
-                    context=OperationConflictContext(
-                        kind="operation_conflict", operation_id=operation_id
-                    ),
-                )
-            return self._process(existing), False
-
-        row = ProcessIntentRow(
-            workload_kind=key.workload_kind.value,
-            logical_id=key.logical_id,
-            operation_id=operation_id,
-            allocation_id=logical.current_allocation_id,
-            allocation_epoch=logical.allocation_epoch,
-            request_hash=request_hash,
-            env_keys=list(env_keys),
-            cwd=cwd,
-            tty=tty,
-            output_limit_bytes=output_limit_bytes,
-            state=ProcessState.RESERVED.value,
-            deadline_at=deadline_at,
-            created_at=timestamp,
-            updated_at=timestamp,
-        )
-        self._session.add(row)
-        logical.last_used_at = timestamp
-        logical.updated_at = timestamp
-        await self._session.flush()
-        return self._process(row), True
-
-    async def mark_process_starting(
-        self, key: SandboxKey, operation_id: UUID, *, now: datetime | None = None
-    ) -> bool:
-        timestamp = now or utc_now()
-        result = await self._session.execute(
-            update(ProcessIntentRow)
-            .where(
-                ProcessIntentRow.workload_kind == key.workload_kind.value,
-                ProcessIntentRow.logical_id == key.logical_id,
-                ProcessIntentRow.operation_id == operation_id,
-                ProcessIntentRow.state == ProcessState.RESERVED.value,
-            )
-            .values(state=ProcessState.STARTING.value, updated_at=timestamp)
-        )
-        return result.rowcount == 1
-
-    async def acknowledge_process(
-        self,
-        key: SandboxKey,
-        operation_id: UUID,
-        *,
-        provider_process_id: str,
-        provider_tag: str,
-        now: datetime | None = None,
-    ) -> ProcessIntent:
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            ProcessIntentRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        if row.provider_process_id not in (None, provider_process_id):
-            raise AgentBoxError(
-                ErrorCode.OPERATION_CONFLICT,
-                "process is already bound to another provider process",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=409,
-                context=OperationConflictContext(
-                    kind="operation_conflict", operation_id=operation_id
-                ),
-            )
-        row.provider_process_id = provider_process_id
-        row.provider_tag = provider_tag
-        row.state = ProcessState.RUNNING.value
-        row.started_at = row.started_at or timestamp
-        row.updated_at = timestamp
-        await self._session.flush()
-        return self._process(row)
-
-    async def mark_process_unknown(
-        self,
-        key: SandboxKey,
-        operation_id: UUID,
-        *,
-        now: datetime | None = None,
-    ) -> ProcessIntent:
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            ProcessIntentRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        if row.state in {ProcessState.RESERVED.value, ProcessState.STARTING.value}:
-            row.state = ProcessState.UNKNOWN.value
-            row.updated_at = timestamp
-            await self._session.flush()
-        return self._process(row)
-
-    async def reset_process_after_rejection(
-        self,
-        key: SandboxKey,
-        operation_id: UUID,
-        *,
-        now: datetime | None = None,
-    ) -> ProcessIntent:
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            ProcessIntentRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        if row.state == ProcessState.STARTING.value:
-            row.state = ProcessState.RESERVED.value
-            row.updated_at = timestamp
-            await self._session.flush()
-        return self._process(row)
-
-    async def mark_process_terminated(
-        self,
-        key: SandboxKey,
-        operation_id: UUID,
-        *,
-        now: datetime | None = None,
-    ) -> ProcessIntent:
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            ProcessIntentRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        if row.state not in {
-            ProcessState.SUCCEEDED.value,
-            ProcessState.FAILED.value,
-            ProcessState.CANCELLED.value,
-            ProcessState.TIMED_OUT.value,
-        }:
-            row.state = ProcessState.CANCELLED.value
-            row.completed_at = timestamp
-            row.updated_at = timestamp
-            await self._session.flush()
-        return self._process(row)
-
-    async def complete_process(
-        self,
-        key: SandboxKey,
-        operation_id: UUID,
-        *,
-        state: ProcessState,
-        exit_code: int | None,
-        now: datetime | None = None,
-    ) -> ProcessIntent:
-        if state not in {
-            ProcessState.SUCCEEDED,
-            ProcessState.FAILED,
-            ProcessState.CANCELLED,
-            ProcessState.TIMED_OUT,
-        }:
-            raise ValueError("completed process must have a terminal state")
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            ProcessIntentRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        if row.state in {
-            ProcessState.SUCCEEDED.value,
-            ProcessState.FAILED.value,
-            ProcessState.CANCELLED.value,
-            ProcessState.TIMED_OUT.value,
-        }:
-            return self._process(row)
-        row.state = state.value
-        row.exit_code = exit_code
-        row.completed_at = timestamp
-        row.updated_at = timestamp
-        await self._session.flush()
-        return self._process(row)
-
-    async def get_process(
-        self, key: SandboxKey, operation_id: UUID
-    ) -> ProcessIntent | None:
-        row = await self._session.get(
-            ProcessIntentRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        return self._process(row) if row is not None else None
-
-    async def list_processes(self, key: SandboxKey) -> tuple[ProcessIntent, ...]:
-        rows = (
-            await self._session.scalars(
-                select(ProcessIntentRow)
-                .where(
-                    ProcessIntentRow.workload_kind == key.workload_kind.value,
-                    ProcessIntentRow.logical_id == key.logical_id,
-                )
-                .order_by(ProcessIntentRow.created_at)
-            )
-        ).all()
-        return tuple(self._process(row) for row in rows)
-
-    async def reserve_python_session(
-        self,
-        key: SandboxKey,
-        *,
-        session_id: UUID,
-        cwd: str,
-        env_keys: tuple[str, ...],
-        now: datetime | None = None,
-    ) -> tuple[PythonSessionRef, bool]:
-        if key.workload_kind != WorkloadKind.WORKSPACE:
-            raise AgentBoxError(
-                ErrorCode.UNSUPPORTED_CAPABILITY,
-                "Python sessions are available only for workspaces",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=422,
-            )
-        timestamp = now or utc_now()
-        logical = await self._select_logical(key, for_update=True)
-        if logical is None or logical.current_allocation_id is None:
-            raise AgentBoxError(
-                ErrorCode.SANDBOX_NOT_FOUND,
-                "workspace has no current allocation",
-                retry=RetryDisposition.WAIT,
-                status_code=404,
-            )
-        allocation = await self._session.get(
-            AllocationRow, logical.current_allocation_id
-        )
-        if allocation is None or allocation.state != AllocationState.ACTIVE.value:
-            raise AgentBoxError(
-                ErrorCode.PROVISIONING,
-                "workspace allocation is not ready for Python sessions",
-                retry=RetryDisposition.WAIT,
-                status_code=409,
-            )
-        row = await self._session.get(
-            SessionRow, (key.workload_kind.value, key.logical_id, session_id)
-        )
-        if row is None:
-            row = SessionRow(
-                workload_kind=key.workload_kind.value,
-                logical_id=key.logical_id,
-                session_id=session_id,
-                allocation_id=allocation.allocation_id,
-                allocation_epoch=logical.allocation_epoch,
-                provider_context_id=None,
-                cwd=cwd,
-                env_keys=list(env_keys),
-                state=PythonSessionState.RESERVED.value,
-                last_used_at=timestamp,
-                created_at=timestamp,
-                updated_at=timestamp,
-            )
-            self._session.add(row)
-            created = True
-        elif (
-            row.allocation_id != allocation.allocation_id
-            or row.allocation_epoch != logical.allocation_epoch
-            or row.state
-            in {PythonSessionState.STALE.value, PythonSessionState.DELETED.value}
-        ):
-            row.allocation_id = allocation.allocation_id
-            row.allocation_epoch = logical.allocation_epoch
-            row.provider_context_id = None
-            row.cwd = cwd
-            row.env_keys = list(env_keys)
-            row.state = PythonSessionState.RESERVED.value
-            row.last_used_at = timestamp
-            row.updated_at = timestamp
-            created = True
-        else:
-            if row.cwd != cwd or tuple(row.env_keys) != env_keys:
-                raise AgentBoxError(
-                    ErrorCode.OPERATION_CONFLICT,
-                    "session ID was reused with different configuration",
-                    retry=RetryDisposition.DO_NOT_RETRY,
-                    status_code=409,
-                )
-            created = False
-        logical.last_used_at = timestamp
-        logical.updated_at = timestamp
-        await self._session.flush()
-        return self._python_session(row), created
-
-    async def mark_python_session_creating(
-        self, key: SandboxKey, session_id: UUID, *, now: datetime | None = None
-    ) -> bool:
-        timestamp = now or utc_now()
-        result = await self._session.execute(
-            update(SessionRow)
-            .where(
-                SessionRow.workload_kind == key.workload_kind.value,
-                SessionRow.logical_id == key.logical_id,
-                SessionRow.session_id == session_id,
-                SessionRow.state == PythonSessionState.RESERVED.value,
-            )
-            .values(state=PythonSessionState.CREATING.value, updated_at=timestamp)
-        )
-        return result.rowcount == 1
-
-    async def acknowledge_python_session(
-        self,
-        key: SandboxKey,
-        session_id: UUID,
-        *,
-        provider_context_id: str,
-        now: datetime | None = None,
-    ) -> PythonSessionRef:
-        timestamp = now or utc_now()
-        row = await self._require_session_row(key, session_id)
-        if row.provider_context_id not in (None, provider_context_id):
-            raise AgentBoxError(
-                ErrorCode.OPERATION_CONFLICT,
-                "session is already bound to another provider context",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=409,
-            )
-        row.provider_context_id = provider_context_id
-        row.state = PythonSessionState.ACTIVE.value
-        row.last_used_at = timestamp
-        row.updated_at = timestamp
-        await self._session.flush()
-        return self._python_session(row)
-
-    async def mark_python_session_unknown(
-        self, key: SandboxKey, session_id: UUID, *, now: datetime | None = None
-    ) -> PythonSessionRef:
-        timestamp = now or utc_now()
-        row = await self._require_session_row(key, session_id)
-        if row.state == PythonSessionState.CREATING.value:
-            row.state = PythonSessionState.UNKNOWN.value
-            row.updated_at = timestamp
-            await self._session.flush()
-        return self._python_session(row)
-
-    async def get_python_session(
-        self, key: SandboxKey, session_id: UUID
-    ) -> PythonSessionRef | None:
-        row = await self._session.get(
-            SessionRow, (key.workload_kind.value, key.logical_id, session_id)
-        )
-        return self._python_session(row) if row is not None else None
-
-    async def set_python_session_state(
-        self,
-        key: SandboxKey,
-        session_id: UUID,
-        state: PythonSessionState,
-        *,
-        provider_context_id: str | None = None,
-        now: datetime | None = None,
-    ) -> PythonSessionRef:
-        timestamp = now or utc_now()
-        row = await self._require_session_row(key, session_id)
-        row.state = state.value
-        row.provider_context_id = provider_context_id
-        row.last_used_at = timestamp
-        row.updated_at = timestamp
-        await self._session.flush()
-        return self._python_session(row)
-
-    async def reserve_python_execution(
-        self,
-        key: SandboxKey,
-        session_id: UUID,
-        *,
-        operation_id: UUID,
-        request_hash: str,
-        deadline_at: datetime,
-        now: datetime | None = None,
-    ) -> tuple[PythonResult, bool]:
-        timestamp = now or utc_now()
-        session = await self._require_session_row(key, session_id)
-        logical = await self._select_logical(key, for_update=True)
-        if (
-            session.state != PythonSessionState.ACTIVE.value
-            or logical is None
-            or logical.current_allocation_id != session.allocation_id
-            or logical.allocation_epoch != session.allocation_epoch
-        ):
-            raise AgentBoxError(
-                ErrorCode.ALLOCATION_CHANGED,
-                "Python session does not belong to the current allocation",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=409,
-                context=AllocationErrorContext(
-                    kind="allocation",
-                    allocation_id=session.allocation_id,
-                    allocation_epoch=session.allocation_epoch,
-                ),
-            )
-        existing = await self._session.get(
-            PythonExecutionRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if existing is not None:
-            if (
-                existing.session_id != session_id
-                or existing.request_hash != request_hash
-            ):
-                raise AgentBoxError(
-                    ErrorCode.OPERATION_CONFLICT,
-                    "Python operation ID was reused with a different request",
-                    retry=RetryDisposition.DO_NOT_RETRY,
-                    status_code=409,
-                    context=OperationConflictContext(
-                        kind="operation_conflict", operation_id=operation_id
-                    ),
-                )
-            return self._python_result(existing), False
-        row = PythonExecutionRow(
-            workload_kind=key.workload_kind.value,
-            logical_id=key.logical_id,
-            operation_id=operation_id,
-            session_id=session_id,
-            allocation_id=session.allocation_id,
-            allocation_epoch=session.allocation_epoch,
-            request_hash=request_hash,
-            state=PythonExecutionState.RESERVED.value,
-            deadline_at=deadline_at,
-            stdout="",
-            stderr="",
-            output_truncated=False,
-            created_at=timestamp,
-            updated_at=timestamp,
-        )
-        self._session.add(row)
-        session.last_used_at = timestamp
-        session.updated_at = timestamp
-        logical.last_used_at = timestamp
-        logical.updated_at = timestamp
-        await self._session.flush()
-        return self._python_result(row), True
-
-    async def mark_python_execution_starting(
-        self, key: SandboxKey, operation_id: UUID, *, now: datetime | None = None
-    ) -> bool:
-        timestamp = now or utc_now()
-        result = await self._session.execute(
-            update(PythonExecutionRow)
-            .where(
-                PythonExecutionRow.workload_kind == key.workload_kind.value,
-                PythonExecutionRow.logical_id == key.logical_id,
-                PythonExecutionRow.operation_id == operation_id,
-                PythonExecutionRow.state == PythonExecutionState.RESERVED.value,
-            )
-            .values(state=PythonExecutionState.STARTING.value, updated_at=timestamp)
-        )
-        return result.rowcount == 1
-
-    async def complete_python_execution(
-        self,
-        key: SandboxKey,
-        result: PythonResult,
-        *,
-        now: datetime | None = None,
-    ) -> PythonResult:
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            PythonExecutionRow,
-            (key.workload_kind.value, key.logical_id, result.operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "Python execution intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        row.state = result.state.value
-        row.stdout = result.stdout
-        row.stderr = result.stderr
-        row.result = result.result
-        row.error_name = result.error_name
-        row.error_message = result.error_message
-        row.traceback = result.traceback
-        row.output_truncated = result.output_truncated
-        row.completed_at = timestamp
-        row.updated_at = timestamp
-        await self._session.flush()
-        return self._python_result(row)
-
-    async def mark_python_execution_unknown(
-        self, key: SandboxKey, operation_id: UUID, *, now: datetime | None = None
-    ) -> PythonResult:
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            PythonExecutionRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "Python execution intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        if row.state == PythonExecutionState.STARTING.value:
-            row.state = PythonExecutionState.UNKNOWN.value
-            row.updated_at = timestamp
-            await self._session.flush()
-        return self._python_result(row)
-
-    async def reset_python_execution_after_rejection(
-        self, key: SandboxKey, operation_id: UUID, *, now: datetime | None = None
-    ) -> PythonResult:
-        timestamp = now or utc_now()
-        row = await self._session.get(
-            PythonExecutionRow,
-            (key.workload_kind.value, key.logical_id, operation_id),
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "Python execution intent does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        if row.state == PythonExecutionState.STARTING.value:
-            row.state = PythonExecutionState.RESERVED.value
-            row.updated_at = timestamp
-            await self._session.flush()
-        return self._python_result(row)
-
-    async def _require_session_row(
-        self, key: SandboxKey, session_id: UUID
-    ) -> SessionRow:
-        row = await self._session.get(
-            SessionRow, (key.workload_kind.value, key.logical_id, session_id)
-        )
-        if row is None:
-            raise AgentBoxError(
-                ErrorCode.SANDBOX_NOT_FOUND,
-                "Python session does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        return row
-
     async def get_allocation_by_id(
         self, allocation_id: UUID
     ) -> PhysicalAllocation | None:
@@ -2268,6 +1860,7 @@ class AgentBoxRepository:
                 digest=row.profile_digest,
             ),
             current_allocation_id=row.current_allocation_id,
+            resource_generation=row.resource_generation,
             allocation_epoch=row.allocation_epoch,
             last_used_at=_aware(row.last_used_at) or utc_now(),
             protected_until=_aware(row.protected_until),
@@ -2291,61 +1884,9 @@ class AgentBoxRepository:
             profile_name=row.profile_name,
             profile_digest=row.profile_digest,
             state=AllocationState(row.state),
+            resource_generation=row.resource_generation,
             allocation_epoch=row.allocation_epoch,
             retry_after=_aware(row.retry_after),
-        )
-
-    @staticmethod
-    def _process(row: ProcessIntentRow) -> ProcessIntent:
-        return ProcessIntent(
-            key=SandboxKey(
-                workload_kind=WorkloadKind(row.workload_kind),
-                logical_id=row.logical_id,
-            ),
-            operation_id=row.operation_id,
-            allocation_id=row.allocation_id,
-            allocation_epoch=row.allocation_epoch,
-            request_hash=row.request_hash,
-            state=ProcessState(row.state),
-            provider_process_id=row.provider_process_id,
-            provider_tag=row.provider_tag,
-            cwd=row.cwd,
-            tty=row.tty,
-            output_limit_bytes=row.output_limit_bytes,
-            deadline_at=_aware(row.deadline_at) or utc_now(),
-            started_at=_aware(row.started_at),
-            completed_at=_aware(row.completed_at),
-            exit_code=row.exit_code,
-        )
-
-    @staticmethod
-    def _python_session(row: SessionRow) -> PythonSessionRef:
-        return PythonSessionRef(
-            key=SandboxKey(
-                workload_kind=WorkloadKind(row.workload_kind),
-                logical_id=row.logical_id,
-            ),
-            session_id=row.session_id,
-            allocation_id=row.allocation_id,
-            allocation_epoch=row.allocation_epoch,
-            provider_context_id=row.provider_context_id,
-            cwd=row.cwd,
-            environment_keys=tuple(row.env_keys),
-            state=PythonSessionState(row.state),
-        )
-
-    @staticmethod
-    def _python_result(row: PythonExecutionRow) -> PythonResult:
-        return PythonResult(
-            operation_id=row.operation_id,
-            state=PythonExecutionState(row.state),
-            stdout=row.stdout,
-            stderr=row.stderr,
-            result=row.result,
-            error_name=row.error_name,
-            error_message=row.error_message,
-            traceback=row.traceback,
-            output_truncated=row.output_truncated,
         )
 
     @staticmethod

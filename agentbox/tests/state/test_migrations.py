@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import sqlite3
 from uuid import uuid4
 
 from alembic import command
@@ -20,6 +21,24 @@ def test_alembic_fresh_install_matches_models(tmp_path: Path):
 
     command.upgrade(config, "head")
     command.check(config)
+    with sqlite3.connect(database_path) as connection:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    # The manager no longer maps or writes these tables. They remain for one
+    # expand/contract release so the N-1 image keeps working while migrations
+    # run before the Container Apps image switch.
+    assert {"processes", "sessions", "python_executions"} <= tables
+    assert {
+        "sandboxes",
+        "allocations",
+        "allocation_create_attempts",
+        "workspace_storage",
+        "provider_admission",
+    } <= tables
 
     async def repository_smoke() -> None:
         database = StateDatabase(database_url)

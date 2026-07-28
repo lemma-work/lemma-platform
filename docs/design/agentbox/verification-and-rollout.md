@@ -104,11 +104,13 @@ provider_create_calls(allocation_token) <= 1
 
 - Same operation ID and request hash returns the same process.
 - Same operation ID with any different non-secret field is `OPERATION_CONFLICT`.
-- Environment/stdin values are absent from durable rows and logs.
-- Lost start acknowledgment becomes `UNKNOWN_DISPATCH` and is resolved by the same
-  provider tag/process; no second start occurs.
+- Environment/stdin values and the process record itself are absent from durable
+  rows and logs.
+- Lost start acknowledgment becomes non-retryable `UNKNOWN_DISPATCH`; no second
+  start occurs.
 - Stale-epoch input/resize/terminate is rejected.
-- Output reconnect resumes from sequence and reports truncation gaps.
+- Same-manager output reconnect resumes from sequence and reports truncation gaps;
+  manager restart explicitly loses the handle.
 
 ### 3.4 Deadlines and errors
 
@@ -248,9 +250,10 @@ selected in production configuration.
 
 - Workspace template static services are ready immediately after create without
   post-create runtime bootstrap.
-- Full-memory pause plus auto-resume restores native command/filesystem access.
+- Explicit resume of the same sandbox ID restores native filesystem access under a
+  new allocation epoch.
 - AgentBox quiescence removed contexts/processes/dynamic credentials before pause.
-- File operations and commands auto-resume without a preceding list/status call.
+- File operations and commands cannot silently auto-resume a paused sandbox.
 - Command, PID/tag reconnect, stdin, list, kill, PTY, and code contexts satisfy the
   portable suite.
 - Secured app grant works and raw traffic token does not escape AgentBox.
@@ -458,7 +461,8 @@ views:
 
 Required alerts:
 
-- unknown create/process older than reconciliation SLO;
+- unknown create older than reconciliation SLO or a sudden rate of ambiguous
+  runtime dispatches;
 - provider scope blocked beyond retry-after tolerance;
 - capacity counter mismatch;
 - function API queue age or warm overhead above gate;
@@ -468,9 +472,10 @@ Required alerts:
 - late callback mutation or suspected duplicate invocation;
 - credential/network security test regression.
 
-Operator tools must inspect logical sandbox, physical allocations, process intents,
-function run/queue state, and provider event history by public correlation ID
-without revealing secrets.
+Operator tools must inspect logical sandboxes, physical allocations, create
+attempts, function run/queue state, and provider event history by public
+correlation ID without revealing secrets. Process/session handles are live-manager
+diagnostics, not database records.
 
 ## 10. Breaking migration
 

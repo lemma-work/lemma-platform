@@ -9,6 +9,7 @@
 **Canonical design set:**
 
 - [Sandbox protocol](sandbox-protocol.md)
+- [Lifecycle state model](lifecycle-state-model.md)
 - [Provider adapters](provider-adapters.md)
 - [Function execution](function-execution.md)
 - [Testing strategy](testing-strategy.md)
@@ -77,6 +78,8 @@ memory pause supports activity-driven auto-resume. A filesystem-only pause cold
 boots and cannot use auto-resume. Paused sandboxes do not expire automatically.
 See [E2B sandbox persistence](https://e2b.dev/docs/sandbox/persistence) and
 [auto-resume](https://e2b.dev/docs/sandbox/auto-resume).
+AgentBox deliberately disables automatic resume: pause/resume is an explicit,
+generation-fenced lifecycle event.
 
 AgentBox removes the compensating machinery instead of making it more complex.
 Provider adapters use the provider's strongest native data plane. The public
@@ -91,7 +94,7 @@ explicit.
   plane operation.
 - Preserve user files across workspace release on every supported provider.
 - Keep stateful Python, foreground commands, background processes, stdin, PTY,
-  reconnect, files, and application ports coherent across providers.
+  manager-local reconnect, files, and application ports coherent across providers.
 - Give API functions a bounded low-latency path and JOB functions a durable queued
   path without using a user workspace.
 - Ensure one persisted allocation token causes at most one provider create request.

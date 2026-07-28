@@ -16,7 +16,12 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 )
 
 
-def _sandbox_info(user_id: UUID) -> SandboxInfo:
+def _sandbox_info(
+    user_id: UUID,
+    *,
+    allocation_id: UUID | None = None,
+    allocation_epoch: int = 1,
+) -> SandboxInfo:
     return SandboxInfo(
         sandbox_id=str(user_id),
         name=str(user_id),
@@ -24,6 +29,8 @@ def _sandbox_info(user_id: UUID) -> SandboxInfo:
         status="RUNNING",
         image="",
         endpoint=f"agentbox://{user_id}",
+        allocation_id=str(allocation_id or uuid4()),
+        allocation_epoch=allocation_epoch,
     )
 
 
@@ -308,6 +315,52 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     assert session.client is manager_client
     assert session.env_vars == {"LEMMA_TOKEN": "dynamic"}
     assert manager_client.directories == [(user_id, "/workspace")]
+
+
+@pytest.mark.asyncio
+async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates_later(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = uuid4()
+    first_allocation_id = uuid4()
+    sandbox = _FakeSandbox()
+    sandbox.infos[user_id] = _sandbox_info(
+        user_id,
+        allocation_id=first_allocation_id,
+        allocation_epoch=1,
+    )
+    service = _service(sandbox)
+    manager_client = _FakeManagerClient()
+
+    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+        return {"LEMMA_TOKEN": "dynamic"}
+
+    monkeypatch.setattr(service, "get_env_vars", environment)
+    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+
+    await asyncio.gather(
+        service.get_session(user_id=user_id, pod_id=None, session_id="first"),
+        service.get_session(user_id=user_id, pod_id=None, session_id="second"),
+    )
+    await service.get_session(user_id=user_id, pod_id=None, session_id="third")
+
+    assert manager_client.directories == [
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+    ]
+
+    sandbox.infos[user_id] = _sandbox_info(
+        user_id,
+        allocation_id=uuid4(),
+        allocation_epoch=2,
+    )
+    await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
+
+    assert manager_client.directories == [
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+    ]
 
 
 @pytest.mark.asyncio

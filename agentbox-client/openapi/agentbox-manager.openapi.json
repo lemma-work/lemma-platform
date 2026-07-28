@@ -165,7 +165,7 @@
           },
           "output_limit_bytes": {
             "default": 1048576,
-            "maximum": 67108864.0,
+            "maximum": 2097152.0,
             "minimum": 1.0,
             "title": "Output Limit Bytes",
             "type": "integer"
@@ -396,7 +396,7 @@
             "type": "string"
           },
           "output_limit_bytes": {
-            "maximum": 67108864.0,
+            "maximum": 2097152.0,
             "minimum": 1.0,
             "title": "Output Limit Bytes",
             "type": "integer"
@@ -794,7 +794,7 @@
           },
           "output_limit_bytes": {
             "default": 1048576,
-            "maximum": 67108864.0,
+            "maximum": 2097152.0,
             "minimum": 1.0,
             "title": "Output Limit Bytes",
             "type": "integer"

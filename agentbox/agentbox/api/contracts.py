@@ -120,7 +120,7 @@ class StartProcessModel(StrictApiModel):
     cwd: str = Field(min_length=1, max_length=4096, pattern=r"^/")
     environment: tuple[EnvironmentVariableModel, ...] = ()
     tty: TerminalSizeModel | None = None
-    output_limit_bytes: int = Field(default=1048576, ge=1, le=67108864)
+    output_limit_bytes: int = Field(default=1048576, ge=1, le=2097152)
     deadline_at: datetime
     initial_input_base64: str | None = Field(
         default=None,
@@ -176,7 +176,7 @@ class ProcessRefResponse(StrictApiModel):
     state: ProcessState
     cwd: str
     tty: bool
-    output_limit_bytes: int = Field(ge=1, le=64 * 1024 * 1024)
+    output_limit_bytes: int = Field(ge=1, le=2 * 1024 * 1024)
     deadline_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -298,7 +298,7 @@ class ExecutePythonModel(StrictApiModel):
     operation_id: UUID
     code: str = Field(min_length=1, max_length=4 * 1024 * 1024)
     environment: tuple[EnvironmentVariableModel, ...] = ()
-    output_limit_bytes: int = Field(default=1024 * 1024, ge=1, le=64 * 1024 * 1024)
+    output_limit_bytes: int = Field(default=1024 * 1024, ge=1, le=2 * 1024 * 1024)
     deadline_at: datetime
 
     @field_validator("deadline_at")
