@@ -104,6 +104,8 @@ class SurfaceAgentRunProgressObserver:
         # handles display_resource at all — it only buffers text + progress.
         self._email_reply_tool_called = False
         self._run_errored = False
+        self._run_error_text: str | None = None
+        self._error_delivered = False
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
         self._progress_handle: dict[str, Any] | None = None
@@ -116,6 +118,8 @@ class SurfaceAgentRunProgressObserver:
     ) -> None:
         del ctx
         platform = _surface_platform(conversation)
+        if platform is None:
+            return
         interval = _TYPING_REFRESH_INTERVAL_SECONDS.get(platform)
         if interval is None:
             return
@@ -138,6 +142,7 @@ class SurfaceAgentRunProgressObserver:
         del ctx
         if event.type in {AgentEventType.ERROR, AgentEventType.REJECTED}:
             self._run_errored = True
+            self._run_error_text = _safe_run_error_text(event)
             return
 
         if event.type == AgentEventType.WAITING:
@@ -316,6 +321,29 @@ class SurfaceAgentRunProgressObserver:
         await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
 
+    async def on_run_failed(
+        self,
+        conversation: Conversation,
+        error: Exception,
+    ) -> None:
+        """Deliver failures raised before the harness can emit an error event."""
+        del error
+        self._run_errored = True
+        self._run_error_text = (
+            "I couldn’t finish that request. "
+            "Try it again without resending your message."
+        )
+        task = self._typing_task
+        self._typing_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._clear_progress(conversation.id)
+        await self._deliver_run_error(conversation)
+
     async def _deliver_final_answer(self, conversation: Conversation) -> None:
         """Deliver the single final answer once the run has finished.
 
@@ -328,6 +356,7 @@ class SurfaceAgentRunProgressObserver:
             return
         self._final_delivered = True
         if self._run_errored:
+            await self._deliver_run_error(conversation)
             return
         platform = _surface_platform(conversation)
         if platform in _EMAIL_PLATFORMS and self._email_reply_tool_called:
@@ -343,6 +372,29 @@ class SurfaceAgentRunProgressObserver:
         except Exception:
             logger.debug(
                 'agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic'
+            )
+
+    async def _deliver_run_error(self, conversation: Conversation) -> None:
+        if self._error_delivered:
+            return
+        if _surface_platform(conversation) in _EMAIL_PLATFORMS:
+            self._error_delivered = True
+            return
+        try:
+            await self._send_agent_message(
+                conversation_id=conversation.id,
+                message=(
+                    self._run_error_text
+                    or "I couldn’t finish that request. You can try it again."
+                ),
+                metadata={
+                    "retry_conversation_id": str(conversation.id),
+                },
+            )
+            self._error_delivered = True
+        except Exception:
+            logger.debug(
+                "agent_surfaces.progress_observer.surface_error_delivery.diagnostic"
             )
 
     async def _refresh_typing_loop(
@@ -401,6 +453,11 @@ def _surface_platform(conversation: Conversation) -> str | None:
     metadata = conversation.metadata or {}
     platform = metadata.get("surface_platform") if isinstance(metadata, dict) else None
     return str(platform).upper() if platform else None
+
+
+def _safe_run_error_text(event: AgentEvent) -> str:
+    del event
+    return "I couldn’t finish that request. Try it again without resending your message."
 
 
 def _email_reply_tool_called(event: AgentEvent) -> bool:

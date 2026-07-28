@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from io import BytesIO
+from pathlib import Path
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -11,6 +13,7 @@ from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
+from PIL import Image
 
 from app.core.config import settings
 from app.core.crypto import get_secret_cipher
@@ -31,6 +34,12 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TelegramApiError,
     TelegramClient,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
+    ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    resolve_telegram_mini_app,
 )
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.auth_config import (
@@ -68,6 +77,7 @@ class TelegramManagedBotSetup(BaseModel):
     organization_id: UUID
     pod_id: UUID
     surface_name: str
+    pod_name: str
     agent_id: UUID | None = None
     surface_config: dict[str, Any] = Field(default_factory=dict)
     is_enabled: bool = True
@@ -75,6 +85,8 @@ class TelegramManagedBotSetup(BaseModel):
     suggested_bot_username: str
     status: TelegramManagedBotSetupStatus = TelegramManagedBotSetupStatus.PENDING
     telegram_user_id: int | None = None
+    telegram_username: str | None = None
+    telegram_display_name: str | None = None
     account_id: UUID | None = None
     surface_id: UUID | None = None
     bot_id: int | None = None
@@ -221,6 +233,7 @@ class TelegramManagerService:
             else surface_settings.telegram_manager_bot_username
         )
         self._manager_username = str(raw_username or "").strip().lstrip("@")
+        self._api_base_url = api_base_url
         credentials: dict[str, Any] = {"bot_token": self._manager_token or ""}
         if api_base_url:
             credentials["api_base_url"] = api_base_url
@@ -259,6 +272,7 @@ class TelegramManagerService:
                 organization_id=organization_id,
                 pod_id=pod_id,
                 surface_name=surface_name,
+                pod_name=pod_name,
                 agent_id=agent_id,
                 surface_config=surface_config.model_dump(mode="json"),
                 is_enabled=is_enabled,
@@ -333,6 +347,18 @@ class TelegramManagerService:
             return
 
         setup.telegram_user_id = telegram_user_id
+        from_user = message.get("from") or {}
+        setup.telegram_username = (
+            str(from_user.get("username") or "").strip().lstrip("@") or None
+        )
+        setup.telegram_display_name = " ".join(
+            part
+            for part in (
+                str(from_user.get("first_name") or "").strip(),
+                str(from_user.get("last_name") or "").strip(),
+            )
+            if part
+        ) or setup.telegram_username
         setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
         await self._store.save(setup)
         await self._client.call(
@@ -412,17 +438,21 @@ class TelegramManagerService:
             if not bot_token:
                 raise RuntimeError("Telegram did not return the managed bot token")
 
+            setup.bot_id = bot_id
+            setup.bot_username = bot_username
             account_id, surface_id = await self._persist_managed_bot(
                 setup=setup,
                 bot_id=bot_id,
                 bot_username=bot_username,
                 bot_token=bot_token,
             )
+            await self._configure_managed_bot(
+                setup=setup,
+                bot_token=bot_token,
+            )
             setup.status = TelegramManagedBotSetupStatus.COMPLETE
             setup.account_id = account_id
             setup.surface_id = surface_id
-            setup.bot_id = bot_id
-            setup.bot_username = bot_username
             setup.error = None
             await self._store.save(setup)
             if chat_id is not None:
@@ -431,6 +461,23 @@ class TelegramManagerService:
                     chat_id,
                     f"{handle} is connected to Lemma and ready to use.",
                     remove_keyboard=True,
+                )
+                await self._client.call(
+                    "sendMessage",
+                    {
+                        "chat_id": chat_id,
+                        "text": "Continue the conversation in your new bot.",
+                        "reply_markup": {
+                            "inline_keyboard": [
+                                [
+                                    {
+                                        "text": "Open your bot",
+                                        "url": self.bot_launch_url(setup),
+                                    }
+                                ]
+                            ]
+                        },
+                    },
                 )
         except (
             DomainError,
@@ -538,8 +585,143 @@ class TelegramManagerService:
                     surface_id=surface.id,
                     is_active=False,
                 )
+            if setup.telegram_user_id is None:
+                raise DomainError(
+                    "Telegram setup is missing its creator identity",
+                    code="TELEGRAM_CREATOR_IDENTITY_MISSING",
+                )
+            external_users = ExternalSurfaceUserRepository(uow)
+            existing_identity = await external_users.get_by_identity(
+                platform=SurfacePlatform.TELEGRAM.value,
+                tenant_id=None,
+                external_user_id=str(setup.telegram_user_id),
+            )
+            if (
+                existing_identity is not None
+                and existing_identity.resolved_user_id is not None
+                and existing_identity.resolved_user_id != setup.user_id
+            ):
+                raise DomainError(
+                    "This Telegram account is already linked to another Lemma user",
+                    code="TELEGRAM_IDENTITY_ALREADY_LINKED",
+                    status_code=409,
+                )
+            await external_users.upsert(
+                platform=SurfacePlatform.TELEGRAM.value,
+                tenant_id=None,
+                external_user_id=str(setup.telegram_user_id),
+                email=None,
+                phone=None,
+                display_name=setup.telegram_display_name,
+                raw_profile={
+                    "sender_username": setup.telegram_username,
+                    "managed_bot_setup_id": setup.setup_id,
+                },
+                resolved_user_id=setup.user_id,
+            )
             await uow.commit()
             return existing.id, surface.id
+
+    def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str:
+        if not setup.bot_username:
+            return self.launch_url(setup)
+        return f"https://t.me/{setup.bot_username}?start=lemma"
+
+    async def _configure_managed_bot(
+        self,
+        *,
+        setup: TelegramManagedBotSetup,
+        bot_token: str,
+    ) -> None:
+        child = TelegramClient(
+            bot_token=bot_token,
+            api_base=self._api_base_url,
+            timeout=30,
+        )
+        surface_config = SurfaceConfig.model_validate(setup.surface_config)
+        async with self._uow_factory() as uow:
+            mini_app = await resolve_telegram_mini_app(
+                uow=uow,
+                pod_id=setup.pod_id,
+                app_id=surface_config.telegram.app_id,
+            )
+        description = (
+            f"{setup.surface_name} connects Telegram to {setup.pod_name} in Lemma. "
+            "Send a message, voice note, photo, or file to work with your agent."
+        )[:512]
+        short_description = (
+            f"Talk to {setup.surface_name} for {setup.pod_name}."
+        )[:120]
+        calls = [
+            (
+                "setMyDescription",
+                {"description": description},
+            ),
+            (
+                "setMyShortDescription",
+                {"short_description": short_description},
+            ),
+            (
+                "setMyCommands",
+                {
+                    "commands": [
+                        {"command": "help", "description": "See what this bot can do"},
+                        {"command": "retry", "description": "Retry the last failed request"},
+                    ]
+                },
+            ),
+        ]
+        if mini_app and mini_app.url:
+            calls.append(
+                (
+                    "setChatMenuButton",
+                    {
+                        "menu_button": {
+                            "type": "web_app",
+                            "text": f"Open {mini_app.label}"[:64],
+                            "web_app": {
+                                "url": mini_app.url
+                            },
+                        }
+                    },
+                )
+            )
+        else:
+            calls.append(
+                (
+                    "setChatMenuButton",
+                    {"menu_button": {"type": "commands"}},
+                )
+            )
+        for method, payload in calls:
+            try:
+                await child.call(method, payload)
+            except Exception:
+                logger.debug(
+                    "agent_surfaces.telegram_manager.bot_branding_best_effort",
+                    method=method,
+                )
+        try:
+            await child.call_multipart(
+                "setMyProfilePhoto",
+                fields={
+                    "photo": {
+                        "type": "static",
+                        "photo": "attach://profile_photo",
+                    }
+                },
+                files={
+                    "profile_photo": (
+                        "lemma-agent.jpg",
+                        _managed_bot_profile_photo(),
+                        "image/jpeg",
+                    )
+                },
+            )
+        except Exception:
+            logger.debug(
+                "agent_surfaces.telegram_manager.bot_profile_photo_best_effort"
+            )
 
     async def _send_text(
         self,
@@ -592,3 +774,20 @@ def _safe_setup_error(exc: Exception) -> str:
     if isinstance(exc, ConnectorNotFoundError):
         return "Telegram connector is not installed for this organization."
     return "Lemma could not finish connecting the managed bot."
+
+
+def _managed_bot_profile_photo() -> bytes:
+    source_path = (
+        Path(__file__).resolve().parents[4] / "public" / "icons" / "lemma.jpeg"
+    )
+    with Image.open(source_path) as source:
+        logo = source.convert("RGB").crop((0, 0, min(source.width, 58), source.height))
+        logo.thumbnail((300, 300), Image.Resampling.LANCZOS)
+        avatar = Image.new("RGB", (512, 512), (247, 246, 241))
+        avatar.paste(
+            logo,
+            ((avatar.width - logo.width) // 2, (avatar.height - logo.height) // 2),
+        )
+        output = BytesIO()
+        avatar.save(output, format="JPEG", quality=92, optimize=True)
+        return output.getvalue()

@@ -14,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
+    SurfaceTelegramConfig,
 )
 from app.modules.agent_surfaces.domain.setup_guides import (
     SurfaceSetupAction,
@@ -48,11 +49,22 @@ class SurfaceSendPolicyConfig(BaseModel):
     allow_send: bool = False
 
 
+class SurfaceTelegramConfigInput(BaseModel):
+    """Selects the pod app exposed as this bot's Telegram Mini App."""
+
+    app_id: UUID | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SurfaceBehaviorConfigInput(BaseModel):
     identity: SurfaceIdentityConfigInput = Field(default_factory=SurfaceIdentityConfigInput)
     channels: list[SurfaceChannelRouteInput] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
     send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    telegram: SurfaceTelegramConfigInput = Field(
+        default_factory=SurfaceTelegramConfigInput
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -89,6 +101,9 @@ class SurfaceConfigResponse(BaseModel):
     channels: list[SurfaceChannelRouteResponse] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
     send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    telegram: SurfaceTelegramConfigInput = Field(
+        default_factory=SurfaceTelegramConfigInput
+    )
 
     @classmethod
     def from_domain(cls, config: SurfaceConfig) -> "SurfaceConfigResponse":
@@ -110,6 +125,7 @@ def surface_config_from_input(
         ),
         channels=channel_routes,
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
+        telegram=SurfaceTelegramConfig(app_id=config_input.telegram.app_id),
     )
 
 
@@ -176,6 +192,7 @@ class TelegramManagedBotSetupResponse(BaseModel):
     account_id: UUID | None = None
     surface_id: UUID | None = None
     bot_username: str | None = None
+    bot_launch_url: str | None = None
     error: str | None = None
 
 

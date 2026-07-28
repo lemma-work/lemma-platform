@@ -11,7 +11,10 @@ import httpx
 from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -143,6 +146,21 @@ class TelegramPlatformService:
         thread_id = self._message_thread_id(event)
         reply_to = event.reply_target.get("message_id")
         reply_markup = (metadata or {}).get("reply_markup")
+        retry_conversation_id = str(
+            (metadata or {}).get("retry_conversation_id") or ""
+        ).strip()
+        if retry_conversation_id and not isinstance(reply_markup, dict):
+            retry_token = await put_callback_token(
+                {
+                    "action": "retry",
+                    "conversation_id": retry_conversation_id,
+                }
+            )
+            reply_markup = {
+                "inline_keyboard": [
+                    [{"text": "Try again", "callback_data": retry_token}]
+                ]
+            }
 
         raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [
             message or ""
@@ -249,6 +267,21 @@ class TelegramPlatformService:
         return True
 
     async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:
+        try:
+            await self._call_with_retry(
+                "sendRichMessage",
+                {
+                    **payload,
+                    "rich_message": {
+                        "markdown": raw_text,
+                    },
+                },
+            )
+            return
+        except TelegramApiError as exc:
+            if not _can_fallback_from_rich_message(exc):
+                raise
+
         rendered = to_markdown_v2(raw_text)
         use_markdown = len(rendered) <= TELEGRAM_MESSAGE_LIMIT
         body = {**payload, "text": rendered if use_markdown else raw_text}
@@ -268,6 +301,49 @@ class TelegramPlatformService:
             plain_body = {k: v for k, v in payload.items()}
             plain_body["text"] = raw_text
             await self._call_with_retry("sendMessage", plain_body)
+
+    async def acknowledge_interaction(
+        self,
+        interaction: ParsedSurfaceInteraction,
+        *,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        callback_query = (interaction.raw_payload or {}).get("callback_query") or {}
+        callback_query_id = str(callback_query.get("id") or "").strip()
+        if callback_query_id:
+            payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+            if text:
+                payload["text"] = text[:200]
+            if show_alert:
+                payload["show_alert"] = True
+            try:
+                await self._client.call("answerCallbackQuery", payload)
+            except Exception:
+                logger.debug(
+                    "agent_surfaces.telegram.callback_acknowledgement_best_effort"
+                )
+        if not clear_actions:
+            return
+        message = callback_query.get("message") or {}
+        chat_id = (message.get("chat") or {}).get("id")
+        message_id = message.get("message_id")
+        if chat_id is None or message_id is None:
+            return
+        try:
+            await self._client.call(
+                "editMessageReplyMarkup",
+                {
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reply_markup": {"inline_keyboard": []},
+                },
+            )
+        except Exception:
+            logger.debug(
+                "agent_surfaces.telegram.callback_keyboard_cleanup_best_effort"
+            )
 
     async def _call_with_retry(
         self, method: str, payload: dict[str, Any]
@@ -423,6 +499,31 @@ class TelegramPlatformService:
         chat_id = event.reply_target.get("chat_id") or event.external_channel_id
         if not self._bot_token or not chat_id:
             return progress_handle
+        if event.is_dm and not (progress_handle or {}).get("message_id"):
+            draft_id = (progress_handle or {}).get("draft_id")
+            if not draft_id:
+                raw_message_id = event.reply_target.get("message_id")
+                try:
+                    draft_id = int(raw_message_id) if raw_message_id is not None else 1
+                except (TypeError, ValueError):
+                    draft_id = 1
+            try:
+                await self._call_with_retry(
+                    "sendRichMessageDraft",
+                    {
+                        "chat_id": int(chat_id),
+                        "draft_id": int(draft_id) or 1,
+                        "rich_message": {
+                            "html": (
+                                f"<tg-thinking>{escape(progress_text)}</tg-thinking>"
+                            )
+                        },
+                    },
+                )
+                return {"draft_id": int(draft_id) or 1, "rich_draft": True}
+            except TelegramApiError as exc:
+                if not _can_fallback_from_rich_message(exc):
+                    raise
         text = f"⏳ {progress_text}"
         message_id = (progress_handle or {}).get("message_id")
         try:
@@ -452,6 +553,8 @@ class TelegramPlatformService:
         """Delete the streaming progress message (the final answer is sent
         separately as its own message)."""
         chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        if (progress_handle or {}).get("rich_draft"):
+            return
         message_id = (progress_handle or {}).get("message_id")
         if not chat_id or not message_id:
             return
@@ -594,3 +697,14 @@ def _telegram_display_resource_text(render_plan: SurfaceDisplayRenderPlan) -> st
 def _truncate_telegram_button_text(value: str) -> str:
     text = " ".join(str(value or "").split()) or "Open"
     return text if len(text) <= 64 else text[:63].rstrip() + "..."
+
+
+def _can_fallback_from_rich_message(exc: TelegramApiError) -> bool:
+    description = str(exc.description or "").lower()
+    return exc.status_code in {400, 404} and (
+        "not found" in description
+        or "unknown method" in description
+        or "rich" in description
+        or "parse" in description
+        or "unsupported" in description
+    )

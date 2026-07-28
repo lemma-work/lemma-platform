@@ -6,7 +6,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from app.modules.agent_surfaces.domain.entities import SurfaceConfig
+from app.modules.agent_surfaces.domain.entities import (
+    SurfaceConfig,
+    SurfaceTelegramConfig,
+)
 from app.modules.agent_surfaces.domain.errors import (
     TelegramManagedBotSetupNotFoundError,
 )
@@ -14,6 +17,9 @@ from app.modules.agent_surfaces.services.telegram_manager_service import (
     TelegramManagedBotSetup,
     TelegramManagedBotSetupStatus,
     TelegramManagerService,
+)
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    TelegramMiniApp,
 )
 
 pytestmark = pytest.mark.unit
@@ -137,6 +143,7 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
     service._persist_managed_bot = AsyncMock(
         return_value=(account_id, surface_id)
     )
+    service._configure_managed_bot = AsyncMock()
 
     async def _call(method, payload):
         if method == "getManagedBotToken":
@@ -168,6 +175,68 @@ async def test_created_managed_bot_persists_surface_and_finishes_setup():
     assert persist_args["bot_id"] == 1234
     assert persist_args["bot_username"] == "surface_bot"
     assert persist_args["bot_token"] == "child-token"
+    service._configure_managed_bot.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_configure_managed_bot_sets_selected_app_as_web_app(monkeypatch):
+    store = _Store()
+
+    class _Uow:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return None
+
+    service = TelegramManagerService(
+        uow_factory=lambda: _Uow(),  # type: ignore[arg-type]
+        store=store,  # type: ignore[arg-type]
+        manager_token="manager-token",
+        manager_username="@lemma_manager_bot",
+    )
+    app_id = uuid4()
+    setup = await service.start_setup(
+        user_id=uuid4(),
+        organization_id=uuid4(),
+        pod_id=uuid4(),
+        surface_name="telegram-support",
+        agent_id=None,
+        surface_config=SurfaceConfig(
+            telegram=SurfaceTelegramConfig(app_id=app_id)
+        ),
+        is_enabled=True,
+        pod_name="Customer Success",
+    )
+    child = SimpleNamespace(call=AsyncMock(), call_multipart=AsyncMock())
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_manager_service.TelegramClient",
+        lambda **_: child,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_manager_service.resolve_telegram_mini_app",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=app_id,
+                name="support-queue",
+                url="https://support.apps.example.test",
+            )
+        ),
+    )
+
+    await service._configure_managed_bot(
+        setup=setup,
+        bot_token="child-token",
+    )
+
+    calls = {call.args[0]: call.args[1] for call in child.call.await_args_list}
+    assert calls["setChatMenuButton"]["menu_button"] == {
+        "type": "web_app",
+        "text": "Open Support Queue",
+        "web_app": {"url": "https://support.apps.example.test"},
+    }
+    commands = calls["setMyCommands"]["commands"]
+    assert {command["command"] for command in commands} == {"help", "retry"}
 
 
 @pytest.mark.asyncio
@@ -191,6 +260,7 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     store = _Store()
     setup_service = _service(store)
     setup = await _start(setup_service)
+    setup.telegram_user_id = 77
     account_id = uuid4()
     surface_id = uuid4()
 
@@ -226,6 +296,10 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     surface_service = SimpleNamespace(
         create_surface=AsyncMock(return_value=SimpleNamespace(id=surface_id)),
     )
+    external_users = SimpleNamespace(
+        get_by_identity=AsyncMock(return_value=None),
+        upsert=AsyncMock(),
+    )
 
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.telegram_manager_service.AuthConfigRepository",
@@ -238,6 +312,10 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     monkeypatch.setattr(
         "app.modules.agent_surfaces.api.dependencies.get_surface_service",
         lambda _: surface_service,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_manager_service.ExternalSurfaceUserRepository",
+        lambda _: external_users,
     )
 
     persisted_account_id, persisted_surface_id = (
@@ -256,4 +334,6 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     assert auth_config.organization_id == setup.organization_id
     assert auth_config.name == "telegram"
     assert accounts.create.await_args.args[0].credentials.bot_token == "child-token"
+    assert external_users.upsert.await_args.kwargs["external_user_id"] == "77"
+    assert external_users.upsert.await_args.kwargs["resolved_user_id"] == setup.user_id
     uow.commit.assert_awaited_once()

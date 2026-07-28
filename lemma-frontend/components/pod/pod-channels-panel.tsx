@@ -37,6 +37,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { useAssistants } from '@/lib/hooks/use-assistants';
+import { useApps } from '@/lib/hooks/use-app';
 import { useAccounts } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
 import {
@@ -159,6 +160,7 @@ const SURFACE_DEFINITIONS: SurfaceDefinition[] = [
 
 const DEFAULT_DM_RESET_HOURS = 24;
 const DEFAULT_AGENT_VALUE = '__pod_default_agent__';
+const NO_TELEGRAM_APP_VALUE = '__no_telegram_mini_app__';
 
 export function PodSurfacesPanel({
     podId,
@@ -171,6 +173,7 @@ export function PodSurfacesPanel({
     const { data: surfaces = [], isLoading: isLoadingSurfaces, refetch, isFetching } = usePodSurfaces(podId);
     const { data: assistantsData, isLoading: isLoadingAssistants } = useAssistants(podId);
     const { data: pod } = usePod(podId);
+    const { data: podApps = [], isLoading: isLoadingApps } = useApps(podId);
     const { data: accounts = [], isLoading: isLoadingAccounts, refetch: refetchAccounts } = useAccounts({ organizationId: pod?.organization_id, limit: 200 });
     const { mutate: toggleSurface, isPending: isToggling } = useTogglePodSurface();
     const { mutate: createSurface, isPending: isCreating } = useCreatePodSurface();
@@ -188,12 +191,17 @@ export function PodSurfacesPanel({
     const [draftAllowedDomains, setDraftAllowedDomains] = useState('');
     const [draftAllowedEmails, setDraftAllowedEmails] = useState('');
     const [draftAllowSend, setDraftAllowSend] = useState(false);
+    const [draftTelegramAppId, setDraftTelegramAppId] = useState(NO_TELEGRAM_APP_VALUE);
     const [telegramSetupId, setTelegramSetupId] = useState<string | null>(null);
     const [telegramLaunchUrl, setTelegramLaunchUrl] = useState<string | null>(null);
     const { data: telegramSetup } = useTelegramManagedBotSetup(podId, telegramSetupId);
 
     const assistants = assistantsData?.items ?? [];
-    const isLoading = isLoadingSurfaces || isLoadingAssistants || isLoadingAccounts;
+    const readyPodApps = useMemo(
+        () => podApps.filter((app) => app.status === 'READY'),
+        [podApps]
+    );
+    const isLoading = isLoadingSurfaces || isLoadingAssistants || isLoadingAccounts || isLoadingApps;
     const surfacesByPlatform = useMemo(() => {
         const map = new Map<SurfacePlatformValue, AssistantSurface[]>();
         for (const surface of surfaces) {
@@ -261,9 +269,9 @@ export function PodSurfacesPanel({
         if (!telegramSetupId || telegramSetup?.status !== 'COMPLETE') return;
 
         const completionTimer = window.setTimeout(() => {
-            setTelegramSetupId(null);
-            setTelegramLaunchUrl(null);
-            setEditTarget(null);
+            if (telegramSetup.bot_launch_url) {
+                setTelegramLaunchUrl(telegramSetup.bot_launch_url);
+            }
             toast.success(
                 telegramSetup.bot_username
                     ? `@${telegramSetup.bot_username} is connected`
@@ -319,6 +327,8 @@ export function PodSurfacesPanel({
         setDraftAllowedDomains((identity.allowed_domains || []).join(', '));
         setDraftAllowedEmails((identity.allowed_email_addresses || []).join(', '));
         setDraftAllowSend(Boolean((config as { send_policy?: { allow_send?: boolean } }).send_policy?.allow_send));
+        const telegramAppId = (config as { telegram?: { app_id?: string | null } }).telegram?.app_id;
+        setDraftTelegramAppId(telegramAppId || NO_TELEGRAM_APP_VALUE);
     };
 
     const openCreate = (definition: SurfaceDefinition) => {
@@ -392,6 +402,15 @@ export function PodSurfacesPanel({
                   }
                 : {}),
             send_policy: { allow_send: draftAllowSend },
+            ...(editingDefinition.platform === 'TELEGRAM'
+                ? {
+                      telegram: {
+                          app_id: draftTelegramAppId === NO_TELEGRAM_APP_VALUE
+                              ? null
+                              : draftTelegramAppId,
+                      },
+                  }
+                : {}),
         };
 
         if (
@@ -617,7 +636,38 @@ export function PodSurfacesPanel({
                                             setTelegramSetupId(null);
                                             setTelegramLaunchUrl(null);
                                         }}
+                                        onDone={closeConfig}
                                     />
+                                ) : null}
+
+                                {editingDefinition.platform === 'TELEGRAM' && !telegramSetupId ? (
+                                    <div className="grid gap-2">
+                                        <label className="type-eyebrow-medium">Telegram Mini App</label>
+                                        <Select value={draftTelegramAppId} onValueChange={setDraftTelegramAppId}>
+                                            <SelectTrigger className="h-10 bg-[var(--field-bg)]">
+                                                <SelectValue placeholder="Choose a pod app" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value={NO_TELEGRAM_APP_VALUE}>
+                                                    No Mini App
+                                                </SelectItem>
+                                                {readyPodApps.map((app) => (
+                                                    <SelectItem key={app.id} value={app.id}>
+                                                        {app.name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                        <p className="text-xs leading-5 text-[var(--text-tertiary)]">
+                                            This app is bound to the button beside the Telegram message field.
+                                            Only deployed apps are available.
+                                        </p>
+                                        {readyPodApps.length === 0 ? (
+                                            <p className="text-xs leading-5 text-[var(--state-warning)]">
+                                                This pod has no deployed apps yet. Deploy an app, then return here to connect it.
+                                            </p>
+                                        ) : null}
+                                    </div>
                                 ) : null}
 
                                 {requiresAccount ? (
@@ -1065,10 +1115,12 @@ function ManagedTelegramSetupCard({
     setup,
     launchUrl,
     onRetry,
+    onDone,
 }: {
     setup: TelegramManagedBotSetupResponse | undefined;
     launchUrl: string | null;
     onRetry: () => void;
+    onDone: () => void;
 }) {
     if (setup?.status === 'FAILED') {
         return (
@@ -1080,6 +1132,36 @@ function ManagedTelegramSetupCard({
                 <Button type="button" variant="outline" size="sm" className="mt-3" onClick={onRetry}>
                     Try again
                 </Button>
+            </div>
+        );
+    }
+
+    if (setup?.status === 'COMPLETE') {
+        return (
+            <div className="surface-inline-callout">
+                <div className="flex items-start gap-2.5">
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--state-success)]" />
+                    <div>
+                        <p className="text-sm font-medium text-[var(--text-primary)]">
+                            {setup.bot_username ? `@${setup.bot_username} is ready` : 'Your Telegram bot is ready'}
+                        </p>
+                        <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                            Your Telegram identity is linked. Open the bot and send a message to start the conversation.
+                        </p>
+                    </div>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                    {launchUrl ? (
+                        <Button asChild size="sm">
+                            <a href={launchUrl} target="_blank" rel="noreferrer">
+                                Open your bot <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                            </a>
+                        </Button>
+                    ) : null}
+                    <Button type="button" variant="outline" size="sm" onClick={onDone}>
+                        Done
+                    </Button>
+                </div>
             </div>
         );
     }

@@ -57,12 +57,24 @@ def test_chunk_text_hard_splits_single_long_run():
 class _RecordingClient:
     """Stand-in for TelegramClient.call that records payloads and can fail."""
 
-    def __init__(self, *, fail_parse_on_markdown: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail_parse_on_markdown: bool = False,
+        rich_unavailable: bool = False,
+    ) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.fail_parse_on_markdown = fail_parse_on_markdown
+        self.rich_unavailable = rich_unavailable
 
     async def __call__(self, method, payload, client=None):
         self.calls.append((method, payload))
+        if self.rich_unavailable and method == "sendRichMessage":
+            raise TelegramApiError(
+                method=method,
+                status_code=404,
+                description="Not Found",
+            )
         if self.fail_parse_on_markdown and payload.get("parse_mode") == "MarkdownV2":
             raise TelegramApiError(
                 method=method,
@@ -93,7 +105,7 @@ def _event(text: str = "hi", *, message_id: int = 5, thread_id: int | None = Non
     return parsed
 
 
-async def test_send_message_uses_markdown_v2_and_reply_parameters():
+async def test_send_message_uses_rich_markdown_and_reply_parameters():
     recorder = _RecordingClient()
     service = _service(recorder)
 
@@ -101,9 +113,8 @@ async def test_send_message_uses_markdown_v2_and_reply_parameters():
 
     assert len(recorder.calls) == 1
     method, payload = recorder.calls[0]
-    assert method == "sendMessage"
-    assert payload["parse_mode"] == "MarkdownV2"
-    assert payload["text"] == "Use *bold* here\\."
+    assert method == "sendRichMessage"
+    assert payload["rich_message"]["markdown"] == "Use **bold** here."
     assert payload["chat_id"] == "123"
     assert payload["reply_parameters"] == {
         "message_id": "5",
@@ -113,14 +124,20 @@ async def test_send_message_uses_markdown_v2_and_reply_parameters():
 
 
 async def test_send_message_falls_back_to_plain_text_on_parse_error():
-    recorder = _RecordingClient(fail_parse_on_markdown=True)
+    recorder = _RecordingClient(
+        fail_parse_on_markdown=True,
+        rich_unavailable=True,
+    )
     service = _service(recorder)
 
     await service.send_message(_event(), "weird _markdown_ text")
 
-    assert len(recorder.calls) == 2
-    first_method, first_payload = recorder.calls[0]
-    second_method, second_payload = recorder.calls[1]
+    assert len(recorder.calls) == 3
+    rich_method, _ = recorder.calls[0]
+    first_method, first_payload = recorder.calls[1]
+    second_method, second_payload = recorder.calls[2]
+    assert rich_method == "sendRichMessage"
+    assert first_method == "sendMessage"
     assert first_payload["parse_mode"] == "MarkdownV2"
     # Fallback drops parse_mode and sends the raw text verbatim.
     assert "parse_mode" not in second_payload
@@ -135,7 +152,10 @@ async def test_send_message_chunks_long_text_under_limit():
     await service.send_message(_event(), "x" * 9000)
 
     assert len(recorder.calls) >= 3
-    assert all(len(payload["text"]) <= 4096 for _, payload in recorder.calls)
+    assert all(
+        len(payload["rich_message"]["markdown"]) <= 4096
+        for _, payload in recorder.calls
+    )
     # Only the first chunk threads the reply.
     assert "reply_parameters" in recorder.calls[0][1]
     assert "reply_parameters" not in recorder.calls[1][1]
@@ -149,6 +169,40 @@ async def test_send_message_sets_forum_topic_thread_id():
 
     _, payload = recorder.calls[0]
     assert payload["message_thread_id"] == 99
+
+
+def test_parser_combines_burst_text_and_album_attachments():
+    first = {
+        "message_id": 5,
+        "media_group_id": "album-1",
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 1, "first_name": "U"},
+        "caption": "Here are the references",
+        "photo": [{"file_id": "p1", "file_size": 10}],
+    }
+    second = {
+        "message_id": 6,
+        "media_group_id": "album-1",
+        "chat": {"id": 123, "type": "private"},
+        "from": {"id": 1, "first_name": "U"},
+        "photo": [{"file_id": "p2", "file_size": 20}],
+    }
+
+    parsed = TelegramMessageParser().parse(
+        {
+            "message": first,
+            "_lemma_batch_messages": [first, second],
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.message_text == "Here are the references"
+    assert parsed.external_message_id == "batch:5-6"
+    assert [item["file_id"] for item in parsed.metadata["attachments"]] == [
+        "p1",
+        "p2",
+    ]
+    assert parsed.metadata["media_group_ids"] == ["album-1"]
 
 
 # --- thinking token stripping -----------------------------------------------

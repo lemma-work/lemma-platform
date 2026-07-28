@@ -176,6 +176,12 @@ class AgentRunObserver(Protocol):
         ctx: ConversationContext,
     ) -> None: ...
 
+    async def on_run_failed(
+        self,
+        conversation: Conversation,
+        error: Exception,
+    ) -> None: ...
+
 
 class AgentRunnerService:
     """Executes one persisted agent run and persists harness messages."""
@@ -496,6 +502,15 @@ class AgentRunnerService:
                     ),
                     agent_run_id=agent_run_id,
                 )
+                if observer is not None and isinstance(exc, Exception):
+                    try:
+                        await observer.on_run_failed(conversation, exc)
+                    except Exception:
+                        logger.debug(
+                            "agent.agent_runner_service."
+                            "agent_run_observer_failure_delivery.diagnostic",
+                            agent_run_id=agent_run_id,
+                        )
 
     async def _resolve_agent_runtime(
         self,

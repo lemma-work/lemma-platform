@@ -273,6 +273,7 @@ export { SurfacePlatform } from './models/SurfacePlatform.js';
 export type { SurfacePlatformSetupGuide } from './models/SurfacePlatformSetupGuide.js';
 export type { SurfaceReach } from './models/SurfaceReach.js';
 export type { SurfaceSendPolicyConfig } from './models/SurfaceSendPolicyConfig.js';
+export type { SurfaceTelegramConfigInput } from './models/SurfaceTelegramConfigInput.js';
 export type { SurfaceSendRequest } from './models/SurfaceSendRequest.js';
 export type { SurfaceSendResponse } from './models/SurfaceSendResponse.js';
 export type { SurfaceSetupAction } from './models/SurfaceSetupAction.js';

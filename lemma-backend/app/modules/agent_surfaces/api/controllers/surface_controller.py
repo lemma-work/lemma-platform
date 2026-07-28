@@ -9,6 +9,7 @@ from app.core.authorization.dependencies import require_action
 from app.core.authorization.dependencies import PodContextDep
 from app.core.authorization.permissions import Permissions
 from app.core.api.dependencies import CurrentUser
+from app.core.api.dependencies import UoWDep
 from app.core.api.pagination import parse_uuid_page_token
 from app.composition.surface_agent import AgentServiceDep
 from app.modules.agent_surfaces.api.dependencies import (
@@ -38,7 +39,11 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
+    SurfaceTelegramConfig,
 )
+from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
+from app.modules.apps.domain.entities import AppStatus
+from app.modules.apps.infrastructure.repositories import AppRepository
 from app.modules.agent_surfaces.domain.setup_guides import SurfacePlatformSetupGuide
 from app.modules.agent_surfaces.platforms.common import computed_webhook_url
 from app.modules.agent_surfaces.services.available_surfaces_builder import (
@@ -189,7 +194,9 @@ async def _resolve_channel_routes(
 
 async def _resolve_surface_config(
     *,
+    uow,
     pod_id: UUID,
+    platform: SurfacePlatform,
     config_input: SurfaceBehaviorConfigInput,
     agent_service,
     ctx,
@@ -200,13 +207,49 @@ async def _resolve_surface_config(
         agent_service=agent_service,
         ctx=ctx,
     )
-    return surface_config_from_input(config_input, channel_routes=channel_routes)
+    config = surface_config_from_input(config_input, channel_routes=channel_routes)
+    config.telegram = await _resolve_telegram_config(
+        uow=uow,
+        pod_id=pod_id,
+        platform=platform,
+        app_id=config_input.telegram.app_id,
+        ctx=ctx,
+    )
+    return config
+
+
+async def _resolve_telegram_config(
+    *,
+    uow,
+    pod_id: UUID,
+    platform: SurfacePlatform,
+    app_id: UUID | None,
+    ctx,
+) -> SurfaceTelegramConfig:
+    if app_id is None:
+        return SurfaceTelegramConfig()
+    if platform is not SurfacePlatform.TELEGRAM:
+        raise AgentSurfaceValidationError(
+            "A Telegram Mini App can only be set on a Telegram surface"
+        )
+    app = await AppRepository(uow).get(app_id, ctx=ctx)
+    if app is None or app.pod_id != pod_id:
+        raise AgentSurfaceValidationError(
+            "The selected Telegram Mini App does not belong to this pod"
+        )
+    if app.status is not AppStatus.READY:
+        raise AgentSurfaceValidationError(
+            "The selected Telegram Mini App must be deployed and ready"
+        )
+    return SurfaceTelegramConfig(app_id=app.id)
 
 
 async def _merge_surface_config(
     *,
+    uow,
     existing: SurfaceConfig,
     pod_id: UUID,
+    platform: SurfacePlatform,
     config_input: SurfaceBehaviorConfigInput,
     agent_service,
     ctx,
@@ -232,6 +275,14 @@ async def _merge_surface_config(
     if "send_policy" in config_input.model_fields_set:
         updates["send_policy"] = SurfaceSendPolicy(
             allow_send=config_input.send_policy.allow_send
+        )
+    if "telegram" in config_input.model_fields_set:
+        updates["telegram"] = await _resolve_telegram_config(
+            uow=uow,
+            pod_id=pod_id,
+            platform=platform,
+            app_id=config_input.telegram.app_id,
+            ctx=ctx,
         )
     return existing.model_copy(update=updates)
 
@@ -323,6 +374,7 @@ async def create_surface(
     pod_id: UUID,
     request: SurfaceCreateRequest,
     user: CurrentUser,
+    uow: UoWDep,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connector_service: ConnectorServiceDep,
@@ -346,7 +398,9 @@ async def create_surface(
     )
 
     config = await _resolve_surface_config(
+        uow=uow,
         pod_id=pod_id,
+        platform=request.platform,
         config_input=request.config,
         agent_service=agent_service,
         ctx=ctx,
@@ -361,6 +415,8 @@ async def create_surface(
         account_id=request.account_id,
         ctx=ctx,
     )
+    if request.platform is SurfacePlatform.TELEGRAM:
+        await service.sync_telegram_mini_app(surface)
     if not request.is_enabled:
         surface = await service.update_surface(
             surface_id=surface.id,
@@ -415,6 +471,7 @@ async def update_surface(
     surface_name: str,
     request: SurfaceUpdateRequest,
     user: CurrentUser,
+    uow: UoWDep,
     agent_service: AgentServiceDep,
     ctx: PodContextDep,
     connector_service: ConnectorServiceDep,
@@ -439,8 +496,10 @@ async def update_surface(
 
     existing = await service.get_surface_by_name_in_pod(pod_id=pod_id, name=surface_name)
     config = await _merge_surface_config(
+        uow=uow,
         existing=existing.config,
         pod_id=pod_id,
+        platform=existing.surface_type,
         config_input=request.config,
         agent_service=agent_service,
         ctx=ctx,
@@ -463,6 +522,11 @@ async def update_surface(
         ),
         ctx=ctx,
     )
+    if (
+        existing.surface_type is SurfacePlatform.TELEGRAM
+        and "telegram" in request.config.model_fields_set
+    ):
+        await service.sync_telegram_mini_app(updated)
     resolved_agent_name = agent.name if agent else await _resolve_agent_display_name(
         agent_service, updated.agent_id
     )

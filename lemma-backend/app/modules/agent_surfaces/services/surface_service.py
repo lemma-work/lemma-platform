@@ -68,6 +68,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
 )
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    resolve_telegram_mini_app,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -235,6 +238,54 @@ class AgentSurfaceService:
         if surface is None:
             raise AgentSurfaceNotFoundError(str(surface_id))
         return surface
+
+    async def sync_telegram_mini_app(
+        self,
+        surface: AgentSurfaceEntity,
+    ) -> None:
+        """Apply the selected pod app to an existing Telegram bot."""
+
+        if (
+            surface.surface_type is not SurfacePlatform.TELEGRAM
+            or self._credential_resolver is None
+        ):
+            return
+        credentials = await self._credential_resolver.for_surface(surface)
+        bot_token = str(credentials.get("bot_token") or "").strip()
+        if not bot_token:
+            raise AgentSurfaceValidationError(
+                "Telegram bot credentials are unavailable"
+            )
+        mini_app = await resolve_telegram_mini_app(
+            uow=self.surface_repository.uow,
+            pod_id=surface.pod_id,
+            app_id=surface.config.telegram.app_id,
+        )
+        client = TelegramClient.from_credentials(credentials, timeout=20)
+        if mini_app and mini_app.url:
+            menu_button: dict[str, Any] = {
+                "type": "web_app",
+                "text": f"Open {mini_app.label}"[:64],
+                "web_app": {"url": mini_app.url},
+            }
+        else:
+            menu_button = {"type": "commands"}
+        await client.call(
+            "setMyCommands",
+            {
+                "commands": [
+                    {"command": "help", "description": "See what this bot can do"},
+                    {
+                        "command": "retry",
+                        "description": "Retry the last failed request",
+                    },
+                ]
+            },
+        )
+        await client.call(
+            "setChatMenuButton",
+            {"menu_button": menu_button},
+        )
 
     async def get_surface_in_pod(
         self,

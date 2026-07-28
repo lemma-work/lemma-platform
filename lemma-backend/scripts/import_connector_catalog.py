@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import ast
 import asyncio
+import importlib
 import json
 import os
 import sys
@@ -54,6 +55,33 @@ def _load_repo_env() -> None:
 
 
 _load_repo_env()
+
+
+def _load_model_registry() -> None:
+    """Import every ORM model package before repositories configure mappers.
+
+    The API and migration entrypoints naturally import the complete model
+    graph. This standalone catalog command does not, which leaves cross-module
+    relationship names such as ``Organization`` unresolved on a fresh process.
+    """
+
+    for module_name in (
+        "app.core.infrastructure.events.models",
+        "app.modules.datastore.infrastructure.models",
+        "app.modules.identity.infrastructure.models",
+        "app.modules.pod.infrastructure.models",
+        "app.modules.agent.infrastructure.models",
+        "app.modules.schedule.infrastructure.models",
+        "app.modules.connectors.infrastructure.models",
+        "app.modules.function.infrastructure.models",
+        "app.modules.apps.infrastructure.models",
+        "app.modules.workflow.infrastructure.models",
+        "app.modules.agent_surfaces.infrastructure.models",
+        "app.modules.usage.infrastructure.models",
+        "app.modules.pod_bundle.infrastructure.models",
+    ):
+        importlib.import_module(module_name)
+
 
 from app.core.config import settings
 from app.modules.connectors.config import connector_settings
@@ -1795,6 +1823,7 @@ async def _generate_all_skills(app_filters: set[str] | None = None) -> None:
 
 
 async def main() -> None:
+    _load_model_registry()
     args = _parse_args()
     app_filters = {
         app_slug.strip() for app_slug in (args.apps or []) if app_slug.strip()

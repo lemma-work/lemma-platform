@@ -91,6 +91,14 @@ async def test_app_assets_support_private_and_public_asset_routes(
     assert unlisted_public_res.status_code == status.HTTP_200_OK, unlisted_public_res.text
     assert marker in unlisted_public_res.text
 
+    telegram_mini_app_res = await async_client.get(
+        f"/public/telegram-mini-apps/{public_slug}"
+    )
+    assert telegram_mini_app_res.status_code == status.HTTP_200_OK, (
+        telegram_mini_app_res.text
+    )
+    assert marker in telegram_mini_app_res.text
+
     publish_res = await authenticated_client.patch(
         f"/pods/{pod_id}/apps/{app_name}",
         json={"visibility": "PUBLIC"},

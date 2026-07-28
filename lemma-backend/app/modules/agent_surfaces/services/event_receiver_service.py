@@ -33,6 +33,7 @@ from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
 )
 from app.modules.agent_surfaces.platforms.slack.client import slack_access_token
 from app.modules.agent_surfaces.platforms.telegram.client import (
+    ALLOWED_UPDATES,
     normalize_bot_base_url,
     resolve_api_base,
 )
@@ -349,9 +350,7 @@ class TelegramPollingReceiverRunner:
                 try:
                     params: dict[str, Any] = {
                         "timeout": 30,
-                        "allowed_updates": json.dumps(
-                            ["message", "edited_message", "callback_query"]
-                        ),
+                        "allowed_updates": json.dumps(ALLOWED_UPDATES),
                     }
                     if offset is not None:
                         params["offset"] = offset
@@ -360,7 +359,24 @@ class TelegramPollingReceiverRunner:
                         client, base_url, "getUpdates", params
                     )
                     conflict_deadline = None
-                    for update in data.get("result") or []:
+                    updates = list(data.get("result") or [])
+                    if any(isinstance(item.get("message"), dict) for item in updates):
+                        next_offset = _next_telegram_offset(updates, offset)
+                        await asyncio.sleep(0.45)
+                        drain_params: dict[str, Any] = {
+                            "timeout": 0,
+                            "allowed_updates": json.dumps(ALLOWED_UPDATES),
+                        }
+                        if next_offset is not None:
+                            drain_params["offset"] = next_offset
+                        drained = await self._telegram_api(
+                            client,
+                            base_url,
+                            "getUpdates",
+                            drain_params,
+                        )
+                        updates.extend(drained.get("result") or [])
+                    for update in _assemble_telegram_updates(updates):
                         update_id = update.get("update_id")
                         _kinds = [
                             key
@@ -426,6 +442,92 @@ class TelegramPollingReceiverRunner:
         response = await client.post(f"{base_url}/{method}", data=params)
         response.raise_for_status()
         return response.json()
+
+
+def _next_telegram_offset(
+    updates: list[dict[str, Any]],
+    current: int | None,
+) -> int | None:
+    ids = [
+        update_id
+        for update in updates
+        for update_id in [update.get("update_id")]
+        if isinstance(update_id, int)
+    ]
+    return max(ids) + 1 if ids else current
+
+
+def _assemble_telegram_updates(
+    updates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    assembled: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+
+    def flush() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        if len(pending) == 1:
+            assembled.append(pending[0])
+            pending = []
+            return
+        first = pending[0]
+        batch = {
+            **first,
+            "update_id": max(
+                int(item.get("update_id") or 0) for item in pending
+            ),
+            "_lemma_batch_messages": [
+                item["message"] for item in pending if isinstance(item.get("message"), dict)
+            ],
+        }
+        assembled.append(batch)
+        pending = []
+
+    for update in updates:
+        message = update.get("message")
+        if not isinstance(message, dict):
+            flush()
+            assembled.append(update)
+            continue
+        if pending and not _telegram_messages_share_burst(
+            pending[-1]["message"],
+            message,
+        ):
+            flush()
+        pending.append(update)
+    flush()
+    return assembled
+
+
+def _telegram_messages_share_burst(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+) -> bool:
+    previous_chat = (previous.get("chat") or {}).get("id")
+    current_chat = (current.get("chat") or {}).get("id")
+    previous_sender = (previous.get("from") or {}).get("id")
+    current_sender = (current.get("from") or {}).get("id")
+    previous_thread = previous.get("message_thread_id")
+    current_thread = current.get("message_thread_id")
+    if (
+        previous_chat != current_chat
+        or previous_sender != current_sender
+        or previous_thread != current_thread
+    ):
+        return False
+    previous_group = previous.get("media_group_id")
+    current_group = current.get("media_group_id")
+    if previous_group or current_group:
+        return bool(previous_group and previous_group == current_group)
+    previous_date = previous.get("date")
+    current_date = current.get("date")
+    try:
+        if previous_date is None or current_date is None:
+            return True
+        return abs(int(current_date) - int(previous_date)) <= 2
+    except (TypeError, ValueError):
+        return True
 
 
 class SlackSocketReceiverRunner:

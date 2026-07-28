@@ -15,6 +15,7 @@ SHELL := /bin/bash
 
 .PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
+        _ensure-native-connectors \
         test-dev-workflow \
         test test-backend test-backend-unit test-backend-e2e \
         test-frontend test-cli test-cli-unit test-cli-e2e test-python \
@@ -70,9 +71,11 @@ DEV_SUPERTOKENS_PORT  ?= 3567
 DEV_BACKEND_URL       := http://localhost:$(DEV_BACKEND_PORT)
 DEV_FRONTEND_URL      := http://localhost:$(DEV_FRONTEND_PORT)
 DEV_AUTH_FRONTEND_URL := $(DEV_FRONTEND_URL)
+DEV_APP_BASE_DOMAIN   := apps.lemma.localhost:$(DEV_BACKEND_PORT)
+DEV_APPS_DOMAIN_SUFFIX := apps.lemma.localhost
 DEV_DATABASE_URL      := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma
 DEV_DATASTORE_DATABASE_URL := postgresql+asyncpg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/lemma_datastore
-DEV_AGENTBOX_DATABASE_URL  := postgresql://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/agentbox
+DEV_AGENTBOX_DATABASE_URL  := postgresql+psycopg://postgres:postgres@localhost:$(DEV_POSTGRES_PORT)/agentbox
 DEV_REDIS_URL         := redis://localhost:$(DEV_REDIS_PORT)/0
 DEV_SUPERTOKENS_URL   := http://localhost:$(DEV_SUPERTOKENS_PORT)
 DEV_AGENTBOX_URL      := http://127.0.0.1:$(DEV_BACKEND_PORT)/internal/agentbox
@@ -125,7 +128,7 @@ BACKEND_CLI_AUTH_FRONTEND_URL   ?= $(DEV_AUTH_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_API_URL ?= $(DEV_SANDBOX_BACKEND_URL)
 BACKEND_WORKSPACE_CALLBACK_AUTH_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
 BACKEND_WORKSPACE_CALLBACK_FRONTEND_URL ?= $(DEV_SANDBOX_FRONTEND_URL)
-BACKEND_APP_BASE_DOMAIN         ?=
+BACKEND_APP_BASE_DOMAIN         ?= $(DEV_APP_BASE_DOMAIN)
 BACKEND_SESSION_COOKIE_DOMAIN   ?=
 BACKEND_SESSION_COOKIE_SECURE   ?= false
 BACKEND_SESSION_COOKIE_SAME_SITE?= lax
@@ -175,7 +178,7 @@ FRONTEND_API_URL              ?= $(DEV_BACKEND_URL)
 FRONTEND_SITE_URL             ?= $(DEV_FRONTEND_URL)
 FRONTEND_AUTH_URL             ?= $(DEV_AUTH_FRONTEND_URL)
 FRONTEND_SESSION_TOKEN_DOMAIN ?=
-FRONTEND_APPS_DOMAIN_SUFFIX   ?=
+FRONTEND_APPS_DOMAIN_SUFFIX   ?= $(DEV_APPS_DOMAIN_SUFFIX)
 
 FRONTEND_DEV_ENV := \
 	NEXT_PUBLIC_API_URL=$(FRONTEND_API_URL) \
@@ -323,6 +326,7 @@ _init-backend-env:
 			echo "AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
 			echo "CLI_API_URL=$(DEV_BACKEND_URL)"; \
 			echo "CLI_AUTH_FRONTEND_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "APP_BASE_DOMAIN=$(DEV_APP_BASE_DOMAIN)"; \
 			echo "AUTH_WEBSITE_BASE_PATH=/auth"; \
 			echo "SUPERTOKENS_API_BASE_PATH=/auth"; \
 			echo "SUPERTOKENS_API_GATEWAY_PATH=/st"; \
@@ -364,7 +368,7 @@ _init-backend-env:
 
 _ensure-backend-env-keys:
 	@set -e; missing=""; \
-	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
+	for k in ENVIRONMENT DEBUG LOG_LEVEL JSON_LOGS_ENABLED API_URL FRONTEND_URL AUTH_FRONTEND_URL CLI_API_URL CLI_AUTH_FRONTEND_URL APP_BASE_DOMAIN AUTH_WEBSITE_BASE_PATH SUPERTOKENS_API_BASE_PATH SUPERTOKENS_API_GATEWAY_PATH SUPERTOKENS_CORE_URL DATABASE_URL DATASTORE_DATABASE_URL REDIS_URL DOCUMENT_PROCESSOR STORAGE_BACKEND LOCAL_OBJECT_STORAGE_ROOT LOCAL_FILE_STORAGE_ROOT EMAIL_TRANSPORT EMAIL_OUTPUT_DIR AUTH_EMAIL_VERIFICATION_REQUIRED ENABLE_TELEGRAM_POLLING_MODE ENABLE_SLACK_SOCKET_MODE CORS_ORIGINS CORS_ORIGIN_REGEX AGENTBOX_API_URL AGENTBOX_API_KEY; do \
 		if ! grep -qE "^$$k=" $(BACKEND_DIR)/.env; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -382,6 +386,7 @@ _ensure-backend-env-keys:
 		append AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
 		append CLI_API_URL '$(DEV_BACKEND_URL)'; \
 		append CLI_AUTH_FRONTEND_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+		append APP_BASE_DOMAIN '$(DEV_APP_BASE_DOMAIN)'; \
 		append AUTH_WEBSITE_BASE_PATH /auth; \
 		append SUPERTOKENS_API_BASE_PATH /auth; \
 		append SUPERTOKENS_API_GATEWAY_PATH /st; \
@@ -414,6 +419,7 @@ _init-frontend-env:
 			echo "NEXT_PUBLIC_API_URL=$(DEV_BACKEND_URL)"; \
 			echo "NEXT_PUBLIC_SITE_URL=$(DEV_FRONTEND_URL)"; \
 			echo "NEXT_PUBLIC_AUTH_URL=$(DEV_AUTH_FRONTEND_URL)"; \
+			echo "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=$(DEV_APPS_DOMAIN_SUFFIX)"; \
 		} > $(FRONTEND_DIR)/.env.local; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	else \
@@ -422,7 +428,7 @@ _init-frontend-env:
 
 _ensure-frontend-env-keys:
 	@set -e; missing=""; \
-	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL; do \
+	for k in NEXT_PUBLIC_API_URL NEXT_PUBLIC_SITE_URL NEXT_PUBLIC_AUTH_URL NEXT_PUBLIC_APPS_DOMAIN_SUFFIX; do \
 		if ! grep -qE "^$$k=" $(FRONTEND_DIR)/.env.local; then missing="$$missing $$k"; fi; \
 	done; \
 	if [ -z "$$missing" ]; then \
@@ -434,6 +440,7 @@ _ensure-frontend-env-keys:
 		append NEXT_PUBLIC_API_URL '$(DEV_BACKEND_URL)'; \
 		append NEXT_PUBLIC_SITE_URL '$(DEV_FRONTEND_URL)'; \
 		append NEXT_PUBLIC_AUTH_URL '$(DEV_AUTH_FRONTEND_URL)'; \
+		append NEXT_PUBLIC_APPS_DOMAIN_SUFFIX '$(DEV_APPS_DOMAIN_SUFFIX)'; \
 		cd $(FRONTEND_DIR) && npm run gen:runtime-config --silent; \
 	fi
 
@@ -511,7 +518,21 @@ _prepare-dev:
 	@$(MAKE) --no-print-directory _wait-infra
 	@$(MAKE) --no-print-directory _ensure-databases
 	@$(MAKE) --no-print-directory migrate
+	@$(MAKE) --no-print-directory _ensure-native-connectors
 	@if [ "$(OTEL)" = "1" ]; then $(MAKE) --no-print-directory otel-up; fi
+
+_ensure-native-connectors:
+	@telegram_present=$$(cd $(BACKEND_DIR) && docker compose exec -T db \
+		psql -U postgres -d lemma -tAc "SELECT 1 FROM connectors WHERE id = 'telegram' LIMIT 1" \
+		2>/dev/null | tr -d '[:space:]'); \
+	if [ "$$telegram_present" = "1" ]; then \
+		echo "  ✓ Native connector catalog already present"; \
+	else \
+		echo "→ Importing native connector catalog…"; \
+		cd $(BACKEND_DIR) && $(BACKEND_DEV_ENV) \
+			uv run python scripts/import_connector_catalog.py --provider native; \
+		echo "  ✓ Native connector catalog ready"; \
+	fi
 
 _start-public-api-tunnel:
 	@command -v cloudflared >/dev/null 2>&1 || { \

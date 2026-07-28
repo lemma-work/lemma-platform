@@ -10,6 +10,7 @@ from app.core.authorization.permissions import Permissions
 from app.composition.surface_agent import AgentServiceDep
 from app.modules.agent_surfaces.api.controllers.surface_controller import (
     _require_surface_agent_action,
+    _resolve_telegram_config,
 )
 from app.modules.agent_surfaces.api.dependencies import TelegramManagerServiceDep
 from app.modules.agent_surfaces.api.schemas import (
@@ -45,6 +46,11 @@ def _response(service, setup) -> TelegramManagedBotSetupResponse:
         account_id=setup.account_id,
         surface_id=setup.surface_id,
         bot_username=setup.bot_username,
+        bot_launch_url=(
+            service.bot_launch_url(setup)
+            if setup.status.value == "COMPLETE" and setup.bot_username
+            else None
+        ),
         error=setup.error,
     )
 
@@ -94,16 +100,24 @@ async def start_telegram_managed_bot_setup(
     if organization_id is None or pod_name is None:
         raise ValueError(f"Pod {pod_id} not found")
 
+    surface_config = surface_config_from_input(
+        request.config,
+        channel_routes=[],
+    )
+    surface_config.telegram = await _resolve_telegram_config(
+        uow=uow,
+        pod_id=pod_id,
+        platform=SurfacePlatform.TELEGRAM,
+        app_id=request.config.telegram.app_id,
+        ctx=ctx,
+    )
     setup = await service.start_setup(
         user_id=user.id,
         organization_id=organization_id,
         pod_id=pod_id,
         surface_name=surface_name,
         agent_id=agent.id if agent else None,
-        surface_config=surface_config_from_input(
-            request.config,
-            channel_routes=[],
-        ),
+        surface_config=surface_config,
         is_enabled=request.is_enabled,
         pod_name=pod_name,
     )

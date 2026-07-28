@@ -49,6 +49,7 @@ EXCLUDED_PATHS = (
     "/livez",
     "/public/icons",
     "/public/apps",
+    "/public/telegram-mini-apps",
     "/public/sdk",  # browser SDK bundle for no-build apps
     "/widgets/serve",  # widget HTML; handler self-validates session-or-signed-token
     "/public/datastore",  # signed-token file serving validates its own token

@@ -21,6 +21,9 @@ from app.modules.agent_surfaces.domain.errors import (
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    TelegramMiniApp,
+)
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountInfo,
     SurfaceAuthConfigInfo,
@@ -46,6 +49,52 @@ def _surface_entity(**overrides) -> AgentSurfaceEntity:
     if payload.pop("is_active", True) is False:
         payload.setdefault("status", AgentSurfaceStatus.INACTIVE)
     return AgentSurfaceEntity(**payload)
+
+
+async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
+    monkeypatch,
+):
+    repo = AsyncMock()
+    credential_resolver = AsyncMock()
+    credential_resolver.for_surface.return_value = {"bot_token": "secret"}
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=AsyncMock(),
+        credential_resolver=credential_resolver,
+    )
+    app_id = uuid4()
+    surface = _surface_entity(
+        pod_id=uuid4(),
+        surface_type=SurfacePlatform.TELEGRAM,
+        config=SurfaceConfig(telegram={"app_id": app_id}),
+    )
+    client = AsyncMock()
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.resolve_telegram_mini_app",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=app_id,
+                name="pocket-desk",
+                url="https://apps.example.test/pocket-desk",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.surface_service.TelegramClient.from_credentials",
+        lambda *_args, **_kwargs: client,
+    )
+
+    await service.sync_telegram_mini_app(surface)
+
+    calls = {call.args[0]: call.args[1] for call in client.call.await_args_list}
+    assert calls["setChatMenuButton"]["menu_button"] == {
+        "type": "web_app",
+        "text": "Open Pocket Desk",
+        "web_app": {"url": "https://apps.example.test/pocket-desk"},
+    }
+    assert {
+        command["command"] for command in calls["setMyCommands"]["commands"]
+    } == {"help", "retry"}
 
 
 async def test_create_surface(monkeypatch):

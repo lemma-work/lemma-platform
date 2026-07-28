@@ -120,6 +120,12 @@ class SurfaceSendPolicy(BaseModel):
     allow_send: bool = False
 
 
+class SurfaceTelegramConfig(BaseModel):
+    """Telegram-only presentation settings for a surface."""
+
+    app_id: UUID | None = None
+
+
 class SurfaceConfig(BaseModel):
     """User-editable surface behavior. Exactly what the API accepts and returns.
 
@@ -131,6 +137,7 @@ class SurfaceConfig(BaseModel):
     identity: SurfaceIdentityPolicy = Field(default_factory=SurfaceIdentityPolicy)
     channels: list[SurfaceChannelRoute] = Field(default_factory=list)
     send_policy: SurfaceSendPolicy = Field(default_factory=SurfaceSendPolicy)
+    telegram: SurfaceTelegramConfig = Field(default_factory=SurfaceTelegramConfig)
 
 
 class ExternalSurfaceUserEntity(Entity):
@@ -191,7 +198,10 @@ class ParsedSurfaceInteraction(BaseModel):
     external_channel_id: str | None = None
     external_thread_id: str | None = None
     external_user_id: str | None = None
-    callback_id: str
+    callback_id: str = ""
+    action: str | None = None
+    conversation_id: str | None = None
+    interaction_state: str | None = None
     values: dict[str, Any] = Field(default_factory=dict)
     # Set when the tapped control is a native approval button; carries the
     # canonical AgentRunApprovalDecision value (APPROVE_ONCE / DENY /

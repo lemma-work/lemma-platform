@@ -20,6 +20,7 @@ functional gain, so the raw client is retained intentionally.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -166,6 +167,27 @@ class TelegramClient:
         else:
             async with httpx.AsyncClient(timeout=self._timeout) as own_client:
                 response = await own_client.post(url, json=payload)
+        return self._parse(method, response)
+
+    async def call_multipart(
+        self,
+        method: str,
+        *,
+        fields: dict[str, Any],
+        files: dict[str, tuple[str, bytes, str]],
+    ) -> dict[str, Any]:
+        data = {
+            key: json.dumps(value, separators=(",", ":"))
+            if isinstance(value, (dict, list))
+            else str(value)
+            for key, value in fields.items()
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                f"{self.base_url}/{method}",
+                data=data,
+                files=files,
+            )
         return self._parse(method, response)
 
     def _parse(self, method: str, response: httpx.Response) -> dict[str, Any]:

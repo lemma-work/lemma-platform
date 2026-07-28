@@ -310,7 +310,7 @@ async def test_telegram_parse_inbound_interaction_resolves_tap():
 
 
 @pytest.mark.asyncio
-async def test_telegram_parse_inbound_interaction_other_and_unknown_return_none():
+async def test_telegram_parse_inbound_interaction_other_and_unknown_are_acknowledgeable():
     adapter = TelegramSurfaceAdapter()
     payload = {"callback_query": {"id": "c", "data": "tok", "from": {"id": 1}, "message": {"chat": {"id": 1}}}}
     other = {"callback_id": "conv-1|tool-1", "header": "country", "value": _OTHER_CALLBACK_VALUE}
@@ -318,12 +318,16 @@ async def test_telegram_parse_inbound_interaction_other_and_unknown_return_none(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
         new=AsyncMock(return_value=other),
     ):
-        assert await adapter.parse_inbound_interaction(payload) is None
+        interaction = await adapter.parse_inbound_interaction(payload)
+        assert interaction is not None
+        assert interaction.interaction_state == "other"
     with patch(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
         new=AsyncMock(return_value=None),
     ):
-        assert await adapter.parse_inbound_interaction(payload) is None
+        interaction = await adapter.parse_inbound_interaction(payload)
+        assert interaction is not None
+        assert interaction.interaction_state == "expired"
 
 
 # ── WhatsApp native interactive replies ──────────────────────────────────────

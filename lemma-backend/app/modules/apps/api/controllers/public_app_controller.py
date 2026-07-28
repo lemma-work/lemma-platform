@@ -7,6 +7,8 @@ derives it from the request Host. Requests reach this router at /public/apps
 either via that host rewrite or directly from clients that set the header.
 """
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
@@ -15,6 +17,11 @@ from app.modules.apps.api.dependencies import AppUseCasesDep
 
 router = APIRouter(
     prefix="/public/apps",
+    tags=["Public Apps"],
+    redirect_slashes=False,
+)
+telegram_mini_app_router = APIRouter(
+    prefix="/public/telegram-mini-apps",
     tags=["Public Apps"],
     redirect_slashes=False,
 )
@@ -66,3 +73,63 @@ async def get_app_asset_by_slug(
         request_etag=request.headers.get("if-none-match"),
     )
     return app_asset_response(asset)
+
+
+def _telegram_mini_app_asset_response(asset, *, public_slug: str) -> Response:
+    """Keep root-relative Vite assets under the tunnel's per-app path."""
+
+    if asset.content is None or asset.not_modified:
+        return app_asset_response(asset)
+    prefix = f"/public/telegram-mini-apps/{quote(public_slug, safe='')}"
+    replacements = {
+        "/assets/": f"{prefix}/assets/",
+    }
+    content = asset.content
+    if isinstance(content, bytes):
+        for source, target in replacements.items():
+            content = content.replace(source.encode(), target.encode())
+    elif isinstance(content, str):
+        for source, target in replacements.items():
+            content = content.replace(source, target)
+    return app_asset_response(
+        asset.model_copy(update={"content": content, "etag": None})
+    )
+
+
+@telegram_mini_app_router.get(
+    "/{public_slug}",
+    status_code=200,
+    operation_id="public.telegram_mini_app.root",
+    include_in_schema=False,
+)
+async def get_telegram_mini_app_root(
+    public_slug: str,
+    request: Request,
+    use_cases: AppUseCasesDep,
+) -> Response:
+    asset = await use_cases.serve_public_asset(
+        slug=public_slug,
+        asset_path=None,
+        request_etag=request.headers.get("if-none-match"),
+    )
+    return _telegram_mini_app_asset_response(asset, public_slug=public_slug)
+
+
+@telegram_mini_app_router.get(
+    "/{public_slug}/{asset_path:path}",
+    status_code=200,
+    operation_id="public.telegram_mini_app.asset",
+    include_in_schema=False,
+)
+async def get_telegram_mini_app_asset(
+    public_slug: str,
+    asset_path: str,
+    request: Request,
+    use_cases: AppUseCasesDep,
+) -> Response:
+    asset = await use_cases.serve_public_asset(
+        slug=public_slug,
+        asset_path=asset_path or None,
+        request_etag=request.headers.get("if-none-match"),
+    )
+    return _telegram_mini_app_asset_response(asset, public_slug=public_slug)
