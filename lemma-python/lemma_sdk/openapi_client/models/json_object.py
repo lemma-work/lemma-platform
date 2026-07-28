@@ -6,11 +6,11 @@ from typing import Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-T = TypeVar("T", bound="FunctionSummaryResponseConfigType0")
+T = TypeVar("T", bound="JsonObject")
 
 
 @_attrs_define
-class FunctionSummaryResponseConfigType0:
+class JsonObject:
     """ """
 
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -25,10 +25,10 @@ class FunctionSummaryResponseConfigType0:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        function_summary_response_config_type_0 = cls()
+        json_object = cls()
 
-        function_summary_response_config_type_0.additional_properties = d
-        return function_summary_response_config_type_0
+        json_object.additional_properties = d
+        return json_object
 
     @property
     def additional_keys(self) -> list[str]:

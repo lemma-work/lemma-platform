@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.6.5",
+    VERSION: "0.6.6",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -12279,7 +12279,9 @@ var LemmaClient = (() => {
       });
       __publicField(this, "runs", {
         create: (name, options = {}) => this.client.request(() => {
-          const payload = { input_data: options.input };
+          const payload = {
+            input_data: options.input
+          };
           return FunctionsService.functionRun(this.podId(), name, payload);
         }),
         list: (name, params = {}) => this.client.request(() => {

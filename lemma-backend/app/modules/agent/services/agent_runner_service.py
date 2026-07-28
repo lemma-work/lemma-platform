@@ -68,6 +68,7 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.services.run_observer_delivery import notify_run_failed
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
     UsageReservation,
@@ -502,15 +503,7 @@ class AgentRunnerService:
                     ),
                     agent_run_id=agent_run_id,
                 )
-                if observer is not None and isinstance(exc, Exception):
-                    try:
-                        await observer.on_run_failed(conversation, exc)
-                    except Exception:
-                        logger.debug(
-                            "agent.agent_runner_service."
-                            "agent_run_observer_failure_delivery.diagnostic",
-                            agent_run_id=agent_run_id,
-                        )
+                await notify_run_failed(observer, conversation, exc, agent_run_id)
 
     async def _resolve_agent_runtime(
         self,

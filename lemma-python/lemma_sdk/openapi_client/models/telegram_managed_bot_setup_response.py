@@ -22,6 +22,7 @@ class TelegramManagedBotSetupResponse:
         setup_id (str):
         status (str):
         account_id (None | Unset | UUID):
+        bot_launch_url (None | str | Unset):
         bot_username (None | str | Unset):
         error (None | str | Unset):
         surface_id (None | Unset | UUID):
@@ -33,6 +34,7 @@ class TelegramManagedBotSetupResponse:
     setup_id: str
     status: str
     account_id: None | Unset | UUID = UNSET
+    bot_launch_url: None | str | Unset = UNSET
     bot_username: None | str | Unset = UNSET
     error: None | str | Unset = UNSET
     surface_id: None | Unset | UUID = UNSET
@@ -56,6 +58,12 @@ class TelegramManagedBotSetupResponse:
             account_id = str(self.account_id)
         else:
             account_id = self.account_id
+
+        bot_launch_url: None | str | Unset
+        if isinstance(self.bot_launch_url, Unset):
+            bot_launch_url = UNSET
+        else:
+            bot_launch_url = self.bot_launch_url
 
         bot_username: None | str | Unset
         if isinstance(self.bot_username, Unset):
@@ -90,6 +98,8 @@ class TelegramManagedBotSetupResponse:
         )
         if account_id is not UNSET:
             field_dict["account_id"] = account_id
+        if bot_launch_url is not UNSET:
+            field_dict["bot_launch_url"] = bot_launch_url
         if bot_username is not UNSET:
             field_dict["bot_username"] = bot_username
         if error is not UNSET:
@@ -128,6 +138,15 @@ class TelegramManagedBotSetupResponse:
             return cast(None | Unset | UUID, data)
 
         account_id = _parse_account_id(d.pop("account_id", UNSET))
+
+        def _parse_bot_launch_url(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        bot_launch_url = _parse_bot_launch_url(d.pop("bot_launch_url", UNSET))
 
         def _parse_bot_username(data: object) -> None | str | Unset:
             if data is None:
@@ -171,6 +190,7 @@ class TelegramManagedBotSetupResponse:
             setup_id=setup_id,
             status=status,
             account_id=account_id,
+            bot_launch_url=bot_launch_url,
             bot_username=bot_username,
             error=error,
             surface_id=surface_id,

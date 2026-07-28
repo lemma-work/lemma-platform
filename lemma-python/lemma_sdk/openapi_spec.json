@@ -3593,14 +3593,12 @@
           "config": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Config"
+            ]
           },
           "description": {
             "anyOf": [
@@ -4628,12 +4626,11 @@
         "type": "object"
       },
       "ExecuteFunctionRequest": {
+        "additionalProperties": false,
         "description": "Request to execute a function.",
         "properties": {
           "input_data": {
-            "additionalProperties": true,
-            "title": "Input Data",
-            "type": "object"
+            "$ref": "#/components/schemas/JsonObject"
           }
         },
         "title": "ExecuteFunctionRequest",
@@ -5667,17 +5664,6 @@
             ],
             "title": "Code"
           },
-          "code_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Code Hash"
-          },
           "code_path": {
             "anyOf": [
               {
@@ -5692,29 +5678,34 @@
           "config": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Config"
+            ]
           },
           "config_schema": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Optional configuration schema derived from the function code.",
-            "title": "Config Schema"
+            "description": "Optional configuration schema derived from the function code."
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "description": {
@@ -5745,33 +5736,32 @@
             "type": "string"
           },
           "input_schema": {
-            "additionalProperties": true,
-            "description": "Input JSON schema derived from the function code.",
-            "title": "Input Schema",
-            "type": "object"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Input JSON schema derived from the function code."
           },
           "name": {
             "title": "Name",
             "type": "string"
           },
           "output_schema": {
-            "additionalProperties": true,
-            "description": "Output JSON schema derived from the function code.",
-            "title": "Output Schema",
-            "type": "object"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Output JSON schema derived from the function code."
           },
           "pod_id": {
             "format": "uuid",
             "title": "Pod Id",
             "type": "string"
           },
-          "python_packages": {
-            "description": "pip dependencies declared in the code's #python_packages header.",
-            "items": {
-              "type": "string"
-            },
-            "title": "Python Packages",
-            "type": "array"
+          "revision_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Hash"
           },
           "status": {
             "$ref": "#/components/schemas/FunctionStatus"
@@ -5780,6 +5770,15 @@
             "$ref": "#/components/schemas/FunctionType"
           },
           "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Updated At"
           },
           "user_id": {
@@ -5828,17 +5827,6 @@
             ],
             "title": "Code"
           },
-          "code_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Code Hash"
-          },
           "code_path": {
             "anyOf": [
               {
@@ -5853,29 +5841,34 @@
           "config": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Config"
+            ]
           },
           "config_schema": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Optional configuration schema derived from the function code.",
-            "title": "Config Schema"
+            "description": "Optional configuration schema derived from the function code."
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "description": {
@@ -5906,20 +5899,16 @@
             "type": "string"
           },
           "input_schema": {
-            "additionalProperties": true,
-            "description": "Input JSON schema derived from the function code.",
-            "title": "Input Schema",
-            "type": "object"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Input JSON schema derived from the function code."
           },
           "name": {
             "title": "Name",
             "type": "string"
           },
           "output_schema": {
-            "additionalProperties": true,
-            "description": "Output JSON schema derived from the function code.",
-            "title": "Output Schema",
-            "type": "object"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "Output JSON schema derived from the function code."
           },
           "permissions": {
             "$ref": "#/components/schemas/FunctionPermissionsResponse"
@@ -5929,13 +5918,16 @@
             "title": "Pod Id",
             "type": "string"
           },
-          "python_packages": {
-            "description": "pip dependencies declared in the code's #python_packages header.",
-            "items": {
-              "type": "string"
-            },
-            "title": "Python Packages",
-            "type": "array"
+          "revision_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Hash"
           },
           "status": {
             "$ref": "#/components/schemas/FunctionStatus"
@@ -5944,6 +5936,15 @@
             "$ref": "#/components/schemas/FunctionType"
           },
           "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Updated At"
           },
           "user_id": {
@@ -6292,9 +6293,27 @@
         "description": "Function run response.",
         "properties": {
           "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Completed At"
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "error": {
@@ -6321,14 +6340,12 @@
           "input_data": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Input Data"
+            ]
           },
           "job_id": {
             "anyOf": [
@@ -6355,16 +6372,34 @@
           "output_data": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision_hash": {
+            "anyOf": [
+              {
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Output Data"
+            "title": "Revision Hash"
           },
           "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Started At"
           },
           "status": {
@@ -6385,28 +6420,6 @@
             "format": "uuid",
             "title": "User Id",
             "type": "string"
-          },
-          "workspace_process_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Workspace Process Id"
-          },
-          "workspace_session_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Workspace Session Id"
           }
         },
         "required": [
@@ -6437,9 +6450,27 @@
         "description": "Function run summary for list responses.",
         "properties": {
           "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Completed At"
           },
           "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Created At"
           },
           "function_id": {
@@ -6453,6 +6484,15 @@
             "type": "string"
           },
           "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Started At"
           },
           "status": {
@@ -6497,17 +6537,6 @@
             "title": "Allowed Actions",
             "type": "array"
           },
-          "code_hash": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Code Hash"
-          },
           "code_path": {
             "anyOf": [
               {
@@ -6522,16 +6551,23 @@
           "config": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Config"
-          },
-          "created_at": {
             "title": "Created At"
           },
           "description": {
@@ -6570,12 +6606,16 @@
             "title": "Pod Id",
             "type": "string"
           },
-          "python_packages": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Python Packages",
-            "type": "array"
+          "revision_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Hash"
           },
           "status": {
             "$ref": "#/components/schemas/FunctionStatus"
@@ -6584,6 +6624,15 @@
             "$ref": "#/components/schemas/FunctionType"
           },
           "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Updated At"
           },
           "user_id": {
@@ -6940,6 +6989,13 @@
         "title": "InstalledAppSummary",
         "type": "object"
       },
+      "JsonObject": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValue"
+        },
+        "type": "object"
+      },
+      "JsonValue": {},
       "LemmaProviderCapabilityResponseSchema": {
         "properties": {
           "auth_config_schema": {
@@ -10601,6 +10657,9 @@
           },
           "send_policy": {
             "$ref": "#/components/schemas/SurfaceSendPolicyConfig"
+          },
+          "telegram": {
+            "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
           }
         },
         "title": "SurfaceBehaviorConfigInput",
@@ -10705,6 +10764,9 @@
           },
           "send_policy": {
             "$ref": "#/components/schemas/SurfaceSendPolicyConfig"
+          },
+          "telegram": {
+            "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
           }
         },
         "title": "SurfaceConfigResponse",
@@ -11289,6 +11351,26 @@
         "title": "SurfaceSetupStep",
         "type": "object"
       },
+      "SurfaceTelegramConfigInput": {
+        "additionalProperties": false,
+        "description": "Selects the pod app exposed as this bot's Telegram Mini App.",
+        "properties": {
+          "app_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Id"
+          }
+        },
+        "title": "SurfaceTelegramConfigInput",
+        "type": "object"
+      },
       "SurfaceUpdateRequest": {
         "additionalProperties": false,
         "description": "Body for `PATCH /pods/{pod_id}/surfaces/{surface_name}`.\n\nPartial update (merge semantics): only fields present in the request are\napplied. The surface's ``platform`` and ``name`` are immutable \u2014 delete and\nrecreate to change either.",
@@ -11586,6 +11668,17 @@
             ],
             "title": "Account Id"
           },
+          "bot_launch_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Launch Url"
+          },
           "bot_username": {
             "anyOf": [
               {
@@ -11851,6 +11944,7 @@
         "type": "object"
       },
       "UpdateFunctionRequest": {
+        "additionalProperties": false,
         "description": "Request to update a function.",
         "properties": {
           "code": {
@@ -11868,14 +11962,12 @@
           "config": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JsonObject"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Config"
+            ]
           },
           "description": {
             "anyOf": [
@@ -14878,7 +14970,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.5"
+    "version": "0.6.6"
   },
   "openapi": "3.1.0",
   "paths": {

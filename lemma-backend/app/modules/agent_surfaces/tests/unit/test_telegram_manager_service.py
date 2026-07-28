@@ -210,11 +210,12 @@ async def test_configure_managed_bot_sets_selected_app_as_web_app(monkeypatch):
     )
     child = SimpleNamespace(call=AsyncMock(), call_multipart=AsyncMock())
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_service.TelegramClient",
+        "app.modules.agent_surfaces.services.managed_bot_configurator.TelegramClient",
         lambda **_: child,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_service.resolve_telegram_mini_app",
+        "app.modules.agent_surfaces.services.managed_bot_configurator."
+        "resolve_telegram_mini_app",
         AsyncMock(
             return_value=TelegramMiniApp(
                 app_id=app_id,
@@ -302,11 +303,13 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
     )
 
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_service.AuthConfigRepository",
+        "app.modules.agent_surfaces.services.managed_bot_persistence."
+        "AuthConfigRepository",
         lambda **_: auth_configs,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_service.AccountRepository",
+        "app.modules.agent_surfaces.services.managed_bot_persistence."
+        "AccountRepository",
         lambda **_: accounts,
     )
     monkeypatch.setattr(
@@ -314,7 +317,8 @@ async def test_persist_managed_bot_bootstraps_native_auth_config_and_commits(
         lambda _: surface_service,
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.telegram_manager_service.ExternalSurfaceUserRepository",
+        "app.modules.agent_surfaces.services.managed_bot_identity."
+        "ExternalSurfaceUserRepository",
         lambda _: external_users,
     )
 

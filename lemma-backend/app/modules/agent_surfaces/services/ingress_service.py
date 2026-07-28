@@ -14,9 +14,6 @@ from app.core.authorization.factory import create_authorization_data_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.contracts import AgentRunApprovalDecision
 from app.composition.surface_agent import ConversationService
-from app.modules.agent.services.conversation_retry_service import (
-    ConversationRetryService,
-)
 from app.modules.agent.contracts import (
     AskUserRequest,
     DisplayResourceRequest,
@@ -85,9 +82,8 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
-from app.modules.agent_surfaces.services.telegram_mini_app_service import (
-    TelegramMiniApp,
-    resolve_telegram_mini_app,
+from app.modules.agent_surfaces.services.telegram_command_service import (
+    handle_telegram_command,
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
@@ -98,8 +94,13 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_ask_user_render_plan,
     build_display_resource_render_plan,
     merge_other_answers,
-    parse_callback_id,
     render_questions_as_text,
+)
+from app.modules.agent_surfaces.services.interaction_helpers import (
+    interaction_sender_matches,
+    parse_interaction_target,
+    resolve_interaction_delivery,
+    retry_interaction_conversation,
 )
 from app.composition.surface_connectors import ConnectorService
 from app.core.log.log import get_logger
@@ -403,10 +404,14 @@ class AgentSurfaceIngressService:
             return
 
         credentials = await self._resolve_credentials_from_context(context)
-        if await self._handle_telegram_command(
+        if await handle_telegram_command(
             context=context,
             adapter=adapter,
             credentials=credentials,
+            uow_factory=self._uow_factory,
+            conversation_service_factory=self._conversation_service_factory,
+            uow=self.uow,
+            conversation_service=self.conversation_service,
         ):
             return
         try:
@@ -540,127 +545,6 @@ class AgentSurfaceIngressService:
             return None
         finally:
             reset_current_context(token)
-
-    async def _handle_telegram_command(
-        self,
-        *,
-        context: SurfaceChatContext,
-        adapter: SurfacePlatformAdapterPort,
-        credentials: dict[str, Any],
-    ) -> bool:
-        if context.platform is not SurfacePlatform.TELEGRAM:
-            return False
-        text = str(context.message_text or "").strip()
-        if not text.startswith("/"):
-            return False
-        command = text.split(maxsplit=1)[0].split("@", 1)[0].lower()
-        if command not in {"/start", "/help", "/retry"}:
-            return False
-        mini_app = await self._telegram_mini_app_for_context(context)
-        if command in {"/start", "/help"}:
-            agent_name = (
-                context.agent_display_name
-                or context.surface_name
-                or "your Lemma agent"
-            )
-            app_help = (
-                f"Open {mini_app.label} from the app button beside the message field"
-                if mini_app
-                else "A pod owner can connect a Mini App from this bot’s surface settings"
-            )
-            await adapter.send_message(
-                credentials=credentials,
-                event=context.event,
-                message=(
-                    f"Hi — I’m **{agent_name}**.\n\n"
-                    "Send me a message, voice note, photo, or file. "
-                    "I’ll keep the work connected to this pod and show progress "
-                    "while I’m working.\n\n"
-                    f"{app_help}. Use `/retry` after a failed request."
-                ),
-            )
-            return True
-        retried = await self._retry_failed_conversation(context)
-        await adapter.send_message(
-            credentials=credentials,
-            event=context.event,
-            message=(
-                "Retrying the last failed request."
-                if retried
-                else "There isn’t a failed request I can safely retry here."
-            ),
-        )
-        return True
-
-    async def _telegram_mini_app_for_context(
-        self,
-        context: SurfaceChatContext,
-    ) -> TelegramMiniApp | None:
-        if context.pod_id is None or context.surface_config is None:
-            return None
-        app_id = context.surface_config.telegram.app_id
-        if app_id is None:
-            return None
-        if self._uow_factory is not None:
-            async with self._uow_factory() as uow:
-                return await resolve_telegram_mini_app(
-                    uow=uow,
-                    pod_id=context.pod_id,
-                    app_id=app_id,
-                )
-        if self.uow is None:
-            return None
-        return await resolve_telegram_mini_app(
-            uow=self.uow,
-            pod_id=context.pod_id,
-            app_id=app_id,
-        )
-
-    async def _retry_failed_conversation(
-        self,
-        context: SurfaceChatContext,
-    ) -> bool:
-        if context.pod_id is None:
-            return False
-        pod_id = context.pod_id
-
-        async def run(conversation_service: ConversationService) -> bool:
-            retry_service = ConversationRetryService(
-                uow=conversation_service.uow,
-                conversation_repository=conversation_service.conversation_repository,
-                agent_repository=conversation_service.agent_repository,
-                authorization_service=conversation_service.authorization_service,
-                fallback_model_name=conversation_service.fallback_model_name,
-                usage_service=conversation_service.usage_service,
-            )
-            auth_ctx = await create_authorization_data_service(
-                conversation_service.uow
-            ).build_user_context(
-                user_id=context.user_id,
-                pod_id=pod_id,
-            )
-            token = set_current_context(auth_ctx)
-            try:
-                await retry_service.retry_failed_run(
-                    conversation_id=context.conversation_id,
-                    user_id=context.user_id,
-                    pod_id=pod_id,
-                    agent_name=context.agent_name,
-                )
-                return True
-            except Exception:
-                return False
-            finally:
-                reset_current_context(token)
-
-        if self._uow_factory is not None:
-            if self._conversation_service_factory is None:
-                return False
-            async with self._uow_factory() as uow:
-                return await run(self._conversation_service_factory(uow))
-        if self.conversation_service is None:
-            return False
-        return await run(self.conversation_service)
 
     async def _fetch_channel_context(
         self,
@@ -1395,54 +1279,19 @@ class AgentSurfaceIngressService:
         adapter = None
         credentials = None
         try:
-            if parsed.action:
-                conversation_id_raw = str(parsed.conversation_id or "")
-                tool_call_id = ""
-            else:
-                parsed_callback = parse_callback_id(parsed.callback_id)
-                if parsed_callback is None:
-                    logger.debug(
-                        'agent_surfaces.ingress_service.surface_interaction_dropped_unparseable_callback.diagnostic',
-                        callback_id=parsed.callback_id,
-                    )
-                    return
-                conversation_id_raw, tool_call_id = parsed_callback
-            if not conversation_id_raw:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_unparseable_callback.diagnostic',
-                    callback_id=parsed.callback_id,
-                )
+            target = parse_interaction_target(parsed)
+            if target is None:
                 return
-            try:
-                conversation_id = UUID(conversation_id_raw)
-            except ValueError:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_invalid_conversation.diagnostic',
-                    callback_id=parsed.callback_id,
-                )
-                return
+            conversation_id, tool_call_id = target
 
-            link = await self.conversation_link_repository.get_by_conversation_id(
-                conversation_id
+            delivery = await resolve_interaction_delivery(
+                self,
+                parsed,
+                conversation_id,
             )
-            if link is None or link.platform != parsed.platform.value:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_no_matching.diagnostic',
-                    conversation_id=conversation_id,
-                )
+            if delivery is None:
                 return
-            surface = await self.surface_repository.get(link.surface_id)
-            if surface is None or not surface.is_active:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_surface_missing.diagnostic',
-                    conversation_id=conversation_id,
-                    surface_id=link.surface_id,
-                )
-                return
-            adapter = self.adapter_registry.get(surface.surface_type)
-            if adapter is None:
-                return
-            credentials = await self._resolve_credentials(surface)
+            link, surface, adapter, credentials = delivery
 
             if parsed.interaction_state == "other":
                 await adapter.acknowledge_interaction(
@@ -1471,11 +1320,7 @@ class AgentSurfaceIngressService:
 
             # Authz: only the surface user who owns the conversation may submit
             # the answer that was shown to them.
-            if (
-                link.external_user_id
-                and parsed.external_user_id
-                and link.external_user_id != parsed.external_user_id
-            ):
+            if not interaction_sender_matches(link, parsed):
                 logger.debug(
                     'agent_surfaces.ingress_service.surface_answer_submission_rejected_submitter.diagnostic',
                     external_user_id=parsed.external_user_id,
@@ -1494,36 +1339,11 @@ class AgentSurfaceIngressService:
                 return
 
             if parsed.action == "retry":
-                auth_ctx = await create_authorization_data_service(
-                    self.uow
-                ).build_user_context(
-                    user_id=conversation.user_id,
-                    pod_id=conversation.pod_id,
+                await retry_interaction_conversation(
+                    conversation_service=self.conversation_service,
+                    uow=self.uow,
+                    conversation=conversation,
                 )
-                token = set_current_context(auth_ctx)
-                try:
-                    retry_service = ConversationRetryService(
-                        uow=self.conversation_service.uow,
-                        conversation_repository=(
-                            self.conversation_service.conversation_repository
-                        ),
-                        agent_repository=self.conversation_service.agent_repository,
-                        authorization_service=(
-                            self.conversation_service.authorization_service
-                        ),
-                        fallback_model_name=(
-                            self.conversation_service.fallback_model_name
-                        ),
-                        usage_service=self.conversation_service.usage_service,
-                    )
-                    await retry_service.retry_failed_run(
-                        conversation_id=conversation.id,
-                        user_id=conversation.user_id,
-                        pod_id=conversation.pod_id,
-                        agent_name=None,
-                    )
-                finally:
-                    reset_current_context(token)
                 await adapter.acknowledge_interaction(
                     credentials=credentials,
                     interaction=parsed,

@@ -46,6 +46,9 @@ from app.modules.agent_surfaces.services.surface_file_ingest_service import (
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     TelegramMiniApp,
 )
+from app.modules.agent_surfaces.services.telegram_command_service import (
+    handle_telegram_command,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -1135,18 +1138,22 @@ async def test_execute_chat_starts_agent_run_with_surface_metadata():
 
 
 @pytest.mark.parametrize("command", ["/start", "/help"])
-async def test_telegram_help_points_to_bound_mini_app_button(command):
+async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatch):
     surface = _telegram_surface()
     event = _telegram_event(chat_id="42", message_id="7")
     adapter = AsyncMock()
     service = _build_service(adapter=adapter, surfaces=[surface])
     app_id = uuid4()
-    service._telegram_mini_app_for_context = AsyncMock(
-        return_value=TelegramMiniApp(
-            app_id=app_id,
-            name="field-log",
-            url="https://field-log.apps.example.test",
-        )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_command_service."
+        "_telegram_mini_app_for_context",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=app_id,
+                name="field-log",
+                url="https://field-log.apps.example.test",
+            )
+        ),
     )
     context = SurfaceChatContext(
         platform=SurfacePlatform.TELEGRAM,
@@ -1162,10 +1169,14 @@ async def test_telegram_help_points_to_bound_mini_app_button(command):
         event=event,
     )
 
-    handled = await service._handle_telegram_command(
+    handled = await handle_telegram_command(
         context=context,
         adapter=adapter,
         credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
     )
 
     assert handled is True
@@ -1194,10 +1205,14 @@ async def test_telegram_app_command_is_not_a_special_command():
         event=event,
     )
 
-    handled = await service._handle_telegram_command(
+    handled = await handle_telegram_command(
         context=context,
         adapter=adapter,
         credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
     )
 
     assert handled is False

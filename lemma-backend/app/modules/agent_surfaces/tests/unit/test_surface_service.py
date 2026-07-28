@@ -70,7 +70,8 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
     )
     client = AsyncMock()
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.resolve_telegram_mini_app",
+        "app.modules.agent_surfaces.services.telegram_mini_app_service."
+        "resolve_telegram_mini_app",
         AsyncMock(
             return_value=TelegramMiniApp(
                 app_id=app_id,
@@ -80,7 +81,8 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
         ),
     )
     monkeypatch.setattr(
-        "app.modules.agent_surfaces.services.surface_service.TelegramClient.from_credentials",
+        "app.modules.agent_surfaces.services.telegram_mini_app_service."
+        "TelegramClient.from_credentials",
         lambda *_args, **_kwargs: client,
     )
 

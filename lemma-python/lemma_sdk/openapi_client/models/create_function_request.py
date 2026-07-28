@@ -10,9 +10,7 @@ from ..models.resource_visibility import ResourceVisibility
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.create_function_request_config_type_0 import (
-        CreateFunctionRequestConfigType0,
-    )
+    from ..models.json_object import JsonObject
 
 
 T = TypeVar("T", bound="CreateFunctionRequest")
@@ -29,7 +27,7 @@ class CreateFunctionRequest:
             name (str):
             code (None | str | Unset): Python source for the function. When provided, the platform analyzes the code and
                 populates input_schema, output_schema, and config_schema on the returned function.
-            config (CreateFunctionRequestConfigType0 | None | Unset):
+            config (JsonObject | None | Unset):
             description (None | str | Unset):
             icon_url (None | str | Unset):
             type_ (FunctionType | Unset): Execution mode for a function.
@@ -38,16 +36,14 @@ class CreateFunctionRequest:
 
     name: str
     code: None | str | Unset = UNSET
-    config: CreateFunctionRequestConfigType0 | None | Unset = UNSET
+    config: JsonObject | None | Unset = UNSET
     description: None | str | Unset = UNSET
     icon_url: None | str | Unset = UNSET
     type_: FunctionType | Unset = UNSET
     visibility: ResourceVisibility | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.create_function_request_config_type_0 import (
-            CreateFunctionRequestConfigType0,
-        )
+        from ..models.json_object import JsonObject
 
         name = self.name
 
@@ -60,7 +56,7 @@ class CreateFunctionRequest:
         config: dict[str, Any] | None | Unset
         if isinstance(self.config, Unset):
             config = UNSET
-        elif isinstance(self.config, CreateFunctionRequestConfigType0):
+        elif isinstance(self.config, JsonObject):
             config = self.config.to_dict()
         else:
             config = self.config
@@ -109,9 +105,7 @@ class CreateFunctionRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.create_function_request_config_type_0 import (
-            CreateFunctionRequestConfigType0,
-        )
+        from ..models.json_object import JsonObject
 
         d = dict(src_dict)
         name = d.pop("name")
@@ -125,9 +119,7 @@ class CreateFunctionRequest:
 
         code = _parse_code(d.pop("code", UNSET))
 
-        def _parse_config(
-            data: object,
-        ) -> CreateFunctionRequestConfigType0 | None | Unset:
+        def _parse_config(data: object) -> JsonObject | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -135,12 +127,12 @@ class CreateFunctionRequest:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                config_type_0 = CreateFunctionRequestConfigType0.from_dict(data)
+                config_type_0 = JsonObject.from_dict(data)
 
                 return config_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
-            return cast(CreateFunctionRequestConfigType0 | None | Unset, data)
+            return cast(JsonObject | None | Unset, data)
 
         config = _parse_config(d.pop("config", UNSET))
 

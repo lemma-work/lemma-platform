@@ -119,7 +119,6 @@ _NAME_TO_MODULE = {
     'CreateConversationRequestMetadataType0': 'create_conversation_request_metadata_type_0',
     'CreateFolderRequest': 'create_folder_request',
     'CreateFunctionRequest': 'create_function_request',
-    'CreateFunctionRequestConfigType0': 'create_function_request_config_type_0',
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders': 'create_open_ai_compatible_runtime_profile_request_headers',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
@@ -163,7 +162,6 @@ _NAME_TO_MODULE = {
     'EventWorkflowStartInput': 'event_workflow_start_input',
     'EventWorkflowStartOutput': 'event_workflow_start_output',
     'ExecuteFunctionRequest': 'execute_function_request',
-    'ExecuteFunctionRequestInputData': 'execute_function_request_input_data',
     'ExportProgressResponse': 'export_progress_response',
     'ExportStartRequest': 'export_start_request',
     'ExportStatus': 'export_status',
@@ -194,15 +192,7 @@ _NAME_TO_MODULE = {
     'FormNodeResponse': 'form_node_response',
     'FormNodeResponsePositionType0': 'form_node_response_position_type_0',
     'FunctionActionResponse': 'function_action_response',
-    'FunctionActionResponseConfigSchemaType0': 'function_action_response_config_schema_type_0',
-    'FunctionActionResponseConfigType0': 'function_action_response_config_type_0',
-    'FunctionActionResponseInputSchema': 'function_action_response_input_schema',
-    'FunctionActionResponseOutputSchema': 'function_action_response_output_schema',
     'FunctionDetailResponse': 'function_detail_response',
-    'FunctionDetailResponseConfigSchemaType0': 'function_detail_response_config_schema_type_0',
-    'FunctionDetailResponseConfigType0': 'function_detail_response_config_type_0',
-    'FunctionDetailResponseInputSchema': 'function_detail_response_input_schema',
-    'FunctionDetailResponseOutputSchema': 'function_detail_response_output_schema',
     'FunctionListResponse': 'function_list_response',
     'FunctionMessageResponse': 'function_message_response',
     'FunctionNode': 'function_node',
@@ -217,13 +207,10 @@ _NAME_TO_MODULE = {
     'FunctionResourcePermissionResponse': 'function_resource_permission_response',
     'FunctionRunListResponse': 'function_run_list_response',
     'FunctionRunResponse': 'function_run_response',
-    'FunctionRunResponseInputDataType0': 'function_run_response_input_data_type_0',
-    'FunctionRunResponseOutputDataType0': 'function_run_response_output_data_type_0',
     'FunctionRunStatus': 'function_run_status',
     'FunctionRunSummaryResponse': 'function_run_summary_response',
     'FunctionStatus': 'function_status',
     'FunctionSummaryResponse': 'function_summary_response',
-    'FunctionSummaryResponseConfigType0': 'function_summary_response_config_type_0',
     'FunctionType': 'function_type',
     'HarnessKind': 'harness_kind',
     'IconUploadRequest': 'icon_upload_request',
@@ -233,6 +220,7 @@ _NAME_TO_MODULE = {
     'ImportStatus': 'import_status',
     'ImportStatusResponse': 'import_status_response',
     'InstalledAppSummary': 'installed_app_summary',
+    'JsonObject': 'json_object',
     'LemmaProviderCapabilityResponseSchema': 'lemma_provider_capability_response_schema',
     'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0': 'lemma_provider_capability_response_schema_auth_config_schema_type_0',
     'LemmaProviderCapabilityResponseSchemaCredentialSchemaType0': 'lemma_provider_capability_response_schema_credential_schema_type_0',
@@ -381,6 +369,7 @@ _NAME_TO_MODULE = {
     'SurfaceSetupPhase': 'surface_setup_phase',
     'SurfaceSetupResponse': 'surface_setup_response',
     'SurfaceSetupStep': 'surface_setup_step',
+    'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUpdateRequest': 'surface_update_request',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
@@ -397,7 +386,6 @@ _NAME_TO_MODULE = {
     'UpdateConversationRequest': 'update_conversation_request',
     'UpdateConversationRequestMetadataType0': 'update_conversation_request_metadata_type_0',
     'UpdateFunctionRequest': 'update_function_request',
-    'UpdateFunctionRequestConfigType0': 'update_function_request_config_type_0',
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateRecordRequest': 'update_record_request',
     'UpdateRecordRequestData': 'update_record_request_data',
@@ -578,7 +566,6 @@ if TYPE_CHECKING:
     from .create_conversation_request_metadata_type_0 import CreateConversationRequestMetadataType0
     from .create_folder_request import CreateFolderRequest
     from .create_function_request import CreateFunctionRequest
-    from .create_function_request_config_type_0 import CreateFunctionRequestConfigType0
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
     from .create_open_ai_compatible_runtime_profile_request_headers import CreateOpenAICompatibleRuntimeProfileRequestHeaders
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
@@ -622,7 +609,6 @@ if TYPE_CHECKING:
     from .event_workflow_start_input import EventWorkflowStartInput
     from .event_workflow_start_output import EventWorkflowStartOutput
     from .execute_function_request import ExecuteFunctionRequest
-    from .execute_function_request_input_data import ExecuteFunctionRequestInputData
     from .export_progress_response import ExportProgressResponse
     from .export_start_request import ExportStartRequest
     from .export_status import ExportStatus
@@ -653,15 +639,7 @@ if TYPE_CHECKING:
     from .form_node_response import FormNodeResponse
     from .form_node_response_position_type_0 import FormNodeResponsePositionType0
     from .function_action_response import FunctionActionResponse
-    from .function_action_response_config_schema_type_0 import FunctionActionResponseConfigSchemaType0
-    from .function_action_response_config_type_0 import FunctionActionResponseConfigType0
-    from .function_action_response_input_schema import FunctionActionResponseInputSchema
-    from .function_action_response_output_schema import FunctionActionResponseOutputSchema
     from .function_detail_response import FunctionDetailResponse
-    from .function_detail_response_config_schema_type_0 import FunctionDetailResponseConfigSchemaType0
-    from .function_detail_response_config_type_0 import FunctionDetailResponseConfigType0
-    from .function_detail_response_input_schema import FunctionDetailResponseInputSchema
-    from .function_detail_response_output_schema import FunctionDetailResponseOutputSchema
     from .function_list_response import FunctionListResponse
     from .function_message_response import FunctionMessageResponse
     from .function_node import FunctionNode
@@ -676,13 +654,10 @@ if TYPE_CHECKING:
     from .function_resource_permission_response import FunctionResourcePermissionResponse
     from .function_run_list_response import FunctionRunListResponse
     from .function_run_response import FunctionRunResponse
-    from .function_run_response_input_data_type_0 import FunctionRunResponseInputDataType0
-    from .function_run_response_output_data_type_0 import FunctionRunResponseOutputDataType0
     from .function_run_status import FunctionRunStatus
     from .function_run_summary_response import FunctionRunSummaryResponse
     from .function_status import FunctionStatus
     from .function_summary_response import FunctionSummaryResponse
-    from .function_summary_response_config_type_0 import FunctionSummaryResponseConfigType0
     from .function_type import FunctionType
     from .harness_kind import HarnessKind
     from .icon_upload_request import IconUploadRequest
@@ -692,6 +667,7 @@ if TYPE_CHECKING:
     from .import_status import ImportStatus
     from .import_status_response import ImportStatusResponse
     from .installed_app_summary import InstalledAppSummary
+    from .json_object import JsonObject
     from .lemma_provider_capability_response_schema import LemmaProviderCapabilityResponseSchema
     from .lemma_provider_capability_response_schema_auth_config_schema_type_0 import LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0
     from .lemma_provider_capability_response_schema_credential_schema_type_0 import LemmaProviderCapabilityResponseSchemaCredentialSchemaType0
@@ -840,6 +816,7 @@ if TYPE_CHECKING:
     from .surface_setup_phase import SurfaceSetupPhase
     from .surface_setup_response import SurfaceSetupResponse
     from .surface_setup_step import SurfaceSetupStep
+    from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_update_request import SurfaceUpdateRequest
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
@@ -856,7 +833,6 @@ if TYPE_CHECKING:
     from .update_conversation_request import UpdateConversationRequest
     from .update_conversation_request_metadata_type_0 import UpdateConversationRequestMetadataType0
     from .update_function_request import UpdateFunctionRequest
-    from .update_function_request_config_type_0 import UpdateFunctionRequestConfigType0
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_record_request import UpdateRecordRequest
     from .update_record_request_data import UpdateRecordRequestData
@@ -1050,7 +1026,6 @@ __all__ = [
     'CreateConversationRequestMetadataType0',
     'CreateFolderRequest',
     'CreateFunctionRequest',
-    'CreateFunctionRequestConfigType0',
     'CreateOpenAICompatibleRuntimeProfileRequest',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
@@ -1094,7 +1069,6 @@ __all__ = [
     'EventWorkflowStartInput',
     'EventWorkflowStartOutput',
     'ExecuteFunctionRequest',
-    'ExecuteFunctionRequestInputData',
     'ExportProgressResponse',
     'ExportStartRequest',
     'ExportStatus',
@@ -1125,15 +1099,7 @@ __all__ = [
     'FormNodeResponse',
     'FormNodeResponsePositionType0',
     'FunctionActionResponse',
-    'FunctionActionResponseConfigSchemaType0',
-    'FunctionActionResponseConfigType0',
-    'FunctionActionResponseInputSchema',
-    'FunctionActionResponseOutputSchema',
     'FunctionDetailResponse',
-    'FunctionDetailResponseConfigSchemaType0',
-    'FunctionDetailResponseConfigType0',
-    'FunctionDetailResponseInputSchema',
-    'FunctionDetailResponseOutputSchema',
     'FunctionListResponse',
     'FunctionMessageResponse',
     'FunctionNode',
@@ -1148,13 +1114,10 @@ __all__ = [
     'FunctionResourcePermissionResponse',
     'FunctionRunListResponse',
     'FunctionRunResponse',
-    'FunctionRunResponseInputDataType0',
-    'FunctionRunResponseOutputDataType0',
     'FunctionRunStatus',
     'FunctionRunSummaryResponse',
     'FunctionStatus',
     'FunctionSummaryResponse',
-    'FunctionSummaryResponseConfigType0',
     'FunctionType',
     'HarnessKind',
     'IconUploadRequest',
@@ -1164,6 +1127,7 @@ __all__ = [
     'ImportStatus',
     'ImportStatusResponse',
     'InstalledAppSummary',
+    'JsonObject',
     'LemmaProviderCapabilityResponseSchema',
     'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0',
     'LemmaProviderCapabilityResponseSchemaCredentialSchemaType0',
@@ -1312,6 +1276,7 @@ __all__ = [
     'SurfaceSetupPhase',
     'SurfaceSetupResponse',
     'SurfaceSetupStep',
+    'SurfaceTelegramConfigInput',
     'SurfaceUpdateRequest',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
@@ -1328,7 +1293,6 @@ __all__ = [
     'UpdateConversationRequest',
     'UpdateConversationRequestMetadataType0',
     'UpdateFunctionRequest',
-    'UpdateFunctionRequestConfigType0',
     'UpdateMemberRoleRequest',
     'UpdateRecordRequest',
     'UpdateRecordRequestData',

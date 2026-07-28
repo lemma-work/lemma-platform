@@ -8,9 +8,9 @@ from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.authorization.dependencies import PodContextDep, require_action
 from app.core.authorization.permissions import Permissions
 from app.composition.surface_agent import AgentServiceDep
-from app.modules.agent_surfaces.api.controllers.surface_controller import (
-    _require_surface_agent_action,
-    _resolve_telegram_config,
+from app.modules.agent_surfaces.api.surface_config_resolver import (
+    require_surface_agent_action,
+    resolve_telegram_config,
 )
 from app.modules.agent_surfaces.api.dependencies import TelegramManagerServiceDep
 from app.modules.agent_surfaces.api.schemas import (
@@ -87,7 +87,7 @@ async def start_telegram_managed_bot_setup(
         if request.default_agent_name
         else None
     )
-    await _require_surface_agent_action(
+    await require_surface_agent_action(
         ctx=ctx,
         pod_id=pod_id,
         agent_id=agent.id if agent else None,
@@ -104,7 +104,7 @@ async def start_telegram_managed_bot_setup(
         request.config,
         channel_routes=[],
     )
-    surface_config.telegram = await _resolve_telegram_config(
+    surface_config.telegram = await resolve_telegram_config(
         uow=uow,
         pod_id=pod_id,
         platform=SurfacePlatform.TELEGRAM,
