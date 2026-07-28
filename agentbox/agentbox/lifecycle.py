@@ -223,6 +223,18 @@ class SandboxLifecycleService:
             return self._handle(intent.logical, intent.allocation)
         if pending_retry:
             return self._handle(intent.logical, intent.allocation)
+        if not intent.should_dispatch_create:
+            if (
+                intent.allocation.state == AllocationState.PROVISIONING
+                and intent.allocation.provider_id is not None
+            ):
+                return await self._wait_and_publish(
+                    intent.logical,
+                    intent.allocation,
+                    profile=profile,
+                    deadline_at=deadline_at,
+                )
+            return self._handle(intent.logical, intent.allocation)
 
         # Transaction 2: transition RESERVED -> DISPATCHED exactly once. The
         # provider has not been called yet and this transaction is closed before it is.
