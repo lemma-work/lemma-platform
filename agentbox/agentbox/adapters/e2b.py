@@ -1332,31 +1332,60 @@ class E2BSandboxAdapter:
         provider_id: str,
         deadline_at: datetime,
     ) -> None:
-        processes = await sandbox.commands.list(
-            request_timeout=self._request_timeout(deadline_at)
-        )
-        await asyncio.gather(
-            *(
-                sandbox.commands.kill(
-                    process.pid,
-                    request_timeout=self._request_timeout(deadline_at),
+        # These are hygiene steps, not the lifecycle boundary. In particular,
+        # E2B can keep the sandbox command and filesystem APIs healthy while
+        # its optional code-interpreter port is unavailable. Failing release in
+        # that state leaves the durable allocation permanently quiescing even
+        # though pause(keep_memory=False) can still stop it safely.
+        async def best_effort(awaitable: Any) -> Any | None:
+            # Reserve at least half of the remaining lifecycle deadline for the
+            # authoritative provider pause. Some optional E2B APIs do not
+            # expose request_timeout, so an outer bound is required too.
+            timeout = min(5.0, self._remaining(deadline_at) / 2)
+            try:
+                return await asyncio.wait_for(awaitable, timeout=timeout)
+            except Exception:
+                return None
+
+        processes = (
+            await best_effort(
+                sandbox.commands.list(
+                    request_timeout=self._request_timeout(deadline_at)
                 )
-                for process in processes
-            ),
-            return_exceptions=True,
+            )
+            or ()
         )
-        contexts = await sandbox.list_code_contexts()
-        await asyncio.gather(
-            *(sandbox.remove_code_context(context.id) for context in contexts),
-            return_exceptions=True,
+        await best_effort(
+            asyncio.gather(
+                *(
+                    sandbox.commands.kill(
+                        process.pid,
+                        request_timeout=self._request_timeout(deadline_at),
+                    )
+                    for process in processes
+                ),
+                return_exceptions=True,
+            )
+        )
+        contexts = await best_effort(sandbox.list_code_contexts()) or ()
+        await best_effort(
+            asyncio.gather(
+                *(sandbox.remove_code_context(context.id) for context in contexts),
+                return_exceptions=True,
+            )
         )
         self._python_contexts.pop(provider_id, None)
         self._python_context_locks.pop(provider_id, None)
-        if await sandbox.files.exists(
-            _PROCESS_ROOT, request_timeout=self._request_timeout(deadline_at)
-        ):
-            await sandbox.files.remove(
+        process_root_exists = await best_effort(
+            sandbox.files.exists(
                 _PROCESS_ROOT, request_timeout=self._request_timeout(deadline_at)
+            )
+        )
+        if process_root_exists:
+            await best_effort(
+                sandbox.files.remove(
+                    _PROCESS_ROOT, request_timeout=self._request_timeout(deadline_at)
+                )
             )
         await self._drop_process_buffers(provider_id)
 
