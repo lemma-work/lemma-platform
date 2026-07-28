@@ -510,7 +510,7 @@ class BundleApplier:
 
         if existing is None:
             config = await _resolve_surface_config(
-                pod_id=self._pod_id,
+                uow=self._uow, pod_id=self._pod_id, platform=platform,
                 config_input=request.config,
                 agent_service=agent_service,
                 ctx=self._ctx,
@@ -532,8 +532,8 @@ class BundleApplier:
             return
 
         config = await _merge_surface_config(
+            uow=self._uow, pod_id=self._pod_id, platform=platform,
             existing=existing.config,
-            pod_id=self._pod_id,
             config_input=request.config,
             agent_service=agent_service,
             ctx=self._ctx,
