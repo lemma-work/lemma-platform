@@ -9,9 +9,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import settings
 from app.core.crypto import get_secret_cipher
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.log.log import get_logger
@@ -25,7 +28,10 @@ from app.modules.agent_surfaces.domain.errors import (
     TelegramManagedBotSetupNotFoundError,
     TelegramManagerNotConfiguredError,
 )
-from app.modules.agent_surfaces.platforms.telegram.client import TelegramClient
+from app.modules.agent_surfaces.platforms.telegram.client import (
+    TelegramApiError,
+    TelegramClient,
+)
 from app.modules.connectors.domain.account import AccountEntity
 from app.modules.connectors.domain.auth_config import (
     AuthConfigEntity,
@@ -426,9 +432,19 @@ class TelegramManagerService:
                     f"{handle} is connected to Lemma and ready to use.",
                     remove_keyboard=True,
                 )
-        except Exception as exc:
-            logger.exception(
-                "agent_surfaces.telegram_manager.managed_bot_provisioning_failed"
+        except (
+            DomainError,
+            KeyError,
+            RedisError,
+            RuntimeError,
+            SQLAlchemyError,
+            TelegramApiError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            logger.error(
+                "agent_surfaces.telegram_manager.managed_bot_provisioning_failed",
+                exc_info=True,
             )
             setup.status = TelegramManagedBotSetupStatus.FAILED
             setup.error = _safe_setup_error(exc)

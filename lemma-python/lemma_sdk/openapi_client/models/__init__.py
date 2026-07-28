@@ -386,6 +386,8 @@ _NAME_TO_MODULE = {
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
     'TableListResponse': 'table_list_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
+    'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
     'Update': 'update',
     'UpdateAgentRequest': 'update_agent_request',
     'UpdateAgentRequestInputSchemaType0': 'update_agent_request_input_schema_type_0',
@@ -843,6 +845,8 @@ if TYPE_CHECKING:
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
     from .table_list_response import TableListResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
+    from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
     from .update import Update
     from .update_agent_request import UpdateAgentRequest
     from .update_agent_request_input_schema_type_0 import UpdateAgentRequestInputSchemaType0
@@ -1313,6 +1317,8 @@ __all__ = [
     'TableDetailResponseConfigType0',
     'TableListResponse',
     'TableSummaryResponse',
+    'TelegramManagedBotSetupRequest',
+    'TelegramManagedBotSetupResponse',
     'Update',
     'UpdateAgentRequest',
     'UpdateAgentRequestInputSchemaType0',

@@ -3,7 +3,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.config import settings
+from app.core.domain.errors import DomainError
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
@@ -91,9 +95,18 @@ class TelegramManagerPollingReceiver:
                         await self._service.handle_update(update)
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                logger.exception(
-                    "agent_surfaces.telegram_manager.polling_receiver_failed"
+            except (
+                DomainError,
+                RedisError,
+                RuntimeError,
+                SQLAlchemyError,
+                TelegramApiError,
+                TypeError,
+                ValueError,
+            ):
+                logger.error(
+                    "agent_surfaces.telegram_manager.polling_receiver_failed",
+                    exc_info=True,
                 )
                 await asyncio.sleep(5)
 
@@ -130,6 +143,7 @@ async def register_telegram_manager_webhook() -> None:
             },
         )
     except TelegramApiError:
-        logger.exception(
-            "agent_surfaces.telegram_manager.webhook_registration_failed"
+        logger.error(
+            "agent_surfaces.telegram_manager.webhook_registration_failed",
+            exc_info=True,
         )
