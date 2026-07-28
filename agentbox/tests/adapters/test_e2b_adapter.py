@@ -290,6 +290,7 @@ class FakeSandbox:
         self.processes: dict[int, FakeProcessInfo] = {}
         self.next_pid = 100
         self.contexts: dict[str, FakeContext] = {}
+        self.fail_context_list = False
         self.paused = False
         self.pause_keep_memory: bool | None = None
         self.timeout = 300
@@ -367,6 +368,8 @@ class FakeSandbox:
         return context
 
     async def list_code_contexts(self):
+        if self.fail_context_list:
+            raise RuntimeError("optional interpreter service is unavailable")
         return list(self.contexts.values())
 
     async def restart_code_context(self, _context):
@@ -630,6 +633,23 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
     assert FakeSandbox.kill_calls == [provider_id]
     assert stat.sha256 is None
     assert sandbox.files.stream_read_calls == 1
+
+
+async def test_workspace_release_pauses_when_optional_interpreter_is_unavailable(
+    database: StateDatabase,
+) -> None:
+    _provider, lifecycle, key, deadline, _created = await provision(database)
+    provider_id = next(iter(FakeSandbox.instances))
+    sandbox = FakeSandbox.instances[provider_id]
+    sandbox.fail_context_list = True
+    sandbox.files.data["/tmp/.agentbox/processes/stale/exit"] = b"0"
+
+    released = await lifecycle.release(key, deadline_at=deadline)
+
+    assert released.ready is False
+    assert sandbox.paused is True
+    assert sandbox.pause_keep_memory is False
+    assert not await sandbox.files.exists("/tmp/.agentbox/processes")
 
 
 async def test_workspace_readiness_fences_failed_filesystem(

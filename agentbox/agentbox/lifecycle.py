@@ -8,6 +8,7 @@ from uuid import UUID
 from agentbox.domain import (
     AdmissionClass,
     AgentBoxError,
+    AllocationErrorContext,
     AllocationState,
     CapacityErrorContext,
     ErrorCode,
@@ -228,12 +229,34 @@ class SandboxLifecycleService:
         try:
             self._check_deadline(deadline_at)
             async with self._database.uow() as uow:
-                dispatch = await uow.repository.mark_create_dispatched(
-                    intent.allocation.allocation_token,
-                    expected_resource_generation=(
-                        intent.allocation.resource_generation
-                    ),
-                )
+                try:
+                    dispatch = await uow.repository.mark_create_dispatched(
+                        intent.allocation.allocation_token,
+                        expected_resource_generation=(
+                            intent.allocation.resource_generation
+                        ),
+                    )
+                except AgentBoxError as exc:
+                    if exc.code != ErrorCode.ALLOCATION_CHANGED:
+                        raise
+                    # A release, destroy, or profile transition won after the
+                    # reservation transaction but before provider create I/O.
+                    # The repository fenced and resolved the undispatched
+                    # attempt; commit that cleanup and tell the caller that
+                    # retrying ensure is safe.
+                    await uow.commit()
+                    raise AgentBoxError(
+                        ErrorCode.ALLOCATION_CHANGED,
+                        "allocation changed before provider creation; retry ensure",
+                        retry=RetryDisposition.SAFE_SAME_OPERATION,
+                        status_code=409,
+                        retry_after_ms=250,
+                        context=AllocationErrorContext(
+                            kind="allocation",
+                            allocation_id=intent.allocation.allocation_id,
+                            allocation_epoch=intent.allocation.allocation_epoch,
+                        ),
+                    ) from exc
                 await uow.commit()
         except AgentBoxError as exc:
             if exc.code != ErrorCode.DEADLINE_EXCEEDED:
