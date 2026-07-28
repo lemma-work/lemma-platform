@@ -21,6 +21,7 @@ from agentbox.domain import (
     RetryDisposition,
     SandboxKey,
 )
+from agentbox.observability import create_inherited_task
 from agentbox.persistence.uow import StateDatabase
 from agentbox.ports import (
     ProviderAllocationRef,
@@ -255,7 +256,7 @@ class PythonSessionService:
                         status_code=429,
                         retry_after_ms=1000,
                     )
-                task = asyncio.create_task(
+                task = create_inherited_task(
                     self._execute_new(
                         key,
                         session_id,
