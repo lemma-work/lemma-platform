@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -28,6 +29,7 @@ from agentbox.ports import (
     ProviderCreateRequest,
     ProviderCreateResult,
     ProviderProcessStartAmbiguous,
+    ProviderProcessMissing,
     ProviderProcessStartRejected,
     ProviderProcessStartRequest,
     ProviderProcessStartResult,
@@ -117,6 +119,17 @@ class ProcessProvider:
         del allocation, process, grace_seconds, deadline_at
         assert self._database.active_units_of_work == 0
 
+    async def send_process_input(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        process,
+        data: bytes,
+        deadline_at: datetime,
+    ) -> None:
+        del allocation, process, data, deadline_at
+        assert self._database.active_units_of_work == 0
+
     async def read_process_output(
         self,
         allocation: ProviderAllocationRef,
@@ -134,6 +147,24 @@ class ProcessProvider:
             truncated_before_sequence=None,
             state=ProcessState.FAILED,
             exit_code=137,
+        )
+
+
+class BlockingProcessProvider(ProcessProvider):
+    def __init__(self, database: StateDatabase) -> None:
+        super().__init__(database)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def start_process(
+        self, request: ProviderProcessStartRequest
+    ) -> ProviderProcessStartResult:
+        self.calls.append(request)
+        self.started.set()
+        await self.release.wait()
+        return ProviderProcessStartResult(
+            provider_process_id=f"process-{request.process.operation_id}",
+            provider_tag=str(request.process.operation_id),
         )
 
 
@@ -162,7 +193,7 @@ def request(operation_id, *, command: str = "echo ok", token: str = "secret"):
     )
 
 
-async def test_process_start_is_durable_deduplicated_and_outside_uow(
+async def test_process_start_is_incarnation_local_deduplicated_and_outside_uow(
     database: StateDatabase,
 ):
     key = await provision_function(database)
@@ -205,12 +236,119 @@ async def test_ambiguous_process_start_is_not_replayed(database: StateDatabase):
     original = request(operation_id)
     with pytest.raises(AgentBoxError) as raised:
         await service.start(key, original)
-    existing, created = await service.start(key, original)
+    with pytest.raises(AgentBoxError) as repeated:
+        await service.start(key, original)
 
     assert raised.value.code == ErrorCode.UNKNOWN_DISPATCH
-    assert existing.state == ProcessState.UNKNOWN
+    assert repeated.value.code == ErrorCode.UNKNOWN_DISPATCH
+    assert raised.value.retry.value == "do_not_retry"
+    assert len(provider.calls) == 1
+
+
+async def test_conflicting_inflight_process_request_does_not_coalesce(
+    database: StateDatabase,
+):
+    key = await provision_function(database)
+    provider = BlockingProcessProvider(database)
+    service = ProcessExecutionService(database, provider)
+    operation_id = uuid4()
+    original = request(operation_id)
+    first = asyncio.create_task(service.start(key, original))
+    await provider.started.wait()
+
+    with pytest.raises(AgentBoxError) as raised:
+        await service.start(
+            key,
+            replace(original, shell_command="echo conflicting"),
+        )
+
+    provider.release.set()
+    await first
+    assert raised.value.code == ErrorCode.OPERATION_CONFLICT
+    assert len(provider.calls) == 1
+
+
+async def test_cancelled_process_waiter_does_not_leak_inflight_capacity(
+    database: StateDatabase,
+):
+    key = await provision_function(database)
+    provider = BlockingProcessProvider(database)
+    service = ProcessExecutionService(database, provider)
+    pending = asyncio.create_task(service.start(key, request(uuid4())))
+    await provider.started.wait()
+
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    provider.release.set()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert service._inflight == {}
+
+
+async def test_live_process_record_is_never_evicted_and_replayed(
+    database: StateDatabase,
+):
+    key = await provision_function(database)
+    provider = ProcessProvider(database)
+    service = ProcessExecutionService(database, provider, max_records=1)
+    operation_id = uuid4()
+    original = request(operation_id)
+    first, _ = await service.start(key, original)
+
+    with pytest.raises(AgentBoxError) as full:
+        await service.start(key, request(uuid4()))
+    repeated, created = await service.start(key, original)
+
+    assert full.value.code == ErrorCode.CAPACITY_EXHAUSTED
+    assert repeated == first
     assert created is False
     assert len(provider.calls) == 1
+
+
+async def test_manager_restart_explicitly_loses_process_handle(
+    database: StateDatabase,
+):
+    key = await provision_function(database)
+    provider = ProcessProvider(database)
+    operation_id = uuid4()
+    await ProcessExecutionService(database, provider).start(
+        key, request(operation_id)
+    )
+
+    restarted_manager = ProcessExecutionService(database, provider)
+    with pytest.raises(AgentBoxError) as raised:
+        await restarted_manager.inspect(key, operation_id)
+
+    assert raised.value.code == ErrorCode.PROCESS_NOT_RUNNING
+    assert raised.value.retry.value == "do_not_retry"
+
+
+async def test_missing_provider_process_makes_stdin_nonretryable(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    key = await provision_function(database)
+    provider = ProcessProvider(database)
+    service = ProcessExecutionService(database, provider)
+    operation_id = uuid4()
+    await service.start(key, request(operation_id))
+
+    async def missing(*_args, **_kwargs):
+        raise ProviderProcessMissing("pid was reused or disappeared")
+
+    monkeypatch.setattr(provider, "send_process_input", missing)
+    with pytest.raises(AgentBoxError) as raised:
+        await service.send_input(
+            key,
+            operation_id,
+            b"non-idempotent-input",
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+        )
+
+    assert raised.value.code == ErrorCode.PROCESS_NOT_RUNNING
+    assert raised.value.retry.value == "do_not_retry"
 
 
 async def test_definitive_rejection_allows_same_operation_retry(
@@ -228,7 +366,7 @@ async def test_definitive_rejection_allows_same_operation_retry(
 
     assert raised.value.code == ErrorCode.PROVIDER_UNAVAILABLE
     assert recovered.state == ProcessState.RUNNING
-    assert created is False
+    assert created is True
     assert len(provider.calls) == 2
 
 

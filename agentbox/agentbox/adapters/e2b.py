@@ -13,7 +13,7 @@ import posixpath
 import shlex
 from tempfile import SpooledTemporaryFile
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from e2b import (
@@ -23,6 +23,7 @@ from e2b import (
     FileUploadException,
     InvalidArgumentException,
     NotEnoughSpaceException,
+    NotFoundException,
     RateLimitException,
     SandboxException,
     SandboxNotFoundException,
@@ -71,6 +72,7 @@ from agentbox.ports import (
     ProviderNotReady,
     ProviderMetadataEntry,
     ProviderPortTarget,
+    ProviderProcessMissing,
     ProviderProcessStartAmbiguous,
     ProviderProcessStartRejected,
     ProviderProcessStartRequest,
@@ -129,7 +131,7 @@ class E2BAdapterConfig:
     api_key: str
     scope: str
     request_timeout_seconds: float = 20
-    workspace_timeout_seconds: int = 300
+    workspace_timeout_seconds: int = 3600
     function_timeout_seconds: int = 300
     function_idle_grace_seconds: int = 300
     function_timeout_refresh_seconds: int = 60
@@ -178,6 +180,7 @@ class _ProcessBuffer:
     handle: Any | None = None
     watcher: asyncio.Task[None] | None = None
     deadline_task: asyncio.Task[None] | None = None
+    stream_lost: bool = False
 
     async def append(self, channel: ProcessOutputChannel, data: str | bytes) -> None:
         encoded = data.encode(errors="replace") if isinstance(data, str) else data
@@ -280,6 +283,8 @@ class E2BSandboxAdapter:
         self._sandboxes: dict[str, E2BSandboxType] = {}
         self._processes: dict[tuple[str, str], _ProcessBuffer] = {}
         self._process_lock = asyncio.Lock()
+        self._python_contexts: dict[str, set[str]] = {}
+        self._python_context_locks: dict[str, asyncio.Lock] = {}
         self._function_timeout_until: dict[str, datetime] = {}
         self._function_timeout_lock = asyncio.Lock()
 
@@ -295,7 +300,7 @@ class E2BSandboxAdapter:
             else self._config.function_timeout_seconds
         )
         lifecycle = (
-            {"on_timeout": "pause", "auto_resume": True}
+            {"on_timeout": "pause", "auto_resume": False}
             if workspace
             else {"on_timeout": "kill", "auto_resume": False}
         )
@@ -404,7 +409,7 @@ class E2BSandboxAdapter:
     ) -> None:
         marker = (
             f"{_WORKSPACE_ROOT}/.agentbox-readiness-"
-            f"{allocation.allocation_token.hex}"
+            f"{allocation.allocation_token.hex}-{uuid4().hex}"
         )
         payload = allocation.allocation_token.bytes
         try:
@@ -424,10 +429,13 @@ class E2BSandboxAdapter:
                     "E2B workspace filesystem readiness marker did not round-trip"
                 )
         finally:
-            await sandbox.files.remove(
-                marker,
-                request_timeout=self._request_timeout(deadline_at),
-            )
+            try:
+                await sandbox.files.remove(
+                    marker,
+                    request_timeout=self._request_timeout(deadline_at),
+                )
+            except FileNotFoundException:
+                pass
 
     async def _wait_function_runtime_ready(
         self,
@@ -477,6 +485,8 @@ class E2BSandboxAdapter:
                 request_timeout=self._request_timeout(deadline_at),
             )
             self._sandboxes.pop(allocation.provider_id, None)
+            self._python_contexts.pop(allocation.provider_id, None)
+            self._python_context_locks.pop(allocation.provider_id, None)
         except SandboxNotFoundException:
             return
         except Exception as exc:
@@ -495,6 +505,8 @@ class E2BSandboxAdapter:
                 request_timeout=self._request_timeout(deadline_at),
             )
             self._sandboxes.pop(allocation.provider_id, None)
+            self._python_contexts.pop(allocation.provider_id, None)
+            self._python_context_locks.pop(allocation.provider_id, None)
             self._function_timeout_until.pop(allocation.provider_id, None)
             await self._drop_process_buffers(allocation.provider_id)
         except SandboxNotFoundException:
@@ -578,6 +590,7 @@ class E2BSandboxAdapter:
             request.allocation, deadline_at=request.request.deadline_at
         )
         process_id: str | None = None
+        handle: Any | None = None
         buffer = _ProcessBuffer(request.request.output_limit_bytes)
         environment = {item.name: item.value for item in request.request.environment}
         environment[_OPERATION_ENV] = str(request.process.operation_id)
@@ -661,6 +674,14 @@ class E2BSandboxAdapter:
             )
         except Exception as exc:
             if process_id is not None:
+                # Once E2B returned a PID, any later failure is ambiguous. Stop
+                # that exact handle best-effort before surfacing the loss so a
+                # caller retry cannot overlap an untracked process.
+                if handle is not None:
+                    try:
+                        await handle.kill()
+                    except Exception:
+                        pass
                 raise ProviderProcessStartAmbiguous(str(exc)) from exc
             try:
                 adopted = await self._find_process_by_operation(
@@ -701,14 +722,20 @@ class E2BSandboxAdapter:
     ) -> None:
         sandbox = await self._connect(allocation, deadline_at=deadline_at)
         pid = self._pid(process)
-        if process.tty:
-            await sandbox.pty.send_stdin(
-                pid, data, request_timeout=self._request_timeout(deadline_at)
-            )
-        else:
-            await sandbox.commands.send_stdin(
-                pid, data, request_timeout=self._request_timeout(deadline_at)
-            )
+        await self._assert_process_identity(
+            sandbox, process, pid, deadline_at=deadline_at
+        )
+        try:
+            if process.tty:
+                await sandbox.pty.send_stdin(
+                    pid, data, request_timeout=self._request_timeout(deadline_at)
+                )
+            else:
+                await sandbox.commands.send_stdin(
+                    pid, data, request_timeout=self._request_timeout(deadline_at)
+                )
+        except NotFoundException as exc:
+            raise ProviderProcessMissing(str(exc)) from exc
 
     async def read_process_output(
         self,
@@ -754,11 +781,18 @@ class E2BSandboxAdapter:
         if not process.tty:
             raise InvalidArgumentException("only PTY processes can be resized")
         sandbox = await self._connect(allocation, deadline_at=deadline_at)
-        await sandbox.pty.resize(
-            self._pid(process),
-            PtySize(rows=size.rows, cols=size.cols),
-            request_timeout=self._request_timeout(deadline_at),
+        pid = self._pid(process)
+        await self._assert_process_identity(
+            sandbox, process, pid, deadline_at=deadline_at
         )
+        try:
+            await sandbox.pty.resize(
+                pid,
+                PtySize(rows=size.rows, cols=size.cols),
+                request_timeout=self._request_timeout(deadline_at),
+            )
+        except NotFoundException as exc:
+            raise ProviderProcessMissing(str(exc)) from exc
 
     async def terminate_process(
         self,
@@ -771,14 +805,23 @@ class E2BSandboxAdapter:
         del grace_seconds
         sandbox = await self._connect(allocation, deadline_at=deadline_at)
         pid = self._pid(process)
-        if process.tty:
-            await sandbox.pty.kill(
-                pid, request_timeout=self._request_timeout(deadline_at)
+        await self._assert_process_identity(
+            sandbox, process, pid, deadline_at=deadline_at
+        )
+        try:
+            killed = (
+                await sandbox.pty.kill(
+                    pid, request_timeout=self._request_timeout(deadline_at)
+                )
+                if process.tty
+                else await sandbox.commands.kill(
+                    pid, request_timeout=self._request_timeout(deadline_at)
+                )
             )
-        else:
-            await sandbox.commands.kill(
-                pid, request_timeout=self._request_timeout(deadline_at)
-            )
+        except NotFoundException as exc:
+            raise ProviderProcessMissing(str(exc)) from exc
+        if killed is False:
+            raise ProviderProcessMissing("E2B process no longer exists")
         buffer = await self._get_process(allocation.provider_id, str(pid))
         if buffer is not None:
             await buffer.complete(ProcessState.CANCELLED, None)
@@ -1016,29 +1059,55 @@ class E2BSandboxAdapter:
         request: CreatePythonSessionRequest,
     ) -> ProviderPythonSessionCreateResult:
         sandbox = await self._connect(allocation, deadline_at=request.deadline_at)
-        before: set[str] | None = None
-        try:
-            before = {context.id for context in await sandbox.list_code_contexts()}
-            context = await sandbox.create_code_context(
-                cwd=request.cwd,
-                language="python",
-                request_timeout=self._request_timeout(request.deadline_at),
-            )
-        except (AuthenticationException, InvalidArgumentException) as exc:
-            raise ProviderPythonSessionCreateRejected(str(exc)) from exc
-        except Exception as exc:
-            if before is not None:
+        context_lock = self._python_context_locks.setdefault(
+            allocation.provider_id,
+            asyncio.Lock(),
+        )
+        async with context_lock:
+            owned = self._python_contexts.setdefault(allocation.provider_id, set())
+            try:
+                existing = await sandbox.list_code_contexts()
+                existing_ids = {context.id for context in existing}
+                owned.intersection_update(existing_ids)
+                # A manager restart intentionally forgets runtime handles. Clear
+                # the abandoned provider contexts before creating a new one so
+                # an old execution cannot overlap a fresh interpreter.
+                for context in existing:
+                    if context.id not in owned:
+                        await sandbox.remove_code_context(context.id)
+                before = set(owned)
+            except (AuthenticationException, InvalidArgumentException) as exc:
+                raise ProviderPythonSessionCreateRejected(str(exc)) from exc
+            except Exception as exc:
+                raise ProviderPythonSessionCreateRejected(
+                    f"could not quiesce abandoned Python contexts: {exc}"
+                ) from exc
+            try:
+                context = await sandbox.create_code_context(
+                    cwd=request.cwd,
+                    language="python",
+                    request_timeout=self._request_timeout(request.deadline_at),
+                )
+            except (AuthenticationException, InvalidArgumentException) as exc:
+                raise ProviderPythonSessionCreateRejected(str(exc)) from exc
+            except Exception as exc:
                 try:
                     after = await sandbox.list_code_contexts()
-                    created = [context for context in after if context.id not in before]
+                    created = [
+                        context for context in after if context.id not in before
+                    ]
                     if len(created) == 1 and created[0].cwd == request.cwd:
+                        owned.add(created[0].id)
                         return ProviderPythonSessionCreateResult(
                             provider_context_id=created[0].id
                         )
                 except Exception:
                     pass
-            raise ProviderPythonSessionCreateAmbiguous(str(exc)) from exc
-        return ProviderPythonSessionCreateResult(provider_context_id=context.id)
+                raise ProviderPythonSessionCreateAmbiguous(str(exc)) from exc
+            owned.add(context.id)
+            return ProviderPythonSessionCreateResult(
+                provider_context_id=context.id
+            )
 
     async def execute_python(
         self,
@@ -1146,11 +1215,18 @@ class E2BSandboxAdapter:
     ) -> None:
         if session.provider_context_id is None:
             return
-        sandbox = await self._connect(allocation, deadline_at=deadline_at)
+        removed = False
         try:
+            sandbox = await self._connect(allocation, deadline_at=deadline_at)
             await sandbox.remove_code_context(session.provider_context_id)
+            removed = True
         except FileNotFoundException:
-            return
+            removed = True
+        finally:
+            if removed:
+                self._python_contexts.get(allocation.provider_id, set()).discard(
+                    session.provider_context_id
+                )
 
     async def resolve_port_target(
         self,
@@ -1189,6 +1265,8 @@ class E2BSandboxAdapter:
                     task.cancel()
         self._processes.clear()
         self._sandboxes.clear()
+        self._python_contexts.clear()
+        self._python_context_locks.clear()
         self._function_timeout_until.clear()
 
     async def _connect(
@@ -1269,6 +1347,8 @@ class E2BSandboxAdapter:
             *(sandbox.remove_code_context(context.id) for context in contexts),
             return_exceptions=True,
         )
+        self._python_contexts.pop(provider_id, None)
+        self._python_context_locks.pop(provider_id, None)
         if await sandbox.files.exists(
             _PROCESS_ROOT, request_timeout=self._request_timeout(deadline_at)
         ):
@@ -1332,8 +1412,15 @@ class E2BSandboxAdapter:
         except asyncio.CancelledError:
             raise
         except Exception:
-            # A stream disconnect is not proof that the command stopped. A later
-            # read reconnects by exact PID and reports any output gap explicitly.
+            # The manager contract deliberately does not reconstruct data-plane
+            # work after a stream is lost. Kill the exact handle best-effort so
+            # failure does not leave untracked side effects running.
+            try:
+                await handle.kill()
+            except Exception:
+                pass
+            buffer.stream_lost = True
+            await buffer.complete(ProcessState.FAILED, None)
             return
         else:
             await buffer.complete(
@@ -1354,16 +1441,20 @@ class E2BSandboxAdapter:
     ) -> None:
         try:
             await asyncio.sleep(max(0, self._remaining(deadline_at)))
-            if buffer.state != ProcessState.RUNNING:
-                return
-            handle = buffer.handle
-            if handle is not None:
-                await handle.kill()
-            await buffer.complete(ProcessState.TIMED_OUT, None)
+            if buffer.state == ProcessState.RUNNING:
+                handle = buffer.handle
+                if handle is not None:
+                    await handle.kill()
+                await buffer.complete(ProcessState.TIMED_OUT, None)
         except asyncio.CancelledError:
             raise
         except Exception:
             await buffer.complete(ProcessState.TIMED_OUT, None)
+        finally:
+            async with self._process_lock:
+                current = self._processes.get((provider_id, process_id))
+                if current is buffer:
+                    self._processes.pop((provider_id, process_id), None)
 
     async def _get_or_reconnect_process(
         self,
@@ -1374,8 +1465,10 @@ class E2BSandboxAdapter:
         deadline_at: datetime,
     ) -> _ProcessBuffer:
         existing = await self._get_process(allocation.provider_id, process_id)
-        if existing is not None:
+        if existing is not None and not existing.stream_lost:
             return existing
+        if existing is not None:
+            raise ProviderProcessMissing("E2B process stream was lost")
         return await self._reconnect_process(
             allocation, process, process_id, deadline_at=deadline_at
         )
@@ -1394,13 +1487,11 @@ class E2BSandboxAdapter:
             truncated_before_sequence=1,
         )
         pid = int(process_id)
-        active = {
-            item.pid
-            for item in await sandbox.commands.list(
-                request_timeout=self._request_timeout(deadline_at)
+        try:
+            await self._assert_process_identity(
+                sandbox, process, pid, deadline_at=deadline_at
             )
-        }
-        if pid not in active:
+        except ProviderProcessMissing:
             exit_code = await self._read_exit_code(
                 sandbox, process.operation_id, deadline_at
             )
@@ -1444,6 +1535,27 @@ class E2BSandboxAdapter:
         if len(matches) > 1:
             raise RuntimeError("multiple E2B processes have the same operation ID")
         return matches[0] if matches else None
+
+    async def _assert_process_identity(
+        self,
+        sandbox: E2BSandboxType,
+        process: ProcessRef,
+        pid: int,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        matches = [
+            item
+            for item in await sandbox.commands.list(
+                request_timeout=self._request_timeout(deadline_at)
+            )
+            if item.pid == pid
+            and item.envs.get(_OPERATION_ENV) == str(process.operation_id)
+        ]
+        if len(matches) != 1:
+            raise ProviderProcessMissing(
+                "E2B PID no longer belongs to the expected process operation"
+            )
 
     async def _read_exit_code(
         self, sandbox: E2BSandboxType, operation_id: UUID, deadline_at: datetime

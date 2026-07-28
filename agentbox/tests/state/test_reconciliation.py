@@ -168,9 +168,9 @@ async def test_lost_create_response_is_adopted_by_exact_metadata_without_recreat
     provider = LostCreateResponseProvider(database)
     lifecycle, key, deadline = await make_ambiguous(database, provider)
 
-    reconciled = await AgentBoxReconciler(
-        database, provider, create_absence_grace_seconds=30
-    ).reconcile_once(deadline_at=deadline)
+    reconciled = await AgentBoxReconciler(database, provider).reconcile_once(
+        deadline_at=deadline
+    )
     handle = await lifecycle.inspect(key)
 
     assert reconciled == 1
@@ -192,7 +192,6 @@ async def test_inventory_absence_during_grace_never_blindly_recreates(
     await AgentBoxReconciler(
         database,
         provider,
-        create_absence_grace_seconds=30,
         retry_seconds=10,
     ).reconcile_once(deadline_at=deadline)
     pending = await lifecycle.ensure(
@@ -216,9 +215,13 @@ async def test_multiple_inventory_matches_remain_indeterminate(
 
     await AgentBoxReconciler(database, provider).reconcile_once(deadline_at=deadline)
     handle = await lifecycle.inspect(key)
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
 
     assert handle is not None
-    assert handle.allocation_state == AllocationState.UNKNOWN
+    assert handle.allocation_state is None
+    assert [item.state for item in allocations] == [AllocationState.UNKNOWN]
     assert len(provider.create_calls) == 1
     assert provider.destroyed == []
 
@@ -260,6 +263,7 @@ async def make_stale_dispatch(
         assert decision.accepted is True
         assert await uow.repository.mark_create_dispatched(
             intent.allocation.allocation_token,
+            expected_resource_generation=intent.allocation.resource_generation,
             now=stale_at,
         )
         await uow.commit()
@@ -270,7 +274,7 @@ async def make_stale_dispatch(
     )
 
 
-async def test_stale_dispatched_create_without_inventory_match_releases_capacity(
+async def test_stale_dispatched_create_without_inventory_match_stays_fenced(
     database: StateDatabase,
 ) -> None:
     provider = LostCreateResponseProvider(database)
@@ -284,14 +288,17 @@ async def test_stale_dispatched_create_without_inventory_match_releases_capacity
     reconciled = await AgentBoxReconciler(
         database,
         provider,
-        create_absence_grace_seconds=1,
         dispatched_create_stale_seconds=30,
     ).reconcile_once(deadline_at=deadline)
     handle = await lifecycle.inspect(key)
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
 
     assert reconciled == 1
     assert handle is not None
-    assert handle.allocation_state == AllocationState.ERROR
+    assert handle.allocation_state is None
+    assert [item.state for item in allocations] == [AllocationState.UNKNOWN]
     async with database.engine.connect() as connection:
         allocation_token = await connection.scalar(
             select(AllocationRow.allocation_token).where(
@@ -313,9 +320,9 @@ async def test_stale_dispatched_create_without_inventory_match_releases_capacity
                 ProviderAdmissionRow.provider_scope == provider.scope
             )
         )
-    assert admission_state == AdmissionState.RELEASED.value
-    assert attempt_state == DispatchState.RESOLVED.value
-    assert reserved_count == 0
+    assert admission_state == AdmissionState.RESERVED.value
+    assert attempt_state == DispatchState.UNKNOWN.value
+    assert reserved_count == 1
 
 
 async def test_stale_dispatched_workspace_with_exact_match_is_adopted(
@@ -339,6 +346,144 @@ async def test_stale_dispatched_workspace_with_exact_match_is_adopted(
     assert handle is not None
     assert handle.ready is True
     assert handle.allocation_state == AllocationState.ACTIVE
+
+
+async def test_stale_reserved_create_releases_capacity_without_provider_call(
+    database: StateDatabase,
+) -> None:
+    provider = LostCreateResponseProvider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    selected_profile = SandboxProfileRef(
+        "function-python-v1",
+        f"sha256:{'b' * 64}",
+    )
+    stale_at = datetime.now(timezone.utc) - timedelta(hours=1)
+    async with database.uow() as uow:
+        await uow.repository.ensure_logical(key, selected_profile)
+        intent = await uow.repository.begin_allocation(
+            key,
+            selected_profile,
+            provider_name=provider.name,
+            provider_scope=provider.scope,
+            admission_class=AdmissionClass.BATCH.value,
+            request_hash="e" * 64,
+            now=stale_at,
+        )
+        decision = await uow.repository.reserve_provider_capacity(
+            intent.allocation.allocation_id,
+            admission_class=AdmissionClass.BATCH,
+            policy=ProviderAdmissionPolicy.permissive_for_tests(),
+            now=stale_at,
+        )
+        assert decision.accepted
+        await uow.commit()
+
+    reconciled = await AgentBoxReconciler(
+        database,
+        provider,
+        dispatched_create_stale_seconds=30,
+    ).reconcile_once(
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30)
+    )
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        active, reserved = await uow.repository._admission_counts(provider.scope)
+        await uow.commit()
+
+    assert reconciled == 1
+    assert [item.state for item in allocations] == [AllocationState.ERROR]
+    assert (active, reserved) == (0, 0)
+    assert provider.create_calls == []
+    assert provider.inventory_calls == 0
+
+
+async def test_draining_allocation_is_destroyed_and_admission_released(
+    database: StateDatabase,
+) -> None:
+    provider = LostCreateResponseProvider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    first_profile = SandboxProfileRef("function-python-v1", f"sha256:{'a' * 64}")
+    second_profile = SandboxProfileRef("function-python-v2", f"sha256:{'b' * 64}")
+
+    async with database.uow() as uow:
+        await uow.repository.ensure_logical(key, first_profile)
+        first = await uow.repository.begin_allocation(
+            key,
+            first_profile,
+            provider_name=provider.name,
+            provider_scope=provider.scope,
+            admission_class=AdmissionClass.BATCH.value,
+            request_hash="a" * 64,
+        )
+        assert (
+            await uow.repository.reserve_provider_capacity(
+                first.allocation.allocation_id,
+                admission_class=AdmissionClass.BATCH,
+                policy=ProviderAdmissionPolicy.permissive_for_tests(),
+            )
+        ).accepted
+        assert await uow.repository.mark_create_dispatched(
+            first.allocation.allocation_token,
+            expected_resource_generation=first.allocation.resource_generation,
+        )
+        await uow.repository.acknowledge_create(
+            first.allocation.allocation_token,
+            provider_id="old-provider",
+            provider_instance_id="old-provider",
+            expected_resource_generation=first.allocation.resource_generation,
+        )
+        first_active = await uow.repository.publish_allocation(
+            first.allocation.allocation_token,
+            expected_resource_generation=first.allocation.resource_generation,
+        )
+
+        await uow.repository.ensure_logical(key, second_profile)
+        second = await uow.repository.begin_allocation(
+            key,
+            second_profile,
+            provider_name=provider.name,
+            provider_scope=provider.scope,
+            admission_class=AdmissionClass.BATCH.value,
+            request_hash="b" * 64,
+        )
+        assert (
+            await uow.repository.reserve_provider_capacity(
+                second.allocation.allocation_id,
+                admission_class=AdmissionClass.BATCH,
+                policy=ProviderAdmissionPolicy.permissive_for_tests(),
+            )
+        ).accepted
+        assert await uow.repository.mark_create_dispatched(
+            second.allocation.allocation_token,
+            expected_resource_generation=second.allocation.resource_generation,
+        )
+        await uow.repository.acknowledge_create(
+            second.allocation.allocation_token,
+            provider_id="new-provider",
+            provider_instance_id="new-provider",
+            expected_resource_generation=second.allocation.resource_generation,
+        )
+        await uow.repository.publish_allocation(
+            second.allocation.allocation_token,
+            expected_resource_generation=second.allocation.resource_generation,
+        )
+        await uow.commit()
+
+    reconciled = await AgentBoxReconciler(database, provider).reconcile_once(
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30)
+    )
+    async with database.uow() as uow:
+        old = await uow.repository.get_allocation_by_id(
+            first_active.allocation_id
+        )
+        active, reserved = await uow.repository._admission_counts(provider.scope)
+        await uow.commit()
+
+    assert reconciled == 1
+    assert old is not None
+    assert old.state == AllocationState.DESTROYED
+    assert provider.destroyed == ["old-provider"]
+    assert (active, reserved) == (1, 0)
 
 
 async def test_stale_native_workspace_match_never_rebinds_active_workspace(
@@ -371,11 +516,13 @@ async def test_stale_native_workspace_match_never_rebinds_active_workspace(
         )
         assert decision.accepted is True
         assert await uow.repository.mark_create_dispatched(
-            intent.allocation.allocation_token
+            intent.allocation.allocation_token,
+            expected_resource_generation=intent.allocation.resource_generation,
         )
         current = await uow.repository.acknowledge_create(
             intent.allocation.allocation_token,
             provider_id="current-sandbox",
+            expected_resource_generation=intent.allocation.resource_generation,
             provider_instance_id="current-sandbox",
         )
         await uow.repository.bind_workspace_storage(
@@ -384,7 +531,8 @@ async def test_stale_native_workspace_match_never_rebinds_active_workspace(
             allocation_id=current.allocation_id,
         )
         current = await uow.repository.publish_allocation(
-            intent.allocation.allocation_token
+            intent.allocation.allocation_token,
+            expected_resource_generation=intent.allocation.resource_generation,
         )
         await uow.commit()
 
@@ -440,7 +588,6 @@ async def test_reconciliation_repairs_terminal_allocation_reservation(
     reconciler = AgentBoxReconciler(
         database,
         provider,
-        create_absence_grace_seconds=1,
         dispatched_create_stale_seconds=30,
     )
     await reconciler.reconcile_once(deadline_at=deadline)
@@ -449,7 +596,10 @@ async def test_reconciliation_repairs_terminal_allocation_reservation(
         await connection.execute(
             update(AllocationRow)
             .where(AllocationRow.logical_id == key.logical_id)
-            .values(admission_state=AdmissionState.RESERVED.value)
+            .values(
+                state=AllocationState.ERROR.value,
+                admission_state=AdmissionState.RESERVED.value,
+            )
         )
         await connection.execute(
             update(ProviderAdmissionRow)
@@ -459,8 +609,12 @@ async def test_reconciliation_repairs_terminal_allocation_reservation(
 
     assert await reconciler.reconcile_once(deadline_at=deadline) == 0
     handle = await lifecycle.inspect(key)
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
     assert handle is not None
-    assert handle.allocation_state == AllocationState.ERROR
+    assert handle.allocation_state is None
+    assert [item.state for item in allocations] == [AllocationState.ERROR]
     async with database.engine.connect() as connection:
         admission_state = await connection.scalar(
             select(AllocationRow.admission_state).where(

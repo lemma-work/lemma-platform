@@ -15,7 +15,10 @@ from agentbox_client.models import (
     RetryDisposition,
 )
 
-from app.modules.function.application.function_dispatcher import FunctionDispatcher
+from app.modules.function.application.function_dispatcher import (
+    FunctionDispatcher,
+    InvocationOutcomeUnconfirmed,
+)
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
     FunctionRuntimeEndpointCache,
@@ -229,9 +232,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
 
 
 @pytest.mark.asyncio
-async def test_ambiguous_response_retries_exact_same_allocation_once(
-    monkeypatch,
-) -> None:
+async def test_ambiguous_response_is_not_replayed() -> None:
     dispatch = _dispatch()
     context = _context(dispatch)
     requests = []
@@ -255,24 +256,83 @@ async def test_ambiguous_response_retries_exact_same_allocation_once(
             )
 
     dispatcher = _dispatcher(_Runtime())
-    monkeypatch.setattr(dispatcher, "_wait_retry", AsyncMock())
     endpoint = FunctionRuntimeEndpoint(
         url="https://agentbox.test/exact-allocation/",
         expires_at=dispatch.deadline_at,
     )
 
-    report = await dispatcher._invoke_runtime_with_recovery(
+    with pytest.raises(InvocationOutcomeUnconfirmed):
+        await dispatcher._invoke_runtime_with_recovery(
+            dispatch,
+            context=context,
+            endpoint=endpoint,
+            function_token="delegated-function-token",
+            organization_id=None,
+        )
+
+    assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_stale_agentbox_grant_is_refreshed_once_before_runtime_receives_work(
+    monkeypatch,
+) -> None:
+    dispatch = _dispatch()
+    context = _context(dispatch)
+    requests = []
+
+    class _Runtime:
+        async def post(self, url, **kwargs):
+            requests.append((url, kwargs))
+            if len(requests) == 1:
+                return httpx.Response(
+                    410,
+                    request=httpx.Request("POST", url),
+                )
+            return httpx.Response(
+                200,
+                request=httpx.Request("POST", url),
+                json={
+                    "status": "completed",
+                    "output_data": {"ok": True},
+                    "error": None,
+                    "stdout": "",
+                    "stderr": "",
+                    "output_truncated": False,
+                },
+            )
+
+    dispatcher = _dispatcher(_Runtime())
+    refreshed = FunctionRuntimeEndpoint(
+        url="https://agentbox.test/fresh-allocation/",
+        expires_at=dispatch.deadline_at,
+    )
+    resolver = AsyncMock(return_value=refreshed)
+    monkeypatch.setattr(dispatcher, "_runtime_endpoint", resolver)
+
+    result = await dispatcher._invoke_runtime_with_recovery(
         dispatch,
         context=context,
-        endpoint=endpoint,
+        endpoint=FunctionRuntimeEndpoint(
+            url="https://agentbox.test/stale-allocation/",
+            expires_at=dispatch.deadline_at,
+        ),
         function_token="delegated-function-token",
         organization_id=None,
     )
 
-    assert report.output_data == {"ok": True}
-    assert len(requests) == 2
-    assert requests[0][0] == requests[1][0]
-    assert requests[0][1]["json"] == requests[1][1]["json"]
+    assert result.status == "completed"
+    assert [str(request[0]) for request in requests] == [
+        (
+            "https://agentbox.test/stale-allocation/"
+            f"functions/{dispatch.function_id}/runs/{dispatch.run_id}"
+        ),
+        (
+            "https://agentbox.test/fresh-allocation/"
+            f"functions/{dispatch.function_id}/runs/{dispatch.run_id}"
+        ),
+    ]
+    resolver.assert_awaited_once_with(dispatch)
 
 
 @pytest.mark.asyncio

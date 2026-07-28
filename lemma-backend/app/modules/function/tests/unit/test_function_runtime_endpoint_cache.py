@@ -45,14 +45,29 @@ async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value
         await release.wait()
         return first
 
-    tasks = [asyncio.create_task(cache.get(key, loader=load_first)) for _ in range(10)]
+    required_until = now + timedelta(minutes=1)
+    tasks = [
+        asyncio.create_task(
+            cache.get(
+                key,
+                required_valid_until=required_until,
+                loader=load_first,
+            )
+        )
+        for _ in range(10)
+    ]
     await asyncio.sleep(0)
     release.set()
     assert await asyncio.gather(*tasks) == [first] * 10
     assert calls == 1
 
     await cache.invalidate(key, endpoint=second)
-    assert await cache.get(key, loader=load_first) == first
+    assert (
+        await cache.get(
+            key, required_valid_until=required_until, loader=load_first
+        )
+        == first
+    )
     assert calls == 1
 
     await cache.invalidate(key, endpoint=first)
@@ -62,7 +77,12 @@ async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value
         calls += 1
         return second
 
-    assert await cache.get(key, loader=load_second) == second
+    assert (
+        await cache.get(
+            key, required_valid_until=required_until, loader=load_second
+        )
+        == second
+    )
     assert calls == 2
 
 
@@ -89,13 +109,57 @@ async def test_runtime_endpoint_cache_expires_before_port_grant() -> None:
             expires_at=wall_now + timedelta(seconds=10),
         )
 
-    first = await cache.get(key, loader=loader)
+    required_until = wall_now + timedelta(seconds=5)
+    first = await cache.get(
+        key, required_valid_until=required_until, loader=loader
+    )
     monotonic_now += 7.9
-    assert await cache.get(key, loader=loader) == first
+    assert (
+        await cache.get(
+            key, required_valid_until=required_until, loader=loader
+        )
+        == first
+    )
     monotonic_now += 0.2
-    refreshed = await cache.get(key, loader=loader)
+    refreshed = await cache.get(
+        key, required_valid_until=required_until, loader=loader
+    )
 
     assert refreshed != first
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_endpoint_cache_refreshes_for_longer_invocation() -> None:
+    now = datetime.now(timezone.utc)
+    cache = FunctionRuntimeEndpointCache(wall_clock=lambda: now)
+    key = FunctionRuntimeEndpointKey(
+        pod_id=uuid4(),
+        profile_digest=f"sha256:{'d' * 64}",
+    )
+    calls = 0
+
+    async def loader() -> FunctionRuntimeEndpoint:
+        nonlocal calls
+        calls += 1
+        return FunctionRuntimeEndpoint(
+            url=f"https://runtime.example/{calls}/",
+            expires_at=now
+            + (timedelta(seconds=30) if calls == 1 else timedelta(minutes=15)),
+        )
+
+    short = await cache.get(
+        key,
+        required_valid_until=now + timedelta(seconds=10),
+        loader=loader,
+    )
+    long = await cache.get(
+        key,
+        required_valid_until=now + timedelta(minutes=10),
+        loader=loader,
+    )
+
+    assert short != long
     assert calls == 2
 
 
@@ -128,9 +192,22 @@ async def test_runtime_endpoint_cache_joiner_reloads_after_leader_deadline() -> 
         second_calls += 1
         return endpoint
 
-    leader = asyncio.create_task(cache.get(key, loader=expired_loader))
+    required_until = now + timedelta(minutes=1)
+    leader = asyncio.create_task(
+        cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=expired_loader,
+        )
+    )
     await first_started.wait()
-    joiner = asyncio.create_task(cache.get(key, loader=later_loader))
+    joiner = asyncio.create_task(
+        cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=later_loader,
+        )
+    )
     await asyncio.sleep(0)
     fail_first.set()
 
@@ -140,3 +217,44 @@ async def test_runtime_endpoint_cache_joiner_reloads_after_leader_deadline() -> 
     assert await joiner == endpoint
     assert first_calls == 1
     assert second_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_endpoint_cache_joiner_does_not_wait_past_own_deadline() -> None:
+    now = datetime.now(timezone.utc)
+    cache = FunctionRuntimeEndpointCache(wall_clock=lambda: now)
+    key = FunctionRuntimeEndpointKey(
+        pod_id=uuid4(),
+        profile_digest=f"sha256:{'e' * 64}",
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    endpoint = FunctionRuntimeEndpoint(
+        url="https://runtime.example/slow/",
+        expires_at=now + timedelta(minutes=5),
+    )
+
+    async def slow_loader() -> FunctionRuntimeEndpoint:
+        started.set()
+        await release.wait()
+        return endpoint
+
+    leader = asyncio.create_task(
+        cache.get(
+            key,
+            required_valid_until=now + timedelta(minutes=1),
+            loader=slow_loader,
+        )
+    )
+    await started.wait()
+
+    with pytest.raises(TimeoutError, match="caller deadline"):
+        await cache.get(
+            key,
+            required_valid_until=now + timedelta(minutes=1),
+            wait_until=now,
+            loader=slow_loader,
+        )
+
+    release.set()
+    assert await leader == endpoint

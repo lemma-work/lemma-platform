@@ -22,6 +22,21 @@ if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
+_ROLLOUT_COMPATIBILITY_TABLES = {"processes", "sessions", "python_executions"}
+
+
+def include_object(object_, name, type_, reflected, compare_to) -> bool:
+    """Ignore N-1 compatibility shells during the expand-only release."""
+
+    del compare_to
+    if reflected and type_ == "table" and name in _ROLLOUT_COMPATIBILITY_TABLES:
+        return False
+    table = getattr(object_, "table", None)
+    return not (
+        reflected
+        and table is not None
+        and table.name in _ROLLOUT_COMPATIBILITY_TABLES
+    )
 
 
 def run_migrations_offline() -> None:
@@ -31,6 +46,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -41,6 +57,7 @@ def do_run_migrations(connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_object=include_object,
         render_as_batch=connection.dialect.name == "sqlite",
     )
     with context.begin_transaction():

@@ -315,6 +315,7 @@ class FilesystemService:
             await uow.repository.mark_create_failed(
                 allocation.allocation_token,
                 error_code=ErrorCode.PROVIDER_UNAVAILABLE.value,
+                expected_resource_generation=allocation.resource_generation,
             )
             await uow.commit()
 
@@ -323,6 +324,7 @@ class FilesystemService:
     ) -> ProviderAllocationRef:
         self._check_deadline(deadline_at)
         async with self._database.uow() as uow:
+            await uow.repository.protect_activity(key, until=deadline_at)
             allocation = await uow.repository.current_allocation(key)
             await uow.commit()
         if (
@@ -342,6 +344,7 @@ class FilesystemService:
             allocation_id=allocation.allocation_id,
             allocation_token=allocation.allocation_token,
             key=allocation.key,
+            resource_generation=allocation.resource_generation,
         )
 
     @staticmethod

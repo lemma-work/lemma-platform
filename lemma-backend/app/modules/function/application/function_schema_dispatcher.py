@@ -138,6 +138,8 @@ class FunctionSchemaDispatcher:
     ) -> FunctionRuntimeEndpoint:
         return await self._endpoint_cache.get(
             self._endpoint_key(pod_id),
+            required_valid_until=self._port_access_expiry(deadline_at),
+            wait_until=deadline_at,
             loader=lambda: self._load_runtime_endpoint(
                 pod_id,
                 deadline_at=deadline_at,

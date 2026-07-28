@@ -57,8 +57,15 @@ class FunctionRuntimeRouteResolver:
         self,
         dispatch: FunctionExecutionDispatch,
     ) -> FunctionRuntimeEndpoint:
+        required_valid_until = min(
+            dispatch.deadline_at
+            + timedelta(seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS),
+            self._now() + timedelta(hours=23, minutes=55),
+        )
         return await self._endpoint_cache.get(
             self._key(dispatch),
+            required_valid_until=required_valid_until,
+            wait_until=dispatch.deadline_at,
             loader=lambda: self._load(
                 dispatch,
                 deadline_at=dispatch.deadline_at,

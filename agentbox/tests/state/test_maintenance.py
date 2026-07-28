@@ -9,8 +9,9 @@ import pytest_asyncio
 
 from agentbox.domain import (
     AdmissionClass,
+    AgentBoxError,
     AllocationState,
-    ProcessState,
+    ErrorCode,
     SandboxDesiredState,
     SandboxKey,
     SandboxProfileRef,
@@ -230,6 +231,33 @@ async def test_workspace_hard_expiry_is_measured_from_last_activity(
     assert released.delete_after == before_release.last_used_at + timedelta(hours=48)
 
 
+async def test_activity_cannot_start_after_maintenance_claim(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    lifecycle = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    await _ensure(lifecycle, key)
+    now = datetime.now(timezone.utc)
+
+    async with database.uow() as uow:
+        await uow.repository.begin_release(
+            key,
+            claimed_until=now + timedelta(seconds=30),
+            retention_seconds=48 * 60 * 60,
+            now=now,
+        )
+        with pytest.raises(AgentBoxError) as raised:
+            await uow.repository.protect_activity(
+                key,
+                until=now + timedelta(seconds=20),
+                now=now,
+            )
+        await uow.rollback()
+
+    assert raised.value.code == ErrorCode.SANDBOX_QUIESCING
+
+
 async def test_idle_function_compute_is_destroyed_and_can_be_recreated(
     database: StateDatabase,
 ) -> None:
@@ -268,7 +296,7 @@ async def test_idle_function_compute_is_destroyed_and_can_be_recreated(
     assert recreated.current_allocation_id is not None
 
 
-async def test_running_process_blocks_idle_function_cleanup(
+async def test_active_runtime_lease_blocks_idle_function_cleanup(
     database: StateDatabase,
 ) -> None:
     provider = Provider(database)
@@ -281,24 +309,15 @@ async def test_running_process_blocks_idle_function_cleanup(
     )
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
     await _ensure(lifecycle, key)
+    lease_deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
     async with database.uow() as uow:
-        process, _ = await uow.repository.reserve_process(
-            key,
-            operation_id=uuid4(),
-            request_hash="1" * 64,
-            env_keys=(),
-            cwd="/tmp",
-            tty=False,
-            output_limit_bytes=1024,
-            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
-        )
+        await uow.repository.protect_activity(key, until=lease_deadline)
         await uow.commit()
 
     completed = await worker.run_once(
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30)
     )
 
-    assert process.state == ProcessState.RESERVED
     assert completed == 0
     assert provider.destroy_calls == []
 

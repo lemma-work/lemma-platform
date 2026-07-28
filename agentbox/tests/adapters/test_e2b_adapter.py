@@ -611,6 +611,10 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
     )
 
     assert created.ready is True
+    assert FakeSandbox.last_create_kwargs["lifecycle"] == {
+        "on_timeout": "pause",
+        "auto_resume": False,
+    }
     assert released.ready is False
     assert resumed.ready is True
     assert resumed.allocation_id == created.allocation_id
@@ -762,3 +766,46 @@ async def test_native_process_files_and_python_are_provider_neutral(
     assert "secret" not in repr(session)
     assert database.active_units_of_work == 0
     assert provider.workspace_storage_kind == StorageKind.SANDBOX_NATIVE
+
+
+async def test_new_manager_clears_abandoned_e2b_python_context_before_create(
+    database: StateDatabase,
+) -> None:
+    provider, _lifecycle, key, deadline, _handle = await provision(database)
+    async with database.uow() as uow:
+        allocation = await uow.repository.current_allocation(key)
+        await uow.commit()
+    assert allocation is not None
+    assert allocation.provider_id is not None
+    provider_ref = ProviderAllocationRef(
+        provider_id=allocation.provider_id,
+        provider_instance_id=allocation.provider_instance_id,
+        allocation_id=allocation.allocation_id,
+        allocation_token=allocation.allocation_token,
+        key=allocation.key,
+        resource_generation=allocation.resource_generation,
+    )
+    await provider.create_python_session(
+        provider_ref,
+        CreatePythonSessionRequest(
+            session_id=uuid4(),
+            cwd="/workspace",
+            environment_keys=(),
+            deadline_at=deadline,
+        ),
+    )
+    sandbox = FakeSandbox.instances[allocation.provider_id]
+    assert len(sandbox.contexts) == 1
+
+    replacement_manager = adapter()
+    await replacement_manager.create_python_session(
+        provider_ref,
+        CreatePythonSessionRequest(
+            session_id=uuid4(),
+            cwd="/workspace",
+            environment_keys=(),
+            deadline_at=deadline,
+        ),
+    )
+
+    assert len(sandbox.contexts) == 1

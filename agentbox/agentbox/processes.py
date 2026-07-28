@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import hashlib
+import asyncio
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 from uuid import UUID
 
 from agentbox.domain import (
     AgentBoxError,
+    AllocationState,
     ErrorCode,
     PhysicalAllocation,
     ProcessErrorContext,
-    ProcessIntent,
     ProcessOutputSnapshot,
     ProcessRef,
     ProcessState,
@@ -18,9 +21,11 @@ from agentbox.domain import (
     StartProcessRequest,
     TerminalSize,
 )
+from agentbox.observability import create_inherited_task
 from agentbox.persistence.uow import StateDatabase
 from agentbox.ports import (
     ProviderAllocationRef,
+    ProviderProcessMissing,
     ProviderProcessPort,
     ProviderProcessStartAmbiguous,
     ProviderProcessStartRejected,
@@ -28,110 +33,107 @@ from agentbox.ports import (
 )
 
 
-class ProcessExecutionService:
-    """Durable process intentions around provider I/O with no open DB transaction."""
+_TERMINAL_STATES = {
+    ProcessState.SUCCEEDED,
+    ProcessState.FAILED,
+    ProcessState.CANCELLED,
+    ProcessState.TIMED_OUT,
+}
 
-    def __init__(self, database: StateDatabase, provider: ProviderProcessPort) -> None:
+
+@dataclass(slots=True)
+class _ProcessRecord:
+    request_hash: str
+    ref: ProcessRef
+
+
+class ProcessExecutionService:
+    """Epoch-fenced process routing without global execution-history storage.
+
+    Process state belongs to the allocation that executes it. The manager keeps
+    only a bounded routing cache. Losing that cache makes the operation
+    unavailable; it never makes an old PID valid in a new allocation.
+    """
+
+    def __init__(
+        self,
+        database: StateDatabase,
+        provider: ProviderProcessPort,
+        *,
+        max_records: int = 64,
+    ) -> None:
+        if max_records < 1:
+            raise ValueError("process routing cache must retain at least one record")
         self._database = database
         self._provider = provider
+        self._max_records = max_records
+        self._records: OrderedDict[
+            tuple[str, UUID, UUID], _ProcessRecord
+        ] = OrderedDict()
+        self._inflight: dict[
+            tuple[str, UUID, UUID], tuple[str, asyncio.Task[ProcessRef]]
+        ] = {}
+        self._lock = asyncio.Lock()
 
     async def start(
         self, key: SandboxKey, request: StartProcessRequest
     ) -> tuple[ProcessRef, bool]:
         self._check_deadline(request.deadline_at)
+        record_key = self._record_key(key, request.operation_id)
         request_hash = self._request_hash(request)
-        async with self._database.uow() as uow:
-            intent, created = await uow.repository.reserve_process(
-                key,
-                operation_id=request.operation_id,
-                request_hash=request_hash,
-                env_keys=tuple(item.name for item in request.environment),
-                cwd=request.cwd,
-                tty=request.tty is not None,
-                output_limit_bytes=request.output_limit_bytes,
-                deadline_at=request.deadline_at,
-            )
-            allocation = await uow.repository.get_allocation_by_id(intent.allocation_id)
-            await uow.commit()
-        if allocation is None:  # pragma: no cover - FK invariant
-            raise RuntimeError("process allocation disappeared")
-        if not created and intent.state != ProcessState.RESERVED:
-            return self._ref(intent), False
-
-        async with self._database.uow() as uow:
-            dispatch = await uow.repository.mark_process_starting(
-                key, request.operation_id
-            )
-            await uow.commit()
-        if not dispatch:
-            current = await self.inspect(key, request.operation_id)
-            return current, False
-
-        try:
-            result = await self._provider.start_process(
-                ProviderProcessStartRequest(
-                    allocation=self._provider_ref(allocation),
-                    process=self._ref(intent),
-                    request=request,
+        async with self._lock:
+            self._prune_expired_locked(datetime.now(timezone.utc))
+            existing = self._records.get(record_key)
+            if existing is not None:
+                if existing.request_hash != request_hash:
+                    raise self._operation_conflict(request.operation_id)
+                if existing.ref.state == ProcessState.UNKNOWN:
+                    raise self._outcome_unknown(request.operation_id)
+                self._records.move_to_end(record_key)
+                return existing.ref, False
+            in_flight = self._inflight.get(record_key)
+            created = in_flight is None
+            if in_flight is not None:
+                in_flight_hash, task = in_flight
+                if in_flight_hash != request_hash:
+                    raise self._operation_conflict(request.operation_id)
+            else:
+                if len(self._records) + len(self._inflight) >= self._max_records:
+                    raise AgentBoxError(
+                        ErrorCode.CAPACITY_EXHAUSTED,
+                        "manager process routing capacity is temporarily full",
+                        retry=RetryDisposition.WAIT,
+                        status_code=429,
+                        retry_after_ms=1000,
+                    )
+                task = create_inherited_task(
+                    self._start_new(key, request, request_hash),
+                    name=f"agentbox-process-start:{request.operation_id}",
                 )
-            )
-        except ProviderProcessStartAmbiguous as exc:
-            async with self._database.uow() as uow:
-                intent = await uow.repository.mark_process_unknown(
-                    key, request.operation_id
-                )
-                await uow.commit()
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process start outcome is unknown and will be reconciled",
-                retry=RetryDisposition.WAIT,
-                status_code=202,
-                context=ProcessErrorContext(
-                    kind="process", operation_id=request.operation_id
-                ),
-            ) from exc
-        except ProviderProcessStartRejected as exc:
-            async with self._database.uow() as uow:
-                await uow.repository.reset_process_after_rejection(
-                    key, request.operation_id
-                )
-                await uow.commit()
-            raise AgentBoxError(
-                ErrorCode.PROVIDER_UNAVAILABLE,
-                "provider rejected process start",
-                retry=RetryDisposition.SAFE_SAME_OPERATION,
-                status_code=503,
-            ) from exc
+                self._inflight[record_key] = (request_hash, task)
+                def clear(completed: asyncio.Task[ProcessRef]) -> None:
+                    current = self._inflight.get(record_key)
+                    if current is not None and current[1] is completed:
+                        self._inflight.pop(record_key, None)
 
-        async with self._database.uow() as uow:
-            intent = await uow.repository.acknowledge_process(
-                key,
-                request.operation_id,
-                provider_process_id=result.provider_process_id,
-                provider_tag=result.provider_tag,
-            )
-            await uow.commit()
-        return self._ref(intent), created
+                task.add_done_callback(clear)
+        return await asyncio.shield(task), created
 
     async def inspect(self, key: SandboxKey, operation_id: UUID) -> ProcessRef:
-        async with self._database.uow() as uow:
-            intent = await uow.repository.get_process(key, operation_id)
-            await uow.commit()
-        if intent is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-                context=ProcessErrorContext(kind="process", operation_id=operation_id),
-            )
-        return self._ref(intent)
+        async with self._lock:
+            record = self._records.get(self._record_key(key, operation_id))
+            if record is not None:
+                return record.ref
+        raise self._missing(operation_id)
 
     async def list(self, key: SandboxKey) -> tuple[ProcessRef, ...]:
-        async with self._database.uow() as uow:
-            intents = await uow.repository.list_processes(key)
-            await uow.commit()
-        return tuple(self._ref(intent) for intent in intents)
+        prefix = (key.workload_kind.value, key.logical_id)
+        async with self._lock:
+            return tuple(
+                record.ref
+                for record_key, record in self._records.items()
+                if record_key[:2] == prefix
+            )
 
     async def send_input(
         self,
@@ -142,13 +144,21 @@ class ProcessExecutionService:
         deadline_at: datetime,
     ) -> None:
         self._check_deadline(deadline_at)
-        intent, allocation = await self._bound_process(key, operation_id)
-        await self._provider.send_process_input(
-            self._provider_ref(allocation),
-            process=self._ref_with_provider_identity(intent),
-            data=data,
-            deadline_at=deadline_at,
-        )
+        record, allocation = await self._bound_process(key, operation_id)
+        if record.ref.state in _TERMINAL_STATES:
+            raise self._not_running(operation_id)
+        try:
+            await self._provider.send_process_input(
+                self._provider_ref(allocation),
+                process=record.ref,
+                data=data,
+                deadline_at=deadline_at,
+            )
+        except ProviderProcessMissing as exc:
+            await self._terminalize(
+                key, operation_id, state=ProcessState.FAILED, exit_code=None
+            )
+            raise self._not_running(operation_id) from exc
 
     async def read_output(
         self,
@@ -167,32 +177,27 @@ class ProcessExecutionService:
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=422,
             )
-        intent, allocation = await self._bound_process(key, operation_id)
-        snapshot = await self._provider.read_process_output(
-            self._provider_ref(allocation),
-            process=self._ref_with_provider_identity(intent),
-            after_sequence=after_sequence,
-            wait_seconds=wait_seconds,
-            deadline_at=deadline_at,
-        )
-        if snapshot.state in {
-            ProcessState.SUCCEEDED,
-            ProcessState.FAILED,
-            ProcessState.CANCELLED,
-            ProcessState.TIMED_OUT,
-        }:
-            async with self._database.uow() as uow:
-                completed = await uow.repository.complete_process(
-                    key,
-                    operation_id,
-                    state=snapshot.state,
-                    exit_code=snapshot.exit_code,
-                )
-                await uow.commit()
-            # Terminal durable state is a fence. In particular, providers
-            # commonly report a signal-killed process as FAILED after AgentBox
-            # has explicitly recorded it as CANCELLED. Preserve output chunks,
-            # but never let that late provider observation rewrite semantics.
+        record, allocation = await self._bound_process(key, operation_id)
+        try:
+            snapshot = await self._provider.read_process_output(
+                self._provider_ref(allocation),
+                process=record.ref,
+                after_sequence=after_sequence,
+                wait_seconds=wait_seconds,
+                deadline_at=deadline_at,
+            )
+        except ProviderProcessMissing as exc:
+            await self._terminalize(
+                key, operation_id, state=ProcessState.FAILED, exit_code=None
+            )
+            raise self._not_running(operation_id) from exc
+        if snapshot.state in _TERMINAL_STATES:
+            completed = await self._terminalize(
+                key,
+                operation_id,
+                state=snapshot.state,
+                exit_code=snapshot.exit_code,
+            )
             if (
                 completed.state != snapshot.state
                 or completed.exit_code != snapshot.exit_code
@@ -215,13 +220,21 @@ class ProcessExecutionService:
         deadline_at: datetime,
     ) -> None:
         self._check_deadline(deadline_at)
-        intent, allocation = await self._bound_process(key, operation_id)
-        await self._provider.resize_process(
-            self._provider_ref(allocation),
-            process=self._ref_with_provider_identity(intent),
-            size=size,
-            deadline_at=deadline_at,
-        )
+        record, allocation = await self._bound_process(key, operation_id)
+        if record.ref.state in _TERMINAL_STATES:
+            raise self._not_running(operation_id)
+        try:
+            await self._provider.resize_process(
+                self._provider_ref(allocation),
+                process=record.ref,
+                size=size,
+                deadline_at=deadline_at,
+            )
+        except ProviderProcessMissing as exc:
+            await self._terminalize(
+                key, operation_id, state=ProcessState.FAILED, exit_code=None
+            )
+            raise self._not_running(operation_id) from exc
 
     async def terminate(
         self,
@@ -239,41 +252,116 @@ class ProcessExecutionService:
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=422,
             )
-        intent, allocation = await self._bound_process(key, operation_id)
-        await self._provider.terminate_process(
-            self._provider_ref(allocation),
-            process=self._ref_with_provider_identity(intent),
-            grace_seconds=grace_seconds,
-            deadline_at=deadline_at,
+        record, allocation = await self._bound_process(key, operation_id)
+        if record.ref.state not in _TERMINAL_STATES:
+            try:
+                await self._provider.terminate_process(
+                    self._provider_ref(allocation),
+                    process=record.ref,
+                    grace_seconds=grace_seconds,
+                    deadline_at=deadline_at,
+                )
+            except ProviderProcessMissing:
+                pass
+        return await self._terminalize(
+            key,
+            operation_id,
+            state=ProcessState.CANCELLED,
+            exit_code=record.ref.exit_code,
         )
-        async with self._database.uow() as uow:
-            intent = await uow.repository.mark_process_terminated(key, operation_id)
-            await uow.commit()
-        return self._ref(intent)
+
+    async def _start_new(
+        self,
+        key: SandboxKey,
+        request: StartProcessRequest,
+        request_hash: str,
+    ) -> ProcessRef:
+        allocation = await self._lease_allocation(key, request.deadline_at)
+        pending = ProcessRef(
+            key=key,
+            operation_id=request.operation_id,
+            allocation_id=allocation.allocation_id,
+            allocation_epoch=allocation.allocation_epoch or 0,
+            provider_process_id=None,
+            state=ProcessState.STARTING,
+            cwd=request.cwd,
+            tty=request.tty is not None,
+            output_limit_bytes=request.output_limit_bytes,
+            deadline_at=request.deadline_at,
+            started_at=None,
+            completed_at=None,
+            exit_code=None,
+        )
+        try:
+            result = await self._provider.start_process(
+                ProviderProcessStartRequest(
+                    allocation=self._provider_ref(allocation),
+                    process=pending,
+                    request=request,
+                )
+            )
+        except ProviderProcessStartAmbiguous as exc:
+            unknown = ProcessRef(
+                key=pending.key,
+                operation_id=pending.operation_id,
+                allocation_id=pending.allocation_id,
+                allocation_epoch=pending.allocation_epoch,
+                provider_process_id=None,
+                state=ProcessState.UNKNOWN,
+                cwd=pending.cwd,
+                tty=pending.tty,
+                output_limit_bytes=pending.output_limit_bytes,
+                deadline_at=pending.deadline_at,
+                started_at=None,
+                completed_at=None,
+                exit_code=None,
+            )
+            await self._store(key, request_hash, unknown)
+            raise self._outcome_unknown(request.operation_id) from exc
+        except ProviderProcessStartRejected as exc:
+            raise AgentBoxError(
+                ErrorCode.PROVIDER_UNAVAILABLE,
+                "provider rejected process start before execution",
+                retry=RetryDisposition.SAFE_SAME_OPERATION,
+                status_code=503,
+            ) from exc
+        ref = ProcessRef(
+            key=key,
+            operation_id=request.operation_id,
+            allocation_id=allocation.allocation_id,
+            allocation_epoch=allocation.allocation_epoch or 0,
+            provider_process_id=result.provider_process_id,
+            state=ProcessState.RUNNING,
+            cwd=request.cwd,
+            tty=request.tty is not None,
+            output_limit_bytes=request.output_limit_bytes,
+            deadline_at=request.deadline_at,
+            started_at=datetime.now(timezone.utc),
+            completed_at=None,
+            exit_code=None,
+        )
+        await self._store(key, request_hash, ref)
+        return ref
 
     async def _bound_process(
         self, key: SandboxKey, operation_id: UUID
-    ) -> tuple[ProcessIntent, PhysicalAllocation]:
+    ) -> tuple[_ProcessRecord, PhysicalAllocation]:
+        async with self._lock:
+            record = self._records.get(self._record_key(key, operation_id))
+        if record is None:
+            raise self._missing(operation_id)
         async with self._database.uow() as uow:
             logical = await uow.repository.get_logical(key)
-            intent = await uow.repository.get_process(key, operation_id)
-            allocation = (
-                await uow.repository.get_allocation_by_id(intent.allocation_id)
-                if intent is not None
-                else None
+            allocation = await uow.repository.get_allocation_by_id(
+                record.ref.allocation_id
             )
             await uow.commit()
-        if logical is None or intent is None or allocation is None:
-            raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process or its allocation does not exist",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-                context=ProcessErrorContext(kind="process", operation_id=operation_id),
-            )
+        if logical is None or allocation is None:
+            raise self._missing(operation_id)
         if (
-            logical.current_allocation_id != intent.allocation_id
-            or logical.allocation_epoch != intent.allocation_epoch
+            logical.current_allocation_id != record.ref.allocation_id
+            or logical.allocation_epoch != record.ref.allocation_epoch
+            or allocation.state != AllocationState.ACTIVE
         ):
             raise AgentBoxError(
                 ErrorCode.ALLOCATION_CHANGED,
@@ -281,60 +369,95 @@ class ProcessExecutionService:
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=409,
             )
-        return intent, allocation
+        return record, allocation
 
-    @staticmethod
-    def _provider_process_id(intent: ProcessIntent) -> str:
-        if intent.provider_process_id is None:
+    async def _lease_allocation(
+        self, key: SandboxKey, deadline_at: datetime
+    ) -> PhysicalAllocation:
+        async with self._database.uow() as uow:
+            await uow.repository.protect_activity(key, until=deadline_at)
+            allocation = await uow.repository.current_allocation(key)
+            await uow.commit()
+        if (
+            allocation is None
+            or allocation.provider_id is None
+            or allocation.allocation_epoch is None
+            or allocation.state != AllocationState.ACTIVE
+        ):
             raise AgentBoxError(
-                ErrorCode.UNKNOWN_DISPATCH,
-                "process has no acknowledged provider identity",
+                ErrorCode.PROVISIONING,
+                "sandbox allocation is not ready for processes",
                 retry=RetryDisposition.WAIT,
                 status_code=409,
-                context=ProcessErrorContext(
-                    kind="process", operation_id=intent.operation_id
-                ),
             )
-        return intent.provider_process_id
+        return allocation
+
+    async def _store(
+        self, key: SandboxKey, request_hash: str, ref: ProcessRef
+    ) -> None:
+        async with self._lock:
+            record_key = self._record_key(key, ref.operation_id)
+            self._records[record_key] = _ProcessRecord(
+                request_hash=request_hash, ref=ref
+            )
+            self._records.move_to_end(record_key)
+
+    def _prune_expired_locked(self, now: datetime) -> None:
+        expired = [
+            record_key
+            for record_key, record in self._records.items()
+            if record.ref.deadline_at <= now
+        ]
+        for record_key in expired:
+            self._records.pop(record_key, None)
+
+    async def _terminalize(
+        self,
+        key: SandboxKey,
+        operation_id: UUID,
+        *,
+        state: ProcessState,
+        exit_code: int | None,
+    ) -> ProcessRef:
+        record_key = self._record_key(key, operation_id)
+        async with self._lock:
+            record = self._records.get(record_key)
+            if record is None:
+                raise self._missing(operation_id)
+            if record.ref.state in _TERMINAL_STATES:
+                return record.ref
+            current = record.ref
+            record.ref = ProcessRef(
+                key=current.key,
+                operation_id=current.operation_id,
+                allocation_id=current.allocation_id,
+                allocation_epoch=current.allocation_epoch,
+                provider_process_id=current.provider_process_id,
+                state=state,
+                cwd=current.cwd,
+                tty=current.tty,
+                output_limit_bytes=current.output_limit_bytes,
+                deadline_at=current.deadline_at,
+                started_at=current.started_at,
+                completed_at=datetime.now(timezone.utc),
+                exit_code=exit_code,
+            )
+            return record.ref
 
     @staticmethod
-    def _ref_with_provider_identity(intent: ProcessIntent) -> ProcessRef:
-        ProcessExecutionService._provider_process_id(intent)
-        return ProcessExecutionService._ref(intent)
-
-    @staticmethod
-    def _ref(intent: ProcessIntent) -> ProcessRef:
-        return ProcessRef(
-            key=intent.key,
-            operation_id=intent.operation_id,
-            allocation_id=intent.allocation_id,
-            allocation_epoch=intent.allocation_epoch,
-            provider_process_id=intent.provider_process_id,
-            state=intent.state,
-            cwd=intent.cwd,
-            tty=intent.tty,
-            output_limit_bytes=intent.output_limit_bytes,
-            deadline_at=intent.deadline_at,
-            started_at=intent.started_at,
-            completed_at=intent.completed_at,
-            exit_code=intent.exit_code,
-        )
+    def _record_key(key: SandboxKey, operation_id: UUID) -> tuple[str, UUID, UUID]:
+        return key.workload_kind.value, key.logical_id, operation_id
 
     @staticmethod
     def _provider_ref(allocation: PhysicalAllocation) -> ProviderAllocationRef:
-        if allocation.provider_id is None:
-            raise AgentBoxError(
-                ErrorCode.PROVISIONING,
-                "sandbox provider allocation is not ready",
-                retry=RetryDisposition.WAIT,
-                status_code=409,
-            )
+        assert allocation.provider_id is not None
         return ProviderAllocationRef(
             provider_id=allocation.provider_id,
             provider_instance_id=allocation.provider_instance_id,
             allocation_id=allocation.allocation_id,
             allocation_token=allocation.allocation_token,
             key=allocation.key,
+            resource_generation=allocation.resource_generation,
         )
 
     @staticmethod
@@ -344,11 +467,6 @@ class ProcessExecutionService:
             if request.shell_command is not None
             else "argv:" + "\x1e".join(request.argv or ())
         )
-        tty = (
-            f"{request.tty.cols}x{request.tty.rows}"
-            if request.tty is not None
-            else "none"
-        )
         canonical = "\x1f".join(
             (
                 str(request.operation_id),
@@ -356,10 +474,11 @@ class ProcessExecutionService:
                 request.cwd,
                 hashlib.sha256(
                     "\x1e".join(
-                        f"{item.name}\x1d{item.value}" for item in request.environment
+                        f"{item.name}\x1d{item.value}"
+                        for item in request.environment
                     ).encode()
                 ).hexdigest(),
-                tty,
+                str(request.tty),
                 str(request.output_limit_bytes),
                 request.deadline_at.isoformat(),
                 (
@@ -387,3 +506,51 @@ class ProcessExecutionService:
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=408,
             )
+
+    @staticmethod
+    def _missing(operation_id: UUID) -> AgentBoxError:
+        return AgentBoxError(
+            ErrorCode.PROCESS_NOT_RUNNING,
+            "process handle is no longer available in this manager incarnation",
+            retry=RetryDisposition.DO_NOT_RETRY,
+            status_code=410,
+            context=ProcessErrorContext(
+                kind="process", operation_id=operation_id
+            ),
+        )
+
+    @staticmethod
+    def _not_running(operation_id: UUID) -> AgentBoxError:
+        return AgentBoxError(
+            ErrorCode.PROCESS_NOT_RUNNING,
+            "process is no longer running; do not replay stdin",
+            retry=RetryDisposition.DO_NOT_RETRY,
+            status_code=410,
+            context=ProcessErrorContext(
+                kind="process", operation_id=operation_id
+            ),
+        )
+
+    @staticmethod
+    def _operation_conflict(operation_id: UUID) -> AgentBoxError:
+        return AgentBoxError(
+            ErrorCode.OPERATION_CONFLICT,
+            "operation ID was reused with a different request",
+            retry=RetryDisposition.DO_NOT_RETRY,
+            status_code=409,
+            context=ProcessErrorContext(
+                kind="process", operation_id=operation_id
+            ),
+        )
+
+    @staticmethod
+    def _outcome_unknown(operation_id: UUID) -> AgentBoxError:
+        return AgentBoxError(
+            ErrorCode.UNKNOWN_DISPATCH,
+            "process start outcome was lost; start a new operation if needed",
+            retry=RetryDisposition.DO_NOT_RETRY,
+            status_code=409,
+            context=ProcessErrorContext(
+                kind="process", operation_id=operation_id
+            ),
+        )
