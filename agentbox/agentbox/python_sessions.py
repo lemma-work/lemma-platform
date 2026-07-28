@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 from uuid import UUID
@@ -361,19 +361,33 @@ class PythonSessionService:
 
     async def inspect(self, key: SandboxKey, session_id: UUID) -> PythonSessionRef:
         session_key = self._runtime_key(key, session_id)
-        async with self._state_lock:
-            self._prune_expired_sessions_locked(datetime.now(timezone.utc))
-            session = self._sessions.get(session_key)
-            if session is not None:
-                self._session_last_used[session_key] = datetime.now(timezone.utc)
-        if session is None:
-            raise AgentBoxError(
-                ErrorCode.SANDBOX_NOT_FOUND,
-                "Python session handle is no longer available",
-                retry=RetryDisposition.DO_NOT_RETRY,
-                status_code=404,
-            )
-        return session
+        async with self._session_lock(session_key):
+            async with self._state_lock:
+                self._prune_expired_sessions_locked(datetime.now(timezone.utc))
+                session = self._sessions.get(session_key)
+                if session is not None:
+                    self._session_last_used[session_key] = datetime.now(timezone.utc)
+            if session is None:
+                raise AgentBoxError(
+                    ErrorCode.SANDBOX_NOT_FOUND,
+                    "Python session handle is no longer available",
+                    retry=RetryDisposition.DO_NOT_RETRY,
+                    status_code=404,
+                )
+            async with self._database.uow() as uow:
+                allocation = await uow.repository.current_allocation(key)
+                await uow.commit()
+            if (
+                allocation is not None
+                and allocation.state == AllocationState.ACTIVE
+                and self._matches_allocation(session, allocation)
+            ):
+                return session
+            stale = replace(session, state=PythonSessionState.STALE)
+            async with self._state_lock:
+                if self._sessions.get(session_key) is session:
+                    self._sessions[session_key] = stale
+            return stale
 
     async def restart(
         self, key: SandboxKey, session_id: UUID, *, deadline_at: datetime

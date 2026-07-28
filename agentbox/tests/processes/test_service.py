@@ -263,7 +263,7 @@ async def test_conflicting_inflight_process_request_does_not_coalesce(
         )
 
     provider.release.set()
-    await first
+    _ = await first
     assert raised.value.code == ErrorCode.OPERATION_CONFLICT
     assert len(provider.calls) == 1
 
@@ -279,7 +279,7 @@ async def test_cancelled_process_waiter_does_not_leak_inflight_capacity(
 
     pending.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await pending
+        _ = await pending
     provider.release.set()
     await asyncio.sleep(0)
     await asyncio.sleep(0)

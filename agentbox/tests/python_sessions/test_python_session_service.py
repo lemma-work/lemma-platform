@@ -19,6 +19,7 @@ from agentbox.domain import (
     PythonExecutionState,
     PythonResult,
     PythonSessionRef,
+    PythonSessionState,
     SandboxKey,
     SandboxProfileRef,
     StorageKind,
@@ -99,6 +100,15 @@ class Provider:
             provider_id=allocation.provider_id,
             provider_instance_id=allocation.provider_instance_id,
         )
+
+    async def release_allocation(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        deadline_at: datetime,
+    ) -> None:
+        del allocation, deadline_at
+        self._outside_transaction()
 
     async def create_python_session(
         self,
@@ -262,6 +272,31 @@ async def test_python_execution_is_incarnation_local_and_deduplicated(
     assert changed_secret.value.code == ErrorCode.OPERATION_CONFLICT
 
 
+async def test_inspect_marks_session_stale_after_allocation_resume(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key, service, session_request = await provision(database, provider)
+    lifecycle = SandboxLifecycleService(database, provider)
+    original = await service.inspect(key, session_request.session_id)
+
+    await lifecycle.release(key, deadline_at=session_request.deadline_at)
+    resumed = await lifecycle.ensure(
+        key,
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=session_request.deadline_at,
+    )
+    stale = await service.inspect(key, session_request.session_id)
+    replacement, created = await service.create(key, session_request)
+
+    assert resumed.allocation_id == original.allocation_id
+    assert resumed.allocation_epoch == original.allocation_epoch + 1
+    assert stale.state == PythonSessionState.STALE
+    assert created is True
+    assert replacement.allocation_epoch == resumed.allocation_epoch
+
+
 async def test_unknown_execution_is_never_replayed(database: StateDatabase) -> None:
     provider = Provider(database)
     provider.ambiguous_execution = True
@@ -365,7 +400,7 @@ async def test_conflicting_inflight_python_request_does_not_coalesce(
         )
 
     provider.release.set()
-    await first
+    _ = await first
     assert raised.value.code == ErrorCode.OPERATION_CONFLICT
     assert provider.execution_calls == 1
 
@@ -389,7 +424,7 @@ async def test_cancelled_python_waiter_does_not_leak_inflight_capacity(
 
     pending.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await pending
+        _ = await pending
     provider.release.set()
     await asyncio.sleep(0)
     await asyncio.sleep(0)

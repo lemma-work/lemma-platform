@@ -435,6 +435,7 @@ class E2BSandboxAdapter:
                     request_timeout=self._request_timeout(deadline_at),
                 )
             except FileNotFoundException:
+                # Another cleanup path may already have removed the probe.
                 pass
 
     async def _wait_function_runtime_ready(
@@ -681,6 +682,8 @@ class E2BSandboxAdapter:
                     try:
                         await handle.kill()
                     except Exception:
+                        # Preserve the original ambiguous-start error; this
+                        # best-effort cleanup cannot make the outcome certain.
                         pass
                 raise ProviderProcessStartAmbiguous(str(exc)) from exc
             try:
@@ -1418,6 +1421,8 @@ class E2BSandboxAdapter:
             try:
                 await handle.kill()
             except Exception:
+                # The stream is already lost, so cleanup failure cannot be
+                # recovered here; the operation remains failed and fenced.
                 pass
             buffer.stream_lost = True
             await buffer.complete(ProcessState.FAILED, None)

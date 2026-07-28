@@ -11,6 +11,15 @@ from alembic import op
 import sqlalchemy as sa
 
 
+__all__ = (
+    "branch_labels",
+    "depends_on",
+    "down_revision",
+    "downgrade",
+    "revision",
+    "upgrade",
+)
+
 revision: str = "6bb3a72395fb"
 down_revision: Union[str, Sequence[str], None] = "24278caff64b"
 branch_labels: Union[str, Sequence[str], None] = None

@@ -262,6 +262,8 @@ class ProcessExecutionService:
                     deadline_at=deadline_at,
                 )
             except ProviderProcessMissing:
+                # Already absent is the desired result of termination; still
+                # terminalize the bounded manager record below.
                 pass
         return await self._terminalize(
             key,
