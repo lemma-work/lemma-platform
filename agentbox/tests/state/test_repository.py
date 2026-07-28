@@ -145,6 +145,33 @@ class InitiallyNotReadyProvider(FakeProvider):
         )
 
 
+class ConcurrentReadinessProvider(FakeProvider):
+    def __init__(self, database: StateDatabase) -> None:
+        super().__init__(database)
+        self.first_wait_started = asyncio.Event()
+        self.both_waiting = asyncio.Event()
+        self.release_waiters = asyncio.Event()
+
+    async def wait_ready(
+        self,
+        allocation: ProviderAllocationRef,
+        *,
+        profile: SandboxProfileRef,
+        deadline_at: datetime,
+    ) -> ProviderReadyResult:
+        del profile, deadline_at
+        assert self.database.active_units_of_work == 0
+        self.ready_calls += 1
+        self.first_wait_started.set()
+        if self.ready_calls == 2:
+            self.both_waiting.set()
+        await self.release_waiters.wait()
+        return ProviderReadyResult(
+            provider_id=allocation.provider_id,
+            provider_instance_id=allocation.provider_instance_id,
+        )
+
+
 class FailedReadinessProvider(FakeProvider):
     def __init__(self, database: StateDatabase, *, destroy_fails: bool = False) -> None:
         super().__init__(database)
@@ -373,6 +400,80 @@ async def test_verified_ensure_rechecks_active_without_changing_epoch(
     assert verified.allocation_epoch == created.allocation_epoch
     assert len(provider.create_calls) == 1
     assert provider.ready_calls == 2
+
+
+async def test_concurrent_ensure_waiters_publish_same_allocation_idempotently(
+    database: StateDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = ConcurrentReadinessProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    selected_profile = profile("function-python-v1", "b")
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    dispatch_claims = 0
+    original_mark_create_dispatched = AgentBoxRepository.mark_create_dispatched
+
+    async def count_dispatch_claims(
+        repository: AgentBoxRepository,
+        allocation_token,
+        *,
+        expected_resource_generation,
+        now=None,
+    ) -> bool:
+        nonlocal dispatch_claims
+        dispatch_claims += 1
+        return await original_mark_create_dispatched(
+            repository,
+            allocation_token,
+            expected_resource_generation=expected_resource_generation,
+            now=now,
+        )
+
+    monkeypatch.setattr(
+        AgentBoxRepository,
+        "mark_create_dispatched",
+        count_dispatch_claims,
+    )
+
+    first = asyncio.create_task(
+        service.ensure(
+            key,
+            selected_profile,
+            admission_class=AdmissionClass.LATENCY,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+    )
+    await asyncio.wait_for(provider.first_wait_started.wait(), timeout=5)
+    second = asyncio.create_task(
+        service.ensure(
+            key,
+            selected_profile,
+            admission_class=AdmissionClass.BATCH,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+    )
+    await asyncio.wait_for(provider.both_waiting.wait(), timeout=5)
+    provider.release_waiters.set()
+
+    first_handle, second_handle = await asyncio.gather(first, second)
+
+    assert first_handle.ready is True
+    assert second_handle.ready is True
+    assert first_handle.allocation_id == second_handle.allocation_id
+    assert first_handle.allocation_epoch == second_handle.allocation_epoch == 1
+    assert dispatch_claims == 1
+    assert len(provider.create_calls) == 1
+    assert provider.ready_calls == 2
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        active, reserved = await uow.repository._admission_counts(provider.scope)
+        await uow.commit()
+    assert [allocation.state for allocation in allocations] == [AllocationState.ACTIVE]
+    assert (active, reserved) == (1, 0)
+    assert database.active_units_of_work == 0
 
 
 async def test_lost_create_response_is_not_replayed(database: StateDatabase):

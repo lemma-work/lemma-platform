@@ -1243,6 +1243,30 @@ class AgentBoxRepository:
             logical_id=allocation.logical_id,
         )
         logical = await self._select_logical(key, for_update=True)
+        current_active_allocation = (
+            logical is not None
+            and logical.desired_state == SandboxDesiredState.PRESENT.value
+            and logical.maintenance_action is None
+            and logical.resource_generation == expected_resource_generation
+            and allocation.resource_generation == expected_resource_generation
+            and logical.profile_digest == allocation.profile_digest
+            and logical.current_allocation_id == allocation.allocation_id
+            and allocation.state == AllocationState.ACTIVE.value
+        )
+        if current_active_allocation:
+            if allocation.provider_id != provider_id:
+                raise AgentBoxError(
+                    ErrorCode.OPERATION_CONFLICT,
+                    "allocation is already bound to another provider object",
+                    retry=RetryDisposition.DO_NOT_RETRY,
+                    status_code=409,
+                    context=AllocationErrorContext(
+                        kind="allocation",
+                        allocation_id=allocation.allocation_id,
+                        allocation_epoch=allocation.allocation_epoch,
+                    ),
+                )
+            return self._allocation(allocation)
         if (
             logical is None
             or logical.desired_state != SandboxDesiredState.PRESENT.value
@@ -1320,6 +1344,17 @@ class AgentBoxRepository:
         logical = await self._select_logical(key, for_update=True)
         if logical is None:  # pragma: no cover - state invariant
             raise RuntimeError("allocation owner does not exist")
+        current_active_allocation = (
+            logical.desired_state == SandboxDesiredState.PRESENT.value
+            and logical.maintenance_action is None
+            and logical.resource_generation == expected_resource_generation
+            and allocation.resource_generation == expected_resource_generation
+            and logical.profile_digest == allocation.profile_digest
+            and logical.current_allocation_id == allocation.allocation_id
+            and allocation.state == AllocationState.ACTIVE.value
+        )
+        if current_active_allocation:
+            return self._allocation(allocation)
         if (
             logical.desired_state != SandboxDesiredState.PRESENT.value
             or logical.maintenance_action is not None
@@ -1341,8 +1376,6 @@ class AgentBoxRepository:
             )
 
         previous_id = logical.current_allocation_id
-        if previous_id == allocation.allocation_id and allocation.state == "active":
-            return self._allocation(allocation)
         if previous_id is not None and previous_id != allocation.allocation_id:
             await self._session.execute(
                 update(AllocationRow)
