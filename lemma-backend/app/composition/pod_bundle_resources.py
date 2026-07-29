@@ -75,16 +75,16 @@ def get_surface_service(*args, **kwargs):
 
 
 def _merge_surface_config(*args, **kwargs):
-    from app.modules.agent_surfaces.api.controllers.surface_controller import (
-        _merge_surface_config as operation,
+    from app.modules.agent_surfaces.api.surface_config_resolver import (
+        merge_surface_config as operation,
     )
 
     return operation(*args, **kwargs)
 
 
 def _resolve_surface_config(*args, **kwargs):
-    from app.modules.agent_surfaces.api.controllers.surface_controller import (
-        _resolve_surface_config as operation,
+    from app.modules.agent_surfaces.api.surface_config_resolver import (
+        resolve_surface_config as operation,
     )
 
     return operation(*args, **kwargs)

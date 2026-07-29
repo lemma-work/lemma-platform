@@ -376,7 +376,7 @@ async def test_concurrent_created_updates_provision_once_and_finish_complete():
         return_exceptions=True,
     )
     release.set()
-    await first_task
+    assert await first_task is None
 
     assert isinstance(
         second_result[0],

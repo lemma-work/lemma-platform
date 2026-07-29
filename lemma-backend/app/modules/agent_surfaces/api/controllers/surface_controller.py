@@ -53,8 +53,6 @@ from app.modules.agent_surfaces.services.surface_service import (
 from app.composition.surface_connectors import ConnectorServiceDep
 
 router = APIRouter(prefix="/pods/{pod_id}/surfaces", tags=["Agent Surfaces"])
-_merge_surface_config = merge_surface_config
-_resolve_surface_config = resolve_surface_config
 
 # A surface's platform-level setup checklist (env/OAuth prerequisites) needs no
 # surface to exist yet, so it lives outside the surface-resource router.

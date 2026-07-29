@@ -317,6 +317,7 @@ class SurfaceAgentRunProgressObserver:
             try:
                 await task
             except asyncio.CancelledError:
+                # Expected after task.cancel(); delivery cleanup must continue.
                 pass
         await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)

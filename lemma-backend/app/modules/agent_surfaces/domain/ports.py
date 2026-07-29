@@ -234,7 +234,8 @@ class SurfacePlatformAdapterPort(Protocol):
         text: str | None = None,
         show_alert: bool = False,
         clear_actions: bool = False,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
     # Parse an interaction submission (Slack block_actions, Teams Action.Submit)
     # into a routable interaction, or None when the payload is not an interaction.

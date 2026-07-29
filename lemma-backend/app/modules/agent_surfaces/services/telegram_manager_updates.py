@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from contextlib import AbstractAsyncContextManager
-from typing import Any, Protocol
+from typing import Any
 from uuid import UUID
 
 from app.core.domain.errors import DomainError
@@ -11,15 +10,16 @@ from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TelegramApiError,
-    TelegramClient,
     classify_telegram_error,
+)
+from app.modules.agent_surfaces.services.telegram_manager_runtime import (
+    TelegramManagerRuntime,
 )
 from app.modules.agent_surfaces.services.telegram_manager_store import (
     TelegramManagedBotProvisioningClaim,
     TelegramManagedBotProvisioningInProgressError,
     TelegramManagedBotSetup,
     TelegramManagedBotSetupStatus,
-    TelegramManagedBotSetupStore,
 )
 from app.modules.connectors.domain.errors import ConnectorNotFoundError
 
@@ -30,44 +30,6 @@ _START_RE = re.compile(r"^/start(?:@\w+)?\s+surface_([A-Za-z0-9_-]+)$")
 
 class _PermanentProvisioningError(RuntimeError):
     pass
-
-
-class TelegramManagerRuntime(Protocol):
-    _store: TelegramManagedBotSetupStore
-    _client: TelegramClient
-
-    async def _send_text(
-        self,
-        chat_id: int,
-        text: str,
-        *,
-        remove_keyboard: bool = False,
-    ) -> None: ...
-
-    async def _persist_managed_bot(
-        self,
-        *,
-        setup: TelegramManagedBotSetup,
-        bot_id: int,
-        bot_username: str | None,
-        bot_token: str,
-    ) -> tuple[UUID, UUID]: ...
-
-    async def _configure_managed_bot(
-        self,
-        *,
-        setup: TelegramManagedBotSetup,
-        bot_token: str,
-    ) -> None: ...
-
-    def _renew_provisioning_lease(
-        self,
-        *,
-        setup_id: str,
-        owner: str,
-    ) -> AbstractAsyncContextManager[None]: ...
-
-    def bot_launch_url(self, setup: TelegramManagedBotSetup) -> str: ...
 
 
 async def handle_telegram_manager_update(

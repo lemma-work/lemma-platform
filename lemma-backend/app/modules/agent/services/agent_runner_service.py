@@ -181,7 +181,8 @@ class AgentRunObserver(Protocol):
         self,
         conversation: Conversation,
         error: Exception,
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
 
 class AgentRunnerService:
