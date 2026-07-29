@@ -40,8 +40,7 @@ BACKEND_COVERAGE_DATA_ENV = COVERAGE_FILE=$(BACKEND_COVERAGE_FILE)
 # environment.
 FUNCTION_BENCH_CONCURRENCY ?= 5
 FUNCTION_BENCH_INVOCATIONS ?= 5
-FUNCTION_BENCH_SOURCE_ROWS ?= 1000
-FUNCTION_BENCH_WRITE_ROWS ?= 1000
+FUNCTION_BENCH_BATCH_ROWS ?= 1000
 FUNCTION_BENCH_POLL_INTERVAL_SECONDS ?= 0.5
 FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS ?= 300
 FUNCTION_BENCH_TUNNEL ?= ngrok
@@ -51,8 +50,7 @@ FUNCTION_BENCH_ENV = \
 	LOG_LEVEL=WARNING \
 	FUNCTION_BENCH_CONCURRENCY=$(FUNCTION_BENCH_CONCURRENCY) \
 	FUNCTION_BENCH_INVOCATIONS=$(FUNCTION_BENCH_INVOCATIONS) \
-	FUNCTION_BENCH_SOURCE_ROWS=$(FUNCTION_BENCH_SOURCE_ROWS) \
-	FUNCTION_BENCH_WRITE_ROWS=$(FUNCTION_BENCH_WRITE_ROWS) \
+	FUNCTION_BENCH_BATCH_ROWS=$(FUNCTION_BENCH_BATCH_ROWS) \
 	FUNCTION_BENCH_POLL_INTERVAL_SECONDS=$(FUNCTION_BENCH_POLL_INTERVAL_SECONDS) \
 	FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS=$(FUNCTION_BENCH_TERMINAL_TIMEOUT_SECONDS)
 FUNCTION_BENCH_TEST = app/modules/function/tests/perf/test_function_execution_benchmark.py
@@ -82,7 +80,7 @@ help:
 	@echo "                         # package Teams manifest zip"
 	@echo "  make docker-build      # build backend image from monorepo root"
 	@echo "  make agentbox-build # build local AgentBox runtime images"
-	@echo "  make benchmark-functions-docker # API/JOB table benchmark on Docker"
+	@echo "  make benchmark-functions-docker # no-op + single/batch API/JOB benchmark on Docker"
 	@echo "  make benchmark-functions-e2b    # same benchmark on pinned E2B builds"
 	@echo ""
 	@echo "Load testing (WebSocket capacity on a simulated 2 CPU / 2 GB server):"
