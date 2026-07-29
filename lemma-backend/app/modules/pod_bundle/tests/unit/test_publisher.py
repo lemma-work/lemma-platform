@@ -15,6 +15,7 @@ from app.modules.pod_bundle.infrastructure.readme import (
     install_target,
     render_readme,
 )
+from app.modules.pod_bundle.infrastructure.social_card import render_social_card
 
 
 class FakeOps:
@@ -82,6 +83,7 @@ def test_render_readme_has_badge_and_counts():
     assert "# CRM" in r
     assert "Leads pod" in r  # the description becomes the tagline
     assert install_badge("acme", "crm") in r.splitlines()
+    assert 'src="./social-card.png"' in r
     # "What's inside" is a table of the present resources.
     assert "**Tables** | 2 |" in r and "**Agents** | 1 |" in r
     assert "Functions" not in r  # zero-count types omitted
@@ -91,7 +93,9 @@ def test_render_readme_default_tagline_when_no_description():
     r = render_readme(
         pod_name="CRM", description=None, resource_counts={}, owner="acme", repo="crm"
     )
-    assert "ready to install" in r  # falls back to a friendly default tagline
+    assert (
+        "ready to run with your team" in r
+    )  # falls back to a friendly default tagline
 
 
 def test_render_readme_includes_icon_when_provided():
@@ -106,6 +110,17 @@ def test_render_readme_includes_icon_when_provided():
     assert '<img src="https://cdn.example/icon.png"' in r
 
 
+def test_render_readme_escapes_pod_name_in_social_card_alt():
+    r = render_readme(
+        pod_name='Research "Desk"',
+        description=None,
+        resource_counts={},
+        owner="acme",
+        repo="research",
+    )
+    assert 'alt="Run Research &quot;Desk&quot; on Lemma"' in r
+
+
 def test_install_button_is_big_branded_badge():
     badge = install_badge("acme", "crm")
     # Links to the one-click importer for the real owner/repo...
@@ -114,11 +129,22 @@ def test_install_button_is_big_branded_badge():
     assert badge == (
         f'<a href="{install_target("acme", "crm")}">'
         f'<img src="{install_badge_url()}" height="44" '
-        'alt="Install to Lemma" /></a>'
+        'alt="Run it on Lemma" /></a>'
     )
     assert "for-the-badge" in badge
     assert "logo=data%3Aimage" in badge  # url-encoded data: logo (the Lemma mark)
     assert 'height="44"' in badge
+
+
+def test_social_card_is_a_full_size_png():
+    card = render_social_card(
+        pod_name="Research Desk",
+        source_label="github.com/acme/research-desk",
+    )
+    assert card.startswith(b"\x89PNG\r\n\x1a\n")
+    # IHDR stores width and height as big-endian uint32s.
+    assert int.from_bytes(card[16:20], "big") == 1200
+    assert int.from_bytes(card[20:24], "big") == 630
 
 
 # --- publisher ---------------------------------------------------------------
@@ -162,7 +188,11 @@ async def test_publish_chunks_large_files():
     ops = FakeOps()
     big = b"x" * 400_000  # > threshold -> chunked
     await GithubPublisher(ops).publish(
-        repo_name="crm", private=False, description=None, files={"apps/x/dist.zip": big}, readme="img.shields.io"
+        repo_name="crm",
+        private=False,
+        description=None,
+        files={"apps/x/dist.zip": big},
+        readme="img.shields.io",
     )
     chunk_paths = [p for p, _ in ops.puts if ".chunk" in p]
     assert len(chunk_paths) == 3  # 400k / 150k -> 3 parts
@@ -172,7 +202,11 @@ async def test_publish_chunks_large_files():
 async def test_publish_create_failure_raises_domain_error():
     with pytest.raises(PodBundleDomainError):
         await GithubPublisher(FakeOps(create_error=True)).publish(
-            repo_name="crm", private=False, description=None, files={}, readme="img.shields.io"
+            repo_name="crm",
+            private=False,
+            description=None,
+            files={},
+            readme="img.shields.io",
         )
 
 
@@ -226,13 +260,20 @@ async def test_composio_ops_create_repo_parses_full_name():
     async def runner(op, payload):
         calls.append((op, payload))
         if "REPOSITORY" in op:
-            return {"data": {"full_name": "acme/crm", "html_url": "https://github.com/acme/crm"}}
+            return {
+                "data": {
+                    "full_name": "acme/crm",
+                    "html_url": "https://github.com/acme/crm",
+                }
+            }
         return {"data": {}}
 
     ops = ComposioGithubOps(runner)
     repo = await ops.create_repo(name="crm", private=False, description="d")
     assert repo.owner == "acme" and repo.repo == "crm"
-    await ops.put_file(owner="acme", repo="crm", path="pod.json", content=b"{}", message="m")
+    await ops.put_file(
+        owner="acme", repo="crm", path="pod.json", content=b"{}", message="m"
+    )
     # put_file base64-encodes content.
     assert calls[-1][1]["content"] == "e30="  # base64 of {}
 
@@ -241,14 +282,20 @@ async def test_composio_ops_create_repo_parses_full_name():
 
 
 async def test_polish_none_returns_input():
-    assert await polish_readme("original img.shields.io", polish_fn=None) == "original img.shields.io"
+    assert (
+        await polish_readme("original img.shields.io", polish_fn=None)
+        == "original img.shields.io"
+    )
 
 
 async def test_polish_degrades_on_error():
     async def boom(_):
         raise RuntimeError("model down")
 
-    assert await polish_readme("original img.shields.io", polish_fn=boom) == "original img.shields.io"
+    assert (
+        await polish_readme("original img.shields.io", polish_fn=boom)
+        == "original img.shields.io"
+    )
 
 
 async def test_polish_rejects_output_dropping_badge():
@@ -256,7 +303,10 @@ async def test_polish_rejects_output_dropping_badge():
         return "polished but no badge"
 
     # Output without the install badge is discarded (keeps the deterministic one).
-    assert await polish_readme("original img.shields.io", polish_fn=strip_badge) == "original img.shields.io"
+    assert (
+        await polish_readme("original img.shields.io", polish_fn=strip_badge)
+        == "original img.shields.io"
+    )
 
 
 async def test_polish_accepts_good_output():

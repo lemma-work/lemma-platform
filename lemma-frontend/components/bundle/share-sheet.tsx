@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowUpRight, Copy, Download, FileText, Github } from '@/components/ui/icons';
+import { ArrowUpRight, Copy, Download, FileText, Github, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import {
@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { BundleProgressBar } from '@/components/bundle/bundle-progress';
+import { PodShareCard } from '@/components/bundle/pod-share-card';
 import {
     getPublish,
     pollExport,
@@ -68,6 +69,19 @@ function publishPhaseLabel(status: string): string {
     return 'Starting…';
 }
 
+function githubImportPath(repoUrl: string): string | null {
+    try {
+        const url = new URL(repoUrl);
+        if (url.hostname.toLowerCase() !== 'github.com') return null;
+        const [owner, repoWithSuffix] = url.pathname.split('/').filter(Boolean);
+        const repo = repoWithSuffix?.replace(/\.git$/i, '');
+        if (!owner || !repo) return null;
+        return `/import/github/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+    } catch {
+        return null;
+    }
+}
+
 export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetProps) {
     const defaultRepo = useMemo(() => toRepoSlug(podName || 'my-pod') || 'my-pod', [podName]);
 
@@ -84,6 +98,11 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
     const [publishView, setPublishView] = useState<BundleProgressView | null>(null);
     const [published, setPublished] = useState<PublishStatusResponse | null>(null);
     const [needsGithub, setNeedsGithub] = useState(false);
+    const publishedInstallUrl = useMemo(() => {
+        const path = published?.repo_url ? githubImportPath(published.repo_url) : null;
+        if (!path || typeof window === 'undefined') return null;
+        return new URL(path, window.location.origin).toString();
+    }, [published]);
 
     async function handleExport() {
         if (exporting) return;
@@ -166,6 +185,21 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
         }
     }
 
+    async function sharePublishedPod() {
+        if (!publishedInstallUrl) return;
+        const title = `Run ${podName || 'this pod'} on Lemma`;
+        const text = `Run ${podName || 'this pod'} on Lemma.`;
+        if (navigator.share) {
+            try {
+                await navigator.share({ title, text, url: publishedInstallUrl });
+                return;
+            } catch (error) {
+                if (error instanceof DOMException && error.name === 'AbortError') return;
+            }
+        }
+        await copy(publishedInstallUrl, 'Run link');
+    }
+
     return (
         <Sheet open={open} onOpenChange={onOpenChange}>
             <SheetContent side="right" className="flex w-full flex-col gap-0 sm:max-w-md">
@@ -219,12 +253,15 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
                             Publish to GitHub
                         </div>
                         <p className="mt-1 text-xs text-[var(--text-tertiary)]">
-                            Creates a repo with a README and an <span className="font-medium">Import to Lemma</span>{' '}
-                            badge — a durable, shareable install link.
+                            Creates a repo with a README and a <span className="font-medium">Run it on Lemma</span>{' '}
+                            button — a durable, shareable install link.
                         </p>
 
                         {published ? (
                             <div className="mt-4 space-y-3">
+                                {publishedInstallUrl ? (
+                                    <PodShareCard podName={podName} repoUrl={publishedInstallUrl} />
+                                ) : null}
                                 <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3">
                                     <div className="text-xs text-[var(--text-tertiary)]">Published repository</div>
                                     <a
@@ -242,18 +279,26 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
                                         variant="secondary"
                                         size="sm"
                                         className="flex-1"
-                                        onClick={() => published.repo_url && copy(published.repo_url, 'Repo link')}
+                                        onClick={() => publishedInstallUrl && copy(publishedInstallUrl, 'Run link')}
+                                        disabled={!publishedInstallUrl}
                                     >
                                         <Copy className="mr-2 h-3.5 w-3.5" />
-                                        Copy link
+                                        Copy run link
                                     </Button>
-                                    <Button variant="secondary" size="sm" className="flex-1" onClick={() => setPublished(null)}>
-                                        Publish again
+                                    <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        className="flex-1"
+                                        onClick={sharePublishedPod}
+                                        disabled={!publishedInstallUrl}
+                                    >
+                                        <Share2 className="mr-2 h-3.5 w-3.5" />
+                                        Share
                                     </Button>
                                 </div>
                                 <p className="text-xs text-[var(--text-tertiary)]">
-                                    Others import it from <span className="font-medium">Import → GitHub</span> by pasting
-                                    this URL.
+                                    This link opens the pod directly in Lemma. The GitHub repository remains its
+                                    public, inspectable source.
                                 </p>
                             </div>
                         ) : publishing ? (

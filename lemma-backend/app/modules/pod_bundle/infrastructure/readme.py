@@ -1,7 +1,7 @@
 """Render a bundle's README as a human-facing landing page for the pod.
 
 The README is what someone sees when they land on the published GitHub repo, so
-it reads like a product page: a centered header, a big **Install to Lemma**
+it reads like a product page: a centered header, a big **Run it on Lemma**
 button (a shields.io ``for-the-badge`` badge carrying the Lemma mark) that
 deep-links to the one-click importer (``/import/github/{owner}/{repo}``), a
 "What's inside" summary, and install instructions. Deterministic; the optional AI
@@ -11,12 +11,13 @@ polish (:mod:`ai_readme`) only refines the copy of this same structure.
 from __future__ import annotations
 
 import base64
+import html
 from urllib.parse import urlencode
 
 from app.core.config import settings
 
-# Lemma brand purple.
-_BRAND = "6D3BEB"
+# Lemma ink.
+_BRAND = "11110F"
 
 # Display order + emoji for the "What's inside" table (surfaces read as
 # "Connectors", the user-facing term).
@@ -41,10 +42,7 @@ _LEMMA_MARK_SVG = (
     '<rect x="17" y="3" width="5" height="19" rx="1" fill="#fff"/></svg>'
 )
 
-_DEFAULT_TAGLINE = (
-    "A shareable Lemma pod — agents, data, workflows, and connectors, "
-    "ready to install in one click."
-)
+_DEFAULT_TAGLINE = "Apps, agents, workflows, and data — ready to run with your team."
 
 
 def _app_base_url() -> str:
@@ -69,7 +67,7 @@ def install_badge_url() -> str:
             "logoColor": "white",
         }
     )
-    return f"https://img.shields.io/badge/Install%20to%20Lemma-{_BRAND}?{query}"
+    return f"https://img.shields.io/badge/Run%20it%20on%20Lemma-{_BRAND}?{query}"
 
 
 def install_target(owner: str, repo: str) -> str:
@@ -81,7 +79,7 @@ def install_badge(owner: str, repo: str) -> str:
     GitHub import route, sized up with an explicit height."""
     return (
         f'<a href="{install_target(owner, repo)}">'
-        f'<img src="{install_badge_url()}" height="44" alt="Install to Lemma" />'
+        f'<img src="{install_badge_url()}" height="44" alt="Run it on Lemma" />'
         "</a>"
     )
 
@@ -96,6 +94,7 @@ def render_readme(
     icon_url: str | None = None,
 ) -> str:
     name = (pod_name or "Lemma Pod").strip() or "Lemma Pod"
+    escaped_name = html.escape(name, quote=True)
     tagline = (description or "").strip() or _DEFAULT_TAGLINE
 
     present = [
@@ -108,6 +107,8 @@ def render_readme(
     if icon_url:
         lines += [f'<img src="{icon_url}" width="88" height="88" alt="{name}" />', ""]
     lines += [
+        f'<img src="./social-card.png" width="100%" alt="Run {escaped_name} on Lemma" />',
+        "",
         f"# {name}",
         "",
         f"### {tagline}",
@@ -125,13 +126,15 @@ def render_readme(
             "|  | Resource | Count |",
             "| :-: | :-- | --: |",
         ]
-        lines += [f"| {emoji} | **{label}** | {count} |" for label, emoji, count in present]
+        lines += [
+            f"| {emoji} | **{label}** | {count} |" for label, emoji, count in present
+        ]
         lines += [""]
 
     lines += [
         "## 🚀 Install",
         "",
-        f"**One click** — press **Install to Lemma** above "
+        f"**One click** — press **Run it on Lemma** above "
         f"(or [open the installer]({install_target(owner, repo)})).",
         "",
         "**From inside Lemma** — go to **Settings → Share & Export → Import from "
@@ -145,8 +148,8 @@ def render_readme(
         "",
         '<div align="center">',
         "",
-        '<sub>Exported from <a href="https://lemma.work">Lemma</a> — the open '
-        "workspace for humans and AI agents.</sub>",
+        "<sub>Run your apps and agents. Bring your team. "
+        '<a href="https://lemma.work">Lemma</a>.</sub>',
         "",
         "</div>",
         "",

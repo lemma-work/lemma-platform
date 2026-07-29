@@ -5,13 +5,20 @@ from __future__ import annotations
 import asyncio
 from io import BytesIO
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlparse
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import structlog
 
 from app.core.api.uploads import upload_source_sha256
-from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
+from app.core.config import settings
+from app.core.authorization.context import (
+    Context,
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
 from app.core import runtime_config
@@ -25,6 +32,7 @@ from app.modules.apps.domain.entities import (
     AppStatus,
     AppUpdateEntity,
 )
+from app.modules.apps.domain.branding import AppBrandingEntitlementPort
 from app.modules.apps.domain.errors import (
     AppConflictError,
     AppNotFoundError,
@@ -50,16 +58,19 @@ from app.modules.pod.contracts import (
 
 logger = structlog.get_logger()
 
+
 class AppService:
     def __init__(
         self,
         app_repository: AppRepositoryPort,
         file_manager_factory: AppStorageFactoryPort,
         authorization_service: object,
+        app_branding_entitlement: AppBrandingEntitlementPort | None = None,
     ):
         self.repository = app_repository
         self.file_manager_factory = file_manager_factory
         self.authorization_service = authorization_service
+        self.app_branding_entitlement = app_branding_entitlement
         # Storage side of the asset/archive/bundle/delete sagas, on an object
         # that holds NO repository (DB-free by construction).
         self._storage_phase = AppStoragePhase(file_manager_factory)
@@ -122,7 +133,9 @@ class AppService:
 
         release = await self.repository.get_release(app.current_release_id)
         if not release:
-            raise AppNotFoundError(f"Current release not found for app '{raise_not_found_name}'")
+            raise AppNotFoundError(
+                f"Current release not found for app '{raise_not_found_name}'"
+            )
         return release
 
     async def _resolve_asset_document(
@@ -132,17 +145,50 @@ class AppService:
         raise_not_found_name: str,
         asset_path: str | None,
         request_etag: str | None = None,
+        public_url: str | None = None,
     ) -> _AssetReadInputs | AppAssetDocument:
         """DB phase: resolve release + ETag. Returns a not-modified document on a
         304 (no storage needed) or the inputs for the storage read otherwise."""
-        release = await self._get_current_release(app, raise_not_found_name=raise_not_found_name)
+        release = await self._get_current_release(
+            app, raise_not_found_name=raise_not_found_name
+        )
         normalized_asset_path = self._normalize_requested_asset_path(asset_path)
-        app_identity = runtime_config.build_runtime_app_identity(app.name, app.description)
-        entrypoint_request = runtime_config.is_runtime_config_entrypoint(normalized_asset_path)
+        app_identity = runtime_config.build_runtime_app_identity(
+            app.name,
+            app.description,
+            public_url,
+        )
+        entrypoint_request = runtime_config.is_runtime_config_entrypoint(
+            normalized_asset_path
+        )
+        branding: dict[str, str] | None = None
+        if (
+            entrypoint_request
+            and public_url
+            and settings.app_branding_enabled
+        ):
+            can_remove_branding = False
+            if self.app_branding_entitlement is not None:
+                try:
+                    can_remove_branding = (
+                        await self.app_branding_entitlement.can_remove_app_branding(
+                            pod_id=app.pod_id
+                        )
+                    )
+                except Exception:
+                    # Branding lookup must never take a hosted app down. If the
+                    # cloud entitlement provider is unavailable, fail toward the
+                    # OSS/default policy and keep attribution visible.
+                    logger.warning(
+                        "apps.app_service.branding_entitlement.diagnostic",
+                        pod_id=str(app.pod_id),
+                    )
+            if not can_remove_branding:
+                branding = runtime_config.build_app_branding(public_url)
         # Entrypoints carry the injected pod context, so a pod/api/auth change
-        # must bust the cached HTML — fold the config hash into the ETag.
+        # or branding entitlement change must bust the cached HTML.
         etag = (
-            f"{release.version}.{runtime_config.runtime_config_token(app.pod_id, app=app_identity)}"
+            f"{release.version}.{runtime_config.runtime_config_token(app.pod_id, app=app_identity, branding=branding)}"
             if entrypoint_request
             else release.version
         )
@@ -161,6 +207,7 @@ class AppService:
             normalized_asset_path=normalized_asset_path,
             quoted_etag=quoted_etag,
             app=app_identity,
+            branding=branding,
         )
 
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
@@ -233,7 +280,9 @@ class AppService:
         self._normalize_app_visibility(entity)
         created = await self.repository.create(entity)
         if ctx is not None:
-            refreshed = await self.repository.get_by_name(entity.pod_id, entity.name, ctx=ctx)
+            refreshed = await self.repository.get_by_name(
+                entity.pod_id, entity.name, ctx=ctx
+            )
             return refreshed or created
         return created
 
@@ -262,7 +311,9 @@ class AppService:
         embed bridge or conversation padding), and deployed as the app's bundle.
         """
         for issue in lint_app_html(artifact.content):
-            logger.debug('apps.app_service.app_html_lint.diagnostic', pod_id=str(pod_id))
+            logger.debug(
+                "apps.app_service.app_html_lint.diagnostic", pod_id=str(pod_id)
+            )
         document = wrap_html_fragment(artifact.content, title=name, embed=False)
         entity_data: dict = {
             "pod_id": pod_id,
@@ -371,7 +422,9 @@ class AppService:
             )
             app.public_slug = public_slug
         if update_entity.visibility is not None:
-            app.visibility = self._normalize_visibility_value(update_entity.visibility).value
+            app.visibility = self._normalize_visibility_value(
+                update_entity.visibility
+            ).value
 
         updated = await self.repository.update(app)
         if ctx is not None:
@@ -586,11 +639,14 @@ class AppService:
         app = await self.repository.get_by_public_slug(public_slug)
         if not app:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
+        scheme = urlparse(settings.api_url).scheme or "https"
+        public_url = f"{scheme}://{app.public_slug}.{settings.app_base_domain}"
         return await self._resolve_asset_document(
             app,
             raise_not_found_name=public_slug,
             asset_path=asset_path,
             request_etag=request_etag,
+            public_url=public_url,
         )
 
     async def resolve_source_archive(
@@ -648,7 +704,10 @@ class AppService:
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
         normalized = str(value or ResourceVisibility.POD.value).strip().upper()
-        if normalized in PERSONAL_VISIBILITY_VALUES or normalized in {"PRIVATE", "OWNER"}:
+        if normalized in PERSONAL_VISIBILITY_VALUES or normalized in {
+            "PRIVATE",
+            "OWNER",
+        }:
             return ResourceVisibility.PERSONAL
         if normalized == "RESTRICTED":
             return ResourceVisibility.RESTRICTED

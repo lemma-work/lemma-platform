@@ -733,6 +733,14 @@ class Settings(BaseSettings):
             "app routing and is rejected at startup in development/production."
         ),
     )
+    app_branding_enabled: bool = Field(
+        default=True,
+        description=(
+            "Show the host-owned 'Remix on Lemma' attribution on public app "
+            "entrypoints. Enabled by default in OSS and cloud; cloud billing may "
+            "remove it for entitled organizations."
+        ),
+    )
     browser_sdk_path: Optional[str] = Field(
         default=None,
         description=(

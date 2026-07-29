@@ -36,6 +36,7 @@ from app.modules.pod_bundle.infrastructure.github_publisher import (
     RepoCreateResult,
 )
 from app.modules.pod_bundle.infrastructure.readme import render_readme
+from app.modules.pod_bundle.infrastructure.social_card import render_social_card
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
     error_payload,
@@ -324,6 +325,13 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             publisher=publisher,
             description=description,
         )
+        display_name = pod_meta.get("name") or pod_name.removesuffix(".zip")
+        files["social-card.png"] = await run_blocking(
+            render_social_card,
+            pod_name=display_name,
+            source_label=f"github.com/{repo.owner}/{repo.repo}",
+            limiter="cpu_bound",
+        )
         readme = await _ensure_readme(
             worker_ctx=worker_ctx,
             state=state,
@@ -364,10 +372,10 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
     except Exception:
         await _fail_publish(store, state, "Publish failed due to a transient error.")
         logger.debug(
-            'pod_bundle.publish_task.pod_publish_s_retryable_s.propagated',
+            "pod_bundle.publish_task.pod_publish_s_retryable_s.propagated",
             publish_id=publish_id,
-        exc_info=True,
-    )
+            exc_info=True,
+        )
         raise
 
 
@@ -380,7 +388,7 @@ async def _fail_publish(store, state: PublishState, message: str) -> None:
         await publish_bundle_event(state.publish_id, error_payload(message, state.seq))
     except Exception:
         logger.debug(
-            'pod_bundle.publish_task.persist_publish_s_s.diagnostic',
+            "pod_bundle.publish_task.persist_publish_s_s.diagnostic",
             publish_id=state.publish_id,
         )
 

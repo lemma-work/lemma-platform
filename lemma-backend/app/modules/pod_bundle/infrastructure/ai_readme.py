@@ -28,7 +28,8 @@ _PROMPT = (
     "add a short intro sentence or lightly reorganize prose.\n\n"
     "Hard constraints — do NOT change these:\n"
     "- Keep the centered install button exactly as-is: the `<a>`/`<img>` block "
-    "whose image is the `https://img.shields.io/...Install%20to%20Lemma...` badge.\n"
+    "whose image is the `https://img.shields.io/...Run%20it%20on%20Lemma...` badge.\n"
+    "- Keep the `social-card.png` hero image exactly as-is.\n"
     "- Keep every link, the `<div align=\"center\">` header, the '## Install' "
     "instructions, and the resource counts in 'What's inside'.\n"
     "- Do not invent resources, features, or links that are not already present.\n"
@@ -43,7 +44,7 @@ async def polish_readme(readme: str, *, polish_fn: PolishFn | None = None) -> st
         polished = await polish_fn(readme)
     except Exception:  # noqa: BLE001 - never fail a publish over polish
         logger.debug(
-            'pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic'
+            "pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic"
         )
         return readme
     polished = _strip_code_fence((polished or "").strip())
