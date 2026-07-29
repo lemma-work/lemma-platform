@@ -23,6 +23,7 @@ from agentbox.ports import (
     ProviderAllocationRef,
     ProviderCreateRequest,
     ProviderCreateResult,
+    ProviderMetadataEntry,
     ProviderPortTarget,
     ProviderReadyResult,
     ProviderStorageResult,
@@ -40,6 +41,7 @@ class Provider:
     def __init__(self, database: StateDatabase) -> None:
         self.database = database
         self.resolved: list[tuple[str, int, PortProtocol]] = []
+        self.activity_until: list[datetime | None] = []
 
     async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
         assert self.database.active_units_of_work == 0
@@ -74,10 +76,19 @@ class Provider:
         deadline_at: datetime,
         activity_until: datetime | None = None,
     ) -> ProviderPortTarget:
-        del deadline_at, activity_until
+        del deadline_at
         assert self.database.active_units_of_work == 0
         self.resolved.append((allocation.provider_id, port, protocol))
-        return ProviderPortTarget(base_url=f"{protocol.value}://127.0.0.1:{port}")
+        self.activity_until.append(activity_until)
+        return ProviderPortTarget(
+            base_url=f"{protocol.value}://127.0.0.1:{port}",
+            headers=(
+                ProviderMetadataEntry(
+                    name="X-Provider-Access-Token",
+                    value="provider-secret",
+                ),
+            ),
+        )
 
 
 @pytest_asyncio.fixture
@@ -261,3 +272,75 @@ async def test_function_runtime_grant_allows_long_job_but_workspace_does_not(
             protocol=PortProtocol.HTTP,
             expires_at=now + timedelta(hours=2),
         )
+
+
+async def test_function_runtime_lease_returns_direct_allocation_fenced_target(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    profile = SandboxProfileRef("function-python-v1", f"sha256:{'e' * 64}")
+    now = datetime.now(timezone.utc)
+    lifecycle = SandboxLifecycleService(database, provider)
+    handle = await lifecycle.ensure(
+        key,
+        profile,
+        admission_class=AdmissionClass.LATENCY,
+        deadline_at=now + timedelta(seconds=30),
+    )
+    required_valid_until = now + timedelta(minutes=10)
+    service = PortAccessService(
+        database,
+        provider,
+        PortAccessSigner(b"t" * 32),
+        public_base_url="https://agentbox.example",
+        trusted_function_activity_seconds=300,
+        trusted_function_activity_refresh_seconds=60,
+    )
+
+    lease = await service.lease_function_runtime(
+        key.logical_id,
+        deadline_at=now + timedelta(seconds=20),
+        required_valid_until=required_valid_until,
+    )
+
+    assert lease.key == key
+    assert lease.allocation_id == handle.allocation_id
+    assert lease.allocation_epoch == handle.allocation_epoch
+    assert lease.profile == profile
+    assert lease.url == "http://127.0.0.1:8090/"
+    assert lease.expires_at == required_valid_until + timedelta(seconds=60)
+    assert lease.request_headers[0].name == "X-Provider-Access-Token"
+    assert "provider-secret" not in repr(lease)
+    assert provider.resolved == [
+        (f"sandbox-{handle.allocation_id}", 8090, PortProtocol.HTTP)
+    ]
+    assert provider.activity_until == [lease.expires_at]
+    async with database.uow() as uow:
+        logical = await uow.repository.get_logical(key)
+        await uow.commit()
+    assert logical is not None
+    assert logical.protected_until == lease.expires_at
+
+
+async def test_function_runtime_lease_requires_current_active_allocation(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    service = PortAccessService(
+        database,
+        provider,
+        PortAccessSigner(b"u" * 32),
+        public_base_url="https://agentbox.example",
+    )
+
+    with pytest.raises(AgentBoxError) as missing:
+        await service.lease_function_runtime(
+            key.logical_id,
+            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=20),
+            required_valid_until=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
+
+    assert missing.value.status_code == 404
+    assert provider.resolved == []

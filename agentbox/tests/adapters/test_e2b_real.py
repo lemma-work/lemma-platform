@@ -8,13 +8,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from e2b_code_interpreter import AsyncSandbox
-from fastapi import FastAPI
 import httpx
 import pytest
 
 from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
-from agentbox.api.port_proxy import access_router, create_port_proxy_http_client
-from agentbox.config import settings
 from agentbox.domain import (
     AdmissionClass,
     AgentBoxError,
@@ -22,7 +19,6 @@ from agentbox.domain import (
     CreatePythonSessionRequest,
     EnvironmentVariable,
     ExecutePythonRequest,
-    PortProtocol,
     ProcessState,
     PythonExecutionState,
     PythonSessionState,
@@ -39,7 +35,6 @@ from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.maintenance import SandboxMaintenanceWorker
 from agentbox.persistence.uow import StateDatabase
 from agentbox.port_access import PortAccessService, PortAccessSigner
-from agentbox.ports import ProviderAllocationRef
 from agentbox.processes import ProcessExecutionService
 from agentbox.profiles import E2BProfileArtifact, ProfileRegistry, SandboxProfile
 from agentbox.python_sessions import PythonSessionService
@@ -602,9 +597,7 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
 
 async def test_real_e2b_function_runtime_port_and_exact_destroy(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(settings, "agentbox_api_key", "e2b-test-manager-key")
     profile = _function_profile()
     registry = ProfileRegistry((profile,))
     adapter = _adapter(registry, scope=f"e2b:function-test:{uuid4()}")
@@ -635,52 +628,37 @@ async def test_real_e2b_function_runtime_port_and_exact_destroy(
         assert allocation.provider_id is not None
         provider_id = allocation.provider_id
 
-        target = await adapter.resolve_port_target(
-            ProviderAllocationRef(
-                provider_id=allocation.provider_id,
-                provider_instance_id=allocation.provider_instance_id,
-                allocation_id=allocation.allocation_id,
-                allocation_token=allocation.allocation_token,
-                key=key,
-            ),
-            port=8090,
-            protocol=PortProtocol.HTTP,
+        lease = await port_access.lease_function_runtime(
+            key.logical_id,
             deadline_at=deadline,
+            required_valid_until=datetime.now(timezone.utc) + timedelta(minutes=2),
         )
         async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(
-                f"{target.base_url}/healthz",
-                headers={header.name: header.value for header in target.headers},
-            )
-        assert response.status_code == 200
-        assert response.json() == {
-            "ready": True,
-            "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
-            "protocol_version": 2,
-        }
-
-        proxy_app = FastAPI()
-        proxy_app.state.port_access = port_access
-        proxy_app.state.port_proxy_http_client = create_port_proxy_http_client()
-        proxy_app.include_router(access_router)
-        try:
-            async with httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=proxy_app),
-                base_url="http://agentbox.test",
-            ) as proxy_client:
-                responses = await asyncio.gather(
-                    *(
-                        proxy_client.get(
-                            f"/trusted/function-runtimes/{key.logical_id}/healthz",
-                            headers={"X-API-Key": "e2b-test-manager-key"},
-                        )
-                        for _ in range(10)
+            responses = await asyncio.gather(
+                *(
+                    client.get(
+                        f"{lease.url}healthz",
+                        headers={
+                            header.name: header.value
+                            for header in lease.request_headers
+                        },
                     )
+                    for _ in range(10)
                 )
-        finally:
-            await proxy_app.state.port_proxy_http_client.aclose()
+            )
         assert all(item.status_code == 200 for item in responses)
-        assert all(item.json()["ready"] is True for item in responses)
+        assert all(
+            item.json()
+            == {
+                "ready": True,
+                "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
+                "protocol_version": 2,
+            }
+            for item in responses
+        )
+        assert lease.allocation_id == allocation.allocation_id
+        assert lease.allocation_epoch == allocation.allocation_epoch
+        assert lease.profile == profile.ref
         assert database.active_units_of_work == 0
         assert await lifecycle.destroy(key, deadline_at=deadline)
     finally:

@@ -52,7 +52,6 @@ from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.api.port_proxy import access_router, create_port_proxy_http_client
 from agentbox.port_access import PortAccessService, PortAccessSigner
 from agentbox.persistence.uow import StateDatabase
-from agentbox.ports import ProviderAllocationRef
 from agentbox.processes import ProcessExecutionService
 from agentbox.python_sessions import PythonSessionService
 from agentbox.profiles import DockerProfileArtifact, ProfileRegistry, SandboxProfile
@@ -958,6 +957,12 @@ async def test_real_docker_function_runtime_port_and_exact_destroy(
     database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
     await database.create_schema_for_test()
     lifecycle = SandboxLifecycleService(database, adapter)
+    port_access = PortAccessService(
+        database,
+        adapter,
+        PortAccessSigner(b"function-runtime-lease-key-0001"),
+        public_base_url="http://agentbox.test",
+    )
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
     deadline = datetime.now(timezone.utc) + timedelta(seconds=60)
     provider_id: str | None = None
@@ -976,26 +981,27 @@ async def test_real_docker_function_runtime_port_and_exact_destroy(
         assert allocation.provider_id is not None
         provider_id = allocation.provider_id
 
-        target = await adapter.resolve_port_target(
-            ProviderAllocationRef(
-                provider_id=allocation.provider_id,
-                provider_instance_id=allocation.provider_instance_id,
-                allocation_id=allocation.allocation_id,
-                allocation_token=allocation.allocation_token,
-                key=key,
-            ),
-            port=8090,
-            protocol=PortProtocol.HTTP,
+        lease = await port_access.lease_function_runtime(
+            key.logical_id,
             deadline_at=deadline,
+            required_valid_until=datetime.now(timezone.utc) + timedelta(seconds=30),
         )
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(f"{target.base_url}/healthz")
+            response = await client.get(
+                f"{lease.url}healthz",
+                headers={
+                    header.name: header.value for header in lease.request_headers
+                },
+            )
         assert response.status_code == 200
         assert response.json() == {
             "ready": True,
             "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
             "protocol_version": 2,
         }
+        assert lease.allocation_id == allocation.allocation_id
+        assert lease.allocation_epoch == allocation.allocation_epoch
+        assert lease.profile == sandbox_profile.ref
 
         assert await lifecycle.destroy(key, deadline_at=deadline)
         assert await engine.inspect_container(provider_id, deadline_at=deadline) is None
