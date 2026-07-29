@@ -36,7 +36,7 @@ class AgentHostEventNormalizer:
         metadata = {
             "agent_host_object_id": object_id,
             "agent_host_sequence": row.sequence,
-            "integration_key": row.integration_key,
+            "harness_key": row.harness_key,
             "adapter_version": row.adapter_version,
         }
         if event_type is AgentHostEventType.AGENT_MESSAGE_CHUNK:

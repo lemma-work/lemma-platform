@@ -22,24 +22,25 @@ class ResolvedAgentRuntime:
     @property
     def model_name_for_harness(self) -> str:
         if self.model is None:
-            return "default"
+            return ""
         return self.provider_model_name or self.model.name
 
     def public_snapshot(self) -> dict[str, object | None]:
         return {
             "profile_id": self.profile.id,
             "profile_name": self.profile.name,
-            "user_id": str(self.profile.user_id) if self.profile.user_id else None,
-            "daemon_id": (
-                str(self.profile.daemon_id) if self.profile.daemon_id else None
+            "owner_user_id": (
+                str(self.profile.owner_user_id)
+                if self.profile.owner_user_id
+                else None
             ),
-            "host_integration_id": (
-                str(self.profile.host_integration_id)
-                if self.profile.host_integration_id
+            "harness_id": (
+                str(self.profile.harness_id)
+                if self.profile.harness_id
                 else None
             ),
             "scope": self.profile.scope.value,
-            "protocol": self.profile.protocol.value,
+            "runtime_type": self.profile.runtime_type.value,
             "model_name": self.model.name if self.model else None,
             "provider_model_name": self.provider_model_name,
             "config": _config_dict(self.profile.config),

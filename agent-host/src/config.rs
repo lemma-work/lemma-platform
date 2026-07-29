@@ -12,6 +12,7 @@ pub struct HostPaths {
     pub config: PathBuf,
     pub journal: PathBuf,
     pub log: PathBuf,
+    pub adapters: PathBuf,
 }
 
 impl HostPaths {
@@ -46,6 +47,7 @@ impl HostPaths {
             config: root.join("config.json"),
             journal: root.join("journal.sqlite3"),
             log: root.join("agent-host.log"),
+            adapters: root.join("adapters"),
             root,
         }
     }

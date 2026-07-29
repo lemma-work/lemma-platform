@@ -26,7 +26,7 @@ from app.modules.agent.tools.tool_assembler import RunToolAssembler
 
 
 # Fallback when a tool advertises no explicit retry budget. The dispatcher does a
-# single invocation (the daemon/approval path manages its own retries), so this
+# single invocation (the remote harness/approval path manages its own retries), so this
 # only keeps the standalone RunContext well-formed if a tool raises ModelRetry.
 _DEFAULT_TOOL_MAX_RETRIES = 5
 

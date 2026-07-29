@@ -29,7 +29,7 @@ describe("user-interaction tool predicates", () => {
     expect(isUserInteractionToolName("exec_command")).toBe(false);
   });
 
-  it("does not render a completed daemon prose fallback as an interaction card", () => {
+  it("does not render completed remote-harness prose as an interaction card", () => {
     expect(isRenderableUserInteractionInvocation({
       toolCallId: "ask-1",
       toolName: "mcp__lemma_tools__lemma_ask_user",

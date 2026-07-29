@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.core.log.log import get_logger
 from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services.runtime_profile_service import (
@@ -17,6 +18,9 @@ from app.modules.agent.services.runtime_profile_service import (
 
 class AgentRuntimeDefaultError(ValueError):
     """Raised when a local runtime default cannot be updated."""
+
+
+logger = get_logger(__name__)
 
 
 class AgentRuntimeDefaultService:
@@ -35,10 +39,26 @@ class AgentRuntimeDefaultService:
     def editable(self) -> bool:
         return self.environment == "local"
 
-    def get_default(self) -> AgentRuntimeConfig:
+    def get_default(
+        self,
+        *,
+        available_profile_ids: set[str] | None = None,
+    ) -> AgentRuntimeConfig:
         if self.environment == "local":
             configured = self._read_local_config()
             if configured is not None:
+                if (
+                    available_profile_ids is not None
+                    and configured.profile_id not in available_profile_ids
+                ):
+                    logger.warning(
+                        "agent.runtime_default.profile_missing",
+                        profile_id=configured.profile_id,
+                        config_path=str(self.config_path),
+                    )
+                    return AgentRuntimeConfig(
+                        profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
+                    )
                 return configured
             return AgentRuntimeConfig(
                 profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,

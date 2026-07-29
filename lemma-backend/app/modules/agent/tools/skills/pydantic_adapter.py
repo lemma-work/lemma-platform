@@ -23,7 +23,7 @@ LOCAL_WORKSPACE_SKILL_OVERRIDE = """
 
 ## Local Lemma Workspace Override
 
-If you are using this skill through Lemma's local harness or daemon-routed
+If you are using this skill through Lemma's local harness or remote-harness-routed
 `lemma_*` MCP tools, run CLI examples through `lemma_exec_command`. The
 workspace injects Lemma environment variables for the current user and pod. Do
 not run raw localhost API/Auth probes from workspace exec: workspace

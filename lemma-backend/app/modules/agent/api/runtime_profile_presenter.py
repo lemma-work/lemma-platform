@@ -1,32 +1,40 @@
-"""Runtime-profile status and model-catalog projections."""
+"""Runtime-profile availability and live harness projections."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from uuid import UUID
 
+from pydantic import TypeAdapter
+
+from app.composition.identity_notifications import user_is_organization_member
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.api.schemas import AgentRuntimeProfileResponse
 from app.modules.agent.domain.agent_host import (
-    AgentHostIntegrationHealth,
+    AgentHostHarnessHealth,
     AgentHostStatus,
     effective_agent_host_status,
+    validate_agent_host_model,
     validate_agent_host_selections,
 )
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
+    HarnessRuntimeConfig,
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
     RuntimeProfileScope,
+    RuntimeProfileType,
 )
 from app.modules.agent.infrastructure.agent_host_management_repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.repositories import AgentRuntimeDaemonRepository
 from app.modules.agent.infrastructure.runtime_models import (
-    AgentHostIntegrationModel,
+    AgentHostHarnessModel,
     AgentHostModel,
 )
+
+
+_PROFILE_RESPONSE = TypeAdapter(AgentRuntimeProfileResponse)
 
 
 async def profile_responses_with_runtime_status(
@@ -35,177 +43,145 @@ async def profile_responses_with_runtime_status(
     user_id: UUID,
     uow: SqlAlchemyUnitOfWork,
 ) -> list[AgentRuntimeProfileResponse]:
-    daemon_repo = AgentRuntimeDaemonRepository(uow)
+    host_repo = AgentHostRepository(uow)
     responses: list[AgentRuntimeProfileResponse] = []
     for profile in profiles:
         payload = profile.public_dict()
-        if profile.daemon_id is not None:
+        if profile.runtime_type is RuntimeProfileType.HARNESS:
             payload.update(
-                await _daemon_status_payload(
+                await _harness_status_payload(
                     profile,
-                    daemon_repo=daemon_repo,
+                    host_repo=host_repo,
                     user_id=user_id,
+                    uow=uow,
                 )
             )
-        if profile.host_integration_id is not None:
-            payload.update(
-                await _agent_host_status_payload(
-                    profile,
-                    host_repo=AgentHostRepository(uow),
-                    user_id=user_id,
-                )
+        else:
+            payload["availability_status"] = (
+                "READY" if profile.status.value == "ACTIVE" else "DISABLED"
             )
-        responses.append(AgentRuntimeProfileResponse.model_validate(payload))
+        responses.append(_PROFILE_RESPONSE.validate_python(payload))
     return responses
 
 
-async def _daemon_status_payload(
-    profile: AgentRuntimeProfile,
-    *,
-    daemon_repo: AgentRuntimeDaemonRepository,
-    user_id: UUID,
-) -> dict[str, object]:
-    if profile.user_id is None or profile.daemon_id is None:
-        return {
-            "daemon_harness_available": False,
-            "availability_status": "UNAVAILABLE",
-        }
-    daemon = await daemon_repo.get_for_user(
-        daemon_id=profile.daemon_id,
-        user_id=profile.user_id,
-    )
-    if daemon is None:
-        return {
-            "daemon_harness_available": False,
-            "availability_status": "UNAVAILABLE",
-        }
-    catalog = _json_object(getattr(daemon, "harness_catalog", None))
-    raw_info = catalog.get(profile.derived_harness_kind().value)
-    harness_available = (
-        isinstance(raw_info, dict) and raw_info.get("available") is not False
-    )
-    if profile.scope is RuntimeProfileScope.PERSONAL and profile.user_id != user_id:
-        availability_status = "UNAVAILABLE_FOR_YOU"
-    elif daemon.status != "ONLINE":
-        availability_status = "OFFLINE"
-    elif not harness_available:
-        availability_status = "NOT_INSTALLED"
-    else:
-        availability_status = "READY"
-    return {
-        "daemon_display_name": daemon.display_name,
-        "daemon_status": daemon.status,
-        "daemon_harness_available": harness_available,
-        "availability_status": availability_status,
-    }
-
-
-async def _agent_host_status_payload(
+async def _harness_status_payload(
     profile: AgentRuntimeProfile,
     *,
     host_repo: AgentHostRepository,
     user_id: UUID,
+    uow: SqlAlchemyUnitOfWork,
 ) -> dict[str, object]:
-    if profile.host_integration_id is None:
+    if profile.harness_id is None:
         return {"availability_status": "UNAVAILABLE"}
-    integration = await host_repo.get_integration(
-        integration_id=profile.host_integration_id
-    )
-    if integration is None:
+    harness = await host_repo.get_harness(harness_id=profile.harness_id)
+    if harness is None:
         return {"availability_status": "UNAVAILABLE"}
-    host = await _visible_agent_host(
+    host = await _visible_host(
         profile,
-        host_id=integration.host_id,
+        host_id=harness.host_id,
         host_repo=host_repo,
         user_id=user_id,
+        uow=uow,
     )
-    if host is None:
-        return {
-            "host_id": integration.host_id,
-            "integration_key": integration.integration_key,
-            "integration_health": integration.health,
-            "integration_config_revision": integration.config_revision,
-            "availability_status": "UNAVAILABLE_FOR_YOU",
-        }
-    config = _profile_config(profile.config)
-    host_status = effective_agent_host_status(host.status, host.last_seen_at)
-    availability = _agent_host_availability(
-        host=host,
-        host_status=host_status,
-        integration=integration,
-        config=config,
-    )
-    return {
-        "host_id": host.id,
-        "host_display_name": host.display_name,
-        "host_status": host_status.value,
-        "integration_key": integration.integration_key,
-        "integration_health": integration.health,
-        "integration_config_revision": integration.config_revision,
-        "model_catalog": _agent_host_model_catalog(integration),
-        "availability_status": availability,
+    base: dict[str, object] = {
+        "host_id": harness.host_id,
+        "harness_key": harness.harness_key,
+        "harness_health": harness.health,
+        "harness_config_revision": harness.config_revision,
+        "model_catalog": _harness_model_catalog(harness),
     }
+    if host is None:
+        base["availability_status"] = "UNAVAILABLE_FOR_YOU"
+        return base
+
+    host_status = effective_agent_host_status(host.status, host.last_seen_at)
+    base.update(
+        {
+            "host_display_name": host.display_name,
+            "host_status": host_status.value,
+            "availability_status": _harness_availability(
+                profile=profile,
+                host=host,
+                host_status=host_status,
+                harness=harness,
+            ),
+        }
+    )
+    return base
 
 
-async def _visible_agent_host(
+async def _visible_host(
     profile: AgentRuntimeProfile,
     *,
     host_id: UUID,
     host_repo: AgentHostRepository,
     user_id: UUID,
+    uow: SqlAlchemyUnitOfWork,
 ) -> AgentHostModel | None:
     if profile.scope is RuntimeProfileScope.PERSONAL:
-        if profile.user_id != user_id:
+        if profile.owner_user_id != user_id:
             return None
         return await host_repo.get_for_user(host_id=host_id, user_id=user_id)
+
     host = await host_repo.get(host_id)
-    if (
-        host is None
-        or host.user_id != profile.user_id
-        or host.organization_id != profile.organization_id
+    if host is None or host.organization_id != profile.organization_id:
+        return None
+    if profile.organization_id is None:
+        return None
+    if not await user_is_organization_member(
+        uow,
+        user_id=host.user_id,
+        organization_id=profile.organization_id,
     ):
         return None
     return host
 
 
-def _agent_host_availability(
+def _harness_availability(
     *,
+    profile: AgentRuntimeProfile,
     host: AgentHostModel,
     host_status: AgentHostStatus,
-    integration: AgentHostIntegrationModel,
-    config: object,
+    harness: AgentHostHarnessModel,
 ) -> str:
+    if profile.status.value != "ACTIVE":
+        return "DISABLED"
     if host.revoked_at is not None or host_status is AgentHostStatus.REVOKED:
         return "REVOKED"
     if host_status is not AgentHostStatus.ONLINE:
         return host_status.value
-    if integration.health != AgentHostIntegrationHealth.READY.value:
-        return str(integration.health)
-    if integration.stale_after <= datetime.now(timezone.utc):
+    if harness.health != AgentHostHarnessHealth.READY.value:
+        return str(harness.health)
+    if harness.stale_after <= datetime.now(timezone.utc):
         return "STALE"
-    selections = config.get("config_selections") if isinstance(config, dict) else {}
+    config = profile.config
+    if not isinstance(config, HarnessRuntimeConfig):
+        return "CONFIG_INVALID"
+    if config.harness_snapshot_revision != harness.config_revision:
+        return "CONFIG_REVISION_MISMATCH"
     try:
         validate_agent_host_selections(
-            config_options=integration.config_options or [],
-            selections=selections if isinstance(selections, dict) else {},
+            config_options=harness.config_options or [],
+            selections=config.config_selections,
+        )
+        validate_agent_host_model(
+            config_options=harness.config_options or [],
+            model_name=profile.default_model_name,
         )
     except ValueError:
         return "CONFIG_INVALID"
     return "READY"
 
 
-def _agent_host_model_catalog(
-    integration: object,
+def _harness_model_catalog(
+    harness: AgentHostHarnessModel,
 ) -> list[RuntimeModelCatalogEntry]:
-    """Project the provider-owned live model option into the generic picker."""
+    """Project the current harness model option into the runtime picker."""
     capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
-    raw_capabilities = getattr(integration, "capabilities", None)
-    if isinstance(raw_capabilities, dict) and raw_capabilities.get("images") is True:
+    if isinstance(harness.capabilities, dict) and harness.capabilities.get("images"):
         capabilities.append(RuntimeModelCapability.VISION)
-    for option in getattr(integration, "config_options", None) or []:
-        if not isinstance(option, dict):
-            continue
-        if option.get("category") != "model" and option.get("id") != "model":
+    for option in harness.config_options or []:
+        if not isinstance(option, dict) or option.get("category") != "model":
             continue
         catalog: list[RuntimeModelCatalogEntry] = []
         for raw_value in option.get("options") or []:
@@ -225,22 +201,7 @@ def _agent_host_model_catalog(
                     ),
                     provider_model_name=value,
                     capabilities=capabilities,
-                    metadata={
-                        "dynamic_agent_host_selection": True,
-                        "config_revision": getattr(integration, "config_revision", ""),
-                    },
                 )
             )
         return catalog
     return []
-
-
-def _json_object(value: object) -> dict[str, object]:
-    return dict(value) if isinstance(value, dict) else {}
-
-
-def _profile_config(value: object) -> dict[str, object]:
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        return _json_object(model_dump(mode="json"))
-    return _json_object(value)

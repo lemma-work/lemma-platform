@@ -2403,7 +2403,8 @@ def test_servers_add_command_is_removed(tmp_path):
     assert result.exit_code != 0
 
 
-def test_legacy_context_config_is_migrated(tmp_path):
+def test_legacy_context_config_is_migrated(monkeypatch, tmp_path):
+    monkeypatch.setenv("LEMMA_LOCALD_ROOT", str(tmp_path / "no-locald"))
     config_file = tmp_path / "config.json"
     config_file.write_text(
         json.dumps(
@@ -2608,6 +2609,7 @@ def test_env_server_is_inline_and_read_only(monkeypatch, tmp_path):
 
 
 def test_lemma_server_env_selects_stored_server(monkeypatch, tmp_path):
+    monkeypatch.setenv("LEMMA_LOCALD_ROOT", str(tmp_path / "no-locald"))
     config_file = tmp_path / "config.json"
     config_file.write_text(
         json.dumps(
@@ -2729,66 +2731,6 @@ def test_confirm_destructive_yes_skips_prompt():
     confirm_destructive("Delete thing?", True)
 
 
-def test_runtime_profiles_list_and_harnesses(monkeypatch):
-    from lemma_cli.cli_core.commands import runtime as runtime_cmd
-
-    captured: dict[str, object] = {}
-
-    class FakeOrgRuntime:
-        def profiles(self):
-            captured["profiles"] = True
-            return {"items": [{"id": "system:lemma", "name": "Lemma"}]}
-
-        def create_profile(self, payload):
-            captured["create"] = payload
-            return {"id": "profile-1", **payload}
-
-    class FakeRuntime:
-        def harnesses(self):
-            captured["harnesses"] = True
-            return {"items": [{"harness_kind": "CODEX", "available": True}]}
-
-    fake_client = SimpleNamespace(runtime=FakeRuntime(), org_runtime=FakeOrgRuntime())
-
-    def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={}, output="json"))
-
-    monkeypatch.setattr(runtime_cmd, "run_with_client", fake_run_with_client)
-
-    result = runner.invoke(app, ["--json", "runtime", "profiles", "list"])
-    assert result.exit_code == 0, result.stdout
-    assert captured.get("profiles") is True
-
-    result = runner.invoke(app, ["--json", "runtime", "harnesses"])
-    assert result.exit_code == 0, result.stdout
-    assert captured.get("harnesses") is True
-
-    result = runner.invoke(
-        app,
-        [
-            "--json",
-            "runtime",
-            "profiles",
-            "create",
-            "user_daemon",
-            "--name",
-            "Codex on laptop",
-            "--daemon-id",
-            "daemon-1",
-            "--harness",
-            "codex",
-            "--default-model",
-            "gpt-5.5",
-        ],
-    )
-    assert result.exit_code == 0, result.stdout
-    assert captured["create"] == {
-        "source": "USER_DAEMON",
-        "name": "Codex on laptop",
-        "daemon_id": "daemon-1",
-        "harness_kind": "CODEX",
-        "default_model_name": "gpt-5.5",
-    }
 
 
 # --------------------------------------------------------------------------- #

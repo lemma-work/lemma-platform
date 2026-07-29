@@ -1,4 +1,4 @@
-"""Durable external Agent Host v2 management and control APIs."""
+"""Durable external Agent Host management and control APIs."""
 
 from __future__ import annotations
 
@@ -14,10 +14,10 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.api.agent_host_schemas import (
-    AgentHostIntegrationListResponse,
-    AgentHostIntegrationPublishRequest,
-    AgentHostIntegrationPublishResponse,
-    AgentHostIntegrationResponse,
+    AgentHostHarnessListResponse,
+    AgentHostHarnessPublishRequest,
+    AgentHostHarnessPublishResponse,
+    AgentHostHarnessResponse,
     AgentHostListResponse,
     AgentHostResponse,
 )
@@ -51,7 +51,7 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostRepositoryError,
 )
 from app.modules.agent.infrastructure.runtime_models import (
-    AgentHostIntegrationModel,
+    AgentHostHarnessModel,
     AgentHostModel,
 )
 from app.modules.agent.services.agent_host_auth import (
@@ -161,26 +161,27 @@ def _host_response(host: AgentHostModel) -> AgentHostResponse:
     )
 
 
-def _integration_response(
-    integration: AgentHostIntegrationModel,
-) -> AgentHostIntegrationResponse:
-    return AgentHostIntegrationResponse(
-        id=integration.id,
-        host_id=integration.host_id,
-        integration_key=integration.integration_key,
-        display_name=integration.display_name,
-        adapter_protocol=integration.adapter_protocol,
-        adapter_version=integration.adapter_version,
-        upstream_version=integration.upstream_version,
-        auth_state=integration.auth_state,
-        health=integration.health,
-        capabilities=integration.capabilities or {},
-        config_revision=integration.config_revision,
-        config_options=integration.config_options or [],
-        fetched_at=integration.fetched_at,
-        stale_after=integration.stale_after,
-        stale_reason=integration.stale_reason,
-        metadata=integration.integration_metadata or {},
+def _harness_response(
+    harness: AgentHostHarnessModel,
+) -> AgentHostHarnessResponse:
+    return AgentHostHarnessResponse(
+        id=harness.id,
+        host_id=harness.host_id,
+        harness_key=harness.harness_key,
+        display_name=harness.display_name,
+        adapter_protocol=harness.adapter_protocol,
+        adapter_protocol_version=harness.adapter_protocol_version,
+        adapter_version=harness.adapter_version,
+        upstream_version=harness.upstream_version,
+        auth_state=harness.auth_state,
+        health=harness.health,
+        capabilities=harness.capabilities or {},
+        config_revision=harness.config_revision,
+        config_options=harness.config_options or [],
+        fetched_at=harness.fetched_at,
+        stale_after=harness.stale_after,
+        stale_reason=harness.stale_reason,
+        metadata=harness.harness_metadata or {},
     )
 
 
@@ -198,7 +199,7 @@ def _repository_error(exc: AgentHostRepositoryError) -> HTTPException:
 
 
 @router.post(
-    "/me/agent-hosts/pairings",
+    "/me/runtime/agent-host-pairings",
     response_model=AgentHostPairingCreated,
     status_code=status.HTTP_201_CREATED,
     operation_id="agent.host.pairing.create",
@@ -230,7 +231,7 @@ async def create_agent_host_pairing(
 
 
 @router.post(
-    "/agent-host/v2/pairings:complete",
+    "/agent-host/pairings:complete",
     response_model=AgentHostPairingCompleted,
     operation_id="agent.host.pairing.complete",
 )
@@ -272,7 +273,7 @@ async def complete_agent_host_pairing(
 
 
 @router.post(
-    "/agent-host/v2/token:exchange",
+    "/agent-host/token:exchange",
     response_model=AgentHostTokenResponse,
     operation_id="agent.host.token.exchange",
 )
@@ -315,7 +316,7 @@ async def exchange_agent_host_token(
 
 
 @router.post(
-    "/agent-host/v2/poll",
+    "/agent-host/poll",
     response_model=AgentHostPollResponse,
     operation_id="agent.host.poll",
 )
@@ -350,15 +351,18 @@ async def poll_agent_host_commands(
                     request.acknowledged_command_ids if first else []
                 ),
                 checkpoints=request.checkpoints if first else [],
+                rejections=request.rejections if first else [],
                 available_run_slots=request.capacity.available_runs,
             )
             await uow.commit()
             control_update_applied = first and bool(
                 request.acknowledged_command_ids or request.checkpoints
+                or request.rejections
             )
             if (
                 commands
                 or control_update_applied
+                or (first and request.capacity.available_runs == 0)
                 or host_status is AgentHostStatus.UPGRADE_REQUIRED
             ):
                 return AgentHostPollResponse(
@@ -383,7 +387,7 @@ async def poll_agent_host_commands(
 
 
 @router.post(
-    "/agent-host/v2/events:append",
+    "/agent-host/events:append",
     response_model=AgentHostEventAck,
     operation_id="agent.host.events.append",
 )
@@ -408,7 +412,7 @@ async def append_agent_host_events(
 
 
 @router.get(
-    "/agent-host/v2/mcp-routes/{route_id}",
+    "/agent-host/mcp-routes/{route_id}",
     response_model=AgentHostMcpRouteResponse,
     operation_id="agent.host.mcp_route.resolve",
 )
@@ -442,38 +446,38 @@ async def resolve_agent_host_mcp_route(
 
 
 @router.put(
-    "/agent-host/v2/integrations",
-    response_model=AgentHostIntegrationPublishResponse,
-    operation_id="agent.host.integrations.publish",
+    "/agent-host/harnesses",
+    response_model=AgentHostHarnessPublishResponse,
+    operation_id="agent.host.harnesses.publish",
 )
-async def publish_agent_host_integrations(
-    request: AgentHostIntegrationPublishRequest,
+async def publish_agent_host_harnesses(
+    request: AgentHostHarnessPublishRequest,
     uow: UoWDep,
     authorization: Annotated[str | None, Header()] = None,
-) -> AgentHostIntegrationPublishResponse:
+) -> AgentHostHarnessPublishResponse:
     claims = await _device_claims(
         authorization=authorization,
-        capability="integrations",
+        capability="harnesses",
     )
     repo = AgentHostRepository(uow)
     try:
-        integrations = [
-            await repo.publish_integration(
+        harnesses = [
+            await repo.publish_harness(
                 host_id=claims.host_id,
                 snapshot=snapshot,
             )
-            for snapshot in request.integrations
+            for snapshot in request.harnesses
         ]
         await uow.commit()
-        return AgentHostIntegrationPublishResponse(
-            items=[_integration_response(item) for item in integrations]
+        return AgentHostHarnessPublishResponse(
+            items=[_harness_response(item) for item in harnesses]
         )
     except AgentHostRepositoryError as exc:
         raise _repository_error(exc) from exc
 
 
 @router.post(
-    "/agent-host/v2/revoke",
+    "/agent-host/revoke",
     status_code=status.HTTP_204_NO_CONTENT,
     operation_id="agent.host.self_revoke",
 )
@@ -498,7 +502,7 @@ async def self_revoke_agent_host(
 
 
 @router.get(
-    "/me/agent-hosts",
+    "/me/runtime/agent-hosts",
     response_model=AgentHostListResponse,
     operation_id="agent.host.list",
 )
@@ -511,26 +515,26 @@ async def list_agent_hosts(
 
 
 @router.get(
-    "/me/agent-hosts/{host_id}/integrations",
-    response_model=AgentHostIntegrationListResponse,
-    operation_id="agent.host.integrations.list",
+    "/me/runtime/agent-hosts/{host_id}/harnesses",
+    response_model=AgentHostHarnessListResponse,
+    operation_id="agent.host.harnesses.list",
 )
-async def list_agent_host_integrations(
+async def list_agent_host_harnesses(
     host_id: UUID,
     user: CurrentUser,
     uow: UoWDep,
-) -> AgentHostIntegrationListResponse:
+) -> AgentHostHarnessListResponse:
     repo = AgentHostRepository(uow)
     if await repo.get_for_user(host_id=host_id, user_id=user.id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    integrations = await repo.list_integrations(host_id=host_id)
-    return AgentHostIntegrationListResponse(
-        items=[_integration_response(item) for item in integrations]
+    harnesses = await repo.list_harnesses(host_id=host_id)
+    return AgentHostHarnessListResponse(
+        items=[_harness_response(item) for item in harnesses]
     )
 
 
 @router.delete(
-    "/me/agent-hosts/{host_id}",
+    "/me/runtime/agent-hosts/{host_id}",
     response_model=AgentHostResponse,
     operation_id="agent.host.revoke",
 )

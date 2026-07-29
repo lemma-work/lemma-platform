@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { RuntimeProfileScope } from './RuntimeProfileScope.js';
 export type CreateAnthropicCompatibleRuntimeProfileRequest = {
     api_key: string;
     base_url?: (string | null);
@@ -11,5 +12,6 @@ export type CreateAnthropicCompatibleRuntimeProfileRequest = {
     model_names?: Array<string>;
     model_settings?: Record<string, any>;
     name: string;
-    source?: string;
+    runtime_type: string;
+    scope?: RuntimeProfileScope;
 };

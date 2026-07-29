@@ -25,23 +25,12 @@ class RuntimeProfileScope(str, Enum):
     PERSONAL = "PERSONAL"
 
 
-class RuntimeProfileKind(str, Enum):
-    MODEL_PROVIDER = "MODEL_PROVIDER"
-    HARNESS = "HARNESS"
-    EXTERNAL_AGENT = "EXTERNAL_AGENT"
-
-
-class RuntimeProfileProtocol(str, Enum):
+class RuntimeProfileType(str, Enum):
     OPENAI_COMPATIBLE = "OPENAI_COMPATIBLE"
     ANTHROPIC_COMPATIBLE = "ANTHROPIC_COMPATIBLE"
     AZURE_OPENAI = "AZURE_OPENAI"
     GOOGLE_VERTEX = "GOOGLE_VERTEX"
-    CODEX_APP_SERVER = "CODEX_APP_SERVER"
-    CLAUDE_CODE = "CLAUDE_CODE"
-    OPENCODE = "OPENCODE"
-    CURSOR = "CURSOR"
-    ANTIGRAVITY = "ANTIGRAVITY"
-    AGENT_HOST_V2 = "AGENT_HOST_V2"
+    HARNESS = "HARNESS"
 
 
 class RuntimeProfileStatus(str, Enum):
@@ -59,22 +48,12 @@ class RuntimeModelCapability(str, Enum):
     REASONING = "REASONING"
 
 
-MODEL_PROVIDER_PROTOCOLS = frozenset(
+MODEL_PROVIDER_TYPES = frozenset(
     {
-        RuntimeProfileProtocol.OPENAI_COMPATIBLE,
-        RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
-        RuntimeProfileProtocol.AZURE_OPENAI,
-        RuntimeProfileProtocol.GOOGLE_VERTEX,
-    }
-)
-
-HARNESS_PROTOCOLS = frozenset(
-    {
-        RuntimeProfileProtocol.CODEX_APP_SERVER,
-        RuntimeProfileProtocol.CLAUDE_CODE,
-        RuntimeProfileProtocol.OPENCODE,
-        RuntimeProfileProtocol.CURSOR,
-        RuntimeProfileProtocol.ANTIGRAVITY,
+        RuntimeProfileType.OPENAI_COMPATIBLE,
+        RuntimeProfileType.ANTHROPIC_COMPATIBLE,
+        RuntimeProfileType.AZURE_OPENAI,
+        RuntimeProfileType.GOOGLE_VERTEX,
     }
 )
 
@@ -97,21 +76,25 @@ class RuntimeModelCatalogEntry(BaseModel):
 
 
 class ApiKeyRuntimeCredentials(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # SecretStr so the key never leaks via repr()/logs/tracebacks; read the
     # plaintext only through ``reveal_credentials`` at the point of use.
     api_key: SecretStr = Field(min_length=1)
 
 
-class OAuthRuntimeCredentials(BaseModel):
-    access_token: SecretStr = Field(min_length=1)
-    refresh_token: SecretStr | None = None
-    expires_at: str | None = None
+class GoogleVertexRuntimeCredentials(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_account_json: JsonObject
 
 
-RuntimeCredentials = ApiKeyRuntimeCredentials | OAuthRuntimeCredentials | JsonObject
+RuntimeCredentials = ApiKeyRuntimeCredentials | GoogleVertexRuntimeCredentials
 
 
-def reveal_credentials(credentials: object | None) -> dict[str, object] | None:
+def reveal_credentials(
+    credentials: RuntimeCredentials | None,
+) -> dict[str, object] | None:
     """Plaintext dict form of runtime credentials for actual use.
 
     This is the single place secrets are unwrapped: ``SecretStr`` fields become
@@ -122,74 +105,59 @@ def reveal_credentials(credentials: object | None) -> dict[str, object] | None:
     """
     if credentials is None:
         return None
-    model_dump = getattr(credentials, "model_dump", None)
-    if callable(model_dump):
-        return {
-            key: (value.get_secret_value() if isinstance(value, SecretStr) else value)
-            for key, value in model_dump().items()
-        }
-    if isinstance(credentials, dict):
-        return dict(credentials)
-    return None
+    return {
+        key: (value.get_secret_value() if isinstance(value, SecretStr) else value)
+        for key, value in credentials.model_dump().items()
+    }
 
 
 class OpenAICompatibleRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     base_url: HttpUrl
     headers: dict[str, str] = Field(default_factory=dict)
     model_settings: JsonObject = Field(default_factory=dict)
 
 
 class AnthropicCompatibleRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     base_url: HttpUrl | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     model_settings: JsonObject = Field(default_factory=dict)
 
 
 class AzureOpenAIRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     azure_endpoint: HttpUrl
-    azure_version: str = Field(min_length=1)
-    deployment_id: str = Field(min_length=1)
+    api_version: str | None = Field(default=None, min_length=1)
     model_settings: JsonObject = Field(default_factory=dict)
 
 
 class GoogleVertexRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     project_id: str = Field(min_length=1)
     location: str = Field(min_length=1)
     model_settings: JsonObject = Field(default_factory=dict)
 
 
-class CodexAppServerRuntimeConfig(BaseModel):
-    endpoint_url: HttpUrl | str | None = None
-    binary: str = "codex"
+class HarnessRuntimeConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class ClaudeCodeRuntimeConfig(BaseModel):
-    endpoint_url: HttpUrl | str | None = None
-    binary: str = "claude"
-
-
-class OpenCodeRuntimeConfig(BaseModel):
-    endpoint_url: HttpUrl | str | None = None
-    binary: str = "opencode"
-
-
-class AgentHostRuntimeConfig(BaseModel):
-    integration_snapshot_revision: str = Field(min_length=1, max_length=255)
+    harness_snapshot_revision: str = Field(min_length=1, max_length=255)
     config_selections: JsonObject = Field(default_factory=dict)
     host_wait_timeout_seconds: int = Field(default=300, ge=1, le=3600)
     fallback_profile_id: str | None = Field(default=None, min_length=1)
 
 
 RuntimeProfileConfig = (
-    AgentHostRuntimeConfig
+    HarnessRuntimeConfig
     | OpenAICompatibleRuntimeConfig
     | AnthropicCompatibleRuntimeConfig
     | AzureOpenAIRuntimeConfig
     | GoogleVertexRuntimeConfig
-    | CodexAppServerRuntimeConfig
-    | ClaudeCodeRuntimeConfig
-    | OpenCodeRuntimeConfig
-    | JsonObject
 )
 
 
@@ -200,20 +168,17 @@ class AgentRuntimeProfile(BaseModel):
 
     id: str
     organization_id: UUID | None = None
-    user_id: UUID | None = None
-    daemon_id: UUID | None = None
-    host_integration_id: UUID | None = None
+    owner_user_id: UUID | None = None
+    harness_id: UUID | None = None
     scope: RuntimeProfileScope
-    kind: RuntimeProfileKind
-    protocol: RuntimeProfileProtocol
+    runtime_type: RuntimeProfileType
     name: str = Field(min_length=1)
     description: str | None = None
     default_model_name: str | None = None
     model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
-    config: RuntimeProfileConfig = Field(default_factory=dict)
+    config: RuntimeProfileConfig
     credentials: RuntimeCredentials | None = None
     status: RuntimeProfileStatus = RuntimeProfileStatus.ACTIVE
-    metadata: JsonObject = Field(default_factory=dict)
 
     @field_validator("id", "name")
     @classmethod
@@ -225,40 +190,55 @@ class AgentRuntimeProfile(BaseModel):
 
     @model_validator(mode="after")
     def validate_profile(self) -> "AgentRuntimeProfile":
-        if self.kind is RuntimeProfileKind.MODEL_PROVIDER:
-            if self.protocol not in MODEL_PROVIDER_PROTOCOLS:
-                raise ValueError("MODEL_PROVIDER profile has invalid protocol")
+        if self.runtime_type in MODEL_PROVIDER_TYPES:
+            if self.harness_id is not None:
+                raise ValueError("Provider runtime profile cannot reference a harness")
             if not self.default_model_name:
-                raise ValueError("MODEL_PROVIDER profile requires default_model_name")
-            self._validate_default_model_name()
-        if self.kind is RuntimeProfileKind.HARNESS:
-            if self.protocol not in HARNESS_PROTOCOLS:
-                raise ValueError("HARNESS profile has invalid protocol")
-        if self.kind is RuntimeProfileKind.EXTERNAL_AGENT:
-            if self.protocol is not RuntimeProfileProtocol.AGENT_HOST_V2:
-                raise ValueError("EXTERNAL_AGENT profile has invalid protocol")
-            if self.host_integration_id is None:
+                raise ValueError("Provider runtime profile requires default_model_name")
+            expected_config = {
+                RuntimeProfileType.OPENAI_COMPATIBLE: OpenAICompatibleRuntimeConfig,
+                RuntimeProfileType.ANTHROPIC_COMPATIBLE: (
+                    AnthropicCompatibleRuntimeConfig
+                ),
+                RuntimeProfileType.AZURE_OPENAI: AzureOpenAIRuntimeConfig,
+                RuntimeProfileType.GOOGLE_VERTEX: GoogleVertexRuntimeConfig,
+            }[self.runtime_type]
+            if not isinstance(self.config, expected_config):
+                raw_config = self.config.model_dump(mode="json")
+                self.config = expected_config.model_validate(raw_config)
+            expected_credentials = (
+                GoogleVertexRuntimeCredentials
+                if self.runtime_type is RuntimeProfileType.GOOGLE_VERTEX
+                else ApiKeyRuntimeCredentials
+            )
+            if self.credentials is not None and not isinstance(
+                self.credentials, expected_credentials
+            ):
                 raise ValueError(
-                    "EXTERNAL_AGENT profile requires host_integration_id"
+                    f"{self.runtime_type.value} profile has incompatible credentials"
                 )
-            if self.daemon_id is not None:
-                raise ValueError("EXTERNAL_AGENT profile cannot reference a daemon")
-            if not isinstance(self.config, AgentHostRuntimeConfig):
+            self._validate_default_model_name()
+        if self.runtime_type is RuntimeProfileType.HARNESS:
+            if self.harness_id is None:
+                raise ValueError("HARNESS profile requires harness_id")
+            if self.credentials is not None:
+                raise ValueError("HARNESS profile cannot contain credentials")
+            if not isinstance(self.config, HarnessRuntimeConfig):
                 raw_config = (
                     self.config.model_dump(mode="json")
                     if isinstance(self.config, BaseModel)
                     else self.config
                 )
-                self.config = AgentHostRuntimeConfig.model_validate(raw_config)
+                self.config = HarnessRuntimeConfig.model_validate(raw_config)
         if (
             self.scope in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}
             and self.organization_id is None
         ):
             raise ValueError(f"{self.scope.value} profile requires organization_id")
-        if self.scope is RuntimeProfileScope.PERSONAL and self.user_id is None:
-            raise ValueError("PERSONAL profile requires user_id")
-        if self.daemon_id is not None and self.user_id is None:
-            raise ValueError("Daemon runtime profile requires user_id")
+        if self.scope is RuntimeProfileScope.PERSONAL and self.owner_user_id is None:
+            raise ValueError("PERSONAL profile requires owner_user_id")
+        if self.scope is RuntimeProfileScope.ORGANIZATION and self.owner_user_id is not None:
+            raise ValueError("ORGANIZATION profile cannot have owner_user_id")
         return self
 
     @property
@@ -266,33 +246,22 @@ class AgentRuntimeProfile(BaseModel):
         return bool(self.credentials)
 
     def derived_harness_kind(self) -> HarnessKind:
-        if self.protocol in MODEL_PROVIDER_PROTOCOLS:
+        if self.runtime_type in MODEL_PROVIDER_TYPES:
             return HarnessKind.LEMMA
-        if self.protocol is RuntimeProfileProtocol.AGENT_HOST_V2:
-            return HarnessKind.AGENT_HOST
-        if self.protocol is RuntimeProfileProtocol.CODEX_APP_SERVER:
-            return HarnessKind.CODEX
-        if self.protocol is RuntimeProfileProtocol.CLAUDE_CODE:
-            return HarnessKind.CLAUDE_CODE
-        if self.protocol is RuntimeProfileProtocol.OPENCODE:
-            return HarnessKind.OPENCODE
-        if self.protocol is RuntimeProfileProtocol.CURSOR:
-            return HarnessKind.CURSOR
-        if self.protocol is RuntimeProfileProtocol.ANTIGRAVITY:
-            return HarnessKind.ANTIGRAVITY
-        raise ValueError(f"Unsupported runtime profile protocol: {self.protocol}")
+        if self.runtime_type is RuntimeProfileType.HARNESS:
+            return HarnessKind.HARNESS
+        raise ValueError(f"Unsupported runtime profile type: {self.runtime_type}")
 
     def public_dict(self) -> dict[str, Any]:
         data = self.model_dump(mode="json", exclude={"credentials"})
         if self.scope is RuntimeProfileScope.SYSTEM:
-            data["config"] = {}
+            data["config"] = None
             for model in data.get("model_catalog", []):
                 if isinstance(model, dict):
                     model["provider_model_name"] = model.get("name")
         else:
             data["config"] = _redact_public_secrets(data.get("config", {}))
         data["has_credentials"] = self.has_credentials
-        data["derived_harness_kind"] = self.derived_harness_kind().value
         return data
 
     def _validate_default_model_name(self) -> None:

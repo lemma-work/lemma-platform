@@ -235,7 +235,7 @@ async def request_approval(
             error="request_approval cannot approve itself.",
         )
     if not getattr(deps, "supports_pause_signal", False):
-        # Daemon harnesses (Codex/Claude-Code/OpenCode) run tools over MCP and own
+        # Remote harnesses (Codex/Claude-Code/OpenCode) run tools over MCP and own
         # their session, so the run can't pause mid tool-call. Guide the model to
         # the conversational fallback instead of hanging or aborting the run.
         return RequestApprovalResponse(
@@ -387,7 +387,7 @@ async def ask_user(
             success=False, error="ask_user requires an active agent run."
         )
     if not getattr(deps, "supports_pause_signal", False):
-        # Daemon harnesses (Codex/Claude-Code/OpenCode) run tools over MCP and own
+        # Remote harnesses (Codex/Claude-Code/OpenCode) run tools over MCP and own
         # their session, so the run can't pause mid tool-call to collect answers.
         # Guide the model to ask conversationally instead of hanging/aborting.
         return AskUserResponse(

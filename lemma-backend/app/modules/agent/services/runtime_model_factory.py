@@ -38,7 +38,7 @@ def pydantic_ai_model_from_runtime_profile(
     if not isinstance(runtime_profile, Mapping):
         return None
 
-    protocol = runtime_profile.get("protocol")
+    runtime_type = runtime_profile.get("runtime_type")
     provider_model_name = runtime_profile.get("provider_model_name")
     model_name_value = (
         provider_model_name
@@ -61,7 +61,7 @@ def pydantic_ai_model_from_runtime_profile(
     headers = config.get("headers")
     headers = headers if isinstance(headers, Mapping) else {}
 
-    if protocol == "OPENAI_COMPATIBLE":
+    if runtime_type == "OPENAI_COMPATIBLE":
         base_url = config.get("base_url")
         if not isinstance(base_url, str) or not base_url:
             return None
@@ -78,13 +78,64 @@ def pydantic_ai_model_from_runtime_profile(
             profile=openai_compatible_model_profile,
         )
 
-    if protocol == "ANTHROPIC_COMPATIBLE":
+    if runtime_type == "ANTHROPIC_COMPATIBLE":
         base_url = config.get("base_url")
         provider = AnthropicProvider(
             api_key=api_key,
             base_url=base_url if isinstance(base_url, str) and base_url else None,
         )
         return AnthropicModel(model_name_value, provider=provider)
+
+    if runtime_type == "AZURE_OPENAI":
+        from pydantic_ai.providers.azure import AzureProvider
+
+        endpoint = config.get("azure_endpoint")
+        if not isinstance(endpoint, str) or not endpoint or not api_key:
+            return None
+        api_version = config.get("api_version")
+        return OpenAIChatModel(
+            model_name_value,
+            provider=AzureProvider(
+                azure_endpoint=endpoint,
+                api_version=(
+                    api_version
+                    if isinstance(api_version, str) and api_version
+                    else None
+                ),
+                api_key=api_key,
+            ),
+        )
+
+    if runtime_type == "GOOGLE_VERTEX":
+        from google.oauth2 import service_account
+        from pydantic_ai.models.google import GoogleModel
+        from pydantic_ai.providers.google_cloud import GoogleCloudProvider
+
+        project_id = config.get("project_id")
+        location = config.get("location")
+        if (
+            not isinstance(project_id, str)
+            or not project_id
+            or not isinstance(location, str)
+            or not location
+        ):
+            return None
+        raw_service_account = credentials.get("service_account_json")
+        google_credentials = (
+            service_account.Credentials.from_service_account_info(
+                dict(raw_service_account)
+            )
+            if isinstance(raw_service_account, Mapping)
+            else None
+        )
+        return GoogleModel(
+            model_name_value,
+            provider=GoogleCloudProvider(
+                credentials=google_credentials,
+                project=project_id,
+                location=location,
+            ),
+        )
 
     return None
 

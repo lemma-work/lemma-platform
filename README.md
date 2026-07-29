@@ -70,11 +70,12 @@ lemma pod create my-team --with-starter
 
 Open the generated `my-team/` directory in Claude Code, Codex, OpenCode, Cursor, or Antigravity and ask it to build the app you want. Antigravity users should first run `lemma skills install --target agents --scope project` from inside that directory. The coding agent authors and verifies the pod through the same CLI.
 
-To let the pod dispatch runs through your local Claude Code, Codex, OpenCode, Cursor, or Antigravity login, start the daemon:
+To let the pod dispatch runs through a local Claude Code, Codex, OpenCode, or Cursor login, pair Agent Host:
 
 ```bash
-lemma daemon start --background
-lemma daemon status
+lemma agent-host install
+lemma agent-host connect
+lemma agent-host status
 ```
 
 <details>
@@ -208,12 +209,13 @@ lemma pod import ./the-pod-your-agent-wrote
 lemma apps deploy my-app ./index.html   # deploy a no-build HTML app (or a Vite project dir)
 ```
 
-**Or run your agent inside Lemma.** `lemma daemon start` connects your local Claude Code, Codex, OpenCode, Cursor, or Antigravity to the pod: it picks up tasks from a shared queue, streams its work back through the pod, and pauses at approval gates before protected actions. Two agents working the same pod share persistent state, a task queue, and run history.
+**Or run your local harness through Lemma.** `lemma agent-host` pairs a machine and discovers local harnesses such as Claude Code, Codex, OpenCode, or Cursor. Runtime profiles choose a discovered harness, while Agent Host handles durable delivery, event streaming, and diagnostics.
 
 ```bash
-lemma daemon start --background  # your local agent serves pod-assigned runs
-lemma daemon status              # pid, running state, log path
-lemma daemon stop
+lemma agent-host install         # install verified adapters and the service
+lemma agent-host connect         # pair this machine
+lemma agent-host status          # inspect service and harness health
+lemma agent-host logs
 ```
 
 Any agent operates a pod directly through the CLI:
@@ -234,7 +236,7 @@ Python and TypeScript SDKs (with 25+ React hooks) live in [`lemma-python/`](lemm
 
 - **Your machine.** The full stack runs self-contained on your laptop. You choose which external services receive data.
 - **Our cloud, when you want it.** [lemma.work](https://lemma.work) runs the same open-source stack as a hosted option for pods that need to reach teammates and surfaces.
-- **Your subscription, managed models, or your keys.** Pod-assigned runs use your local **Claude Code or Codex login** through the daemon. Server-run agents use Lemma-managed models or an **Anthropic-compatible or OpenAI-compatible** key or endpoint — a cloud provider, a self-hosted gateway, or a local model. Runtime profiles are per pod, so different agents can use different models.
+- **Your subscription, managed models, or your keys.** Harness profiles use a local **Claude Code or Codex login** through Agent Host. Provider profiles use Lemma-managed models, Azure OpenAI, Google Vertex, or an **Anthropic-compatible or OpenAI-compatible** endpoint. Agents select a runtime profile and may explicitly select one of its models.
 - **Your code.** Core is [AGPLv3](LICENSE); SDKs, CLI, and tools are [Apache-2.0](LICENSES/Apache-2.0.txt).
 
 ## Repo layout

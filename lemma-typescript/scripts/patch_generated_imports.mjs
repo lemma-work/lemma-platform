@@ -41,6 +41,22 @@ function patchImports(source) {
 function patchKnownGeneratorIssues(source, filePath) {
   let patched = source;
 
+  const runtimeProfileTypes = new Map([
+    ["models/OpenAICompatibleRuntimeProfileResponse.ts", "OPENAI_COMPATIBLE"],
+    ["models/AnthropicCompatibleRuntimeProfileResponse.ts", "ANTHROPIC_COMPATIBLE"],
+    ["models/AzureOpenAIRuntimeProfileResponse.ts", "AZURE_OPENAI"],
+    ["models/GoogleVertexRuntimeProfileResponse.ts", "GOOGLE_VERTEX"],
+    ["models/HarnessRuntimeProfileResponse.ts", "HARNESS"],
+  ]);
+  for (const [suffix, runtimeType] of runtimeProfileTypes) {
+    if (filePath.endsWith(suffix)) {
+      patched = patched.replace(
+        "runtime_type: string;",
+        `runtime_type: '${runtimeType}';`,
+      );
+    }
+  }
+
   if (filePath.endsWith("services/OrganizationsService.ts")) {
     patched = patched.replace(
       "import type { OrganizationInvitationStatus } from '../models/OrganizationInvitationStatus.js';",

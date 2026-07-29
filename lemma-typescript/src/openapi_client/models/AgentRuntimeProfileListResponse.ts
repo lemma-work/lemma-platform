@@ -3,8 +3,12 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AgentRuntimeConfig } from './AgentRuntimeConfig.js';
-import type { AgentRuntimeProfileResponse } from './AgentRuntimeProfileResponse.js';
+import type { AnthropicCompatibleRuntimeProfileResponse } from './AnthropicCompatibleRuntimeProfileResponse.js';
+import type { AzureOpenAIRuntimeProfileResponse } from './AzureOpenAIRuntimeProfileResponse.js';
+import type { GoogleVertexRuntimeProfileResponse } from './GoogleVertexRuntimeProfileResponse.js';
+import type { HarnessRuntimeProfileResponse } from './HarnessRuntimeProfileResponse.js';
+import type { OpenAICompatibleRuntimeProfileResponse } from './OpenAICompatibleRuntimeProfileResponse.js';
 export type AgentRuntimeProfileListResponse = {
     default_runtime: AgentRuntimeConfig;
-    items: Array<AgentRuntimeProfileResponse>;
+    items: Array<(OpenAICompatibleRuntimeProfileResponse | AnthropicCompatibleRuntimeProfileResponse | AzureOpenAIRuntimeProfileResponse | GoogleVertexRuntimeProfileResponse | HarnessRuntimeProfileResponse)>;
 };

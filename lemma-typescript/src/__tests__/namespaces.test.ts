@@ -17,15 +17,15 @@ describe("AgentHostNamespace", () => {
     const listSpy = vi
       .spyOn(AgentHostService, "agentHostList")
       .mockResolvedValue({ items: [] } as never);
-    const integrationSpy = vi
-      .spyOn(AgentHostService, "agentHostIntegrationsList")
+    const harnessSpy = vi
+      .spyOn(AgentHostService, "agentHostHarnessesList")
       .mockResolvedValue({ items: [] } as never);
     const hosts = new AgentHostNamespace(passthroughAdapter);
 
     await expect(hosts.list()).resolves.toEqual({ items: [] });
-    await expect(hosts.listIntegrations("host-1")).resolves.toEqual({ items: [] });
+    await expect(hosts.listHarnesses("host-1")).resolves.toEqual({ items: [] });
     expect(listSpy).toHaveBeenCalledOnce();
-    expect(integrationSpy).toHaveBeenCalledWith("host-1");
+    expect(harnessSpy).toHaveBeenCalledWith("host-1");
     expect("poll" in hosts).toBe(false);
   });
 

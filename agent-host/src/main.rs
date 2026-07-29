@@ -102,6 +102,9 @@ enum Command {
     Doctor {
         #[arg(long)]
         json: bool,
+        /// Reinstall missing or tampered pinned adapters.
+        #[arg(long)]
+        repair: bool,
     },
     /// Run a direct local ACP smoke prompt. No Lemma tools are injected.
     Run {
@@ -142,7 +145,8 @@ async fn main() -> anyhow::Result<()> {
             allow_insecure_http,
         } => {
             let mut config = HostConfig::load_or_create(&paths)?;
-            let manifest = AdapterManifest::builtin()?;
+            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
+            manifest.install_cache(&paths.adapters, false)?;
             let target = lemma_agent_host::api::TargetClient::pair(
                 url,
                 &pairing_code,
@@ -199,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let mut config = HostConfig::load_or_create(&paths)?;
             let selected = select_one_target(&config, target.as_deref())?.clone();
-            let manifest = AdapterManifest::builtin()?;
+            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
             let client = lemma_agent_host::api::TargetClient::new(
                 selected.clone(),
                 config.installation_id.clone(),
@@ -256,11 +260,14 @@ async fn main() -> anyhow::Result<()> {
             update_targets(&paths, target.as_deref(), |item| {
                 item.refresh_generation = item.refresh_generation.saturating_add(1);
             })?;
-            println!("Integration refresh requested.");
+            println!("Harness refresh requested.");
             Ok(())
         }
         Command::Logs { lines, follow } => show_logs(&paths.log, lines, follow).await,
         Command::InstallService => {
+            AdapterManifest::builtin()?
+                .with_cache_root(paths.adapters.clone())
+                .install_cache(&paths.adapters, false)?;
             let manager = ServiceManager::current(paths)?;
             manager.install()?;
             println!("Agent Host per-user service installed and started.");
@@ -272,7 +279,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Discover { json, probe } => {
-            let manifest = AdapterManifest::builtin()?;
+            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
             if !probe {
                 print_value(&serde_json::to_value(manifest.discover())?, json);
                 return Ok(());
@@ -280,9 +287,9 @@ async fn main() -> anyhow::Result<()> {
             let mut results = Vec::new();
             for snapshot in manifest.discover() {
                 let probe_result =
-                    if snapshot.health == lemma_agent_host::protocol::IntegrationHealth::Ready {
-                        let adapter = manifest.resolve(&snapshot.integration_key)?;
-                        let scratch = paths.root.join("probe").join(&snapshot.integration_key);
+                    if snapshot.health == lemma_agent_host::protocol::HarnessHealth::Ready {
+                        let adapter = manifest.resolve(&snapshot.harness_key)?;
+                        let scratch = paths.root.join("probe").join(&snapshot.harness_key);
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(30),
                             AcpDriver.probe(adapter, scratch),
@@ -309,34 +316,43 @@ async fn main() -> anyhow::Result<()> {
                         })
                     };
                 results.push(serde_json::json!({
-                    "integration": snapshot,
+                    "harness": snapshot,
                     "acp_probe": probe_result,
                 }));
             }
             print_value(&Value::Array(results), json);
             Ok(())
         }
-        Command::Doctor { json } => {
+        Command::Doctor { json, repair } => {
             let config = HostConfig::load_or_create(&paths)?;
             let config_result = config.validate();
             let journal_result =
                 Journal::open(&paths.journal).and_then(|journal| journal.integrity_check());
-            let manifest = AdapterManifest::builtin()?;
-            let integrations = manifest.discover();
-            let ready = integrations
+            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
+            let repair_result = repair
+                .then(|| manifest.install_cache(&paths.adapters, true))
+                .transpose();
+            let repair_ok = repair_result.is_ok();
+            let repair_error = repair_result.err().map(|error| error.to_string());
+            let harnesses = manifest.discover();
+            let ready = harnesses
                 .iter()
                 .filter(|snapshot| {
-                    snapshot.health == lemma_agent_host::protocol::IntegrationHealth::Ready
+                    snapshot.health == lemma_agent_host::protocol::HarnessHealth::Ready
                 })
                 .count();
             let result = serde_json::json!({
-                "ok": config_result.is_ok() && journal_result.is_ok() && ready > 0,
+                "ok": config_result.is_ok()
+                    && journal_result.is_ok()
+                    && repair_ok
+                    && ready > 0,
                 "config": config_result.err().map(|error| error.to_string()),
                 "journal": journal_result.err().map(|error| error.to_string()),
+                "repair": repair_error,
                 "adapter_manifest_id": manifest.manifest_id,
                 "adapter_manifest_sha256": manifest.content_digest(),
-                "integrations_ready": ready,
-                "integrations": integrations,
+                "harnesses_ready": ready,
+                "harnesses": harnesses,
                 "data_directory": paths.root,
             });
             print_value(&result, json);
@@ -347,14 +363,15 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Run { agent, prompt } => {
-            let manifest = AdapterManifest::builtin()?;
+            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
             let adapter = manifest.resolve(&agent)?;
             let scratch = paths.root.join("smoke").join(Uuid::new_v4().to_string());
             let spec = RunSpec {
                 agent_run_id: Uuid::new_v4(),
                 conversation_id: Uuid::new_v4(),
-                integration_id: Uuid::new_v4(),
+                harness_id: Uuid::new_v4(),
                 profile_revision: "local-smoke".to_owned(),
+                model_name: None,
                 config_selections: JsonMap::new(),
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": prompt})],

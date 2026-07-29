@@ -1,46 +1,52 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeConfig.js";
-import type { AgentHarnessListResponse } from "../openapi_client/models/AgentHarnessListResponse.js";
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
-import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
+import type { AnthropicCompatibleRuntimeProfileResponse } from "../openapi_client/models/AnthropicCompatibleRuntimeProfileResponse.js";
+import type { AzureOpenAIRuntimeProfileResponse } from "../openapi_client/models/AzureOpenAIRuntimeProfileResponse.js";
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateAnthropicCompatibleRuntimeProfileRequest.js";
-import type { CreateAgentHostRuntimeProfileRequest } from "../openapi_client/models/CreateAgentHostRuntimeProfileRequest.js";
+import type { CreateAzureOpenAIRuntimeProfileRequest } from "../openapi_client/models/CreateAzureOpenAIRuntimeProfileRequest.js";
+import type { CreateGoogleVertexRuntimeProfileRequest } from "../openapi_client/models/CreateGoogleVertexRuntimeProfileRequest.js";
+import type { CreateHarnessRuntimeProfileRequest } from "../openapi_client/models/CreateHarnessRuntimeProfileRequest.js";
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateOpenAICompatibleRuntimeProfileRequest.js";
-import type { CreateUserDaemonRuntimeProfileRequest } from "../openapi_client/models/CreateUserDaemonRuntimeProfileRequest.js";
-import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
+import type { GoogleVertexRuntimeProfileResponse } from "../openapi_client/models/GoogleVertexRuntimeProfileResponse.js";
+import type { HarnessRuntimeProfileResponse } from "../openapi_client/models/HarnessRuntimeProfileResponse.js";
+import type { OpenAICompatibleRuntimeProfileResponse } from "../openapi_client/models/OpenAICompatibleRuntimeProfileResponse.js";
+import type { UpdateRuntimeProfileRequest } from "../openapi_client/models/UpdateRuntimeProfileRequest.js";
+import { RuntimeService } from "../openapi_client/services/RuntimeService.js";
 
 export type CreateAgentRuntimeProfileRequest =
-  | CreateUserDaemonRuntimeProfileRequest
   | CreateOpenAICompatibleRuntimeProfileRequest
   | CreateAnthropicCompatibleRuntimeProfileRequest
-  | CreateAgentHostRuntimeProfileRequest;
+  | CreateAzureOpenAIRuntimeProfileRequest
+  | CreateGoogleVertexRuntimeProfileRequest
+  | CreateHarnessRuntimeProfileRequest;
 
-export type CreateAgentRuntimeRequest = CreateAgentRuntimeProfileRequest;
+export type AgentRuntimeResponse =
+  | OpenAICompatibleRuntimeProfileResponse
+  | AnthropicCompatibleRuntimeProfileResponse
+  | AzureOpenAIRuntimeProfileResponse
+  | GoogleVertexRuntimeProfileResponse
+  | HarnessRuntimeProfileResponse;
 export type AgentRuntimeListResponse = AgentRuntimeProfileListResponse;
-export type AgentRuntimeResponse = AgentRuntimeProfileResponse;
 
 export class AgentRuntimeNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
-
-  listHarnesses(): Promise<AgentHarnessListResponse> {
-    return this.client.request(() => AgentRuntimeService.agentRuntimeHarnessesList());
-  }
-
-  listAvailableHarnesses(): Promise<AgentHarnessListResponse> {
-    return this.listHarnesses();
-  }
 
   listRuntimes(orgId: string): Promise<AgentRuntimeListResponse> {
     return this.listProfiles(orgId);
   }
 
   listProfiles(orgId: string): Promise<AgentRuntimeProfileListResponse> {
-    return this.client.request(() => AgentRuntimeService.agentRuntimeProfilesList(orgId));
+    return this.client.request(() => RuntimeService.runtimeProfilesList(orgId));
+  }
+
+  getProfile(orgId: string, profileId: string): Promise<AgentRuntimeResponse> {
+    return this.client.request(() => RuntimeService.runtimeProfilesGet(orgId, profileId));
   }
 
   createRuntime(
     orgId: string,
-    request: CreateAgentRuntimeRequest,
+    request: CreateAgentRuntimeProfileRequest,
   ): Promise<AgentRuntimeResponse> {
     return this.createProfile(orgId, request);
   }
@@ -48,14 +54,31 @@ export class AgentRuntimeNamespace {
   createProfile(
     orgId: string,
     request: CreateAgentRuntimeProfileRequest,
-  ): Promise<AgentRuntimeProfileResponse> {
-    return this.client.request(() => AgentRuntimeService.agentRuntimeProfilesCreate(orgId, request));
+  ): Promise<AgentRuntimeResponse> {
+    return this.client.request(() => RuntimeService.runtimeProfilesCreate(orgId, request));
+  }
+
+  updateProfile(
+    orgId: string,
+    profileId: string,
+    request: UpdateRuntimeProfileRequest,
+  ): Promise<AgentRuntimeResponse> {
+    return this.client.request(
+      () => RuntimeService.runtimeProfilesUpdate(orgId, profileId, request),
+    );
+  }
+
+  refreshProfile(orgId: string, profileId: string): Promise<AgentRuntimeResponse> {
+    return this.client.request(() => RuntimeService.runtimeProfilesRefresh(orgId, profileId));
+  }
+
+  deleteProfile(orgId: string, profileId: string): Promise<void> {
+    return this.client.request(() => RuntimeService.runtimeProfilesDelete(orgId, profileId));
   }
 
   /**
-   * @deprecated Runtime defaults are now pod config (`default_profile_id`) or
-   * organization Agent Runtimes. The backend no longer exposes a global
-   * default-runtime mutation endpoint.
+   * @deprecated Runtime defaults are pod configuration. Profiles only define
+   * reusable execution settings.
    */
   updateDefault(agentRuntime: AgentRuntimeConfig): Promise<never> {
     void agentRuntime;

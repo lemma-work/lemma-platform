@@ -20,7 +20,7 @@ import {
     normalizeConversationPresentedResourceHref,
     removeConversationPresentationParam,
 } from '@/lib/assistant/conversation-presentation';
-import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useAgent, useAgents } from '@/lib/hooks/use-agents';
 import { useConversation } from '@/lib/hooks/use-assistants';
 import { usePod } from '@/lib/hooks/use-pods';
@@ -65,7 +65,6 @@ export default function PodConversationPage({
     const canReadAgents = podAccess.can('agent.read');
     const { data: agentsData } = useAgents(canReadAgents ? podId : undefined);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const {
         openedConversationId,
         clearMessages,
@@ -124,7 +123,7 @@ export default function PodConversationPage({
     const isSelectingRouteConversation = !isNewConversation && openedConversationId !== conversationId;
     const canWriteConversations = podAccess.can('conversation.write');
     const podDefaultRuntime = pod?.config?.default_runtime
-        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
     const hydratedConversationRuntime = resolveHydratedConversationRuntime({
         isNewConversation,
         hasPersistedConversation: Boolean(activeConversation),
@@ -160,7 +159,6 @@ export default function PodConversationPage({
             selectedRuntime={selectedCommandRuntime}
             defaultRuntime={effectiveDefaultRuntime}
             runtimeCatalog={runtimeCatalog}
-            availableHarnesses={availableHarnesses}
             isNewConversation={isNewConversation}
             canWrite={canWriteConversations}
             onAgentChange={handleAgentChange}

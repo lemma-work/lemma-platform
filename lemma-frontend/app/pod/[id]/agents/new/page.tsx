@@ -34,7 +34,7 @@ import { ResourceVisibilityBadge, ResourceVisibilitySelect } from '@/components/
 import { showResourceCreatedToast, showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useCreateAgent } from '@/lib/hooks/use-agents';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod } from '@/lib/hooks/use-pods';
@@ -125,8 +125,7 @@ export default function NewAgentPage({
     const createAgent = useCreateAgent();
     const { data: pod } = usePod(podId);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
-    const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+    const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
     const [currentStep, setCurrentStep] = useState<BuilderStepId>('identity');
     const [showTaskFields, setShowTaskFields] = useState(false);
     const [showOutputFields, setShowOutputFields] = useState(false);
@@ -347,7 +346,6 @@ export default function NewAgentPage({
                                     </div>
                                     <RuntimeModelPicker
                                         catalog={runtimeCatalog}
-                                        availableHarnesses={availableHarnesses}
                                         defaultRuntime={defaultRuntime}
                                         value={draftAgent.agent_runtime ?? null}
                                         onChange={(agentRuntime) => updateDraft({ agent_runtime: agentRuntime })}

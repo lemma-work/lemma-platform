@@ -1,14 +1,11 @@
 import type { HttpClient } from "../http.js";
-import type { AgentHarnessListResponse } from "../openapi_client/models/AgentHarnessListResponse.js";
 import type { ApprovalDecisionResponse } from "../openapi_client/models/ApprovalDecisionResponse.js";
 import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeConfig.js";
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
-import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
 import type { AgentRunStartResponse } from "../openapi_client/models/AgentRunStartResponse.js";
 import type { ConversationListResponse } from "../openapi_client/models/ConversationListResponse.js";
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
-import type { HarnessKind } from "../openapi_client/models/HarnessKind.js";
 import type { ResolveUserApprovalRequest } from "../openapi_client/models/ResolveUserApprovalRequest.js";
 import type { SendMessageRequest } from "../openapi_client/models/SendMessageRequest.js";
 import type { UpdateConversationRequest } from "../openapi_client/models/UpdateConversationRequest.js";
@@ -26,7 +23,6 @@ export const POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT" as const;
 type ConversationCreateInput = CreateConversationRequest & {
   agent_runtime?: AgentRuntimeConfig | null;
   agent_name?: string | null;
-  harness_kind?: HarnessKind | null;
   model?: ConversationModel | null;
   model_name?: ConversationModel | null;
   pod_id?: string | null;
@@ -35,7 +31,6 @@ type ConversationCreateInput = CreateConversationRequest & {
 
 type ConversationUpdateInput = UpdateConversationRequest & {
   agent_runtime?: AgentRuntimeConfig | null;
-  harness_kind?: HarnessKind | null;
   model?: ConversationModel | null;
   model_name?: ConversationModel | null;
   profile_id?: string | null;
@@ -70,7 +65,6 @@ function normalizeMessage(message: ConversationMessage): ConversationMessage {
 }
 
 export class ConversationsNamespace {
-  private runtimeCatalogPromise: Promise<AgentHarnessListResponse> | undefined;
   private profileCatalogPromises = new Map<string, Promise<AgentRuntimeProfileListResponse>>();
 
   constructor(
@@ -98,14 +92,6 @@ export class ConversationsNamespace {
     return podId;
   }
 
-  private listRuntimeCatalog(): Promise<AgentHarnessListResponse> {
-    this.runtimeCatalogPromise ??= this.http.request<AgentHarnessListResponse>(
-      "GET",
-      "/agent-runtime/harnesses",
-    );
-    return this.runtimeCatalogPromise;
-  }
-
   private listProfileCatalog(orgId: string): Promise<AgentRuntimeProfileListResponse> {
     const key = orgId.trim();
     const existing = this.profileCatalogPromises.get(key);
@@ -113,7 +99,7 @@ export class ConversationsNamespace {
 
     const request = this.http.request<AgentRuntimeProfileListResponse>(
       "GET",
-      `/organizations/${encodeURIComponent(key)}/agent-runtime/profiles`,
+      `/organizations/${encodeURIComponent(key)}/runtime/profiles`,
     );
     this.profileCatalogPromises.set(key, request);
     return request;
@@ -142,7 +128,7 @@ export class ConversationsNamespace {
         agentRuntimeId: profile.id,
         profile,
         profile_id: profile.id,
-        harness_kind: profile.derived_harness_kind,
+        harness_kind: profile.runtime_type === "HARNESS" ? "HARNESS" : "LEMMA",
         description: profile.name,
         runtime: {
           profile_id: profile.id,
@@ -155,7 +141,6 @@ export class ConversationsNamespace {
   private async resolveAgentRuntime(
     agentRuntime: AgentRuntimeConfig | null | undefined,
     model: ConversationModel | null | undefined,
-    harnessKind: HarnessKind | null | undefined,
     profileId: string | null | undefined,
   ): Promise<AgentRuntimeConfig | null | undefined> {
     if (agentRuntime || !model) {
@@ -168,8 +153,8 @@ export class ConversationsNamespace {
         model_name: model,
       };
     }
+    return undefined;
 
-    void harnessKind;
     return undefined;
   }
 
@@ -231,29 +216,15 @@ export class ConversationsNamespace {
       };
     }
 
-    const catalog = await this.listRuntimeCatalog();
-    const items = catalog.items.flatMap((harness) =>
-      (harness.models ?? []).map((model) => ({
-        id: model as ConversationModel,
-        name: model,
-        harness_kind: harness.harness_kind,
-        description: harness.daemon_display_name,
-      })),
-    );
-    return {
-      items,
-      limit: items.length,
-      next_page_token: null,
-    };
+    throw new Error("orgId is required to list runtime models.");
   }
 
   async create(payload: ConversationCreateInput = {}): Promise<Conversation> {
     const podId = this.requirePodId(payload.pod_id);
-    const { agent_name, harness_kind, model, model_name, pod_id, profile_id, ...requestBody } = payload;
+    const { agent_name, model, model_name, pod_id, profile_id, ...requestBody } = payload;
     const agentRuntime = await this.resolveAgentRuntime(
       requestBody.agent_runtime,
       model_name ?? model,
-      harness_kind,
       profile_id,
     );
     const body: CreateConversationRequest = {
@@ -291,11 +262,10 @@ export class ConversationsNamespace {
     options: { pod_id?: string | null } = {},
   ): Promise<Conversation> {
     const podId = this.requirePodId(options.pod_id);
-    const { harness_kind, model, model_name, profile_id, ...requestBody } = payload;
+    const { model, model_name, profile_id, ...requestBody } = payload;
     const agentRuntime = await this.resolveAgentRuntime(
       requestBody.agent_runtime,
       model_name ?? model,
-      harness_kind,
       profile_id,
     );
     const body: UpdateConversationRequest = {

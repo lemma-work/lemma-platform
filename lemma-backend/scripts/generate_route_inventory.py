@@ -44,6 +44,7 @@ TAG_MODULES = {
     "icons": "icon",
     "query": "datastore",
     "records": "datastore",
+    "runtime": "agent",
     "tables": "datastore",
     "workflows": "workflow",
 }

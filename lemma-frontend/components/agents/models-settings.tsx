@@ -1,18 +1,14 @@
 'use client';
 
-import Image from 'next/image';
 import { useState } from 'react';
 import { RuntimeProfileScope } from 'lemma-sdk';
 import type {
     AgentHostConfigOption,
-    AgentHostIntegrationResponse,
+    AgentHostHarnessResponse,
     AgentHostResponse,
-    AgentHarnessInfo,
-    AgentHarnessListResponse,
     AgentRuntimeProfileListResponse,
-    AgentRuntimeProfileResponse,
 } from 'lemma-sdk';
-import { Check, Copy, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
+import { Copy, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -20,28 +16,21 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-    useAgentHostIntegrations,
+    useAgentHostHarnesses,
     useAgentHosts,
     useCreateAgentHostPairing,
     useCreateAgentRuntime,
     useRevokeAgentHost,
 } from '@/lib/hooks/use-agent-runtime';
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
-import { useProfile } from '@/lib/hooks/use-user';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
-    LOCAL_RUNTIME_SETUP_COMMANDS,
-    availableHarnessKey,
-    availableHarnessStatusLabel,
-    firstHarnessModelName,
-    HARNESS_LOGOS,
-    isCodingAgentKind,
-    isHarnessAvailable,
+    isHarnessProfile,
     runtimeAvailabilityLabel,
-    runtimeProfileDaemonKey,
     splitModelNames,
     type CustomProviderKind,
+    type RuntimeProfile,
 } from './agent-runtime-helpers';
 
 // The two scopes a connection can be saved under. SYSTEM profiles (Lemma's
@@ -73,43 +62,20 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     { id: 'anthropic', kind: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com' },
 ];
 
-// The local agents we surface even when undetected, so the section reads as a
-// menu of what's possible rather than an empty box. Detected ones get live
-// status and an Add button; the rest show as "Not detected".
-const KNOWN_LOCAL_AGENTS: Array<{ kind: string; name: string }> = [
-    { kind: 'CLAUDE_CODE', name: 'Claude Code' },
-    { kind: 'CODEX', name: 'Codex' },
-    { kind: 'OPENCODE', name: 'OpenCode' },
-    { kind: 'ANTIGRAVITY', name: 'Antigravity' },
-    { kind: 'CURSOR', name: 'Cursor' },
-];
-
 type ConnectTarget = { kind: CustomProviderKind; name: string; baseUrl: string };
 
 export function ModelsSettings({
     organizationId,
     catalog,
-    availableHarnesses,
     onRefresh,
     isRefreshing = false,
 }: {
     organizationId: string;
     catalog?: AgentRuntimeProfileListResponse;
-    availableHarnesses?: AgentHarnessListResponse;
     onRefresh?: () => void | Promise<void>;
     isRefreshing?: boolean;
 }) {
-    const providers = (catalog?.items ?? []).filter((p) => !isCodingAgentKind(p.derived_harness_kind));
-    const detectedLocalAgents = (availableHarnesses?.items ?? []).filter((h) => isCodingAgentKind(h.harness_kind));
-
-    // Daemons already saved as runtime profiles, keyed by daemonId::harnessKind so
-    // a detected harness can tell whether it's been added — and under which scope.
-    const savedDaemonScopeByKey = new Map<string, RuntimeProfileScope>();
-    for (const profile of catalog?.items ?? []) {
-        if (!isCodingAgentKind(profile.derived_harness_kind)) continue;
-        const key = runtimeProfileDaemonKey(profile);
-        if (key) savedDaemonScopeByKey.set(key, profile.scope);
-    }
+    const providers = (catalog?.items ?? []).filter((profile) => !isHarnessProfile(profile));
 
     return (
         <div className="flex flex-col gap-8">
@@ -139,14 +105,6 @@ export function ModelsSettings({
                 onRefresh={onRefresh}
             />
 
-            {detectedLocalAgents.length > 0 || savedDaemonScopeByKey.size > 0 ? (
-                <LegacyLocalAgentsSection
-                    organizationId={organizationId}
-                    harnesses={detectedLocalAgents}
-                    savedDaemonScopeByKey={savedDaemonScopeByKey}
-                    onRefresh={onRefresh}
-                />
-            ) : null}
         </div>
     );
 }
@@ -191,7 +149,7 @@ function SectionHeader({ icon, title, hint }: { icon: React.ReactNode; title: st
     );
 }
 
-function providerStatusLabel(profile: AgentRuntimeProfileResponse): { label: string; tone: 'ok' | 'muted' } {
+function providerStatusLabel(profile: RuntimeProfile): { label: string; tone: 'ok' | 'muted' } {
     if (profile.scope === RuntimeProfileScope.SYSTEM) return { label: 'Built in', tone: 'ok' };
     const availability = runtimeAvailabilityLabel(profile);
     if (availability) return { label: availability, tone: 'muted' };
@@ -204,7 +162,7 @@ function ProvidersSection({
     onRefresh,
 }: {
     organizationId: string;
-    providers: AgentRuntimeProfileResponse[];
+    providers: RuntimeProfile[];
     onRefresh?: () => void | Promise<void>;
 }) {
     const [connect, setConnect] = useState<ConnectTarget | null>(null);
@@ -315,7 +273,7 @@ function ConnectProviderForm({
                 organizationId,
                 request: kind === 'openai'
                     ? {
-                        source: 'OPENAI_COMPATIBLE',
+                        runtime_type: 'OPENAI_COMPATIBLE',
                         scope,
                         name: trimmedName,
                         base_url: baseUrl.trim(),
@@ -324,7 +282,7 @@ function ConnectProviderForm({
                         model_names: modelNames,
                     }
                     : {
-                        source: 'ANTHROPIC_COMPATIBLE',
+                        runtime_type: 'ANTHROPIC_COMPATIBLE',
                         scope,
                         name: trimmedName,
                         base_url: baseUrl.trim() || null,
@@ -389,7 +347,7 @@ function LocalAgentsSection({
     onRefresh,
 }: {
     organizationId: string;
-    profiles: AgentRuntimeProfileResponse[];
+    profiles: RuntimeProfile[];
     onRefresh?: () => void | Promise<void>;
 }) {
     const hosts = useAgentHosts();
@@ -519,11 +477,11 @@ function AgentHostCard({
     onRefresh,
 }: {
     host: AgentHostResponse;
-    profiles: AgentRuntimeProfileResponse[];
+    profiles: RuntimeProfile[];
     organizationId: string;
     onRefresh?: () => void | Promise<void>;
 }) {
-    const integrations = useAgentHostIntegrations(host.id);
+    const harnesses = useAgentHostHarnesses(host.id);
     const revoke = useRevokeAgentHost();
     const capacity = host.capacity as Record<string, unknown>;
     const activeRuns = typeof capacity.active_runs === 'number' ? capacity.active_runs : 0;
@@ -559,11 +517,11 @@ function AgentHostCard({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => void integrations.refetch()}
-                    disabled={integrations.isFetching}
+                    onClick={() => void harnesses.refetch()}
+                    disabled={harnesses.isFetching}
                     aria-label={`Refresh ${host.display_name}`}
                 >
-                    <RefreshCw className={cn('size-4', integrations.isFetching && 'animate-spin')} />
+                    <RefreshCw className={cn('size-4', harnesses.isFetching && 'animate-spin')} />
                 </Button>
                 <Button
                     type="button"
@@ -577,22 +535,22 @@ function AgentHostCard({
                 </Button>
             </div>
             <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
-                {integrations.isLoading ? (
+                {harnesses.isLoading ? (
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">Discovering local agents…</p>
                 ) : null}
-                {(integrations.data?.items ?? []).map((integration) => (
-                    <AgentHostIntegrationRow
-                        key={integration.id}
-                        integration={integration}
+                {(harnesses.data?.items ?? []).map((harness) => (
+                    <AgentHostHarnessRow
+                        key={harness.id}
+                        harness={harness}
                         host={host}
                         profiles={profiles}
                         organizationId={organizationId}
                         onRefresh={onRefresh}
                     />
                 ))}
-                {!integrations.isLoading && !(integrations.data?.items.length ?? 0) ? (
+                {!harnesses.isLoading && !(harnesses.data?.items.length ?? 0) ? (
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">
-                        No integrations published yet. Run <code>lemma agent-host refresh</code> on this computer.
+                        No harnesses published yet. Run <code>lemma agent-host refresh</code> on this computer.
                     </p>
                 ) : null}
             </div>
@@ -600,23 +558,25 @@ function AgentHostCard({
     );
 }
 
-function AgentHostIntegrationRow({
-    integration,
+function AgentHostHarnessRow({
+    harness,
     host,
     profiles,
     organizationId,
     onRefresh,
 }: {
-    integration: AgentHostIntegrationResponse;
+    harness: AgentHostHarnessResponse;
     host: AgentHostResponse;
-    profiles: AgentRuntimeProfileResponse[];
+    profiles: RuntimeProfile[];
     organizationId: string;
     onRefresh?: () => void | Promise<void>;
 }) {
     const [configuring, setConfiguring] = useState(false);
-    const savedProfiles = profiles.filter((profile) => profile.host_integration_id === integration.id);
-    const ready = integration.health === 'READY' && host.status === 'ONLINE';
-    const optionCount = (integration.config_options as AgentHostConfigOption[]).reduce(
+    const savedProfiles = profiles.filter(
+        (profile) => isHarnessProfile(profile) && profile.harness_id === harness.id,
+    );
+    const ready = harness.health === 'READY' && host.status === 'ONLINE';
+    const optionCount = (harness.config_options as AgentHostConfigOption[]).reduce(
         (count, option) => count + (option.category === 'model' ? option.options?.length ?? 0 : 0),
         0,
     );
@@ -625,29 +585,29 @@ function AgentHostIntegrationRow({
         <div className="rounded-md bg-[var(--surface-1)] px-3 py-3">
             <div className="flex flex-wrap items-center gap-3">
                 <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{integration.display_name}</div>
+                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{harness.display_name}</div>
                     <div className="text-xs text-[var(--text-tertiary)]">
-                        ACP · adapter {integration.adapter_version}
-                        {integration.upstream_version ? ` · provider ${integration.upstream_version}` : ''}
+                        ACP · adapter {harness.adapter_version}
+                        {harness.upstream_version ? ` · provider ${harness.upstream_version}` : ''}
                         {optionCount ? ` · ${optionCount} models` : ''}
                     </div>
                 </div>
                 {savedProfiles.length ? (
                     <StatusBadge label={`${savedProfiles.length} saved`} tone="ok" />
                 ) : null}
-                <StatusBadge label={integration.health.replaceAll('_', ' ')} tone={ready ? 'ok' : 'muted'} />
+                <StatusBadge label={harness.health.replaceAll('_', ' ')} tone={ready ? 'ok' : 'muted'} />
                 {ready ? (
                     <Button type="button" size="sm" onClick={() => setConfiguring((value) => !value)}>
                         {configuring ? 'Close' : 'Add profile'}
                     </Button>
                 ) : null}
             </div>
-            {integration.stale_reason ? (
-                <p className="mt-2 text-xs text-[var(--state-danger,var(--text-tertiary))]">{integration.stale_reason}</p>
+            {harness.stale_reason ? (
+                <p className="mt-2 text-xs text-[var(--state-danger,var(--text-tertiary))]">{harness.stale_reason}</p>
             ) : null}
             {configuring ? (
-                <AddAgentHostProfileForm
-                    integration={integration}
+                <AddHarnessProfileForm
+                    harness={harness}
                     profiles={profiles}
                     organizationId={organizationId}
                     onCancel={() => setConfiguring(false)}
@@ -661,29 +621,27 @@ function AgentHostIntegrationRow({
     );
 }
 
-function AddAgentHostProfileForm({
-    integration,
+function AddHarnessProfileForm({
+    harness,
     profiles,
     organizationId,
     onCancel,
     onSaved,
 }: {
-    integration: AgentHostIntegrationResponse;
-    profiles: AgentRuntimeProfileResponse[];
+    harness: AgentHostHarnessResponse;
+    profiles: RuntimeProfile[];
     organizationId: string;
     onCancel: () => void;
     onSaved: () => void;
 }) {
     const createRuntime = useCreateAgentRuntime();
-    const options = integration.config_options as AgentHostConfigOption[];
-    const [name, setName] = useState(integration.display_name);
+    const options = harness.config_options as AgentHostConfigOption[];
+    const [name, setName] = useState(harness.display_name);
     const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.PERSONAL);
-    const [selections, setSelections] = useState<Record<string, string>>(() =>
-        Object.fromEntries(options.map((option) => [option.id, 'FOLLOW_ADAPTER_DEFAULT'])),
-    );
+    const [selections, setSelections] = useState<Record<string, string>>({});
     const [fallbackProfileId, setFallbackProfileId] = useState('none');
     const fallbackProfiles = profiles.filter(
-        (profile) => profile.protocol !== 'AGENT_HOST_V2' && profile.status === 'ACTIVE',
+        (profile) => profile.runtime_type !== 'HARNESS' && profile.status === 'ACTIVE',
     );
 
     const save = async () => {
@@ -693,9 +651,9 @@ function AddAgentHostProfileForm({
             await createRuntime.mutateAsync({
                 organizationId,
                 request: {
-                    source: 'AGENT_HOST',
-                    host_integration_id: integration.id,
-                    integration_snapshot_revision: integration.config_revision,
+                    runtime_type: 'HARNESS',
+                    harness_id: harness.id,
+                    harness_snapshot_revision: harness.config_revision,
                     config_selections: selections,
                     fallback_profile_id: fallbackProfileId === 'none' ? null : fallbackProfileId,
                     scope,
@@ -721,14 +679,21 @@ function AddAgentHostProfileForm({
                     return (
                         <Field key={option.id} label={option.name} hint={option.description ?? undefined}>
                             <Select
-                                value={selections[option.id] ?? 'FOLLOW_ADAPTER_DEFAULT'}
-                                onValueChange={(value) => setSelections((current) => ({ ...current, [option.id]: value }))}
+                                value={selections[option.id] ?? '__harness_default__'}
+                                onValueChange={(value) => setSelections((current) => {
+                                    if (value !== '__harness_default__') {
+                                        return { ...current, [option.id]: value };
+                                    }
+                                    const next = { ...current };
+                                    delete next[option.id];
+                                    return next;
+                                })}
                             >
                                 <SelectTrigger>
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="FOLLOW_ADAPTER_DEFAULT">Adapter default</SelectItem>
+                                    <SelectItem value="__harness_default__">Harness default</SelectItem>
                                     {values.map((item) => (
                                         <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
                                     ))}
@@ -776,7 +741,7 @@ function agentHostOptionValues(option: AgentHostConfigOption): Array<{ value: st
             : typeof raw.id === 'string'
                 ? raw.id
                 : null;
-        if (!value || value === 'FOLLOW_ADAPTER_DEFAULT') return [];
+        if (!value) return [];
         const label = typeof raw.name === 'string'
             ? raw.name
             : typeof raw.label === 'string'
@@ -784,179 +749,6 @@ function agentHostOptionValues(option: AgentHostConfigOption): Array<{ value: st
                 : value;
         return [{ value, label }];
     });
-}
-
-function LegacyLocalAgentsSection({
-    organizationId,
-    harnesses,
-    savedDaemonScopeByKey,
-    onRefresh,
-}: {
-    organizationId: string;
-    harnesses: AgentHarnessInfo[];
-    savedDaemonScopeByKey: Map<string, RuntimeProfileScope>;
-    onRefresh?: () => void | Promise<void>;
-}) {
-    const createRuntime = useCreateAgentRuntime();
-    const { data: profile } = useProfile();
-    const [savingKey, setSavingKey] = useState<string | null>(null);
-    const [addingKey, setAddingKey] = useState<string | null>(null);
-
-    // Who's adding this daemon — used to pre-name it so a workspace with several
-    // people's machines doesn't end up with five identical "Claude Code" entries.
-    const userLabel = (profile?.full_name?.trim() || profile?.first_name?.trim() || profile?.email?.split('@')[0] || '').trim();
-    const defaultDaemonName = (displayName: string) =>
-        userLabel ? `${userLabel}'s ${displayName}` : `${displayName} daemon`;
-
-    // Show the full known roster, each matched to a detected harness if present,
-    // then append anything detected that we don't have a name for yet.
-    const rows: Array<{ kind: string; name: string; harness?: AgentHarnessInfo }> = [
-        ...KNOWN_LOCAL_AGENTS.map((known) => ({
-            ...known,
-            harness: harnesses.find((h) => h.harness_kind === known.kind),
-        })),
-        ...harnesses
-            .filter((h) => !KNOWN_LOCAL_AGENTS.some((k) => k.kind === h.harness_kind))
-            .map((h) => ({ kind: h.harness_kind as string, name: h.display_name, harness: h })),
-    ];
-
-    const save = async (harness: AgentHarnessInfo, scope: RuntimeProfileScope, name: string) => {
-        if (!harness.daemon_id) return toast.error('Start the Lemma daemon to add this local agent');
-        const finalName = name.trim() || defaultDaemonName(harness.display_name);
-        setSavingKey(availableHarnessKey(harness));
-        try {
-            await createRuntime.mutateAsync({
-                organizationId,
-                request: {
-                    source: 'USER_DAEMON',
-                    daemon_id: harness.daemon_id,
-                    harness_kind: harness.harness_kind,
-                    scope,
-                    name: finalName,
-                    default_model_name: firstHarnessModelName(harness) || undefined,
-                },
-            });
-            const scopeLabel = scope === RuntimeProfileScope.PERSONAL ? 'Personal' : 'Workspace';
-            toast.success(`${finalName} added to ${scopeLabel}`);
-            setAddingKey(null);
-            void onRefresh?.();
-        } catch (error) {
-            toast.error(`Couldn't add ${harness.display_name}: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        } finally {
-            setSavingKey(null);
-        }
-    };
-
-    return (
-        <section>
-            <SectionHeader
-                icon={<TerminalSquare className="size-4" />}
-                title="Legacy daemon connections"
-                hint="Existing v1 connections remain visible during migration. New connections should use Agent Host above."
-            />
-            <div className="flex flex-col gap-2">
-                {rows.map((row) => {
-                    const harness = row.harness;
-                    const detected = Boolean(harness);
-                    const available = harness ? isHarnessAvailable(harness) : false;
-                    const status = harness ? (availableHarnessStatusLabel(harness) ?? 'Ready') : 'Not detected';
-                    const logo = HARNESS_LOGOS[row.kind];
-                    const key = harness ? availableHarnessKey(harness) : row.kind;
-                    // Has this exact daemon already been saved as a runtime profile?
-                    // If so the row reads as "Saved" instead of offering Add again.
-                    const savedScope = harness ? savedDaemonScopeByKey.get(availableHarnessKey(harness)) : undefined;
-                    const isSaved = savedScope !== undefined;
-                    return (
-                        <div key={key} className={cn('rounded-md border border-[var(--border-subtle)] px-4 py-3', !detected && 'opacity-70')}>
-                            <div className="flex items-center gap-3">
-                                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
-                                    {logo ? <Image src={logo} alt="" width={20} height={20} className="size-5 object-contain" /> : <TerminalSquare className="size-4 text-[var(--text-tertiary)]" />}
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{row.name}</div>
-                                    <div className="text-xs text-[var(--text-tertiary)]">Local · this machine</div>
-                                </div>
-                                {isSaved && savedScope ? (
-                                    <>
-                                        {scopeBadge(savedScope) ? <StatusBadge label={scopeBadge(savedScope)!.label} tone="muted" /> : null}
-                                        <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-[var(--state-success-soft,var(--surface-1))] px-2 py-0.5 text-xs font-medium text-[var(--state-success,var(--text-secondary))]">
-                                            <Check className="size-3" />
-                                            Saved
-                                        </span>
-                                    </>
-                                ) : (
-                                    <>
-                                        <StatusBadge label={status} tone={available ? 'ok' : 'muted'} />
-                                        {available && harness && addingKey !== key ? (
-                                            <Button type="button" size="sm" onClick={() => setAddingKey(key)} className="gap-1.5">
-                                                <Plus className="size-3.5" />
-                                                Add
-                                            </Button>
-                                        ) : null}
-                                    </>
-                                )}
-                            </div>
-                            {available && harness && addingKey === key && !isSaved ? (
-                                <AddDaemonForm
-                                    defaultName={defaultDaemonName(harness.display_name)}
-                                    loading={savingKey === key}
-                                    onCancel={() => setAddingKey(null)}
-                                    onSave={(name, scope) => void save(harness, scope, name)}
-                                />
-                            ) : null}
-                            {!available && !isSaved ? (
-                                <div className="mt-3 flex flex-col gap-1.5 border-t border-[var(--border-subtle)] pt-3">
-                                    <p className="text-xs text-[var(--text-tertiary)]">
-                                        {detected ? 'Start the Lemma daemon on this machine:' : `Install ${row.name}, then start the Lemma daemon:`}
-                                    </p>
-                                    {LOCAL_RUNTIME_SETUP_COMMANDS.map((command) => (
-                                        <code key={command} className="rounded bg-[var(--surface-1)] px-2.5 py-1.5 font-mono text-xs text-[var(--text-secondary)]">
-                                            {command}
-                                        </code>
-                                    ))}
-                                </div>
-                            ) : null}
-                        </div>
-                    );
-                })}
-            </div>
-        </section>
-    );
-}
-
-// Naming a daemon at save time is the only chance to do it (there's no rename
-// API yet), and a good name is what lets people tell "Ada's Claude Code" from
-// "Sam's Claude Code" once several machines are connected to one workspace.
-function AddDaemonForm({
-    defaultName,
-    loading,
-    onCancel,
-    onSave,
-}: {
-    defaultName: string;
-    loading: boolean;
-    onCancel: () => void;
-    onSave: (name: string, scope: RuntimeProfileScope) => void;
-}) {
-    const [name, setName] = useState(defaultName);
-    const [scope, setScope] = useState<RuntimeProfileScope>(RuntimeProfileScope.ORGANIZATION);
-    return (
-        <div className="mt-3 flex flex-col gap-3 border-t border-[var(--border-subtle)] pt-3">
-            <Field label="Name" hint="How this daemon shows up in your workspace">
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={defaultName} />
-            </Field>
-            <div className="flex flex-wrap items-end justify-between gap-3">
-                <ScopeChooser value={scope} onChange={setScope} />
-                <div className="flex items-center gap-2">
-                    <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
-                    <Button type="button" size="sm" onClick={() => onSave(name, scope)} loading={loading} loadingLabel="Adding" className="gap-1.5">
-                        <Check className="size-3.5" />
-                        Add
-                    </Button>
-                </div>
-            </div>
-        </div>
-    );
 }
 
 function StatusBadge({ label, tone }: { label: string; tone: 'ok' | 'muted' }) {

@@ -1,14 +1,14 @@
 {
   "manifest_version": 1,
   "manifest_id": "lemma-agent-adapters-2026-07-27",
-  "protocol": "ACP_V1",
+  "protocol": "ACP",
   "adapters": [
     {
       "key": "codex",
       "display_name": "Codex",
       "adapter_version": "1.1.7",
-      "command": "npx",
-      "args": ["--yes", "@agentclientprotocol/codex-acp@1.1.7"],
+      "command": "codex-acp",
+      "args": [],
       "upstream_command": "codex",
       "upstream_version_args": ["--version"],
       "minimum_upstream_version": null,
@@ -20,8 +20,8 @@
       "key": "claude-code",
       "display_name": "Claude Code",
       "adapter_version": "0.62.0",
-      "command": "npx",
-      "args": ["--yes", "@agentclientprotocol/claude-agent-acp@0.62.0"],
+      "command": "claude-agent-acp",
+      "args": [],
       "upstream_command": "claude",
       "upstream_version_args": ["--version"],
       "minimum_upstream_version": "2.1.0",

@@ -3,7 +3,7 @@
 ## Purpose
 
 `app/modules/agent` owns agent definitions, conversations/messages, model runs,
-runtime profiles, local daemon connections, tool assembly, approvals, realtime
+runtime profiles, Agent Host dispatch, tool assembly, approvals, realtime
 streaming, MCP access, widgets, and usage handoff. It is the central execution
 module; external delivery belongs to [agent surfaces](agent_surfaces.md), and
 sandbox lifecycle belongs to [workspace](workspace.md).
@@ -12,7 +12,7 @@ sandbox lifecycle belongs to [workspace](workspace.md).
 
 | Contribution | Behavior |
 | --- | --- |
-| API routers | Agent CRUD/permissions, conversations/messages/SSE, runtime profiles/daemon WebSocket, tools, widgets |
+| API routers | Agent CRUD/permissions, conversations/messages/SSE, runtime profiles, Agent Host management/device APIs, tools, widgets |
 | Redis consumer | Converts agent lifecycle events into queued work and title generation |
 | streaq tasks | Run agents, generate titles, reconcile orphaned runs |
 | Published stream | `agent_events` |
@@ -30,7 +30,7 @@ cancellation.
 | --- | --- |
 | `agents` | Named prompt, schemas, toolsets, runtime selection, visibility |
 | `agent_runtime_profiles` | Organization/user/system model provider configuration and encrypted credentials |
-| `agent_runtime_daemons` | Presence/capability state for local Codex/Claude/OpenCode daemons |
+| `agent_hosts`, `agent_host_harnesses` | Paired machines and their discovered local harnesses |
 | `agent_conversations` | Pod thread, named/default agent, parent/subagent and workspace metadata |
 | `agent_messages` | User/assistant/tool messages and structured parts |
 | `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
@@ -42,8 +42,8 @@ cancellation.
 | --- | --- |
 | `/pods/{pod_id}/agents` | Agent CRUD plus resource permission replacement |
 | `/pods/{pod_id}/conversations` | Create/list/read/update, messages, approvals, send, stream, stop |
-| `/organizations/{org}/agent-runtime/profiles` | Discover/create model runtime profiles |
-| `/agent-runtime/harnesses`, `/me/agent-runtime/daemon/ws` | Harness catalog and local daemon transport |
+| `/organizations/{org}/runtime/profiles` | Create, inspect, update, disable, and refresh runtime profiles |
+| `/me/runtime/agent-hosts`, `/agent-host/*` | Agent Host management and device transport |
 | `/tools/*` | Server-side web search and feedback endpoints used by runtimes |
 | `/widgets/serve...`, `/pods/{pod}/widgets...` | Render/submit a tool widget and mint an authenticated embed URL |
 
@@ -61,13 +61,13 @@ stateDiagram-v2
     RUNNING --> STOPPED: cooperative stop
 ```
 
-The runner resolves a runtime profile and harness (`pydantic_ai`, local daemon,
-or test harness), builds only the allowed toolsets, creates short UoWs for
+The runner resolves either Lemma's provider executor or the remote harness
+executor, builds only the allowed toolsets, creates short UoWs for
 message/status transitions, performs model/tool I/O outside them, publishes
 realtime frames, and records usage. Tool calls receive a delegated workload
 context; destructive operations require a standing grant or session approval.
-Daemon listener tasks are cancelled before their Redis clients close, and a
-superseded websocket cannot unregister its replacement connection.
+Agent Host commands, leases, receipts, and events are durable in PostgreSQL;
+acceptance and rejection fencing prevents ambiguous work from being replayed.
 
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served
@@ -85,7 +85,5 @@ through signed, purpose-bound embed access.
 ## Tests and operations
 
 The test suite covers tool assembly, messages, approvals, cancellation,
-runtime profiles, daemon reconnection, MCP, widgets, usage, subagents, and
-mocked/real harness paths. Current unit coverage is 63.2% (5,339 of 8,444
-statements). Large orchestration classes and cross-module coupling are tracked
-in [issues.md](issues.md).
+runtime profiles, Agent Host reliability, MCP, widgets, usage, subagents, and
+mocked/real harness paths.

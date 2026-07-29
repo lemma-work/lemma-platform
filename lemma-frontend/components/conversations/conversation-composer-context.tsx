@@ -1,10 +1,6 @@
 'use client';
 
-import type {
-    AgentHarnessListResponse,
-    AgentRuntimeConfig,
-    AgentRuntimeProfileListResponse,
-} from 'lemma-sdk';
+import type { AgentRuntimeConfig, AgentRuntimeProfileListResponse } from 'lemma-sdk';
 
 import { shortModelName } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
@@ -27,7 +23,6 @@ export function ConversationComposerContext({
     selectedRuntime,
     defaultRuntime,
     runtimeCatalog,
-    availableHarnesses,
     isNewConversation,
     canWrite,
     onAgentChange,
@@ -40,7 +35,6 @@ export function ConversationComposerContext({
     selectedRuntime: AgentRuntimeConfig | null;
     defaultRuntime: AgentRuntimeConfig | null | undefined;
     runtimeCatalog?: AgentRuntimeProfileListResponse;
-    availableHarnesses?: AgentHarnessListResponse;
     isNewConversation: boolean;
     canWrite: boolean;
     onAgentChange: (agentName: string | null) => void;
@@ -95,7 +89,6 @@ export function ConversationComposerContext({
 
             <RuntimeModelPicker
                 catalog={runtimeCatalog}
-                availableHarnesses={availableHarnesses}
                 defaultRuntime={defaultRuntime}
                 value={selectedRuntime}
                 onChange={onRuntimeChange}

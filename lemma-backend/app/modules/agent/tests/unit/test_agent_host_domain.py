@@ -1,4 +1,4 @@
-"""Unit contract for Agent Host v2 wire/domain types."""
+"""Unit contract for Agent Host wire/domain types."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from app.modules.agent.domain.agent_host import (
     AgentHostEventBatch,
     AgentHostEventType,
     AgentHostCheckpoint,
-    AgentHostIntegrationHealth,
-    AgentHostIntegrationSnapshot,
+    AgentHostHarnessHealth,
+    AgentHostHarnessSnapshot,
     AgentHostStatus,
     HostHello,
     canonical_json_sha256,
@@ -71,7 +71,7 @@ def _event(sequence: int, *, run_id=None, lease_epoch: int = 1) -> AgentHostEven
         type=AgentHostEventType.AGENT_MESSAGE_CHUNK,
         object_id="message-1",
         payload={"text": "hello"},
-        integration_key="codex",
+        harness_key="codex",
         adapter_version="1.0.0",
     )
 
@@ -98,20 +98,21 @@ def test_event_digest_is_canonical_and_stable() -> None:
     )
 
 
-def test_integration_key_is_normalized() -> None:
-    snapshot = AgentHostIntegrationSnapshot(
-        integration_key="Claude_Code",
+def test_harness_key_is_normalized() -> None:
+    snapshot = AgentHostHarnessSnapshot(
+        harness_key="Claude_Code",
         display_name="Claude Code",
-        adapter_protocol=AgentHostAdapterProtocol.ACP_V1,
+        adapter_protocol=AgentHostAdapterProtocol.ACP,
+        adapter_protocol_version=1,
         adapter_version="1",
         upstream_version="2",
         auth_state="READY",
-        health=AgentHostIntegrationHealth.READY,
+        health=AgentHostHarnessHealth.READY,
         config_revision="revision",
         fetched_at=NOW,
         stale_after=NOW,
     )
-    assert snapshot.integration_key == "claude-code"
+    assert snapshot.harness_key == "claude-code"
 
 
 def test_recovered_run_can_return_to_running_checkpoint() -> None:

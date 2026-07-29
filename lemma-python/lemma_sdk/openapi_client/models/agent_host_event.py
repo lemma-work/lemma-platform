@@ -25,7 +25,7 @@ class AgentHostEvent:
     Attributes:
         adapter_version (str):
         event_id (UUID):
-        integration_key (str):
+        harness_key (str):
         lease_epoch (int):
         occurred_at (datetime.datetime):
         run_id (UUID):
@@ -37,7 +37,7 @@ class AgentHostEvent:
 
     adapter_version: str
     event_id: UUID
-    integration_key: str
+    harness_key: str
     lease_epoch: int
     occurred_at: datetime.datetime
     run_id: UUID
@@ -52,7 +52,7 @@ class AgentHostEvent:
 
         event_id = str(self.event_id)
 
-        integration_key = self.integration_key
+        harness_key = self.harness_key
 
         lease_epoch = self.lease_epoch
 
@@ -80,7 +80,7 @@ class AgentHostEvent:
             {
                 "adapter_version": adapter_version,
                 "event_id": event_id,
-                "integration_key": integration_key,
+                "harness_key": harness_key,
                 "lease_epoch": lease_epoch,
                 "occurred_at": occurred_at,
                 "run_id": run_id,
@@ -104,7 +104,7 @@ class AgentHostEvent:
 
         event_id = UUID(d.pop("event_id"))
 
-        integration_key = d.pop("integration_key")
+        harness_key = d.pop("harness_key")
 
         lease_epoch = d.pop("lease_epoch")
 
@@ -135,7 +135,7 @@ class AgentHostEvent:
         agent_host_event = cls(
             adapter_version=adapter_version,
             event_id=event_id,
-            integration_key=integration_key,
+            harness_key=harness_key,
             lease_epoch=lease_epoch,
             occurred_at=occurred_at,
             run_id=run_id,

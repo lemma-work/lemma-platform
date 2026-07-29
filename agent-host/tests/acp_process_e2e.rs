@@ -99,8 +99,6 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
     );
     assert_eq!(probe.config_options[0].options.len(), 2);
 
-    let mut selections = JsonMap::new();
-    selections.insert("model".into(), Value::String("fake-2".into()));
     let callbacks = std::sync::Arc::new(CapturingCallbacks::default());
     let outcome = driver
         .run(
@@ -109,9 +107,10 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                 run_spec: RunSpec {
                     agent_run_id: Uuid::new_v4(),
                     conversation_id: Uuid::new_v4(),
-                    integration_id: Uuid::new_v4(),
+                    harness_id: Uuid::new_v4(),
                     profile_revision: "dynamic-revision".into(),
-                    config_selections: selections,
+                    model_name: Some("fake-2".into()),
+                    config_selections: JsonMap::new(),
                     system_prompt: "Be concise.".into(),
                     prompt: vec![serde_json::json!({"type": "text", "text": "Say hello"})],
                     context: BTreeMap::new(),

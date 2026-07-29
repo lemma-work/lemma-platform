@@ -5,22 +5,10 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
 export const agentRuntimeQueryKey = (organizationId?: string | null) =>
     ['agent-runtime', 'runtimes', organizationId ?? null] as const;
 
-export const availableAgentRuntimeHarnessesQueryKey = () =>
-    ['agent-runtime', 'available-harnesses'] as const;
-
 export const agentHostsQueryKey = () => ['agent-hosts'] as const;
 
-export const agentHostIntegrationsQueryKey = (hostId?: string | null) =>
-    ['agent-hosts', hostId ?? null, 'integrations'] as const;
-
-export const useAvailableAgentRuntimeHarnesses = () => {
-    return useQuery({
-        queryKey: availableAgentRuntimeHarnessesQueryKey(),
-        queryFn: () => getLemmaClient().agentRuntime.listAvailableHarnesses(),
-        staleTime: 30000,
-        refetchOnWindowFocus: true,
-    });
-};
+export const agentHostHarnessesQueryKey = (hostId?: string | null) =>
+    ['agent-hosts', hostId ?? null, 'harnesses'] as const;
 
 export const useAgentRuntimes = (organizationId?: string | null) => {
     return useQuery({
@@ -44,10 +32,10 @@ export const useAgentHosts = () => {
     });
 };
 
-export const useAgentHostIntegrations = (hostId?: string | null) => {
+export const useAgentHostHarnesses = (hostId?: string | null) => {
     return useQuery({
-        queryKey: agentHostIntegrationsQueryKey(hostId),
-        queryFn: () => getLemmaClient().agentHost.listIntegrations(hostId!),
+        queryKey: agentHostHarnessesQueryKey(hostId),
+        queryFn: () => getLemmaClient().agentHost.listHarnesses(hostId!),
         enabled: Boolean(hostId),
         staleTime: 15000,
         refetchInterval: 30000,

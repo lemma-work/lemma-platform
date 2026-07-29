@@ -10,8 +10,8 @@ from typing import (
 )
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
 
+from ..models.runtime_profile_scope import RuntimeProfileScope
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -32,17 +32,19 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
     Attributes:
         base_url (str):
         name (str):
+        runtime_type (Literal['OPENAI_COMPATIBLE']):
         api_key (None | str | Unset):
         default_model_name (None | str | Unset):
         description (None | str | Unset):
         headers (CreateOpenAICompatibleRuntimeProfileRequestHeaders | Unset):
         model_names (list[str] | Unset):
         model_settings (CreateOpenAICompatibleRuntimeProfileRequestModelSettings | Unset):
-        source (Literal['OPENAI_COMPATIBLE'] | Unset):  Default: 'OPENAI_COMPATIBLE'.
+        scope (RuntimeProfileScope | Unset):
     """
 
     base_url: str
     name: str
+    runtime_type: Literal["OPENAI_COMPATIBLE"]
     api_key: None | str | Unset = UNSET
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
@@ -51,13 +53,14 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
     model_settings: CreateOpenAICompatibleRuntimeProfileRequestModelSettings | Unset = (
         UNSET
     )
-    source: Literal["OPENAI_COMPATIBLE"] | Unset = "OPENAI_COMPATIBLE"
-    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+    scope: RuntimeProfileScope | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         base_url = self.base_url
 
         name = self.name
+
+        runtime_type = self.runtime_type
 
         api_key: None | str | Unset
         if isinstance(self.api_key, Unset):
@@ -89,14 +92,17 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
         if not isinstance(self.model_settings, Unset):
             model_settings = self.model_settings.to_dict()
 
-        source = self.source
+        scope: str | Unset = UNSET
+        if not isinstance(self.scope, Unset):
+            scope = self.scope.value
 
         field_dict: dict[str, Any] = {}
-        field_dict.update(self.additional_properties)
+
         field_dict.update(
             {
                 "base_url": base_url,
                 "name": name,
+                "runtime_type": runtime_type,
             }
         )
         if api_key is not UNSET:
@@ -111,8 +117,8 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
             field_dict["model_names"] = model_names
         if model_settings is not UNSET:
             field_dict["model_settings"] = model_settings
-        if source is not UNSET:
-            field_dict["source"] = source
+        if scope is not UNSET:
+            field_dict["scope"] = scope
 
         return field_dict
 
@@ -129,6 +135,12 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
         base_url = d.pop("base_url")
 
         name = d.pop("name")
+
+        runtime_type = cast(Literal["OPENAI_COMPATIBLE"], d.pop("runtime_type"))
+        if runtime_type != "OPENAI_COMPATIBLE":
+            raise ValueError(
+                f"runtime_type must match const 'OPENAI_COMPATIBLE', got '{runtime_type}'"
+            )
 
         def _parse_api_key(data: object) -> None | str | Unset:
             if data is None:
@@ -181,39 +193,24 @@ class CreateOpenAICompatibleRuntimeProfileRequest:
                 )
             )
 
-        source = cast(Literal["OPENAI_COMPATIBLE"] | Unset, d.pop("source", UNSET))
-        if source != "OPENAI_COMPATIBLE" and not isinstance(source, Unset):
-            raise ValueError(
-                f"source must match const 'OPENAI_COMPATIBLE', got '{source}'"
-            )
+        _scope = d.pop("scope", UNSET)
+        scope: RuntimeProfileScope | Unset
+        if isinstance(_scope, Unset):
+            scope = UNSET
+        else:
+            scope = RuntimeProfileScope(_scope)
 
         create_open_ai_compatible_runtime_profile_request = cls(
             base_url=base_url,
             name=name,
+            runtime_type=runtime_type,
             api_key=api_key,
             default_model_name=default_model_name,
             description=description,
             headers=headers,
             model_names=model_names,
             model_settings=model_settings,
-            source=source,
+            scope=scope,
         )
 
-        create_open_ai_compatible_runtime_profile_request.additional_properties = d
         return create_open_ai_compatible_runtime_profile_request
-
-    @property
-    def additional_keys(self) -> list[str]:
-        return list(self.additional_properties.keys())
-
-    def __getitem__(self, key: str) -> Any:
-        return self.additional_properties[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.additional_properties[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self.additional_properties[key]
-
-    def __contains__(self, key: str) -> bool:
-        return key in self.additional_properties

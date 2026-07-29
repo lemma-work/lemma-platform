@@ -550,106 +550,9 @@
         "title": "AgentDetailResponse",
         "type": "object"
       },
-      "AgentHarnessInfo": {
-        "properties": {
-          "availability_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Availability Status"
-          },
-          "available": {
-            "default": true,
-            "title": "Available",
-            "type": "boolean"
-          },
-          "daemon_display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Display Name"
-          },
-          "daemon_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Id"
-          },
-          "daemon_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Status"
-          },
-          "display_name": {
-            "title": "Display Name",
-            "type": "string"
-          },
-          "harness_kind": {
-            "$ref": "#/components/schemas/HarnessKind"
-          },
-          "model_catalog": {
-            "items": {
-              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
-            },
-            "title": "Model Catalog",
-            "type": "array"
-          },
-          "models": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Models",
-            "type": "array"
-          }
-        },
-        "required": [
-          "harness_kind",
-          "display_name"
-        ],
-        "title": "AgentHarnessInfo",
-        "type": "object"
-      },
-      "AgentHarnessListResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/AgentHarnessInfo"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "AgentHarnessListResponse",
-        "type": "object"
-      },
       "AgentHostAdapterProtocol": {
         "enum": [
-          "ACP_V1",
+          "ACP",
           "NATIVE"
         ],
         "title": "AgentHostAdapterProtocol",
@@ -765,12 +668,59 @@
           "CANCEL_RUN",
           "DRAIN",
           "RESUME",
-          "REFRESH_INTEGRATION",
+          "REFRESH_HARNESS",
           "CLOSE_SESSION",
           "ROTATE_DEVICE_KEY"
         ],
         "title": "AgentHostCommandKind",
         "type": "string"
+      },
+      "AgentHostCommandRejection": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/AgentHostRejectionCode"
+          },
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "lease_epoch": {
+            "minimum": 1.0,
+            "title": "Lease Epoch",
+            "type": "integer"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "run_id",
+          "lease_epoch",
+          "code",
+          "retryable"
+        ],
+        "title": "AgentHostCommandRejection",
+        "type": "object"
       },
       "AgentHostConfigOption": {
         "properties": {
@@ -841,10 +791,10 @@
             "title": "Event Id",
             "type": "string"
           },
-          "integration_key": {
+          "harness_key": {
             "maxLength": 128,
             "minLength": 1,
-            "title": "Integration Key",
+            "title": "Harness Key",
             "type": "string"
           },
           "lease_epoch": {
@@ -895,7 +845,7 @@
           "event_id",
           "occurred_at",
           "type",
-          "integration_key",
+          "harness_key",
           "adapter_version"
         ],
         "title": "AgentHostEvent",
@@ -965,7 +915,7 @@
         "title": "AgentHostEventType",
         "type": "string"
       },
-      "AgentHostIntegrationCapabilities": {
+      "AgentHostHarnessCapabilities": {
         "additionalProperties": true,
         "properties": {
           "close_session": {
@@ -1004,10 +954,10 @@
             "type": "boolean"
           }
         },
-        "title": "AgentHostIntegrationCapabilities",
+        "title": "AgentHostHarnessCapabilities",
         "type": "object"
       },
-      "AgentHostIntegrationHealth": {
+      "AgentHostHarnessHealth": {
         "enum": [
           "READY",
           "AUTH_REQUIRED",
@@ -1017,14 +967,14 @@
           "INSTALLING",
           "DISABLED"
         ],
-        "title": "AgentHostIntegrationHealth",
+        "title": "AgentHostHarnessHealth",
         "type": "string"
       },
-      "AgentHostIntegrationListResponse": {
+      "AgentHostHarnessListResponse": {
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/AgentHostIntegrationResponse"
+              "$ref": "#/components/schemas/AgentHostHarnessResponse"
             },
             "title": "Items",
             "type": "array"
@@ -1033,32 +983,32 @@
         "required": [
           "items"
         ],
-        "title": "AgentHostIntegrationListResponse",
+        "title": "AgentHostHarnessListResponse",
         "type": "object"
       },
-      "AgentHostIntegrationPublishRequest": {
+      "AgentHostHarnessPublishRequest": {
         "properties": {
-          "integrations": {
+          "harnesses": {
             "items": {
-              "$ref": "#/components/schemas/AgentHostIntegrationSnapshot"
+              "$ref": "#/components/schemas/AgentHostHarnessSnapshot"
             },
             "maxItems": 32,
             "minItems": 1,
-            "title": "Integrations",
+            "title": "Harnesses",
             "type": "array"
           }
         },
         "required": [
-          "integrations"
+          "harnesses"
         ],
-        "title": "AgentHostIntegrationPublishRequest",
+        "title": "AgentHostHarnessPublishRequest",
         "type": "object"
       },
-      "AgentHostIntegrationPublishResponse": {
+      "AgentHostHarnessPublishResponse": {
         "properties": {
           "items": {
             "items": {
-              "$ref": "#/components/schemas/AgentHostIntegrationResponse"
+              "$ref": "#/components/schemas/AgentHostHarnessResponse"
             },
             "title": "Items",
             "type": "array"
@@ -1067,14 +1017,18 @@
         "required": [
           "items"
         ],
-        "title": "AgentHostIntegrationPublishResponse",
+        "title": "AgentHostHarnessPublishResponse",
         "type": "object"
       },
-      "AgentHostIntegrationResponse": {
+      "AgentHostHarnessResponse": {
         "properties": {
           "adapter_protocol": {
             "title": "Adapter Protocol",
             "type": "string"
+          },
+          "adapter_protocol_version": {
+            "title": "Adapter Protocol Version",
+            "type": "integer"
           },
           "adapter_version": {
             "title": "Adapter Version",
@@ -1107,6 +1061,10 @@
             "title": "Fetched At",
             "type": "string"
           },
+          "harness_key": {
+            "title": "Harness Key",
+            "type": "string"
+          },
           "health": {
             "title": "Health",
             "type": "string"
@@ -1119,10 +1077,6 @@
           "id": {
             "format": "uuid",
             "title": "Id",
-            "type": "string"
-          },
-          "integration_key": {
-            "title": "Integration Key",
             "type": "string"
           },
           "metadata": {
@@ -1161,9 +1115,10 @@
         "required": [
           "id",
           "host_id",
-          "integration_key",
+          "harness_key",
           "display_name",
           "adapter_protocol",
+          "adapter_protocol_version",
           "adapter_version",
           "upstream_version",
           "auth_state",
@@ -1176,13 +1131,19 @@
           "stale_reason",
           "metadata"
         ],
-        "title": "AgentHostIntegrationResponse",
+        "title": "AgentHostHarnessResponse",
         "type": "object"
       },
-      "AgentHostIntegrationSnapshot": {
+      "AgentHostHarnessSnapshot": {
         "properties": {
           "adapter_protocol": {
             "$ref": "#/components/schemas/AgentHostAdapterProtocol"
+          },
+          "adapter_protocol_version": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Adapter Protocol Version",
+            "type": "integer"
           },
           "adapter_version": {
             "maxLength": 128,
@@ -1197,7 +1158,7 @@
             "type": "string"
           },
           "capabilities": {
-            "$ref": "#/components/schemas/AgentHostIntegrationCapabilities"
+            "$ref": "#/components/schemas/AgentHostHarnessCapabilities"
           },
           "config_options": {
             "items": {
@@ -1223,14 +1184,14 @@
             "title": "Fetched At",
             "type": "string"
           },
-          "health": {
-            "$ref": "#/components/schemas/AgentHostIntegrationHealth"
-          },
-          "integration_key": {
+          "harness_key": {
             "maxLength": 128,
             "minLength": 1,
-            "title": "Integration Key",
+            "title": "Harness Key",
             "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/AgentHostHarnessHealth"
           },
           "metadata": {
             "additionalProperties": true,
@@ -1267,7 +1228,7 @@
           }
         },
         "required": [
-          "integration_key",
+          "harness_key",
           "display_name",
           "adapter_protocol",
           "adapter_version",
@@ -1277,7 +1238,7 @@
           "fetched_at",
           "stale_after"
         ],
-        "title": "AgentHostIntegrationSnapshot",
+        "title": "AgentHostHarnessSnapshot",
         "type": "object"
       },
       "AgentHostListResponse": {
@@ -1501,6 +1462,14 @@
           },
           "hello": {
             "$ref": "#/components/schemas/HostHello"
+          },
+          "rejections": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostCommandRejection"
+            },
+            "maxItems": 256,
+            "title": "Rejections",
+            "type": "array"
           }
         },
         "required": [
@@ -1544,6 +1513,20 @@
         ],
         "title": "AgentHostPollResponse",
         "type": "object"
+      },
+      "AgentHostRejectionCode": {
+        "enum": [
+          "DRAINING",
+          "COMMAND_EXPIRED",
+          "HARNESS_NOT_FOUND",
+          "CONFIG_REVISION_STALE",
+          "INVALID_SELECTIONS",
+          "CAPACITY_LOST",
+          "ADAPTER_UNAVAILABLE",
+          "INVALID_COMMAND"
+        ],
+        "title": "AgentHostRejectionCode",
+        "type": "string"
       },
       "AgentHostResponse": {
         "properties": {
@@ -2162,7 +2145,33 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/AgentRuntimeProfileResponse"
+              "discriminator": {
+                "mapping": {
+                  "ANTHROPIC_COMPATIBLE": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse",
+                  "AZURE_OPENAI": "#/components/schemas/AzureOpenAIRuntimeProfileResponse",
+                  "GOOGLE_VERTEX": "#/components/schemas/GoogleVertexRuntimeProfileResponse",
+                  "HARNESS": "#/components/schemas/HarnessRuntimeProfileResponse",
+                  "OPENAI_COMPATIBLE": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                },
+                "propertyName": "runtime_type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/AzureOpenAIRuntimeProfileResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/GoogleVertexRuntimeProfileResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/HarnessRuntimeProfileResponse"
+                }
+              ]
             },
             "title": "Items",
             "type": "array"
@@ -2173,247 +2182,6 @@
           "default_runtime"
         ],
         "title": "AgentRuntimeProfileListResponse",
-        "type": "object"
-      },
-      "AgentRuntimeProfileResponse": {
-        "properties": {
-          "availability_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Availability Status"
-          },
-          "config": {
-            "additionalProperties": true,
-            "title": "Config",
-            "type": "object"
-          },
-          "daemon_display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Display Name"
-          },
-          "daemon_harness_available": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Harness Available"
-          },
-          "daemon_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Id"
-          },
-          "daemon_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Status"
-          },
-          "default_model_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Model Name"
-          },
-          "derived_harness_kind": {
-            "$ref": "#/components/schemas/HarnessKind"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "has_credentials": {
-            "default": false,
-            "title": "Has Credentials",
-            "type": "boolean"
-          },
-          "host_display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Host Display Name"
-          },
-          "host_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Host Id"
-          },
-          "host_integration_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Host Integration Id"
-          },
-          "host_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Host Status"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "integration_config_revision": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Integration Config Revision"
-          },
-          "integration_health": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Integration Health"
-          },
-          "integration_key": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Integration Key"
-          },
-          "kind": {
-            "$ref": "#/components/schemas/RuntimeProfileKind"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
-          },
-          "model_catalog": {
-            "items": {
-              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
-            },
-            "title": "Model Catalog",
-            "type": "array"
-          },
-          "name": {
-            "title": "Name",
-            "type": "string"
-          },
-          "organization_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Organization Id"
-          },
-          "protocol": {
-            "$ref": "#/components/schemas/RuntimeProfileProtocol"
-          },
-          "scope": {
-            "$ref": "#/components/schemas/RuntimeProfileScope"
-          },
-          "status": {
-            "$ref": "#/components/schemas/RuntimeProfileStatus"
-          },
-          "user_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "User Id"
-          }
-        },
-        "required": [
-          "id",
-          "scope",
-          "kind",
-          "protocol",
-          "name",
-          "status",
-          "derived_harness_kind"
-        ],
-        "title": "AgentRuntimeProfileResponse",
         "type": "object"
       },
       "AgentSummaryResponse": {
@@ -2706,6 +2474,151 @@
         ],
         "title": "AgentToolset",
         "type": "string"
+      },
+      "AnthropicCompatibleRuntimeConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "base_url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          }
+        },
+        "title": "AnthropicCompatibleRuntimeConfig",
+        "type": "object"
+      },
+      "AnthropicCompatibleRuntimeProfileResponse": {
+        "properties": {
+          "availability_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability Status"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AnthropicCompatibleRuntimeConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "has_credentials": {
+            "default": false,
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
+            },
+            "title": "Model Catalog",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "runtime_type": {
+            "const": "ANTHROPIC_COMPATIBLE",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeProfileStatus"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "status",
+          "runtime_type",
+          "config"
+        ],
+        "title": "AnthropicCompatibleRuntimeProfileResponse",
+        "type": "object"
       },
       "AppBundleUploadRequest": {
         "properties": {
@@ -3447,6 +3360,152 @@
           }
         },
         "title": "AvailableSurfacesResponse",
+        "type": "object"
+      },
+      "AzureOpenAIRuntimeConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "api_version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Version"
+          },
+          "azure_endpoint": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Azure Endpoint",
+            "type": "string"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "azure_endpoint"
+        ],
+        "title": "AzureOpenAIRuntimeConfig",
+        "type": "object"
+      },
+      "AzureOpenAIRuntimeProfileResponse": {
+        "properties": {
+          "availability_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability Status"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AzureOpenAIRuntimeConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "has_credentials": {
+            "default": false,
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
+            },
+            "title": "Model Catalog",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "runtime_type": {
+            "const": "AZURE_OPENAI",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeProfileStatus"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "status",
+          "runtime_type",
+          "config"
+        ],
+        "title": "AzureOpenAIRuntimeProfileResponse",
         "type": "object"
       },
       "BulkCreateRecordsRequest": {
@@ -4366,79 +4425,6 @@
         "title": "ConversationType",
         "type": "string"
       },
-      "CreateAgentHostRuntimeProfileRequest": {
-        "properties": {
-          "config_selections": {
-            "additionalProperties": true,
-            "title": "Config Selections",
-            "type": "object"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "fallback_profile_id": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Fallback Profile Id"
-          },
-          "host_integration_id": {
-            "format": "uuid",
-            "title": "Host Integration Id",
-            "type": "string"
-          },
-          "host_wait_timeout_seconds": {
-            "default": 300,
-            "maximum": 3600.0,
-            "minimum": 1.0,
-            "title": "Host Wait Timeout Seconds",
-            "type": "integer"
-          },
-          "integration_snapshot_revision": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Integration Snapshot Revision",
-            "type": "string"
-          },
-          "name": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "scope": {
-            "$ref": "#/components/schemas/RuntimeProfileScope",
-            "default": "PERSONAL"
-          },
-          "source": {
-            "const": "AGENT_HOST",
-            "default": "AGENT_HOST",
-            "title": "Source",
-            "type": "string"
-          }
-        },
-        "required": [
-          "host_integration_id",
-          "name",
-          "integration_snapshot_revision"
-        ],
-        "title": "CreateAgentHostRuntimeProfileRequest",
-        "type": "object"
-      },
       "CreateAgentRequest": {
         "properties": {
           "agent_runtime": {
@@ -4551,6 +4537,7 @@
         "type": "object"
       },
       "CreateAnthropicCompatibleRuntimeProfileRequest": {
+        "additionalProperties": false,
         "properties": {
           "api_key": {
             "minLength": 1,
@@ -4619,14 +4606,18 @@
             "title": "Name",
             "type": "string"
           },
-          "source": {
+          "runtime_type": {
             "const": "ANTHROPIC_COMPATIBLE",
-            "default": "ANTHROPIC_COMPATIBLE",
-            "title": "Source",
+            "title": "Runtime Type",
             "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope",
+            "default": "PERSONAL"
           }
         },
         "required": [
+          "runtime_type",
           "name",
           "api_key"
         ],
@@ -4735,6 +4726,89 @@
           "name"
         ],
         "title": "CreateAppRequest",
+        "type": "object"
+      },
+      "CreateAzureOpenAIRuntimeProfileRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "minLength": 1,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "api_version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Version"
+          },
+          "azure_endpoint": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Azure Endpoint",
+            "type": "string"
+          },
+          "default_model_name": {
+            "minLength": 1,
+            "title": "Default Model Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "model_names": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Model Names",
+            "type": "array"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "runtime_type": {
+            "const": "AZURE_OPENAI",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope",
+            "default": "PERSONAL"
+          }
+        },
+        "required": [
+          "runtime_type",
+          "name",
+          "azure_endpoint",
+          "api_key",
+          "default_model_name",
+          "model_names"
+        ],
+        "title": "CreateAzureOpenAIRuntimeProfileRequest",
         "type": "object"
       },
       "CreateConversationRequest": {
@@ -4947,7 +5021,175 @@
         "title": "CreateFunctionRequest",
         "type": "object"
       },
+      "CreateGoogleVertexRuntimeProfileRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "default_model_name": {
+            "minLength": 1,
+            "title": "Default Model Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "location": {
+            "minLength": 1,
+            "title": "Location",
+            "type": "string"
+          },
+          "model_names": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Model Names",
+            "type": "array"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "minLength": 1,
+            "title": "Project Id",
+            "type": "string"
+          },
+          "runtime_type": {
+            "const": "GOOGLE_VERTEX",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope",
+            "default": "PERSONAL"
+          },
+          "service_account_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Json"
+          }
+        },
+        "required": [
+          "runtime_type",
+          "name",
+          "project_id",
+          "location",
+          "default_model_name",
+          "model_names"
+        ],
+        "title": "CreateGoogleVertexRuntimeProfileRequest",
+        "type": "object"
+      },
+      "CreateHarnessRuntimeProfileRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "config_selections": {
+            "additionalProperties": true,
+            "title": "Config Selections",
+            "type": "object"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "fallback_profile_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Profile Id"
+          },
+          "harness_id": {
+            "format": "uuid",
+            "title": "Harness Id",
+            "type": "string"
+          },
+          "harness_snapshot_revision": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Harness Snapshot Revision",
+            "type": "string"
+          },
+          "host_wait_timeout_seconds": {
+            "default": 300,
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Host Wait Timeout Seconds",
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "runtime_type": {
+            "const": "HARNESS",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope",
+            "default": "PERSONAL"
+          }
+        },
+        "required": [
+          "runtime_type",
+          "harness_id",
+          "name",
+          "harness_snapshot_revision"
+        ],
+        "title": "CreateHarnessRuntimeProfileRequest",
+        "type": "object"
+      },
       "CreateOpenAICompatibleRuntimeProfileRequest": {
+        "additionalProperties": false,
         "properties": {
           "api_key": {
             "anyOf": [
@@ -5016,14 +5258,18 @@
             "title": "Name",
             "type": "string"
           },
-          "source": {
+          "runtime_type": {
             "const": "OPENAI_COMPATIBLE",
-            "default": "OPENAI_COMPATIBLE",
-            "title": "Source",
+            "title": "Runtime Type",
             "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope",
+            "default": "PERSONAL"
           }
         },
         "required": [
+          "runtime_type",
           "name",
           "base_url"
         ],
@@ -5222,64 +5468,6 @@
           "columns"
         ],
         "title": "CreateTableRequest",
-        "type": "object"
-      },
-      "CreateUserDaemonRuntimeProfileRequest": {
-        "properties": {
-          "daemon_id": {
-            "format": "uuid",
-            "title": "Daemon Id",
-            "type": "string"
-          },
-          "default_model_name": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Model Name"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "harness_kind": {
-            "$ref": "#/components/schemas/HarnessKind"
-          },
-          "name": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "scope": {
-            "$ref": "#/components/schemas/RuntimeProfileScope",
-            "default": "ORGANIZATION"
-          },
-          "source": {
-            "const": "USER_DAEMON",
-            "default": "USER_DAEMON",
-            "title": "Source",
-            "type": "string"
-          }
-        },
-        "required": [
-          "daemon_id",
-          "harness_kind",
-          "name"
-        ],
-        "title": "CreateUserDaemonRuntimeProfileRequest",
         "type": "object"
       },
       "DataStoreWorkflowStartConfigInput": {
@@ -7974,19 +8162,361 @@
         "title": "FunctionType",
         "type": "string"
       },
-      "HarnessKind": {
-        "description": "Runtime framework used to execute an agent.",
-        "enum": [
-          "LEMMA",
-          "AGENT_HOST",
-          "CODEX",
-          "CLAUDE_CODE",
-          "OPENCODE",
-          "CURSOR",
-          "ANTIGRAVITY"
+      "GoogleVertexRuntimeConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "location": {
+            "minLength": 1,
+            "title": "Location",
+            "type": "string"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          },
+          "project_id": {
+            "minLength": 1,
+            "title": "Project Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "location"
         ],
-        "title": "HarnessKind",
-        "type": "string"
+        "title": "GoogleVertexRuntimeConfig",
+        "type": "object"
+      },
+      "GoogleVertexRuntimeProfileResponse": {
+        "properties": {
+          "availability_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability Status"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GoogleVertexRuntimeConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "has_credentials": {
+            "default": false,
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
+            },
+            "title": "Model Catalog",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "runtime_type": {
+            "const": "GOOGLE_VERTEX",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeProfileStatus"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "status",
+          "runtime_type",
+          "config"
+        ],
+        "title": "GoogleVertexRuntimeProfileResponse",
+        "type": "object"
+      },
+      "HarnessRuntimeConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "config_selections": {
+            "additionalProperties": true,
+            "title": "Config Selections",
+            "type": "object"
+          },
+          "fallback_profile_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Profile Id"
+          },
+          "harness_snapshot_revision": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Harness Snapshot Revision",
+            "type": "string"
+          },
+          "host_wait_timeout_seconds": {
+            "default": 300,
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Host Wait Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "harness_snapshot_revision"
+        ],
+        "title": "HarnessRuntimeConfig",
+        "type": "object"
+      },
+      "HarnessRuntimeProfileResponse": {
+        "properties": {
+          "availability_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability Status"
+          },
+          "config": {
+            "$ref": "#/components/schemas/HarnessRuntimeConfig"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "harness_config_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Config Revision"
+          },
+          "harness_health": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Health"
+          },
+          "harness_id": {
+            "format": "uuid",
+            "title": "Harness Id",
+            "type": "string"
+          },
+          "harness_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Key"
+          },
+          "has_credentials": {
+            "default": false,
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "host_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Display Name"
+          },
+          "host_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Id"
+          },
+          "host_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Status"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
+            },
+            "title": "Model Catalog",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "runtime_type": {
+            "const": "HARNESS",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeProfileStatus"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "status",
+          "runtime_type",
+          "config",
+          "harness_id"
+        ],
+        "title": "HarnessRuntimeProfileResponse",
+        "type": "object"
       },
       "HostHello": {
         "properties": {
@@ -8853,6 +9383,147 @@
           "authorization_url"
         ],
         "title": "OAuth2DefaultsResponseSchema",
+        "type": "object"
+      },
+      "OpenAICompatibleRuntimeConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "base_url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "model_settings": {
+            "additionalProperties": true,
+            "title": "Model Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "base_url"
+        ],
+        "title": "OpenAICompatibleRuntimeConfig",
+        "type": "object"
+      },
+      "OpenAICompatibleRuntimeProfileResponse": {
+        "properties": {
+          "availability_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability Status"
+          },
+          "config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OpenAICompatibleRuntimeConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "has_credentials": {
+            "default": false,
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
+            },
+            "title": "Model Catalog",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "runtime_type": {
+            "const": "OPENAI_COMPATIBLE",
+            "title": "Runtime Type",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeProfileStatus"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "name",
+          "status",
+          "runtime_type",
+          "config"
+        ],
+        "title": "OpenAICompatibleRuntimeProfileResponse",
         "type": "object"
       },
       "OperationDetail": {
@@ -11229,31 +11900,6 @@
         "title": "RuntimeModelCatalogEntry",
         "type": "object"
       },
-      "RuntimeProfileKind": {
-        "enum": [
-          "MODEL_PROVIDER",
-          "HARNESS",
-          "EXTERNAL_AGENT"
-        ],
-        "title": "RuntimeProfileKind",
-        "type": "string"
-      },
-      "RuntimeProfileProtocol": {
-        "enum": [
-          "OPENAI_COMPATIBLE",
-          "ANTHROPIC_COMPATIBLE",
-          "AZURE_OPENAI",
-          "GOOGLE_VERTEX",
-          "CODEX_APP_SERVER",
-          "CLAUDE_CODE",
-          "OPENCODE",
-          "CURSOR",
-          "ANTIGRAVITY",
-          "AGENT_HOST_V2"
-        ],
-        "title": "RuntimeProfileProtocol",
-        "type": "string"
-      },
       "RuntimeProfileScope": {
         "enum": [
           "SYSTEM",
@@ -13397,6 +14043,236 @@
           "data"
         ],
         "title": "UpdateRecordRequest",
+        "type": "object"
+      },
+      "UpdateRuntimeProfileRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "api_version": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Version"
+          },
+          "azure_endpoint": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Azure Endpoint"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "config_selections": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Selections"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "fallback_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Profile Id"
+          },
+          "harness_snapshot_revision": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Snapshot Revision"
+          },
+          "headers": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headers"
+          },
+          "host_wait_timeout_seconds": {
+            "anyOf": [
+              {
+                "maximum": 3600.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Wait Timeout Seconds"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Names"
+          },
+          "model_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Settings"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "service_account_json": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Account Json"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeProfileStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "UpdateRuntimeProfileRequest",
         "type": "object"
       },
       "UpdateScheduleRequest": {
@@ -16325,11 +17201,11 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.8"
+    "version": "0.7.0"
   },
   "openapi": "3.1.0",
   "paths": {
-    "/agent-host/v2/events:append": {
+    "/agent-host/events:append": {
       "post": {
         "operationId": "agent.host.events.append",
         "parameters": [
@@ -16398,9 +17274,9 @@
         }
       }
     },
-    "/agent-host/v2/integrations": {
+    "/agent-host/harnesses": {
       "put": {
-        "operationId": "agent.host.integrations.publish",
+        "operationId": "agent.host.harnesses.publish",
         "parameters": [
           {
             "in": "header",
@@ -16423,7 +17299,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AgentHostIntegrationPublishRequest"
+                "$ref": "#/components/schemas/AgentHostHarnessPublishRequest"
               }
             }
           },
@@ -16434,7 +17310,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentHostIntegrationPublishResponse"
+                  "$ref": "#/components/schemas/AgentHostHarnessPublishResponse"
                 }
               }
             },
@@ -16451,23 +17327,23 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Publish Agent Host Integrations",
+        "summary": "Publish Agent Host Harnesses",
         "tags": [
           "agent_host"
         ],
         "x-lemma": {
           "invalidates": [
-            "agent.host.integrations"
+            "agent.host.harnesses"
           ],
           "kind": "mutation",
           "paginates": false,
-          "resource": "agent.host.integrations",
+          "resource": "agent.host.harnesses",
           "result": "entity",
           "verb": "publish"
         }
       }
     },
-    "/agent-host/v2/mcp-routes/{route_id}": {
+    "/agent-host/mcp-routes/{route_id}": {
       "get": {
         "operationId": "agent.host.mcp_route.resolve",
         "parameters": [
@@ -16533,7 +17409,7 @@
         }
       }
     },
-    "/agent-host/v2/pairings:complete": {
+    "/agent-host/pairings:complete": {
       "post": {
         "operationId": "agent.host.pairing.complete",
         "requestBody": {
@@ -16584,7 +17460,7 @@
         }
       }
     },
-    "/agent-host/v2/poll": {
+    "/agent-host/poll": {
       "post": {
         "operationId": "agent.host.poll",
         "parameters": [
@@ -16653,7 +17529,7 @@
         }
       }
     },
-    "/agent-host/v2/revoke": {
+    "/agent-host/revoke": {
       "post": {
         "description": "Revoke the calling device before its local identity is removed.",
         "operationId": "agent.host.self_revoke",
@@ -16706,7 +17582,7 @@
         }
       }
     },
-    "/agent-host/v2/token:exchange": {
+    "/agent-host/token:exchange": {
       "post": {
         "operationId": "agent.host.token.exchange",
         "requestBody": {
@@ -16754,34 +17630,6 @@
           "resource": "agent.host.token",
           "result": "entity",
           "verb": "exchange"
-        }
-      }
-    },
-    "/agent-runtime/harnesses": {
-      "get": {
-        "operationId": "agent.runtime.harnesses.list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentHarnessListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "List Available Agent Harnesses",
-        "tags": [
-          "agent_runtime"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.runtime.harnesses",
-          "result": "collection",
-          "verb": "list"
         }
       }
     },
@@ -17114,35 +17962,7 @@
         }
       }
     },
-    "/me/agent-hosts": {
-      "get": {
-        "operationId": "agent.host.list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentHostListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "List Agent Hosts",
-        "tags": [
-          "agent_host"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.host",
-          "result": "collection",
-          "verb": "list"
-        }
-      }
-    },
-    "/me/agent-hosts/pairings": {
+    "/me/runtime/agent-host-pairings": {
       "post": {
         "operationId": "agent.host.pairing.create",
         "requestBody": {
@@ -17193,7 +18013,35 @@
         }
       }
     },
-    "/me/agent-hosts/{host_id}": {
+    "/me/runtime/agent-hosts": {
+      "get": {
+        "operationId": "agent.host.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Agent Hosts",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.host",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/me/runtime/agent-hosts/{host_id}": {
       "delete": {
         "operationId": "agent.host.revoke",
         "parameters": [
@@ -17246,9 +18094,9 @@
         }
       }
     },
-    "/me/agent-hosts/{host_id}/integrations": {
+    "/me/runtime/agent-hosts/{host_id}/harnesses": {
       "get": {
-        "operationId": "agent.host.integrations.list",
+        "operationId": "agent.host.harnesses.list",
         "parameters": [
           {
             "in": "path",
@@ -17266,7 +18114,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AgentHostIntegrationListResponse"
+                  "$ref": "#/components/schemas/AgentHostHarnessListResponse"
                 }
               }
             },
@@ -17283,14 +18131,14 @@
             "description": "Validation Error"
           }
         },
-        "summary": "List Agent Host Integrations",
+        "summary": "List Agent Host Harnesses",
         "tags": [
           "agent_host"
         ],
         "x-lemma": {
           "kind": "query",
           "paginates": false,
-          "resource": "agent.host.integrations",
+          "resource": "agent.host.harnesses",
           "result": "collection",
           "verb": "list"
         }
@@ -17869,140 +18717,6 @@
         }
       }
     },
-    "/organizations/{org_id}/agent-runtime/profiles": {
-      "get": {
-        "operationId": "agent.runtime.profiles.list",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentRuntimeProfileListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Available Agent Runtime Profiles",
-        "tags": [
-          "agent_runtime"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.runtime.profiles",
-          "result": "collection",
-          "verb": "list"
-        }
-      },
-      "post": {
-        "operationId": "agent.runtime.profiles.create",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "org_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Org Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "discriminator": {
-                  "mapping": {
-                    "AGENT_HOST": "#/components/schemas/CreateAgentHostRuntimeProfileRequest",
-                    "ANTHROPIC_COMPATIBLE": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest",
-                    "OPENAI_COMPATIBLE": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest",
-                    "USER_DAEMON": "#/components/schemas/CreateUserDaemonRuntimeProfileRequest"
-                  },
-                  "propertyName": "source"
-                },
-                "oneOf": [
-                  {
-                    "$ref": "#/components/schemas/CreateUserDaemonRuntimeProfileRequest"
-                  },
-                  {
-                    "$ref": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest"
-                  },
-                  {
-                    "$ref": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest"
-                  },
-                  {
-                    "$ref": "#/components/schemas/CreateAgentHostRuntimeProfileRequest"
-                  }
-                ],
-                "title": "Data"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentRuntimeProfileResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Create Agent Runtime Profile",
-        "tags": [
-          "agent_runtime"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.runtime.profiles"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.runtime.profiles",
-          "result": "entity",
-          "verb": "create"
-        }
-      }
-    },
     "/organizations/{org_id}/invitations": {
       "get": {
         "description": "Get all pending invitations for an organization",
@@ -18410,6 +19124,496 @@
           "resource": "org.member",
           "result": "entity",
           "verb": "update_role"
+        }
+      }
+    },
+    "/organizations/{org_id}/runtime/profiles": {
+      "get": {
+        "operationId": "runtime.profiles.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRuntimeProfileListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List runtime profiles",
+        "tags": [
+          "runtime"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "runtime.profiles",
+          "result": "collection",
+          "verb": "list"
+        }
+      },
+      "post": {
+        "operationId": "runtime.profiles.create",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "ANTHROPIC_COMPATIBLE": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest",
+                    "AZURE_OPENAI": "#/components/schemas/CreateAzureOpenAIRuntimeProfileRequest",
+                    "GOOGLE_VERTEX": "#/components/schemas/CreateGoogleVertexRuntimeProfileRequest",
+                    "HARNESS": "#/components/schemas/CreateHarnessRuntimeProfileRequest",
+                    "OPENAI_COMPATIBLE": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest"
+                  },
+                  "propertyName": "runtime_type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateAzureOpenAIRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateGoogleVertexRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateHarnessRuntimeProfileRequest"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "ANTHROPIC_COMPATIBLE": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse",
+                      "AZURE_OPENAI": "#/components/schemas/AzureOpenAIRuntimeProfileResponse",
+                      "GOOGLE_VERTEX": "#/components/schemas/GoogleVertexRuntimeProfileResponse",
+                      "HARNESS": "#/components/schemas/HarnessRuntimeProfileResponse",
+                      "OPENAI_COMPATIBLE": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    "propertyName": "runtime_type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AzureOpenAIRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GoogleVertexRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HarnessRuntimeProfileResponse"
+                    }
+                  ],
+                  "title": "Response Runtime.Profiles.Create"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a runtime profile",
+        "tags": [
+          "runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "runtime.profiles",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/organizations/{org_id}/runtime/profiles/{profile_id}": {
+      "delete": {
+        "operationId": "runtime.profiles.delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disable a runtime profile",
+        "tags": [
+          "runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "runtime.profiles",
+          "result": "void",
+          "verb": "delete"
+        }
+      },
+      "get": {
+        "operationId": "runtime.profiles.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "ANTHROPIC_COMPATIBLE": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse",
+                      "AZURE_OPENAI": "#/components/schemas/AzureOpenAIRuntimeProfileResponse",
+                      "GOOGLE_VERTEX": "#/components/schemas/GoogleVertexRuntimeProfileResponse",
+                      "HARNESS": "#/components/schemas/HarnessRuntimeProfileResponse",
+                      "OPENAI_COMPATIBLE": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    "propertyName": "runtime_type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AzureOpenAIRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GoogleVertexRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HarnessRuntimeProfileResponse"
+                    }
+                  ],
+                  "title": "Response Runtime.Profiles.Get"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a runtime profile",
+        "tags": [
+          "runtime"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "runtime.profiles",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "operationId": "runtime.profiles.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRuntimeProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "ANTHROPIC_COMPATIBLE": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse",
+                      "AZURE_OPENAI": "#/components/schemas/AzureOpenAIRuntimeProfileResponse",
+                      "GOOGLE_VERTEX": "#/components/schemas/GoogleVertexRuntimeProfileResponse",
+                      "HARNESS": "#/components/schemas/HarnessRuntimeProfileResponse",
+                      "OPENAI_COMPATIBLE": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    "propertyName": "runtime_type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AzureOpenAIRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GoogleVertexRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HarnessRuntimeProfileResponse"
+                    }
+                  ],
+                  "title": "Response Runtime.Profiles.Update"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a runtime profile",
+        "tags": [
+          "runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "runtime.profiles",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/organizations/{org_id}/runtime/profiles/{profile_id}/refresh": {
+      "post": {
+        "operationId": "runtime.profiles.refresh",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "ANTHROPIC_COMPATIBLE": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse",
+                      "AZURE_OPENAI": "#/components/schemas/AzureOpenAIRuntimeProfileResponse",
+                      "GOOGLE_VERTEX": "#/components/schemas/GoogleVertexRuntimeProfileResponse",
+                      "HARNESS": "#/components/schemas/HarnessRuntimeProfileResponse",
+                      "OPENAI_COMPATIBLE": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    "propertyName": "runtime_type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/OpenAICompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AnthropicCompatibleRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AzureOpenAIRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/GoogleVertexRuntimeProfileResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/HarnessRuntimeProfileResponse"
+                    }
+                  ],
+                  "title": "Response Runtime.Profiles.Refresh"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh a runtime profile",
+        "tags": [
+          "runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "runtime.profiles",
+          "result": "entity",
+          "verb": "refresh"
         }
       }
     },

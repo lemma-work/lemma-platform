@@ -11,6 +11,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.agent_host_capacity import AgentHostCapacity
+    from ..models.agent_host_command_rejection import AgentHostCommandRejection
     from ..models.agent_host_run_checkpoint import AgentHostRunCheckpoint
     from ..models.host_hello import HostHello
 
@@ -26,12 +27,14 @@ class AgentHostPollRequest:
         acknowledged_command_ids (list[UUID] | Unset):
         capacity (AgentHostCapacity | Unset):
         checkpoints (list[AgentHostRunCheckpoint] | Unset):
+        rejections (list[AgentHostCommandRejection] | Unset):
     """
 
     hello: HostHello
     acknowledged_command_ids: list[UUID] | Unset = UNSET
     capacity: AgentHostCapacity | Unset = UNSET
     checkpoints: list[AgentHostRunCheckpoint] | Unset = UNSET
+    rejections: list[AgentHostCommandRejection] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -55,6 +58,13 @@ class AgentHostPollRequest:
                 checkpoints_item = checkpoints_item_data.to_dict()
                 checkpoints.append(checkpoints_item)
 
+        rejections: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.rejections, Unset):
+            rejections = []
+            for rejections_item_data in self.rejections:
+                rejections_item = rejections_item_data.to_dict()
+                rejections.append(rejections_item)
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -68,12 +78,15 @@ class AgentHostPollRequest:
             field_dict["capacity"] = capacity
         if checkpoints is not UNSET:
             field_dict["checkpoints"] = checkpoints
+        if rejections is not UNSET:
+            field_dict["rejections"] = rejections
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.agent_host_capacity import AgentHostCapacity
+        from ..models.agent_host_command_rejection import AgentHostCommandRejection
         from ..models.agent_host_run_checkpoint import AgentHostRunCheckpoint
         from ..models.host_hello import HostHello
 
@@ -107,11 +120,23 @@ class AgentHostPollRequest:
 
                 checkpoints.append(checkpoints_item)
 
+        _rejections = d.pop("rejections", UNSET)
+        rejections: list[AgentHostCommandRejection] | Unset = UNSET
+        if _rejections is not UNSET:
+            rejections = []
+            for rejections_item_data in _rejections:
+                rejections_item = AgentHostCommandRejection.from_dict(
+                    rejections_item_data
+                )
+
+                rejections.append(rejections_item)
+
         agent_host_poll_request = cls(
             hello=hello,
             acknowledged_command_ids=acknowledged_command_ids,
             capacity=capacity,
             checkpoints=checkpoints,
+            rejections=rejections,
         )
 
         agent_host_poll_request.additional_properties = d

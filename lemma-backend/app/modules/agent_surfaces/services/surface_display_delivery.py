@@ -7,7 +7,7 @@ owns the unit-of-work + ingress-service construction so the tool needs no
 surface-specific wiring on its context.
 
 Works uniformly for both agent harnesses: the in-process LEMMA harness and the
-daemon harness (whose MCP tool calls execute in the backend) both reach this the
+remote harness (whose MCP tool calls execute in the backend) both reach this
 same way — each call opens its own short uow. Credentials are resolved by the
 ingress service per call; ``display_resource`` is infrequent so this is not a hot
 path.

@@ -785,7 +785,7 @@ export function isUserInteractionToolName(toolName: string): boolean {
 }
 
 /** Whether an interaction invocation should use the specialized question /
- * approval UI. Failed daemon fallbacks have a terminal result but no user
+ * approval UI. Failed remote-harness fallbacks have a terminal result but no user
  * decision or answers, so they deliberately render as ordinary tool activity. */
 export function isRenderableUserInteractionInvocation(
   invocation: AssistantToolInvocation,

@@ -42,9 +42,9 @@ def missing_tool_return_events(
 
 def _missing_tool_return_error(event_type: AgentEventType) -> str:
     if event_type == AgentEventType.STOPPED:
-        return "Daemon run stopped before the tool returned a result."
+        return "Remote harness run stopped before the tool returned a result."
     if event_type == AgentEventType.ERROR:
-        return "Daemon run failed before the tool returned a result."
+        return "Remote harness run failed before the tool returned a result."
     if event_type == AgentEventType.REJECTED:
-        return "Daemon run was rejected before the tool returned a result."
-    return "Daemon run completed without a tool return."
+        return "Remote harness run was rejected before the tool returned a result."
+    return "Remote harness run completed without a tool return."

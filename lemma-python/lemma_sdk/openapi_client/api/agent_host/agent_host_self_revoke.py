@@ -19,7 +19,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/agent-host/v2/revoke",
+        "url": "/agent-host/revoke",
     }
 
     _kwargs["headers"] = headers

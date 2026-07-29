@@ -10,8 +10,8 @@ from typing import (
 )
 
 from attrs import define as _attrs_define
-from attrs import field as _attrs_field
 
+from ..models.runtime_profile_scope import RuntimeProfileScope
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -32,17 +32,19 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
     Attributes:
         api_key (str):
         name (str):
+        runtime_type (Literal['ANTHROPIC_COMPATIBLE']):
         base_url (None | str | Unset):
         default_model_name (None | str | Unset):
         description (None | str | Unset):
         headers (CreateAnthropicCompatibleRuntimeProfileRequestHeaders | Unset):
         model_names (list[str] | Unset):
         model_settings (CreateAnthropicCompatibleRuntimeProfileRequestModelSettings | Unset):
-        source (Literal['ANTHROPIC_COMPATIBLE'] | Unset):  Default: 'ANTHROPIC_COMPATIBLE'.
+        scope (RuntimeProfileScope | Unset):
     """
 
     api_key: str
     name: str
+    runtime_type: Literal["ANTHROPIC_COMPATIBLE"]
     base_url: None | str | Unset = UNSET
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
@@ -51,13 +53,14 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
     model_settings: (
         CreateAnthropicCompatibleRuntimeProfileRequestModelSettings | Unset
     ) = UNSET
-    source: Literal["ANTHROPIC_COMPATIBLE"] | Unset = "ANTHROPIC_COMPATIBLE"
-    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+    scope: RuntimeProfileScope | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
         api_key = self.api_key
 
         name = self.name
+
+        runtime_type = self.runtime_type
 
         base_url: None | str | Unset
         if isinstance(self.base_url, Unset):
@@ -89,14 +92,17 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
         if not isinstance(self.model_settings, Unset):
             model_settings = self.model_settings.to_dict()
 
-        source = self.source
+        scope: str | Unset = UNSET
+        if not isinstance(self.scope, Unset):
+            scope = self.scope.value
 
         field_dict: dict[str, Any] = {}
-        field_dict.update(self.additional_properties)
+
         field_dict.update(
             {
                 "api_key": api_key,
                 "name": name,
+                "runtime_type": runtime_type,
             }
         )
         if base_url is not UNSET:
@@ -111,8 +117,8 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
             field_dict["model_names"] = model_names
         if model_settings is not UNSET:
             field_dict["model_settings"] = model_settings
-        if source is not UNSET:
-            field_dict["source"] = source
+        if scope is not UNSET:
+            field_dict["scope"] = scope
 
         return field_dict
 
@@ -129,6 +135,12 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
         api_key = d.pop("api_key")
 
         name = d.pop("name")
+
+        runtime_type = cast(Literal["ANTHROPIC_COMPATIBLE"], d.pop("runtime_type"))
+        if runtime_type != "ANTHROPIC_COMPATIBLE":
+            raise ValueError(
+                f"runtime_type must match const 'ANTHROPIC_COMPATIBLE', got '{runtime_type}'"
+            )
 
         def _parse_base_url(data: object) -> None | str | Unset:
             if data is None:
@@ -183,39 +195,24 @@ class CreateAnthropicCompatibleRuntimeProfileRequest:
                 )
             )
 
-        source = cast(Literal["ANTHROPIC_COMPATIBLE"] | Unset, d.pop("source", UNSET))
-        if source != "ANTHROPIC_COMPATIBLE" and not isinstance(source, Unset):
-            raise ValueError(
-                f"source must match const 'ANTHROPIC_COMPATIBLE', got '{source}'"
-            )
+        _scope = d.pop("scope", UNSET)
+        scope: RuntimeProfileScope | Unset
+        if isinstance(_scope, Unset):
+            scope = UNSET
+        else:
+            scope = RuntimeProfileScope(_scope)
 
         create_anthropic_compatible_runtime_profile_request = cls(
             api_key=api_key,
             name=name,
+            runtime_type=runtime_type,
             base_url=base_url,
             default_model_name=default_model_name,
             description=description,
             headers=headers,
             model_names=model_names,
             model_settings=model_settings,
-            source=source,
+            scope=scope,
         )
 
-        create_anthropic_compatible_runtime_profile_request.additional_properties = d
         return create_anthropic_compatible_runtime_profile_request
-
-    @property
-    def additional_keys(self) -> list[str]:
-        return list(self.additional_properties.keys())
-
-    def __getitem__(self, key: str) -> Any:
-        return self.additional_properties[key]
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        self.additional_properties[key] = value
-
-    def __delitem__(self, key: str) -> None:
-        del self.additional_properties[key]
-
-    def __contains__(self, key: str) -> bool:
-        return key in self.additional_properties

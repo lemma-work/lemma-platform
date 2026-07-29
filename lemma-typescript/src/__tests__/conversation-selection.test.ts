@@ -300,7 +300,7 @@ describe("explicit conversation selection", () => {
     const failedConversation = {
       ...conversation("failed", "2026-07-19T12:00:00.000Z"),
       last_run_status: "FAILED",
-      last_run_error: "User daemon is not connected",
+      last_run_error: "Agent Host harness is unavailable",
       last_run_retryable: true,
     } as Conversation;
     const { client, resumeStream, retryFailedRun, sendMessageStream } = fakeClient([
@@ -321,7 +321,7 @@ describe("explicit conversation selection", () => {
     sendMessageStream.mockImplementationOnce(async () => new ReadableStream<Uint8Array>({
       start(streamController) {
         streamController.enqueue(encoder.encode(
-          'data: {"type":"error","data":{"message":"User daemon is not connected"}}\n\n',
+          'data: {"type":"error","data":{"message":"Agent Host harness is unavailable"}}\n\n',
         ));
         streamController.close();
       },
@@ -342,7 +342,7 @@ describe("explicit conversation selection", () => {
     await act(async () => controller.get().openConversation("failed"));
     await act(async () => controller.get().sendMessage("finish the report"));
 
-    expect(controller.get().error).toBe("User daemon is not connected");
+    expect(controller.get().error).toBe("Agent Host harness is unavailable");
     expect(controller.get().canRetryFailedMessage).toBe(true);
     expect(controller.get().messages.filter((message) => message.role === "user")).toHaveLength(1);
 

@@ -3,6 +3,6 @@
 /* tslint:disable */
 /* eslint-disable */
 export enum AgentHostAdapterProtocol {
-    ACP_V1 = 'ACP_V1',
+    ACP = 'ACP',
     NATIVE = 'NATIVE',
 }

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel
 from sqlalchemy import func, literal, literal_column, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm import selectinload
@@ -61,7 +63,6 @@ from app.modules.agent.infrastructure.models import (
     ConversationModel,
     MessageModel,
 )
-from app.modules.agent.infrastructure.runtime_models import AgentRuntimeDaemonModel
 from app.modules.agent.infrastructure.conversation_origin_store import (
     create_conversation_for_origin,
 )
@@ -90,30 +91,41 @@ class AgentRuntimeProfileRepository:
         self.encryption = encryption
 
     @staticmethod
-    def _serialize_json(value: object | None) -> dict | None:
+    def _serialize_json(value: BaseModel | dict[str, Any] | None) -> dict | None:
         if value is None:
             return None
-        model_dump = getattr(value, "model_dump", None)
-        if callable(model_dump):
-            return model_dump(mode="json")
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
         if isinstance(value, dict):
             return value
         return None
 
     def _to_entity(self, instance: AgentRuntimeProfileModel) -> AgentRuntimeProfile:
-        data = instance.to_entity().model_dump(mode="json")
-        data["credentials"] = self.encryption.decrypt_json(instance.credentials)
-        return AgentRuntimeProfile.model_validate(data)
+        return AgentRuntimeProfile.model_validate(
+            {
+                "id": str(instance.id),
+                "organization_id": instance.organization_id,
+                "owner_user_id": instance.owner_user_id,
+                "harness_id": instance.harness_id,
+                "scope": instance.scope,
+                "runtime_type": instance.runtime_type,
+                "name": instance.name,
+                "description": instance.description,
+                "default_model_name": instance.default_model_name,
+                "model_catalog": instance.model_catalog or [],
+                "config": instance.config or {},
+                "credentials": self.encryption.decrypt_json(instance.credentials),
+                "status": instance.status,
+            }
+        )
 
     def _to_model(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfileModel:
         return AgentRuntimeProfileModel(
             organization_id=entity.organization_id,
-            user_id=entity.user_id,
-            daemon_id=entity.daemon_id,
-            host_integration_id=entity.host_integration_id,
+            owner_user_id=entity.owner_user_id,
+            harness_id=entity.harness_id,
             scope=entity.scope.value,
-            kind=entity.kind.value,
-            protocol=entity.protocol.value,
+            runtime_type=entity.runtime_type.value,
             name=entity.name,
             description=entity.description,
             default_model_name=entity.default_model_name,
@@ -128,7 +140,6 @@ class AgentRuntimeProfileRepository:
                 reveal_credentials(entity.credentials)
             ),
             status=entity.status.value,
-            profile_metadata=entity.metadata,
         )
 
     async def create(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfile:
@@ -156,7 +167,7 @@ class AgentRuntimeProfileRepository:
             (AgentRuntimeProfileModel.scope == RuntimeProfileScope.ORGANIZATION.value)
             | (
                 (AgentRuntimeProfileModel.scope == RuntimeProfileScope.PERSONAL.value)
-                & (AgentRuntimeProfileModel.user_id == user_id)
+                & (AgentRuntimeProfileModel.owner_user_id == user_id)
             ),
         )
         if not include_disabled:
@@ -175,6 +186,7 @@ class AgentRuntimeProfileRepository:
         profile_id: str,
         organization_id: UUID,
         user_id: UUID,
+        include_disabled: bool = False,
     ) -> AgentRuntimeProfile | None:
         try:
             profile_uuid = UUID(profile_id)
@@ -194,145 +206,40 @@ class AgentRuntimeProfileRepository:
                         AgentRuntimeProfileModel.scope
                         == RuntimeProfileScope.PERSONAL.value
                     )
-                    & (AgentRuntimeProfileModel.user_id == user_id)
+                    & (AgentRuntimeProfileModel.owner_user_id == user_id)
                 ),
-                AgentRuntimeProfileModel.status == RuntimeProfileStatus.ACTIVE.value,
             )
             .limit(1)
         )
+        if not include_disabled:
+            stmt = stmt.where(
+                AgentRuntimeProfileModel.status == RuntimeProfileStatus.ACTIVE.value
+            )
         result = await self.session.execute(stmt)
         instance = result.scalar_one_or_none()
         return self._to_entity(instance) if instance else None
 
-
-class AgentRuntimeDaemonRepository:
-    """Repository for user-owned daemon catalog rows."""
-
-    def __init__(self, uow: SqlAlchemyUnitOfWork):
-        self.uow = uow
-        self.session = uow.session
-
-    async def upsert_ready(
-        self,
-        *,
-        user_id: UUID,
-        device_key: str,
-        display_name: str,
-        device_info: JsonObject | None = None,
-        harness_catalog: JsonObject | None = None,
-    ) -> AgentRuntimeDaemonModel:
-        now = datetime.now(timezone.utc)
-        normalized_device_key = device_key.strip()
-        normalized_display_name = display_name.strip() or "Lemma daemon"
-        stmt = (
-            select(AgentRuntimeDaemonModel)
-            .where(
-                AgentRuntimeDaemonModel.user_id == user_id,
-                AgentRuntimeDaemonModel.device_key == normalized_device_key,
-            )
-            .limit(1)
+    async def update(self, entity: AgentRuntimeProfile) -> AgentRuntimeProfile:
+        instance = await self.session.get(
+            AgentRuntimeProfileModel,
+            UUID(entity.id),
+            with_for_update=True,
         )
-        result = await self.session.execute(stmt)
-        instance = result.scalar_one_or_none()
         if instance is None:
-            instance = AgentRuntimeDaemonModel(
-                user_id=user_id,
-                device_key=normalized_device_key,
-                display_name=normalized_display_name,
-                status="ONLINE",
-                device_info=device_info or {},
-                harness_catalog=harness_catalog or {},
-                last_seen_at=now,
-                connected_at=now,
-                disconnected_at=None,
-            )
-            self.session.add(instance)
-        else:
-            instance.display_name = normalized_display_name
-            instance.status = "ONLINE"
-            instance.device_info = device_info or {}
-            instance.harness_catalog = harness_catalog or {}
-            instance.last_seen_at = now
-            instance.connected_at = now
-            instance.disconnected_at = None
-        await self.session.flush()
-        return instance
-
-    async def update_catalog(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-        harness_catalog: JsonObject,
-    ) -> AgentRuntimeDaemonModel | None:
-        instance = await self.get_for_user(daemon_id=daemon_id, user_id=user_id)
-        if instance is None:
-            return None
-        instance.harness_catalog = harness_catalog
-        instance.last_seen_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return instance
-
-    async def mark_seen(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-    ) -> AgentRuntimeDaemonModel | None:
-        instance = await self.get_for_user(daemon_id=daemon_id, user_id=user_id)
-        if instance is None:
-            return None
-        instance.last_seen_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return instance
-
-    async def mark_offline(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-    ) -> AgentRuntimeDaemonModel | None:
-        instance = await self.get_for_user(daemon_id=daemon_id, user_id=user_id)
-        if instance is None:
-            return None
-        now = datetime.now(timezone.utc)
-        instance.status = "OFFLINE"
-        instance.last_seen_at = now
-        instance.disconnected_at = now
-        await self.session.flush()
-        return instance
-
-    async def get_for_user(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-    ) -> AgentRuntimeDaemonModel | None:
-        stmt = (
-            select(AgentRuntimeDaemonModel)
-            .where(
-                AgentRuntimeDaemonModel.id == daemon_id,
-                AgentRuntimeDaemonModel.user_id == user_id,
-            )
-            .limit(1)
+            raise RuntimeError("Runtime profile no longer exists")
+        instance.name = entity.name
+        instance.description = entity.description
+        instance.default_model_name = entity.default_model_name
+        instance.model_catalog = [
+            item.model_dump(mode="json") for item in entity.model_catalog
+        ]
+        instance.config = self._serialize_json(entity.config) or {}
+        instance.credentials = self.encryption.encrypt_json(
+            reveal_credentials(entity.credentials)
         )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def list_for_user(
-        self,
-        *,
-        user_id: UUID,
-    ) -> list[AgentRuntimeDaemonModel]:
-        result = await self.session.execute(
-            select(AgentRuntimeDaemonModel)
-            .where(AgentRuntimeDaemonModel.user_id == user_id)
-            .order_by(
-                AgentRuntimeDaemonModel.status.desc(),
-                AgentRuntimeDaemonModel.updated_at.desc(),
-            )
-        )
-        return list(result.scalars())
+        instance.status = entity.status.value
+        await self.session.flush()
+        return self._to_entity(instance)
 
 
 class AgentRepository:

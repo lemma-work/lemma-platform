@@ -1,4 +1,4 @@
-"""PostgreSQL repositories for Agent Host v2.
+"""PostgreSQL repositories for Agent Host.
 
 Transport delivery is intentionally at-least-once. These repositories enforce
 the durable fencing, checkpoint, and event-deduplication rules that make replay
@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -19,11 +19,12 @@ from app.modules.agent.domain.agent_host import (
     AgentHostCheckpoint,
     AgentHostCommand,
     AgentHostCommandKind,
+    AgentHostCommandRejection,
     AgentHostCommandState,
     AgentHostEvent,
     AgentHostEventAck,
     AgentHostEventBatch,
-    AgentHostIntegrationHealth,
+    AgentHostHarnessHealth,
     AgentHostRunCheckpoint,
     AgentHostRunSpec,
     AgentHostRunState,
@@ -46,9 +47,11 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
     utcnow,
 )
 from app.modules.agent.infrastructure.runtime_models import (
+    AgentHostAuthNonceModel,
     AgentHostCommandModel,
     AgentHostEventModel,
     AgentHostMcpRouteModel,
+    AgentHostPairingModel,
     AgentHostRunLeaseModel,
 )
 
@@ -58,11 +61,85 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         self.uow = uow
         self.session = uow.session
 
+    async def cleanup_retained_state(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        """Remove expired protocol records without touching active runs.
+
+        Short-lived authorization records remain available for 24 hours after
+        expiry for diagnostics. Durable dispatch records remain for 30 days
+        after a run terminalizes. The terminal-run subquery is deliberately
+        shared by every run-scoped deletion so a clock anomaly can never sweep
+        an active run merely because a command or route timestamp is old.
+        """
+        timestamp = now or utcnow()
+        authorization_cutoff = timestamp - timedelta(hours=24)
+        route_cutoff = timestamp - timedelta(hours=24)
+        durable_cutoff = timestamp - timedelta(days=30)
+        terminal_runs = select(AgentHostRunLeaseModel.run_id).where(
+            AgentHostRunLeaseModel.terminal_at.is_not(None)
+        )
+        old_terminal_runs = select(AgentHostRunLeaseModel.run_id).where(
+            AgentHostRunLeaseModel.terminal_at.is_not(None),
+            AgentHostRunLeaseModel.terminal_at < durable_cutoff,
+        )
+
+        counts: dict[str, int] = {}
+        statements = (
+            (
+                "pairings",
+                delete(AgentHostPairingModel).where(
+                    AgentHostPairingModel.expires_at < authorization_cutoff
+                ),
+            ),
+            (
+                "auth_nonces",
+                delete(AgentHostAuthNonceModel).where(
+                    AgentHostAuthNonceModel.expires_at < authorization_cutoff
+                ),
+            ),
+            (
+                "mcp_routes",
+                delete(AgentHostMcpRouteModel).where(
+                    AgentHostMcpRouteModel.expires_at < route_cutoff,
+                    AgentHostMcpRouteModel.run_id.in_(terminal_runs),
+                ),
+            ),
+            (
+                "events",
+                delete(AgentHostEventModel).where(
+                    AgentHostEventModel.created_at < durable_cutoff,
+                    AgentHostEventModel.run_id.in_(old_terminal_runs),
+                ),
+            ),
+            (
+                "commands",
+                delete(AgentHostCommandModel).where(
+                    AgentHostCommandModel.created_at < durable_cutoff,
+                    AgentHostCommandModel.run_id.in_(old_terminal_runs),
+                ),
+            ),
+            (
+                "leases",
+                delete(AgentHostRunLeaseModel).where(
+                    AgentHostRunLeaseModel.terminal_at.is_not(None),
+                    AgentHostRunLeaseModel.terminal_at < durable_cutoff,
+                ),
+            ),
+        )
+        for label, statement in statements:
+            result = await self.session.execute(statement)
+            counts[label] = result.rowcount or 0
+        await self.session.flush()
+        return counts
+
     async def enqueue_run(
         self,
         *,
         host_id: UUID,
-        integration_id: UUID,
+        harness_id: UUID,
         runtime_profile_id: UUID,
         run_spec: AgentHostRunSpec,
         encrypted_mcp_payload: dict,
@@ -92,7 +169,7 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             if (
                 existing is None
                 or existing.host_id != host_id
-                or existing_lease.integration_id != integration_id
+                or existing_lease.harness_id != harness_id
                 or existing_lease.runtime_profile_id != runtime_profile_id
             ):
                 raise AgentHostRunConflict(
@@ -104,22 +181,22 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         host = await host_repository.require(host_id, for_update=True)
         if host.revoked_at is not None:
             raise AgentHostRunConflict("Agent Host is revoked")
-        integration = await host_repository.get_integration(
-            integration_id=integration_id
+        harness = await host_repository.get_harness(
+            harness_id=harness_id
         )
-        if integration is None or integration.host_id != host_id:
-            raise AgentHostNotFound("Agent Host integration was not found")
-        if integration.health != AgentHostIntegrationHealth.READY.value:
+        if harness is None or harness.host_id != host_id:
+            raise AgentHostNotFound("Agent Host harness was not found")
+        if harness.health != AgentHostHarnessHealth.READY.value:
             raise AgentHostRunConflict(
-                f"integration is not ready: {integration.health}"
+                f"harness is not ready: {harness.health}"
             )
-        if integration.config_revision != run_spec.profile_revision:
+        if harness.config_revision != run_spec.profile_revision:
             raise AgentHostRunConflict(
-                "integration configuration changed after profile validation"
+                "harness configuration changed after profile validation"
             )
         try:
             validate_agent_host_selections(
-                config_options=integration.config_options or [],
+                config_options=harness.config_options or [],
                 selections=run_spec.config_selections,
             )
         except ValueError as exc:
@@ -128,7 +205,7 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         lease = AgentHostRunLeaseModel(
             run_id=run_spec.agent_run_id,
             host_id=host_id,
-            integration_id=integration_id,
+            harness_id=harness_id,
             runtime_profile_id=runtime_profile_id,
             lease_epoch=1,
             state=AgentHostRunState.QUEUED_FOR_HOST.value,
@@ -208,6 +285,7 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         limit: int,
         acknowledged_command_ids: list[UUID],
         checkpoints: list[AgentHostRunCheckpoint],
+        rejections: list[AgentHostCommandRejection],
         available_run_slots: int,
         now: datetime | None = None,
         lease_seconds: int = DEFAULT_RUN_LEASE_SECONDS,
@@ -224,6 +302,12 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
                 checkpoint=checkpoint,
                 now=timestamp,
                 lease_seconds=lease_seconds,
+            )
+        for rejection in rejections:
+            await self.apply_rejection(
+                host_id=host_id,
+                rejection=rejection,
+                now=timestamp,
             )
 
         result = await self.session.execute(
@@ -277,6 +361,71 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             wire_commands.append(self._wire_command(command))
         await self.session.flush()
         return wire_commands
+
+    async def apply_rejection(
+        self,
+        *,
+        host_id: UUID,
+        rejection: AgentHostCommandRejection,
+        now: datetime | None = None,
+    ) -> None:
+        """Persist one fenced pre-dispatch rejection atomically.
+
+        A receipt can requeue an unaccepted command or terminalize it, but it
+        can never move an accepted lease backwards. Duplicate and stale
+        receipts therefore become harmless no-ops.
+        """
+        timestamp = now or utcnow()
+        command = await self.session.get(
+            AgentHostCommandModel,
+            rejection.command_id,
+            with_for_update=True,
+        )
+        if command is None or command.host_id != host_id:
+            raise AgentHostProtocolViolation(
+                "rejected command does not belong to this host"
+            )
+        if (
+            command.kind != AgentHostCommandKind.START_RUN.value
+            or command.run_id != rejection.run_id
+            or command.lease_epoch != rejection.lease_epoch
+        ):
+            raise AgentHostProtocolViolation("rejection identity does not match command")
+        lease = await self.session.get(
+            AgentHostRunLeaseModel,
+            rejection.run_id,
+            with_for_update=True,
+        )
+        if (
+            lease is None
+            or lease.host_id != host_id
+            or lease.lease_epoch != rejection.lease_epoch
+        ):
+            return
+        if (
+            lease.checkpoint is not None
+            or command.state == AgentHostCommandState.ACKNOWLEDGED.value
+            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
+        ):
+            return
+
+        command.rejection_code = rejection.code.value
+        command.rejection_retryable = rejection.retryable
+        command.rejection_detail = rejection.detail
+        command.rejected_at = timestamp
+        if rejection.retryable:
+            command.state = AgentHostCommandState.QUEUED.value
+            command.delivered_at = None
+            lease.state = AgentHostRunState.QUEUED_FOR_HOST.value
+        else:
+            command.state = AgentHostCommandState.ACKNOWLEDGED.value
+            command.acknowledged_at = timestamp
+            lease.state = AgentHostRunState.FAILED.value
+            lease.terminal_at = timestamp
+            lease.error_code = rejection.code.value
+            lease.error_detail = rejection.detail
+        lease.updated_at = timestamp
+        await self.session.flush()
 
     async def _acknowledge_commands(
         self,
@@ -502,6 +651,6 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             object_id=event.object_id,
             payload=event.payload,
             payload_digest=event.payload_digest,
-            integration_key=event.integration_key,
+            harness_key=event.harness_key,
             adapter_version=event.adapter_version,
         )

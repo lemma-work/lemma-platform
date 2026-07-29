@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { RuntimeProfileScope } from './RuntimeProfileScope.js';
 export type CreateOpenAICompatibleRuntimeProfileRequest = {
     api_key?: (string | null);
     base_url: string;
@@ -11,5 +12,6 @@ export type CreateOpenAICompatibleRuntimeProfileRequest = {
     model_names?: Array<string>;
     model_settings?: Record<string, any>;
     name: string;
-    source?: string;
+    runtime_type: string;
+    scope?: RuntimeProfileScope;
 };

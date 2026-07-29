@@ -8,10 +8,7 @@ import { InlineLoader } from '@/components/brand/loader';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
 import { ProductIcon } from '@/components/pod/product-icon';
-import {
-    useAgentRuntimes,
-    useAvailableAgentRuntimeHarnesses,
-} from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useOrganizationDetails } from '@/lib/hooks/use-organizations';
 
 export default function OrganizationAgentRuntimesPage({ params }: { params: Promise<{ id: string }> }) {
@@ -31,12 +28,6 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
         isLoading: isLoadingRuntimeCatalog,
         refetch: refetchRuntimeCatalog,
     } = useAgentRuntimes(organizationId);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
-
     return (
         <PlainPageShell
             title="Models"
@@ -57,11 +48,9 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
                 <ModelsSettings
                     organizationId={organizationId}
                     catalog={runtimeCatalog}
-                    availableHarnesses={availableHarnesses}
-                    isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
+                    isRefreshing={isFetchingRuntimeCatalog}
                     onRefresh={() => {
                         void refetchRuntimeCatalog();
-                        void refetchAvailableHarnesses();
                     }}
                 />
             </section>

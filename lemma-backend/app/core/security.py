@@ -66,7 +66,7 @@ EXCLUDED_PATHS = (
     "/webhooks",
     "/agent-runtime/runs/",  # run-scoped MCP routes validate their own token
     "/agent-runtime/conversations/",  # conversation-scoped MCP routes validate their own token
-    "/agent-host/v2/",  # Agent Host endpoints validate pairing proof or scoped device tokens
+    "/agent-host/",  # Agent Host endpoints validate pairing proof or scoped device tokens
 )
 
 
@@ -151,7 +151,6 @@ async def verify_auth(connection: HTTPConnection):
 
     if connection.scope["type"] != "http" and (
         connection.url.path.startswith("/workspace/browser")
-        or connection.url.path == "/me/agent-runtime/daemon/ws"
         or _is_datastore_changes_ws_path(connection.url.path)
     ):
         return

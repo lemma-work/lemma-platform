@@ -8,17 +8,18 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.agent.domain.agent_host import (
-    AgentHostIntegrationSnapshot,
+    AgentHostHarnessSnapshot,
     AgentHostStatus,
 )
 
 
-class AgentHostIntegrationResponse(BaseModel):
+class AgentHostHarnessResponse(BaseModel):
     id: UUID
     host_id: UUID
-    integration_key: str
+    harness_key: str
     display_name: str
     adapter_protocol: str
+    adapter_protocol_version: int
     adapter_version: str
     upstream_version: str | None
     auth_state: str
@@ -59,16 +60,16 @@ class AgentHostListResponse(BaseModel):
     items: list[AgentHostResponse]
 
 
-class AgentHostIntegrationListResponse(BaseModel):
-    items: list[AgentHostIntegrationResponse]
+class AgentHostHarnessListResponse(BaseModel):
+    items: list[AgentHostHarnessResponse]
 
 
-class AgentHostIntegrationPublishRequest(BaseModel):
-    integrations: list[AgentHostIntegrationSnapshot] = Field(
+class AgentHostHarnessPublishRequest(BaseModel):
+    harnesses: list[AgentHostHarnessSnapshot] = Field(
         min_length=1,
         max_length=32,
     )
 
 
-class AgentHostIntegrationPublishResponse(BaseModel):
-    items: list[AgentHostIntegrationResponse]
+class AgentHostHarnessPublishResponse(BaseModel):
+    items: list[AgentHostHarnessResponse]

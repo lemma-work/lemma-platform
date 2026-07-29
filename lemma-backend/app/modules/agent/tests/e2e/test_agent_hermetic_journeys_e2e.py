@@ -27,9 +27,9 @@ async def _create_runtime_profile(
     e2e_settings,
 ) -> dict:
     response = await authenticated_client.post(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles",
         json={
-            "source": "OPENAI_COMPATIBLE",
+            "runtime_type": "OPENAI_COMPATIBLE",
             "name": f"Hermetic FunctionModel {uuid4().hex[:8]}",
             "base_url": f"{e2e_settings.agentbox_api_url}/v1",
             "api_key": _RUNTIME_SECRET,
@@ -353,9 +353,9 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     """Provider profiles discover models and reject unsafe or unusable config."""
     canary = "CANARY_ANTHROPIC_PROFILE_KEY_b628"
     created = await authenticated_client.post(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles",
         json={
-            "source": "ANTHROPIC_COMPATIBLE",
+            "runtime_type": "ANTHROPIC_COMPATIBLE",
             "name": f"Anthropic compatible {uuid4().hex[:8]}",
             "base_url": f"{e2e_settings.agentbox_api_url}/v1",
             "api_key": canary,
@@ -366,7 +366,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     )
     assert created.status_code == status.HTTP_201_CREATED, created.text
     profile = created.json()
-    assert profile["protocol"] == "ANTHROPIC_COMPATIBLE"
+    assert profile["runtime_type"] == "ANTHROPIC_COMPATIBLE"
     assert profile["default_model_name"] == "mock-safe-model"
     assert profile["has_credentials"] is True
     assert canary not in created.text
@@ -376,16 +376,16 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     assert set(model["capabilities"]) == {"TEXT", "TOOLS", "VISION"}
 
     listed = await authenticated_client.get(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles"
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles"
     )
     assert listed.status_code == status.HTTP_200_OK, listed.text
     assert profile["id"] in {item["id"] for item in listed.json()["items"]}
     assert canary not in listed.text
 
     invalid_default = await authenticated_client.post(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles",
         json={
-            "source": "OPENAI_COMPATIBLE",
+            "runtime_type": "OPENAI_COMPATIBLE",
             "name": "Missing default model",
             "base_url": f"{e2e_settings.agentbox_api_url}/v1",
             "api_key": "not-persisted",
@@ -396,9 +396,9 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     assert "provider model names" in invalid_default.json()["message"]
 
     empty_catalog = await authenticated_client.post(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles",
         json={
-            "source": "OPENAI_COMPATIBLE",
+            "runtime_type": "OPENAI_COMPATIBLE",
             "name": "Empty provider catalog",
             "base_url": f"{e2e_settings.agentbox_api_url}/missing",
             "api_key": "not-persisted",
@@ -408,9 +408,9 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     assert "provide model_names" in empty_catalog.json()["message"]
 
     unsafe_url = await authenticated_client.post(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles",
         json={
-            "source": "OPENAI_COMPATIBLE",
+            "runtime_type": "OPENAI_COMPATIBLE",
             "name": "Cloud metadata is forbidden",
             "base_url": "http://169.254.169.254/latest",
             "api_key": "CANARY_SSRF_KEY_must_not_leak",
@@ -421,17 +421,17 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     assert unsafe_url.json()["message"] == "base_url must be a public http(s) URL"
     assert "CANARY_SSRF_KEY" not in unsafe_url.text
 
-    unavailable_daemon = await authenticated_client.post(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+    unavailable_harness = await authenticated_client.post(
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles",
         json={
-            "source": "USER_DAEMON",
-            "daemon_id": str(uuid4()),
-            "harness_kind": "CODEX",
+            "runtime_type": "HARNESS",
+            "harness_id": str(uuid4()),
+            "harness_snapshot_revision": "missing",
             "name": "Unavailable laptop",
         },
     )
-    assert unavailable_daemon.status_code == status.HTTP_400_BAD_REQUEST
-    assert "not available" in unavailable_daemon.json()["message"]
+    assert unavailable_harness.status_code == status.HTTP_400_BAD_REQUEST
+    assert "not available" in unavailable_harness.json()["message"]
 
 
 @pytest.mark.asyncio

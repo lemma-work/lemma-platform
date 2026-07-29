@@ -1,5 +1,5 @@
 import type { GeneratedClientAdapter } from "../generated.js";
-import type { AgentHostIntegrationListResponse } from "../openapi_client/models/AgentHostIntegrationListResponse.js";
+import type { AgentHostHarnessListResponse } from "../openapi_client/models/AgentHostHarnessListResponse.js";
 import type { AgentHostListResponse } from "../openapi_client/models/AgentHostListResponse.js";
 import type { AgentHostPairingCreate } from "../openapi_client/models/AgentHostPairingCreate.js";
 import type { AgentHostPairingCreated } from "../openapi_client/models/AgentHostPairingCreated.js";
@@ -17,8 +17,8 @@ export class AgentHostNamespace {
     return this.client.request(() => AgentHostService.agentHostPairingCreate(request));
   }
 
-  listIntegrations(hostId: string): Promise<AgentHostIntegrationListResponse> {
-    return this.client.request(() => AgentHostService.agentHostIntegrationsList(hostId));
+  listHarnesses(hostId: string): Promise<AgentHostHarnessListResponse> {
+    return this.client.request(() => AgentHostService.agentHostHarnessesList(hostId));
   }
 
   revoke(hostId: string): Promise<AgentHostResponse> {

@@ -23,7 +23,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/agent-host/v2/mcp-routes/{route_id}".format(
+        "url": "/agent-host/mcp-routes/{route_id}".format(
             route_id=quote(str(route_id), safe=""),
         ),
     }

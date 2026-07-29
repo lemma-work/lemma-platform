@@ -17,8 +17,6 @@ use serde_json::{Map, Value};
 use crate::adapters::ResolvedAdapter;
 use crate::protocol::{ConfigOption, EventType, JsonMap, RunSpec, RunState};
 
-pub const FOLLOW_ADAPTER_DEFAULT: &str = "FOLLOW_ADAPTER_DEFAULT";
-
 #[derive(Clone)]
 pub struct AcpRunRequest {
     pub adapter: ResolvedAdapter,
@@ -197,10 +195,29 @@ impl AgentDriver for AcpDriver {
                         .block_task()
                         .await?;
                 }
-                for (key, selection) in &run_spec.config_selections {
-                    if selection.as_str() == Some(FOLLOW_ADAPTER_DEFAULT) {
-                        continue;
+                if let Some(model_name) = &run_spec.model_name {
+                    let option = safe_options
+                        .iter()
+                        .find(|option| option.category == "model")
+                        .ok_or_else(|| {
+                            agent_client_protocol::schema::v1::Error::invalid_params()
+                                .data("this harness does not expose model selection")
+                        })?;
+                    let selection = Value::String(model_name.clone());
+                    if !selection_is_allowed(option, &selection) {
+                        return Err(agent_client_protocol::schema::v1::Error::invalid_params()
+                            .data("selected model is not offered by this harness"));
                     }
+                    connection
+                        .send_request(SetSessionConfigOptionRequest::new(
+                            session_id.clone(),
+                            option.id.clone(),
+                            SessionConfigOptionValue::value_id(model_name.clone()),
+                        ))
+                        .block_task()
+                        .await?;
+                }
+                for (key, selection) in &run_spec.config_selections {
                     let option = safe_options
                         .iter()
                         .find(|option| option.id == *key || option.category == *key)
@@ -208,6 +225,10 @@ impl AgentDriver for AcpDriver {
                             agent_client_protocol::schema::v1::Error::invalid_params()
                                 .data(format!("unknown or policy-blocked configuration: {key}"))
                         })?;
+                    if option.category == "model" {
+                        return Err(agent_client_protocol::schema::v1::Error::invalid_params()
+                            .data("model must be supplied through model_name"));
+                    }
                     if !selection_is_allowed(option, selection) {
                         return Err(agent_client_protocol::schema::v1::Error::invalid_params()
                             .data(format!("configuration value is not allowed for {key}")));
@@ -554,8 +575,9 @@ mod tests {
         let spec = RunSpec {
             agent_run_id: uuid::Uuid::new_v4(),
             conversation_id: uuid::Uuid::new_v4(),
-            integration_id: uuid::Uuid::new_v4(),
+            harness_id: uuid::Uuid::new_v4(),
             profile_revision: "r".into(),
+            model_name: None,
             config_selections: JsonMap::new(),
             system_prompt: "Be exact.".into(),
             prompt: vec![serde_json::json!({"type": "text", "text": "Hello"})],

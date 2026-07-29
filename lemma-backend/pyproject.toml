@@ -41,7 +41,7 @@ dependencies = [
     "pydantic-deep>=0.2.20",
     "authlib>=1.6.6",
     "apscheduler>=3.11.2",
-    "pydantic-ai-slim[anthropic,fastmcp,mcp,openai,retries]>=1.104.0",
+    "pydantic-ai-slim[anthropic,fastmcp,google,mcp,openai,retries]>=1.104.0",
     "websockets>=16.0",
     "uvicorn[standard]>=0.42.0",
     "supertokens-python==0.31.3",

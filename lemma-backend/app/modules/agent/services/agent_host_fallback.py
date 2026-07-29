@@ -14,7 +14,7 @@ from app.modules.agent.capabilities import build_lemma_harness_tooling
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCapability,
-    RuntimeProfileProtocol,
+    RuntimeProfileType,
 )
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
@@ -77,7 +77,7 @@ async def run_agent_host_fallback(
         user_id=user_id,
         organization_id=conversation.organization_id,
     )
-    if fallback_runtime.harness_kind is HarnessKind.AGENT_HOST:
+    if fallback_runtime.harness_kind is HarnessKind.HARNESS:
         raise RuntimeError("Agent Host fallback chains are not supported")
 
     primary_profile_id = (
@@ -116,8 +116,8 @@ async def run_agent_host_fallback(
             agent_run_id=agent_run_id,
             model_name=fallback_runtime.model_name_for_harness,
             enable_prompt_caching=(
-                fallback_runtime.profile.protocol
-                is RuntimeProfileProtocol.OPENAI_COMPATIBLE
+                fallback_runtime.profile.runtime_type
+                is RuntimeProfileType.OPENAI_COMPATIBLE
                 and settings.lemma_llm_caching_enabled
             ),
         )

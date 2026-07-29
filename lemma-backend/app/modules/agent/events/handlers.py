@@ -38,16 +38,16 @@ from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
-from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.infrastructure.harnesses import (
-    AgentHostHarness,
-    DaemonHarness,
+    RemoteHarness,
     HarnessRegistry,
     PydanticAIHarness,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.agent_host_repository import (
+    AgentHostDispatchRepository,
+)
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.realtime import (
     completed_payload,
@@ -79,26 +79,10 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def build_harness_registry() -> HarnessRegistry:
-    reconnect_grace_seconds = agent_settings.daemon_reconnect_grace_seconds
     return HarnessRegistry(
         [
             PydanticAIHarness(),
-            AgentHostHarness(provide_uow_factory()),
-            DaemonHarness(
-                HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.CLAUDE_CODE, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.ANTIGRAVITY, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
+            RemoteHarness(provide_uow_factory()),
         ]
     )
 
@@ -284,6 +268,27 @@ async def process_conversation_title(
 # task is definitively gone (crash/OOM/forced shutdown losing the finalization
 # race) and the run must be failed so it doesn't sit in RUNNING forever.
 _ORPHANED_RUN_CUTOFF_SECONDS = JOB_TIMEOUT_SECONDS + 300
+
+
+@streaq_cron("17 3 * * *", name="cleanup_agent_host_retained_state")
+async def cleanup_agent_host_retained_state() -> None:
+    """Apply the Agent Host protocol retention policy once per day."""
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    try:
+        async with worker_ctx.uow() as uow:
+            counts = await AgentHostDispatchRepository(
+                uow
+            ).cleanup_retained_state()
+    except Exception:
+        logger.error(
+            "agent.handlers.cleanup_agent_host_retained_state.failed",
+            exc_info=True,
+        )
+        return
+    logger.info(
+        "agent.handlers.cleanup_agent_host_retained_state.completed",
+        **counts,
+    )
 
 
 @streaq_cron("*/10 * * * *", name="reconcile_orphaned_agent_runs")

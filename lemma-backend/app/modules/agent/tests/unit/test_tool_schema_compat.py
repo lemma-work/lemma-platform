@@ -240,7 +240,7 @@ def test_final_answer_tool_schema_clean_with_output_schema():
 def test_inline_tool_schema_refs_removes_defs_and_refs():
     from app.modules.agent.tools.callable_tool_factory import inline_tool_schema_refs
 
-    # MCP tool schemas are served to daemon harnesses (OpenCode/Cursor/...) whose
+    # MCP tool schemas are served to remote harnesses (OpenCode/Cursor/...) whose
     # providers (e.g. Fireworks GLM) can't resolve $ref server-side, so they must
     # ship fully inlined. RecordFilter is flat (field/op/value), so it inlines.
     schema = {

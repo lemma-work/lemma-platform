@@ -7,13 +7,14 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
-| DELETE | `/me/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
+| DELETE | `/me/runtime/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
+| DELETE | `/organizations/{org_id}/runtime/profiles/{profile_id}` | `runtime.profiles.delete` | Disable a runtime profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
-| GET | `/agent-host/v2/mcp-routes/{route_id}` | `agent.host.mcp_route.resolve` | Resolve Agent Host Mcp Route |
-| GET | `/agent-runtime/harnesses` | `agent.runtime.harnesses.list` | List Available Agent Harnesses |
-| GET | `/me/agent-hosts` | `agent.host.list` | List Agent Hosts |
-| GET | `/me/agent-hosts/{host_id}/integrations` | `agent.host.integrations.list` | List Agent Host Integrations |
-| GET | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |
+| GET | `/agent-host/mcp-routes/{route_id}` | `agent.host.mcp_route.resolve` | Resolve Agent Host Mcp Route |
+| GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
+| GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
+| GET | `/organizations/{org_id}/runtime/profiles` | `runtime.profiles.list` | List runtime profiles |
+| GET | `/organizations/{org_id}/runtime/profiles/{profile_id}` | `runtime.profiles.get` | Get a runtime profile |
 | GET | `/pods/{pod_id}/agents` | `agent.list` | List Agents |
 | GET | `/pods/{pod_id}/agents/{agent_name}` | `agent.get` | Get Agent |
 | GET | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.get` | Get Agent Resource Permissions |
@@ -22,15 +23,17 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/approvals` | `agent.conversation.approval.list` | List Agent Run Approvals |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/messages` | `agent.conversation.message.list` | List Pod Conversation Messages |
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
+| PATCH | `/organizations/{org_id}/runtime/profiles/{profile_id}` | `runtime.profiles.update` | Update a runtime profile |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
 | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.update` | Update Pod Conversation |
-| POST | `/agent-host/v2/events:append` | `agent.host.events.append` | Append Agent Host Events |
-| POST | `/agent-host/v2/pairings:complete` | `agent.host.pairing.complete` | Complete Agent Host Pairing |
-| POST | `/agent-host/v2/poll` | `agent.host.poll` | Poll Agent Host Commands |
-| POST | `/agent-host/v2/revoke` | `agent.host.self_revoke` | Self Revoke Agent Host |
-| POST | `/agent-host/v2/token:exchange` | `agent.host.token.exchange` | Exchange Agent Host Token |
-| POST | `/me/agent-hosts/pairings` | `agent.host.pairing.create` | Create Agent Host Pairing |
-| POST | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.create` | Create Agent Runtime Profile |
+| POST | `/agent-host/events:append` | `agent.host.events.append` | Append Agent Host Events |
+| POST | `/agent-host/pairings:complete` | `agent.host.pairing.complete` | Complete Agent Host Pairing |
+| POST | `/agent-host/poll` | `agent.host.poll` | Poll Agent Host Commands |
+| POST | `/agent-host/revoke` | `agent.host.self_revoke` | Self Revoke Agent Host |
+| POST | `/agent-host/token:exchange` | `agent.host.token.exchange` | Exchange Agent Host Token |
+| POST | `/me/runtime/agent-host-pairings` | `agent.host.pairing.create` | Create Agent Host Pairing |
+| POST | `/organizations/{org_id}/runtime/profiles` | `runtime.profiles.create` | Create a runtime profile |
+| POST | `/organizations/{org_id}/runtime/profiles/{profile_id}/refresh` | `runtime.profiles.refresh` | Refresh a runtime profile |
 | POST | `/pods/{pod_id}/agents` | `agent.create` | Create Agent |
 | POST | `/pods/{pod_id}/conversations` | `agent.conversation.create` | Create Pod Agent Conversation |
 | POST | `/pods/{pod_id}/conversations/{conversation_id}/approvals/{approval_id}/decision` | `agent.conversation.approval.resolve` | Resolve User Approval |
@@ -40,7 +43,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token` | `widget.embed_token` | Mint Widget Embed URL |
 | POST | `/tools/report-feedback` | `agent.tool.report_feedback` | Agent Report Feedback |
 | POST | `/tools/web-search` | `agent.tool.web_search` | Agent Web Search |
-| PUT | `/agent-host/v2/integrations` | `agent.host.integrations.publish` | Publish Agent Host Integrations |
+| PUT | `/agent-host/harnesses` | `agent.host.harnesses.publish` | Publish Agent Host Harnesses |
 | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.replace` | Replace Agent Resource Permissions |
 
 ## agent_surfaces

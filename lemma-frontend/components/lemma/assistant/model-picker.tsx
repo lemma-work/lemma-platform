@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import type {
-  AgentHarnessListResponse,
   AgentRuntimeConfig,
   AgentRuntimeProfileListResponse,
   AvailableModelInfo,
@@ -26,12 +25,13 @@ import {
 import { cn } from "@/lib/utils";
 import {
   HARNESS_LOGOS,
-  isCodingAgentKind,
   modelPathHint,
   runtimeCatalogToModelOptions,
   runtimeKey,
   shortModelName,
 } from "@/components/agents/agent-runtime-helpers";
+
+const isHarnessRuntime = (kind?: string | null) => kind === "HARNESS";
 
 const AUTO_VALUE = "__AUTO_RUNTIME__";
 
@@ -204,7 +204,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
         key,
         harnessKind,
         displayName: option.agentRuntime?.name ?? option.profile?.name ?? providerName(harnessKind),
-        isCodingAgent: isCodingAgentKind(harnessKind),
+        isCodingAgent: isHarnessRuntime(harnessKind),
         options: [option],
       });
     });
@@ -478,7 +478,6 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
 
 export interface RuntimeModelPickerProps {
   catalog?: AgentRuntimeProfileListResponse;
-  availableHarnesses?: AgentHarnessListResponse;
   /** The default the "Auto" choice falls back to — shown under the Auto row. */
   defaultRuntime?: AgentRuntimeConfig | null;
   /** Current selection. null = inherit the default (Auto). */
@@ -515,7 +514,6 @@ export interface RuntimeModelPickerProps {
  */
 export function RuntimeModelPicker({
   catalog,
-  availableHarnesses,
   defaultRuntime,
   value,
   onChange,
@@ -534,8 +532,8 @@ export function RuntimeModelPicker({
   allowAuto,
 }: RuntimeModelPickerProps) {
   const options = useMemo(
-    () => runtimeCatalogToModelOptions(catalog, availableHarnesses),
-    [catalog, availableHarnesses],
+    () => runtimeCatalogToModelOptions(catalog),
+    [catalog],
   );
   const defaultModelLabel = defaultRuntime?.model_name ? shortModelName(defaultRuntime.model_name) : undefined;
   // "Currently <model>" signals this tracks the default — it'll move if the

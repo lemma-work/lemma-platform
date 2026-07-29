@@ -22,7 +22,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/agent-host/v2/events:append",
+        "url": "/agent-host/events:append",
     }
 
     _kwargs["json"] = body.to_dict()

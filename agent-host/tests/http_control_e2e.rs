@@ -10,7 +10,7 @@ use lemma_agent_host::adapters::AdapterManifest;
 use lemma_agent_host::api::TargetClient;
 use lemma_agent_host::crypto::MemoryVault;
 use lemma_agent_host::protocol::{
-    Event, EventBatch, EventType, HostCapacity, IntegrationHealth, JsonMap,
+    Event, EventBatch, EventType, HarnessHealth, HostCapacity, JsonMap,
 };
 use serde_json::{Value, json};
 use tokio::net::TcpListener;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 struct ServerState {
     host_id: Uuid,
     user_id: Uuid,
-    integration_id: Uuid,
+    harness_id: Uuid,
     route_id: Uuid,
     token_exchanges: Arc<AtomicUsize>,
     reject_next_authenticated: Arc<AtomicBool>,
@@ -86,11 +86,11 @@ async fn publish(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, StatusCode> {
     authenticated(&state, &headers)?;
-    let snapshot = &body["integrations"][0];
+    let snapshot = &body["harnesses"][0];
     Ok(Json(json!({
         "items": [{
-            "id": state.integration_id,
-            "integration_key": snapshot["integration_key"],
+            "id": state.harness_id,
+            "harness_key": snapshot["harness_key"],
             "adapter_version": snapshot["adapter_version"],
             "config_revision": snapshot["config_revision"],
         }]
@@ -154,19 +154,19 @@ async fn pairing_token_refresh_and_all_control_endpoints_interoperate() {
     let state = ServerState {
         host_id: Uuid::new_v4(),
         user_id: Uuid::new_v4(),
-        integration_id: Uuid::new_v4(),
+        harness_id: Uuid::new_v4(),
         route_id: Uuid::new_v4(),
         token_exchanges: Arc::new(AtomicUsize::new(0)),
         reject_next_authenticated: Arc::new(AtomicBool::new(false)),
     };
     let app = Router::new()
-        .route("/agent-host/v2/pairings:complete", post(pairing))
-        .route("/agent-host/v2/token:exchange", post(token))
-        .route("/agent-host/v2/poll", post(poll))
-        .route("/agent-host/v2/integrations", put(publish))
-        .route("/agent-host/v2/events:append", post(append_events))
-        .route("/agent-host/v2/mcp-routes/{route_id}", get(mcp_route))
-        .route("/agent-host/v2/revoke", post(revoke))
+        .route("/agent-host/pairings:complete", post(pairing))
+        .route("/agent-host/token:exchange", post(token))
+        .route("/agent-host/poll", post(poll))
+        .route("/agent-host/harnesses", put(publish))
+        .route("/agent-host/events:append", post(append_events))
+        .route("/agent-host/mcp-routes/{route_id}", get(mcp_route))
+        .route("/agent-host/revoke", post(revoke))
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -203,6 +203,7 @@ async fn pairing_token_refresh_and_all_control_endpoints_interoperate() {
             },
             vec![],
             vec![],
+            vec![],
         )
         .await
         .unwrap();
@@ -210,8 +211,8 @@ async fn pairing_token_refresh_and_all_control_endpoints_interoperate() {
 
     let snapshots = manifest.discover();
     let expected_revision = snapshots[0].config_revision.clone();
-    let published = client.publish_integrations(snapshots).await.unwrap();
-    assert_eq!(published[0].id, state.integration_id);
+    let published = client.publish_harnesses(snapshots).await.unwrap();
+    assert_eq!(published[0].id, state.harness_id);
     assert_eq!(published[0].config_revision, expected_revision);
 
     let run_id = Uuid::new_v4();
@@ -224,7 +225,7 @@ async fn pairing_token_refresh_and_all_control_endpoints_interoperate() {
         event_type: EventType::RunState,
         object_id: None,
         payload: JsonMap::new(),
-        integration_key: "codex".into(),
+        harness_key: "codex".into(),
         adapter_version: "1.1.7".into(),
     };
     let ack = client
@@ -248,7 +249,7 @@ async fn pairing_token_refresh_and_all_control_endpoints_interoperate() {
         .reject_next_authenticated
         .store(true, Ordering::SeqCst);
     client
-        .poll(HostCapacity::default(), vec![], vec![])
+        .poll(HostCapacity::default(), vec![], vec![], vec![])
         .await
         .unwrap();
     assert_eq!(state.token_exchanges.load(Ordering::SeqCst), 2);
@@ -257,9 +258,9 @@ async fn pairing_token_refresh_and_all_control_endpoints_interoperate() {
 }
 
 #[test]
-fn fixture_health_enum_stays_wire_compatible() {
+fn harness_health_enum_stays_wire_compatible() {
     assert_eq!(
-        serde_json::to_value(IntegrationHealth::Ready).unwrap(),
+        serde_json::to_value(HarnessHealth::Ready).unwrap(),
         Value::String("READY".into())
     );
 }

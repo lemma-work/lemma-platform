@@ -35,7 +35,7 @@ KNOWN_UNEXPOSED_PREFIXES = (
     # Agent Host device control-plane operations are reserved for the signed
     # native binary. The user-facing management operations have a typed facade.
     "agent.host.events.",
-    "agent.host.integrations.publish",
+    "agent.host.harnesses.publish",
     "agent.host.mcp_route.",
     "agent.host.pairing.complete",
     "agent.host.poll",

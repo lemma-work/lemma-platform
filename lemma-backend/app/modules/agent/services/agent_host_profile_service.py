@@ -7,19 +7,18 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from app.modules.agent.domain.agent_host import (
-    FOLLOW_ADAPTER_DEFAULT,
-    AgentHostIntegrationHealth,
+    AgentHostHarnessHealth,
     AgentHostStatus,
     effective_agent_host_status,
+    validate_agent_host_model,
     validate_agent_host_selections,
 )
 from app.modules.agent.domain.runtime_profiles import (
-    AgentHostRuntimeConfig,
+    HarnessRuntimeConfig,
     AgentRuntimeProfile,
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
+    RuntimeProfileType,
     RuntimeProfileScope,
     RuntimeProfileStatus,
 )
@@ -27,7 +26,7 @@ from app.modules.agent.domain.value_objects import JsonObject
 from app.modules.agent.infrastructure.agent_host_management_repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.runtime_models import AgentHostIntegrationModel
+from app.modules.agent.infrastructure.runtime_models import AgentHostHarnessModel
 
 if TYPE_CHECKING:
     from app.modules.agent.services.runtime_profile_service import (
@@ -35,16 +34,17 @@ if TYPE_CHECKING:
     )
 
 
-async def create_agent_host_profile(
+async def create_harness_profile(
     service: AgentRuntimeProfileService,
     *,
     organization_id: UUID,
     user_id: UUID,
-    host_integration_id: UUID,
+    harness_id: UUID,
     scope: RuntimeProfileScope,
     name: str,
-    integration_snapshot_revision: str,
+    harness_snapshot_revision: str,
     config_selections: JsonObject,
+    default_model_name: str | None = None,
     description: str | None = None,
     host_wait_timeout_seconds: int = 300,
     fallback_profile_id: str | None = None,
@@ -56,75 +56,70 @@ async def create_agent_host_profile(
         RuntimeProfileScope.PERSONAL,
     }:
         raise ValueError("Agent Host profile scope must be ORGANIZATION or PERSONAL")
-    integration = await _require_ready_integration(
+    harness = await _require_ready_harness(
         host_repository=service.host_repository,
-        integration_id=host_integration_id,
-        integration_snapshot_revision=integration_snapshot_revision,
+        harness_id=harness_id,
+        harness_snapshot_revision=harness_snapshot_revision,
         organization_id=organization_id,
         user_id=user_id,
         scope=scope,
     )
-    await _validate_fallback(
+    await validate_fallback_profile(
         service=service,
         fallback_profile_id=fallback_profile_id,
         organization_id=organization_id,
         user_id=user_id,
     )
     selections = validate_agent_host_selections(
-        config_options=integration.config_options or [],
+        config_options=harness.config_options or [],
         selections=config_selections,
     )
-    selected_model = selections.get("model")
+    selected_model = validate_agent_host_model(
+        config_options=harness.config_options or [],
+        model_name=default_model_name,
+    )
     profile = AgentRuntimeProfile(
         id=str(uuid4()),
         organization_id=organization_id,
-        user_id=user_id,
-        host_integration_id=host_integration_id,
+        owner_user_id=(
+            user_id if scope is RuntimeProfileScope.PERSONAL else None
+        ),
+        harness_id=harness_id,
         scope=scope,
-        kind=RuntimeProfileKind.EXTERNAL_AGENT,
-        protocol=RuntimeProfileProtocol.AGENT_HOST_V2,
+        runtime_type=RuntimeProfileType.HARNESS,
         name=_normalize_profile_name(name),
         description=description.strip() if description else None,
-        default_model_name=(
-            selected_model
-            if isinstance(selected_model, str)
-            and selected_model != FOLLOW_ADAPTER_DEFAULT
-            else FOLLOW_ADAPTER_DEFAULT
-        ),
+        default_model_name=selected_model,
         model_catalog=[],
-        config=AgentHostRuntimeConfig(
-            integration_snapshot_revision=integration.config_revision,
+        config=HarnessRuntimeConfig(
+            harness_snapshot_revision=harness.config_revision,
             config_selections=selections,
             host_wait_timeout_seconds=host_wait_timeout_seconds,
             fallback_profile_id=fallback_profile_id,
         ),
         status=RuntimeProfileStatus.ACTIVE,
-        metadata={
-            "source": "AGENT_HOST",
-            "integration_key": integration.integration_key,
-        },
     )
     return await service.repository.create(profile)
 
 
-async def _require_ready_integration(
+async def _require_ready_harness(
     *,
     host_repository: AgentHostRepository,
-    integration_id: UUID,
-    integration_snapshot_revision: str,
+    harness_id: UUID,
+    harness_snapshot_revision: str,
     organization_id: UUID,
     user_id: UUID,
     scope: RuntimeProfileScope,
-) -> AgentHostIntegrationModel:
-    integration = await host_repository.get_integration(integration_id=integration_id)
-    if integration is None:
-        raise ValueError("Agent Host integration is not available")
+) -> AgentHostHarnessModel:
+    harness = await host_repository.get_harness(harness_id=harness_id)
+    if harness is None:
+        raise ValueError("Agent Host harness is not available")
     host = await host_repository.get_for_user(
-        host_id=integration.host_id,
+        host_id=harness.host_id,
         user_id=user_id,
     )
     if host is None or host.revoked_at is not None:
-        raise ValueError("Agent Host integration is not owned by the current user")
+        raise ValueError("Agent Host harness is not owned by the current user")
     if (
         scope is RuntimeProfileScope.ORGANIZATION
         and host.organization_id != organization_id
@@ -137,18 +132,18 @@ async def _require_ready_integration(
         is not AgentHostStatus.ONLINE
     ):
         raise ValueError("Agent Host is offline or not accepting new runs")
-    if integration.health != AgentHostIntegrationHealth.READY.value:
-        raise ValueError(f"Agent Host integration is not ready: {integration.health}")
-    if integration.stale_after <= datetime.now(timezone.utc):
-        raise ValueError("Agent Host integration snapshot is stale; refresh it")
-    if integration.config_revision != integration_snapshot_revision:
+    if harness.health != AgentHostHarnessHealth.READY.value:
+        raise ValueError(f"Agent Host harness is not ready: {harness.health}")
+    if harness.stale_after <= datetime.now(timezone.utc):
+        raise ValueError("Agent Host harness snapshot is stale; refresh it")
+    if harness.config_revision != harness_snapshot_revision:
         raise ValueError(
-            "Agent Host integration changed; refresh configuration before saving"
+            "Agent Host harness changed; refresh configuration before saving"
         )
-    return integration
+    return harness
 
 
-async def _validate_fallback(
+async def validate_fallback_profile(
     *,
     service: AgentRuntimeProfileService,
     fallback_profile_id: str | None,
@@ -166,34 +161,31 @@ async def _validate_fallback(
         raise ValueError("Fallback runtime profile is not available")
     if fallback.status is not RuntimeProfileStatus.ACTIVE:
         raise ValueError("Fallback runtime profile is not active")
-    if fallback.protocol is RuntimeProfileProtocol.AGENT_HOST_V2:
+    if fallback.runtime_type is RuntimeProfileType.HARNESS:
         raise ValueError(
-            "Fallback runtime profile cannot use Agent Host; "
+            "Fallback runtime profile cannot use a harness; "
             "fallback chains are intentionally unsupported"
         )
 
 
-def selected_agent_host_model(
+def selected_harness_model(
     profile: AgentRuntimeProfile,
     requested_model_name: str | None,
 ) -> RuntimeModelCatalogEntry | None:
-    config = _config_dict(profile.config)
-    selections = config.get("config_selections")
-    configured_model = selections.get("model") if isinstance(selections, dict) else None
-    model_name = requested_model_name or configured_model or FOLLOW_ADAPTER_DEFAULT
-    if not isinstance(model_name, str) or not model_name.strip():
+    model_name = requested_model_name or profile.default_model_name
+    if model_name is None:
+        return None
+    model_name = model_name.strip()
+    if not model_name:
         return None
     return RuntimeModelCatalogEntry(
         name=model_name,
-        display_name=(
-            "Adapter default" if model_name == FOLLOW_ADAPTER_DEFAULT else model_name
-        ),
+        display_name=model_name,
         provider_model_name=model_name,
         capabilities=[
             RuntimeModelCapability.TEXT,
             RuntimeModelCapability.TOOLS,
         ],
-        metadata={"dynamic_agent_host_selection": True},
     )
 
 

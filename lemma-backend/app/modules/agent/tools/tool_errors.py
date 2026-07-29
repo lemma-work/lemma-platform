@@ -5,7 +5,7 @@ helpers so they format and skip errors identically:
 
   * the in-process LEMMA harness wraps every toolset in ``GracefulToolset`` and
     returns ``format_tool_error`` instead of raising,
-  * the daemon path (per-conversation / pod MCP services + the approval executor)
+  * the remote-harness path (per-conversation / pod MCP services + the approval executor)
     catches dispatcher failures and returns the same payload as an MCP tool error
     (``CallToolResult(isError=True, ...)``).
 

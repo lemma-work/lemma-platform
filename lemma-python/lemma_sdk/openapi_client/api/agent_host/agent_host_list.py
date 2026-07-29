@@ -13,7 +13,7 @@ def _get_kwargs() -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
         "method": "get",
-        "url": "/me/agent-hosts",
+        "url": "/me/runtime/agent-hosts",
     }
 
     return _kwargs

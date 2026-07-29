@@ -21,8 +21,6 @@ EXPECTED = [
     ),
     ("function_run_poll_interval_seconds", "FUNCTION_RUN_POLL_INTERVAL_SECONDS", 0.5),
     ("conversation_title_model", "CONVERSATION_TITLE_MODEL", None),
-    ("daemon_ws_ping_stale_after_seconds", "DAEMON_WS_PING_STALE_AFTER_SECONDS", 90.0),
-    ("daemon_reconnect_grace_seconds", "DAEMON_RECONNECT_GRACE_SECONDS", 120.0),
     ("widget_url_expiry_seconds", "WIDGET_URL_EXPIRY_SECONDS", 1800),
     ("speech_provider", "SPEECH_PROVIDER", "auto"),
     ("deepgram_api_key", "DEEPGRAM_API_KEY", None),
@@ -57,7 +55,7 @@ def test_agent_runtime_config_path_default_and_env(monkeypatch):
 
 
 @pytest.mark.parametrize("field,env,default", EXPECTED)
-def test_agent_settings_reads_legacy_env_var(monkeypatch, field, env, default):
+def test_agent_settings_reads_env_var(monkeypatch, field, env, default):
     _clear(monkeypatch)
     raw, expected = (
         ("123", float(123) if isinstance(default, float) else 123)

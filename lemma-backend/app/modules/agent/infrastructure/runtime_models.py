@@ -1,4 +1,4 @@
-"""Persistence models for local agent runtimes and Agent Host dispatch."""
+"""Persistence models for Agent Host harness discovery and dispatch."""
 
 from __future__ import annotations
 
@@ -20,50 +20,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import Base, UUIDAuditBase, UUIDCreatedBase
-
-
-class AgentRuntimeDaemonModel(UUIDAuditBase):
-    """User-owned host daemon connection/catalog state."""
-
-    __tablename__ = "agent_runtime_daemons"
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "device_key",
-            name="uq_agent_runtime_daemon_user_device",
-        ),
-        Index("ix_agent_runtime_daemons_user_status", "user_id", "status"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    device_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default="OFFLINE",
-        index=True,
-    )
-    device_info: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    harness_catalog: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    connected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    disconnected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
 
 
 class AgentHostPairingModel(UUIDCreatedBase):
@@ -153,17 +109,17 @@ class AgentHostModel(UUIDAuditBase):
     )
 
 
-class AgentHostIntegrationModel(UUIDAuditBase):
-    """Revisioned capability/configuration snapshot for one local integration."""
+class AgentHostHarnessModel(UUIDAuditBase):
+    """Revisioned capability/configuration snapshot for one local harness."""
 
-    __tablename__ = "agent_host_integrations"
+    __tablename__ = "agent_host_harnesses"
     __table_args__ = (
         UniqueConstraint(
             "host_id",
-            "integration_key",
-            name="uq_agent_host_integration_key",
+            "harness_key",
+            name="uq_agent_host_harness_key",
         ),
-        Index("ix_agent_host_integration_host_health", "host_id", "health"),
+        Index("ix_agent_host_harness_host_health", "host_id", "health"),
     )
 
     host_id: Mapped[UUID] = mapped_column(
@@ -171,9 +127,10 @@ class AgentHostIntegrationModel(UUIDAuditBase):
         index=True,
         nullable=False,
     )
-    integration_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    harness_key: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     adapter_protocol: Mapped[str] = mapped_column(String(32), nullable=False)
+    adapter_protocol_version: Mapped[int] = mapped_column(nullable=False, default=1)
     adapter_version: Mapped[str] = mapped_column(String(128), nullable=False)
     upstream_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     auth_state: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -188,7 +145,7 @@ class AgentHostIntegrationModel(UUIDAuditBase):
         DateTime(timezone=True), nullable=False
     )
     stale_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    integration_metadata: Mapped[dict] = mapped_column(
+    harness_metadata: Mapped[dict] = mapped_column(
         JSONB, nullable=False, default=dict
     )
 
@@ -230,6 +187,12 @@ class AgentHostCommandModel(UUIDCreatedBase):
     acknowledged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    rejection_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    rejection_retryable: Mapped[bool | None] = mapped_column(nullable=True)
+    rejection_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class AgentHostRunLeaseModel(Base):
@@ -257,8 +220,8 @@ class AgentHostRunLeaseModel(Base):
         index=True,
         nullable=False,
     )
-    integration_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_host_integrations.id", ondelete="RESTRICT"),
+    harness_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agent_host_harnesses.id", ondelete="RESTRICT"),
         nullable=False,
     )
     runtime_profile_id: Mapped[UUID | None] = mapped_column(
@@ -322,7 +285,7 @@ class AgentHostEventModel(UUIDCreatedBase):
     object_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    integration_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    harness_key: Mapped[str] = mapped_column(String(128), nullable=False)
     adapter_version: Mapped[str] = mapped_column(String(128), nullable=False)
 
 

@@ -40,7 +40,7 @@ class _FakeResolved:
         return {
             "profile_id": "system:lemma",
             "scope": "SYSTEM",
-            "protocol": "OPENAI_COMPATIBLE",
+            "runtime_type": "OPENAI_COMPATIBLE",
             "model_name": "deepseek-v4-flash",
             "provider_model_name": "accounts/fireworks/models/deepseek-v4-flash",
             "config": {"base_url": "http://fireworks.test/v1"},

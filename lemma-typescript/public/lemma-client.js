@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.6.8",
+    VERSION: "0.7.0",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10598,29 +10598,18 @@ var LemmaClient = (() => {
     });
   };
 
-  // src/openapi_client/services/AgentRuntimeService.ts
-  var AgentRuntimeService = class {
+  // src/openapi_client/services/RuntimeService.ts
+  var RuntimeService = class {
     /**
-     * List Available Agent Harnesses
-     * @returns AgentHarnessListResponse Successful Response
-     * @throws ApiError
-     */
-    static agentRuntimeHarnessesList() {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/agent-runtime/harnesses"
-      });
-    }
-    /**
-     * List Available Agent Runtime Profiles
+     * List runtime profiles
      * @param orgId
      * @returns AgentRuntimeProfileListResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesList(orgId) {
+    static runtimeProfilesList(orgId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/organizations/{org_id}/agent-runtime/profiles",
+        url: "/organizations/{org_id}/runtime/profiles",
         path: {
           "org_id": orgId
         },
@@ -10630,21 +10619,104 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Create Agent Runtime Profile
+     * Create a runtime profile
      * @param orgId
      * @param requestBody
-     * @returns AgentRuntimeProfileResponse Successful Response
+     * @returns any Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesCreate(orgId, requestBody) {
+    static runtimeProfilesCreate(orgId, requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/organizations/{org_id}/agent-runtime/profiles",
+        url: "/organizations/{org_id}/runtime/profiles",
         path: {
           "org_id": orgId
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Disable a runtime profile
+     * @param orgId
+     * @param profileId
+     * @returns void
+     * @throws ApiError
+     */
+    static runtimeProfilesDelete(orgId, profileId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/organizations/{org_id}/runtime/profiles/{profile_id}",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get a runtime profile
+     * @param orgId
+     * @param profileId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static runtimeProfilesGet(orgId, profileId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{org_id}/runtime/profiles/{profile_id}",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update a runtime profile
+     * @param orgId
+     * @param profileId
+     * @param requestBody
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static runtimeProfilesUpdate(orgId, profileId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/organizations/{org_id}/runtime/profiles/{profile_id}",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Refresh a runtime profile
+     * @param orgId
+     * @param profileId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static runtimeProfilesRefresh(orgId, profileId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/organizations/{org_id}/runtime/profiles/{profile_id}/refresh",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
         errors: {
           422: `Validation Error`
         }
@@ -10657,28 +10729,35 @@ var LemmaClient = (() => {
     constructor(client) {
       __publicField(this, "client", client);
     }
-    listHarnesses() {
-      return this.client.request(() => AgentRuntimeService.agentRuntimeHarnessesList());
-    }
-    listAvailableHarnesses() {
-      return this.listHarnesses();
-    }
     listRuntimes(orgId) {
       return this.listProfiles(orgId);
     }
     listProfiles(orgId) {
-      return this.client.request(() => AgentRuntimeService.agentRuntimeProfilesList(orgId));
+      return this.client.request(() => RuntimeService.runtimeProfilesList(orgId));
+    }
+    getProfile(orgId, profileId) {
+      return this.client.request(() => RuntimeService.runtimeProfilesGet(orgId, profileId));
     }
     createRuntime(orgId, request2) {
       return this.createProfile(orgId, request2);
     }
     createProfile(orgId, request2) {
-      return this.client.request(() => AgentRuntimeService.agentRuntimeProfilesCreate(orgId, request2));
+      return this.client.request(() => RuntimeService.runtimeProfilesCreate(orgId, request2));
+    }
+    updateProfile(orgId, profileId, request2) {
+      return this.client.request(
+        () => RuntimeService.runtimeProfilesUpdate(orgId, profileId, request2)
+      );
+    }
+    refreshProfile(orgId, profileId) {
+      return this.client.request(() => RuntimeService.runtimeProfilesRefresh(orgId, profileId));
+    }
+    deleteProfile(orgId, profileId) {
+      return this.client.request(() => RuntimeService.runtimeProfilesDelete(orgId, profileId));
     }
     /**
-     * @deprecated Runtime defaults are now pod config (`default_profile_id`) or
-     * organization Agent Runtimes. The backend no longer exposes a global
-     * default-runtime mutation endpoint.
+     * @deprecated Runtime defaults are pod configuration. Profiles only define
+     * reusable execution settings.
      */
     updateDefault(agentRuntime) {
       void agentRuntime;
@@ -10700,7 +10779,7 @@ var LemmaClient = (() => {
     static agentHostEventsAppend(requestBody, authorization) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/v2/events:append",
+        url: "/agent-host/events:append",
         headers: {
           "authorization": authorization
         },
@@ -10712,16 +10791,16 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Publish Agent Host Integrations
+     * Publish Agent Host Harnesses
      * @param requestBody
      * @param authorization
-     * @returns AgentHostIntegrationPublishResponse Successful Response
+     * @returns AgentHostHarnessPublishResponse Successful Response
      * @throws ApiError
      */
-    static agentHostIntegrationsPublish(requestBody, authorization) {
+    static agentHostHarnessesPublish(requestBody, authorization) {
       return request(OpenAPI, {
         method: "PUT",
-        url: "/agent-host/v2/integrations",
+        url: "/agent-host/harnesses",
         headers: {
           "authorization": authorization
         },
@@ -10742,7 +10821,7 @@ var LemmaClient = (() => {
     static agentHostMcpRouteResolve(routeId, authorization) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/agent-host/v2/mcp-routes/{route_id}",
+        url: "/agent-host/mcp-routes/{route_id}",
         path: {
           "route_id": routeId
         },
@@ -10763,7 +10842,7 @@ var LemmaClient = (() => {
     static agentHostPairingComplete(requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/v2/pairings:complete",
+        url: "/agent-host/pairings:complete",
         body: requestBody,
         mediaType: "application/json",
         errors: {
@@ -10781,7 +10860,7 @@ var LemmaClient = (() => {
     static agentHostPoll(requestBody, authorization) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/v2/poll",
+        url: "/agent-host/poll",
         headers: {
           "authorization": authorization
         },
@@ -10802,7 +10881,7 @@ var LemmaClient = (() => {
     static agentHostSelfRevoke(authorization) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/v2/revoke",
+        url: "/agent-host/revoke",
         headers: {
           "authorization": authorization
         },
@@ -10820,7 +10899,24 @@ var LemmaClient = (() => {
     static agentHostTokenExchange(requestBody) {
       return request(OpenAPI, {
         method: "POST",
-        url: "/agent-host/v2/token:exchange",
+        url: "/agent-host/token:exchange",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Agent Host Pairing
+     * @param requestBody
+     * @returns AgentHostPairingCreated Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingCreate(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/me/runtime/agent-host-pairings",
         body: requestBody,
         mediaType: "application/json",
         errors: {
@@ -10836,24 +10932,7 @@ var LemmaClient = (() => {
     static agentHostList() {
       return request(OpenAPI, {
         method: "GET",
-        url: "/me/agent-hosts"
-      });
-    }
-    /**
-     * Create Agent Host Pairing
-     * @param requestBody
-     * @returns AgentHostPairingCreated Successful Response
-     * @throws ApiError
-     */
-    static agentHostPairingCreate(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/me/agent-hosts/pairings",
-        body: requestBody,
-        mediaType: "application/json",
-        errors: {
-          422: `Validation Error`
-        }
+        url: "/me/runtime/agent-hosts"
       });
     }
     /**
@@ -10865,7 +10944,7 @@ var LemmaClient = (() => {
     static agentHostRevoke(hostId) {
       return request(OpenAPI, {
         method: "DELETE",
-        url: "/me/agent-hosts/{host_id}",
+        url: "/me/runtime/agent-hosts/{host_id}",
         path: {
           "host_id": hostId
         },
@@ -10875,15 +10954,15 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * List Agent Host Integrations
+     * List Agent Host Harnesses
      * @param hostId
-     * @returns AgentHostIntegrationListResponse Successful Response
+     * @returns AgentHostHarnessListResponse Successful Response
      * @throws ApiError
      */
-    static agentHostIntegrationsList(hostId) {
+    static agentHostHarnessesList(hostId) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/me/agent-hosts/{host_id}/integrations",
+        url: "/me/runtime/agent-hosts/{host_id}/harnesses",
         path: {
           "host_id": hostId
         },
@@ -10905,8 +10984,8 @@ var LemmaClient = (() => {
     createPairing(request2) {
       return this.client.request(() => AgentHostService.agentHostPairingCreate(request2));
     }
-    listIntegrations(hostId) {
-      return this.client.request(() => AgentHostService.agentHostIntegrationsList(hostId));
+    listHarnesses(hostId) {
+      return this.client.request(() => AgentHostService.agentHostHarnessesList(hostId));
     }
     revoke(hostId) {
       return this.client.request(() => AgentHostService.agentHostRevoke(hostId));
@@ -11163,7 +11242,6 @@ var LemmaClient = (() => {
     constructor(http, podId) {
       __publicField(this, "http", http);
       __publicField(this, "podId", podId);
-      __publicField(this, "runtimeCatalogPromise");
       __publicField(this, "profileCatalogPromises", /* @__PURE__ */ new Map());
       __publicField(this, "messages", {
         list: (conversationId, options = {}) => {
@@ -11234,21 +11312,13 @@ var LemmaClient = (() => {
       }
       return podId;
     }
-    listRuntimeCatalog() {
-      var _a;
-      (_a = this.runtimeCatalogPromise) != null ? _a : this.runtimeCatalogPromise = this.http.request(
-        "GET",
-        "/agent-runtime/harnesses"
-      );
-      return this.runtimeCatalogPromise;
-    }
     listProfileCatalog(orgId) {
       const key = orgId.trim();
       const existing = this.profileCatalogPromises.get(key);
       if (existing) return existing;
       const request2 = this.http.request(
         "GET",
-        `/organizations/${encodeURIComponent(key)}/agent-runtime/profiles`
+        `/organizations/${encodeURIComponent(key)}/runtime/profiles`
       );
       this.profileCatalogPromises.set(key, request2);
       return request2;
@@ -11274,7 +11344,7 @@ var LemmaClient = (() => {
             agentRuntimeId: profile.id,
             profile,
             profile_id: profile.id,
-            harness_kind: profile.derived_harness_kind,
+            harness_kind: profile.runtime_type === "HARNESS" ? "HARNESS" : "LEMMA",
             description: profile.name,
             runtime: {
               profile_id: profile.id,
@@ -11284,7 +11354,7 @@ var LemmaClient = (() => {
         });
       });
     }
-    async resolveAgentRuntime(agentRuntime, model, harnessKind, profileId) {
+    async resolveAgentRuntime(agentRuntime, model, profileId) {
       if (agentRuntime || !model) {
         return agentRuntime;
       }
@@ -11294,7 +11364,7 @@ var LemmaClient = (() => {
           model_name: model
         };
       }
-      void harnessKind;
+      return void 0;
       return void 0;
     }
     list(options = {}) {
@@ -11320,39 +11390,22 @@ var LemmaClient = (() => {
       var _a;
       const orgId = (_a = options.orgId) == null ? void 0 : _a.trim();
       if (orgId) {
-        const catalog2 = await this.listProfileCatalog(orgId);
-        const items2 = this.modelOptionsFromProfiles(catalog2);
+        const catalog = await this.listProfileCatalog(orgId);
+        const items = this.modelOptionsFromProfiles(catalog);
         return {
-          items: items2,
-          limit: items2.length,
+          items,
+          limit: items.length,
           next_page_token: null
         };
       }
-      const catalog = await this.listRuntimeCatalog();
-      const items = catalog.items.flatMap(
-        (harness) => {
-          var _a2;
-          return ((_a2 = harness.models) != null ? _a2 : []).map((model) => ({
-            id: model,
-            name: model,
-            harness_kind: harness.harness_kind,
-            description: harness.daemon_display_name
-          }));
-        }
-      );
-      return {
-        items,
-        limit: items.length,
-        next_page_token: null
-      };
+      throw new Error("orgId is required to list runtime models.");
     }
     async create(payload = {}) {
       const podId = this.requirePodId(payload.pod_id);
-      const { agent_name, harness_kind, model, model_name, pod_id, profile_id, ...requestBody } = payload;
+      const { agent_name, model, model_name, pod_id, profile_id, ...requestBody } = payload;
       const agentRuntime = await this.resolveAgentRuntime(
         requestBody.agent_runtime,
         model_name != null ? model_name : model,
-        harness_kind,
         profile_id
       );
       const body = {
@@ -11377,11 +11430,10 @@ var LemmaClient = (() => {
     }
     async update(conversationId, payload, options = {}) {
       const podId = this.requirePodId(options.pod_id);
-      const { harness_kind, model, model_name, profile_id, ...requestBody } = payload;
+      const { model, model_name, profile_id, ...requestBody } = payload;
       const agentRuntime = await this.resolveAgentRuntime(
         requestBody.agent_runtime,
         model_name != null ? model_name : model,
-        harness_kind,
         profile_id
       );
       const body = {

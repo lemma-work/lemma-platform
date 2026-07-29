@@ -6,7 +6,7 @@ import type { AgentHostEventType } from './AgentHostEventType.js';
 export type AgentHostEvent = {
     adapter_version: string;
     event_id: string;
-    integration_key: string;
+    harness_key: string;
     lease_epoch: number;
     object_id?: (string | null);
     occurred_at: string;

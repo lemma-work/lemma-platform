@@ -3,13 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from ..openapi_client.api.agent_host import (
-    agent_host_integrations_list,
+    agent_host_harnesses_list,
     agent_host_list,
     agent_host_pairing_create,
     agent_host_revoke,
 )
-from ..openapi_client.models.agent_host_integration_list_response import (
-    AgentHostIntegrationListResponse,
+from ..openapi_client.models.agent_host_harness_list_response import (
+    AgentHostHarnessListResponse,
 )
 from ..openapi_client.models.agent_host_list_response import AgentHostListResponse
 from ..openapi_client.models.agent_host_pairing_create import AgentHostPairingCreate
@@ -38,8 +38,8 @@ class AgentHosts(Resource):
             body_model=AgentHostPairingCreate,
         )
 
-    def integrations(self, host_id: str) -> AgentHostIntegrationListResponse:
-        return self._call(agent_host_integrations_list, as_uuid(host_id))
+    def harnesses(self, host_id: str) -> AgentHostHarnessListResponse:
+        return self._call(agent_host_harnesses_list, as_uuid(host_id))
 
     def revoke(self, host_id: str) -> AgentHostResponse:
         return self._call(agent_host_revoke, as_uuid(host_id))

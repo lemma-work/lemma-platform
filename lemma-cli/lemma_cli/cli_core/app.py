@@ -20,17 +20,13 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "auth": (f"{_CMD}.system", "auth_app", "Authentication commands.", False),
     "config": (f"{_CMD}.system", "config_app", "CLI context and per-server defaults (pod/org).", False),
     "servers": (f"{_CMD}.system", "server_app", "Show and manage Lemma CLI servers.", False),
-    # The daemon group is resolved from lemma_cli.daemon.commands, not the
-    # .commands.daemon test-compat shim, which eagerly loads the whole daemon
-    # implementation (runner, harnesses, MCP — asyncio + http.server).
-    "daemon": ("lemma_cli.daemon.commands", "app", "Run the Lemma user daemon.", False),
     "agent-host": (
         "lemma_cli.agent_host.commands",
         "app",
         "Manage the durable local Agent Host.",
         False,
     ),
-    "runtime": (f"{_CMD}.runtime", "app", "Agent runtime profiles and daemon harnesses.", False),
+    "runtime": (f"{_CMD}.runtime", "app", "Manage agent runtime profiles.", False),
     "org": (f"{_CMD}.organizations", "app", "Organization commands.", False),
     "orgs": (f"{_CMD}.organizations", "app", "Organization commands.", False),
     "organization": (f"{_CMD}.organizations", "app", "Organization commands.", True),

@@ -31,7 +31,7 @@ pub async fn run_bridge(
         .find(|target| target.target_id == target_id && target.enabled)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("MCP bridge target is missing or disabled"))?;
-    let manifest = AdapterManifest::builtin()?;
+    let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
     let target_client = TargetClient::new(
         target,
         config.installation_id,

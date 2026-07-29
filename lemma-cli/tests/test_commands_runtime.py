@@ -11,132 +11,142 @@ from lemma_cli.cli_core.commands import runtime
 runner = CliRunner()
 
 _PROFILES = [
-    {"id": "prof-1", "name": "Default", "source": "USER_DAEMON"},
-    {"id": "prof-2", "name": "Fireworks", "source": "OPENAI_COMPATIBLE"},
+    {"id": "prof-1", "name": "Codex", "runtime_type": "HARNESS"},
+    {
+        "id": "prof-2",
+        "name": "Fireworks",
+        "runtime_type": "OPENAI_COMPATIBLE",
+    },
 ]
 
 
-def _make_client_and_captured():
+def make_client():
     captured = {}
-
-    class FakeRuntime:
-        def harnesses(self):
-            captured["harnesses_called"] = True
-            return {"items": [{"id": "h-1", "kind": "CLAUDE_CODE"}]}
 
     class FakeOrgRuntime:
         def profiles(self):
-            captured["profiles_called"] = True
+            captured["list"] = True
             return {"items": list(_PROFILES)}
+
+        def get_profile(self, profile_id):
+            captured["get"] = profile_id
+            return next(item for item in _PROFILES if item["id"] == profile_id)
 
         def create_profile(self, payload):
             captured["create"] = payload
-            return {"id": "prof-3", "name": payload.get("name")}
+            return {"id": "prof-3", **payload}
 
-    class FakeClient:
-        def __init__(self):
-            self.runtime = FakeRuntime()
-            self.org_runtime = FakeOrgRuntime()
+        def update_profile(self, profile_id, payload):
+            captured["update"] = (profile_id, payload)
+            return {"id": profile_id, **payload}
 
-    return FakeClient(), captured
+        def refresh_profile(self, profile_id):
+            captured["refresh"] = profile_id
+            return {"id": profile_id}
+
+        def delete_profile(self, profile_id):
+            captured["delete"] = profile_id
+            return {"id": profile_id, "status": "DISABLED"}
+
+    return SimpleNamespace(org_runtime=FakeOrgRuntime()), captured
 
 
-def _patch(monkeypatch, client):
+def patch_client(monkeypatch, client):
     state = SimpleNamespace(
         config={"_runtime": {"pod": "pod-1"}, "defaults": {"org_id": "org-1"}},
         output="pretty",
         full=False,
     )
-    monkeypatch.setattr(runtime, "run_with_client", lambda ctx, fn: fn(client, state))
+    monkeypatch.setattr(runtime, "run_with_client", lambda _ctx, fn: fn(client, state))
 
 
-def test_runtime_harnesses_dispatches_api(monkeypatch):
-    client, captured = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
-    result = runner.invoke(app, ["runtime", "harnesses"])
-
-    assert result.exit_code == 0, result.stdout
-    assert captured.get("harnesses_called") is True
-
-
-def test_runtime_profiles_list_dispatches_api(monkeypatch):
-    client, captured = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
-    result = runner.invoke(app, ["runtime", "profiles", "list", "--json"])
-
-    assert result.exit_code == 0, result.stdout
-    assert captured.get("profiles_called") is True
-    payload = json.loads(result.stdout)
-    names = [item.get("name") for item in payload.get("items", [])]
-    assert "Default" in names
+def test_runtime_profiles_list_and_get(monkeypatch):
+    client, captured = make_client()
+    patch_client(monkeypatch, client)
+    listed = runner.invoke(app, ["runtime", "profiles", "list", "--json"])
+    fetched = runner.invoke(app, ["runtime", "profiles", "get", "prof-2", "--json"])
+    assert listed.exit_code == 0, listed.stdout
+    assert fetched.exit_code == 0, fetched.stdout
+    assert captured["list"] is True
+    assert captured["get"] == "prof-2"
 
 
-def test_runtime_profiles_get_by_name(monkeypatch):
-    client, _ = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
-    result = runner.invoke(app, ["runtime", "profiles", "get", "Fireworks"])
-
-    assert result.exit_code == 0, result.stdout
-    assert "Fireworks" in result.stdout
-
-
-def test_runtime_profiles_get_by_id(monkeypatch):
-    client, _ = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
-    result = runner.invoke(app, ["runtime", "profiles", "get", "prof-1"])
-
-    assert result.exit_code == 0, result.stdout
-    assert "Default" in result.stdout
-
-
-def test_runtime_profiles_get_not_found_fails(monkeypatch):
-    client, _ = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
-    result = runner.invoke(app, ["runtime", "profiles", "get", "nope"])
-
-    assert result.exit_code != 0
-    assert "not found" in result.stdout.lower() or "nope" in result.stdout
-
-
-def test_runtime_profiles_create_dispatches_api(monkeypatch):
-    client, captured = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
+def test_runtime_profiles_create_provider_uses_runtime_type(monkeypatch):
+    client, captured = make_client()
+    patch_client(monkeypatch, client)
     result = runner.invoke(
         app,
         [
-            "runtime", "profiles", "create", "OPENAI_COMPATIBLE",
-            "--name", "Fireworks",
-            "--base-url", "https://api.fireworks.ai",
-            "--api-key", "fw-xxx",
-            "--default-model", "accounts/fireworks/models/glm-5p2",
-            "--model", "m1",
-            "--model", "m2",
+            "runtime",
+            "profiles",
+            "create",
+            "openai_compatible",
+            "--name",
+            "Fireworks",
+            "--base-url",
+            "https://api.fireworks.ai",
+            "--api-key",
+            "fw-xxx",
+            "--default-model",
+            "m2",
+            "--model",
+            "m1",
+            "--model",
+            "m2",
         ],
     )
-
     assert result.exit_code == 0, result.stdout
-    sent = captured["create"]
-    assert sent["source"] == "OPENAI_COMPATIBLE"
-    assert sent["name"] == "Fireworks"
-    assert sent["base_url"] == "https://api.fireworks.ai"
-    assert sent["api_key"] == "fw-xxx"
-    assert sent["default_model_name"] == "accounts/fireworks/models/glm-5p2"
-    assert sent["model_names"] == ["m1", "m2"]
+    assert captured["create"] == {
+        "runtime_type": "OPENAI_COMPATIBLE",
+        "scope": "PERSONAL",
+        "name": "Fireworks",
+        "base_url": "https://api.fireworks.ai",
+        "api_key": "fw-xxx",
+        "default_model_name": "m2",
+        "model_names": ["m1", "m2"],
+    }
 
 
-def test_runtime_profiles_create_uppercases_source(monkeypatch):
-    client, captured = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
+def test_runtime_profiles_create_harness_has_no_host_type(monkeypatch):
+    client, captured = make_client()
+    patch_client(monkeypatch, client)
     result = runner.invoke(
-        app, ["runtime", "profiles", "create", "user_daemon", "--name", "Daemon"]
+        app,
+        [
+            "runtime",
+            "profiles",
+            "create",
+            "harness",
+            "--name",
+            "Codex",
+            "--harness-id",
+            "00000000-0000-4000-8000-000000000001",
+            "--harness-revision",
+            "revision-1",
+        ],
     )
-
     assert result.exit_code == 0, result.stdout
-    assert captured["create"]["source"] == "USER_DAEMON"
+    assert captured["create"]["runtime_type"] == "HARNESS"
+    assert "daemon_id" not in captured["create"]
+
+
+def test_runtime_profiles_update_refresh_and_delete(monkeypatch):
+    client, captured = make_client()
+    patch_client(monkeypatch, client)
+    updated = runner.invoke(
+        app,
+        [
+            "runtime",
+            "profiles",
+            "update",
+            "prof-2",
+            "--data",
+            json.dumps({"default_model_name": "m2"}),
+        ],
+    )
+    refreshed = runner.invoke(app, ["runtime", "profiles", "refresh", "prof-2"])
+    deleted = runner.invoke(app, ["runtime", "profiles", "delete", "prof-2"])
+    assert updated.exit_code == refreshed.exit_code == deleted.exit_code == 0
+    assert captured["update"] == ("prof-2", {"default_model_name": "m2"})
+    assert captured["refresh"] == "prof-2"
+    assert captured["delete"] == "prof-2"

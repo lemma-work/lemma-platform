@@ -111,14 +111,14 @@ impl DeviceIdentity {
         nonce: &str,
     ) -> String {
         let payload = format!(
-            "lemma-agent-host-pair-v2\n{pairing_code}\n{installation_id}\n{timestamp}\n{nonce}"
+            "lemma-agent-host-pair\n{pairing_code}\n{installation_id}\n{timestamp}\n{nonce}"
         );
         URL_SAFE_NO_PAD.encode(self.signing_key.sign(payload.as_bytes()).to_bytes())
     }
 
     #[must_use]
     pub fn sign_token_exchange(&self, host_id: Uuid, timestamp: i64, nonce: &str) -> String {
-        let payload = format!("lemma-agent-host-v2\n{host_id}\n{timestamp}\n{nonce}");
+        let payload = format!("lemma-agent-host\n{host_id}\n{timestamp}\n{nonce}");
         URL_SAFE_NO_PAD.encode(self.signing_key.sign(payload.as_bytes()).to_bytes())
     }
 
@@ -179,7 +179,7 @@ mod tests {
         let verifying_key = VerifyingKey::from_bytes(&key_bytes).unwrap();
         verifying_key
             .verify(
-                format!("lemma-agent-host-v2\n{host_id}\n42\nnonce").as_bytes(),
+                format!("lemma-agent-host\n{host_id}\n42\nnonce").as_bytes(),
                 &signature,
             )
             .unwrap();

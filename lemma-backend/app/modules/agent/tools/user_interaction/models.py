@@ -212,7 +212,7 @@ class RequestApprovalResponse(BaseToolResponse):
     interaction_fallback: bool = Field(
         default=False,
         description=(
-            "True when a daemon runtime could not pause and the model must ask "
+            "True when a remote harness runtime could not pause and the model must ask "
             "for confirmation conversationally instead."
         ),
     )
@@ -273,7 +273,7 @@ class AskUserResponse(BaseToolResponse):
     interaction_fallback: bool = Field(
         default=False,
         description=(
-            "True when a daemon runtime could not pause and the model must ask "
+            "True when a remote harness runtime could not pause and the model must ask "
             "the question conversationally instead."
         ),
     )

@@ -9,7 +9,7 @@ import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
@@ -24,30 +24,37 @@ from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
+    AzureOpenAIRuntimeConfig,
+    GoogleVertexRuntimeConfig,
+    GoogleVertexRuntimeCredentials,
+    HarnessRuntimeConfig,
+    MODEL_PROVIDER_TYPES,
     OpenAICompatibleRuntimeConfig,
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    RuntimeProfileType,
     reveal_credentials,
+)
+from app.modules.agent.domain.agent_host import (
+    validate_agent_host_model,
+    validate_agent_host_selections,
 )
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
-    HarnessKind,
     JsonObject,
 )
 from app.modules.agent.infrastructure.agent_host_management_repository import (
     AgentHostRepository,
 )
 from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
 )
 from app.modules.agent.services.agent_host_profile_service import (
-    create_agent_host_profile,
-    selected_agent_host_model,
+    create_harness_profile,
+    selected_harness_model,
+    validate_fallback_profile,
 )
 from app.modules.agent.services.resolved_runtime import ResolvedAgentRuntime
 
@@ -157,26 +164,15 @@ def _openai_compat_model_capabilities(
     return capabilities
 
 
-USER_DAEMON_PROFILE_PROTOCOLS = {
-    HarnessKind.CODEX: RuntimeProfileProtocol.CODEX_APP_SERVER,
-    HarnessKind.CLAUDE_CODE: RuntimeProfileProtocol.CLAUDE_CODE,
-    HarnessKind.OPENCODE: RuntimeProfileProtocol.OPENCODE,
-    HarnessKind.CURSOR: RuntimeProfileProtocol.CURSOR,
-    HarnessKind.ANTIGRAVITY: RuntimeProfileProtocol.ANTIGRAVITY,
-}
-
-
 class AgentRuntimeProfileService:
     """List and resolve runtime profiles available to a user/org."""
 
     def __init__(
         self,
         repository: AgentRuntimeProfileRepository | None = None,
-        daemon_repository: AgentRuntimeDaemonRepository | None = None,
         host_repository: AgentHostRepository | None = None,
     ):
         self.repository = repository
-        self.daemon_repository = daemon_repository
         self.host_repository = host_repository
 
     def system_profiles(self) -> list[AgentRuntimeProfile]:
@@ -201,100 +197,31 @@ class AgentRuntimeProfileService:
             )
         return profiles
 
-    async def create_user_daemon_profile(
+    async def create_harness_profile(
         self,
         *,
         organization_id: UUID,
         user_id: UUID,
-        daemon_id: UUID,
-        harness_kind: HarnessKind,
-        name: str,
-        scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION,
-        description: str | None = None,
-        default_model_name: str | None = None,
-    ) -> AgentRuntimeProfile:
-        if self.repository is None:
-            raise RuntimeError("Runtime profile repository is required")
-        if self.daemon_repository is None:
-            raise RuntimeError("Runtime daemon repository is required")
-        if harness_kind not in USER_DAEMON_PROFILE_PROTOCOLS:
-            raise ValueError("Unsupported user daemon harness kind")
-        if scope not in {
-            RuntimeProfileScope.ORGANIZATION,
-            RuntimeProfileScope.PERSONAL,
-        }:
-            raise ValueError(
-                "User daemon profile scope must be ORGANIZATION or PERSONAL"
-            )
-
-        normalized_name = name.strip()
-        if not normalized_name:
-            raise ValueError("Profile name cannot be empty")
-
-        daemon = await self.daemon_repository.get_for_user(
-            daemon_id=daemon_id,
-            user_id=user_id,
-        )
-        if daemon is None:
-            raise ValueError("Daemon is not available for the current user")
-
-        detected_catalog = _daemon_harness_model_catalog(
-            harness_catalog=getattr(daemon, "harness_catalog", {}) or {},
-            harness_kind=harness_kind,
-        )
-        if detected_catalog is None:
-            raise ValueError(
-                f"{harness_kind.value} is not available from daemon {daemon_id}"
-            )
-        model_catalog = _user_daemon_model_catalog(detected_catalog)
-        model_names = [entry.name for entry in model_catalog]
-        selected_default_model = _select_user_daemon_default_model(
-            requested_model_name=default_model_name,
-            model_names=model_names,
-        )
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
-            organization_id=organization_id,
-            user_id=user_id,
-            daemon_id=daemon_id,
-            scope=scope,
-            kind=RuntimeProfileKind.HARNESS,
-            protocol=USER_DAEMON_PROFILE_PROTOCOLS[harness_kind],
-            name=normalized_name,
-            description=description.strip() if description else None,
-            default_model_name=selected_default_model,
-            model_catalog=model_catalog,
-            config={},
-            status=RuntimeProfileStatus.ACTIVE,
-            metadata={
-                "source": "USER_DAEMON",
-            },
-        )
-        return await self.repository.create(profile)
-
-    async def create_agent_host_profile(
-        self,
-        *,
-        organization_id: UUID,
-        user_id: UUID,
-        host_integration_id: UUID,
+        harness_id: UUID,
         scope: RuntimeProfileScope,
         name: str,
-        integration_snapshot_revision: str,
+        harness_snapshot_revision: str,
         config_selections: JsonObject,
+        default_model_name: str | None = None,
         description: str | None = None,
         host_wait_timeout_seconds: int = 300,
         fallback_profile_id: str | None = None,
     ) -> AgentRuntimeProfile:
-        return await create_agent_host_profile(
+        return await create_harness_profile(
             self,
             organization_id=organization_id,
             user_id=user_id,
-            host_integration_id=host_integration_id,
+            harness_id=harness_id,
             scope=scope,
             name=name,
-            integration_snapshot_revision=integration_snapshot_revision,
+            harness_snapshot_revision=harness_snapshot_revision,
             config_selections=config_selections,
+            default_model_name=default_model_name,
             description=description,
             host_wait_timeout_seconds=host_wait_timeout_seconds,
             fallback_profile_id=fallback_profile_id,
@@ -304,7 +231,9 @@ class AgentRuntimeProfileService:
         self,
         *,
         organization_id: UUID,
+        user_id: UUID,
         name: str,
+        scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL,
         base_url: str | HttpUrl,
         api_key: str | None = None,
         description: str | None = None,
@@ -316,6 +245,7 @@ class AgentRuntimeProfileService:
     ) -> AgentRuntimeProfile:
         if self.repository is None:
             raise RuntimeError("Runtime profile repository is required")
+        _validate_user_profile_scope(scope)
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
         discovered_models = await _discover_openai_compatible_models(
@@ -337,9 +267,11 @@ class AgentRuntimeProfileService:
         profile = AgentRuntimeProfile(
             id=str(uuid4()),
             organization_id=organization_id,
-            scope=RuntimeProfileScope.ORGANIZATION,
-            kind=RuntimeProfileKind.MODEL_PROVIDER,
-            protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+            owner_user_id=(
+                user_id if scope is RuntimeProfileScope.PERSONAL else None
+            ),
+            scope=scope,
+            runtime_type=RuntimeProfileType.OPENAI_COMPATIBLE,
             name=normalized_name,
             description=description.strip() if description else None,
             default_model_name=selected_default_model,
@@ -355,10 +287,6 @@ class AgentRuntimeProfileService:
                 else None
             ),
             status=RuntimeProfileStatus.ACTIVE,
-            metadata={
-                "source": "openai_compatible",
-                "catalog_discovered": bool(discovered_models),
-            },
         )
         return await _create_profile(self.repository, profile, name=normalized_name)
 
@@ -366,7 +294,9 @@ class AgentRuntimeProfileService:
         self,
         *,
         organization_id: UUID,
+        user_id: UUID,
         name: str,
+        scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL,
         api_key: str,
         base_url: str | HttpUrl | None = None,
         description: str | None = None,
@@ -377,6 +307,7 @@ class AgentRuntimeProfileService:
     ) -> AgentRuntimeProfile:
         if self.repository is None:
             raise RuntimeError("Runtime profile repository is required")
+        _validate_user_profile_scope(scope)
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
         discovered_models = await _discover_anthropic_compatible_models(
@@ -398,9 +329,11 @@ class AgentRuntimeProfileService:
         profile = AgentRuntimeProfile(
             id=str(uuid4()),
             organization_id=organization_id,
-            scope=RuntimeProfileScope.ORGANIZATION,
-            kind=RuntimeProfileKind.MODEL_PROVIDER,
-            protocol=RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+            owner_user_id=(
+                user_id if scope is RuntimeProfileScope.PERSONAL else None
+            ),
+            scope=scope,
+            runtime_type=RuntimeProfileType.ANTHROPIC_COMPATIBLE,
             name=normalized_name,
             description=description.strip() if description else None,
             default_model_name=selected_default_model,
@@ -412,10 +345,113 @@ class AgentRuntimeProfileService:
             ),
             credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip())),
             status=RuntimeProfileStatus.ACTIVE,
-            metadata={
-                "source": "anthropic_compatible",
-                "catalog_discovered": bool(discovered_models),
-            },
+        )
+        return await _create_profile(self.repository, profile, name=normalized_name)
+
+    async def create_azure_openai_profile(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        name: str,
+        scope: RuntimeProfileScope,
+        azure_endpoint: str | HttpUrl,
+        api_version: str | None,
+        api_key: str,
+        default_model_name: str,
+        model_names: list[str],
+        description: str | None = None,
+        model_settings: JsonObject | None = None,
+    ) -> AgentRuntimeProfile:
+        if self.repository is None:
+            raise RuntimeError("Runtime profile repository is required")
+        _validate_user_profile_scope(scope)
+        normalized_name = _normalize_profile_name(name)
+        catalog = _provider_model_catalog(
+            discovered_models=[],
+            fallback_model_names=model_names,
+        )
+        selected_default_model = _select_provider_default_model(
+            requested_model_name=default_model_name,
+            catalog=catalog,
+        )
+        profile = AgentRuntimeProfile(
+            id=str(uuid4()),
+            organization_id=organization_id,
+            owner_user_id=(
+                user_id if scope is RuntimeProfileScope.PERSONAL else None
+            ),
+            scope=scope,
+            runtime_type=RuntimeProfileType.AZURE_OPENAI,
+            name=normalized_name,
+            description=description.strip() if description else None,
+            default_model_name=selected_default_model,
+            model_catalog=catalog,
+            config=AzureOpenAIRuntimeConfig(
+                azure_endpoint=HttpUrl(str(azure_endpoint)),
+                api_version=api_version.strip() if api_version else None,
+                model_settings=model_settings or {},
+            ),
+            credentials=ApiKeyRuntimeCredentials(
+                api_key=SecretStr(api_key.strip())
+            ),
+            status=RuntimeProfileStatus.ACTIVE,
+        )
+        return await _create_profile(self.repository, profile, name=normalized_name)
+
+    async def create_google_vertex_profile(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        name: str,
+        scope: RuntimeProfileScope,
+        project_id: str,
+        location: str,
+        default_model_name: str,
+        model_names: list[str],
+        service_account_json: JsonObject | None = None,
+        description: str | None = None,
+        model_settings: JsonObject | None = None,
+    ) -> AgentRuntimeProfile:
+        if self.repository is None:
+            raise RuntimeError("Runtime profile repository is required")
+        _validate_user_profile_scope(scope)
+        normalized_name = _normalize_profile_name(name)
+        catalog = _provider_model_catalog(
+            discovered_models=[],
+            fallback_model_names=model_names,
+            default_vision=True,
+        )
+        selected_default_model = _select_provider_default_model(
+            requested_model_name=default_model_name,
+            catalog=catalog,
+        )
+        profile = AgentRuntimeProfile(
+            id=str(uuid4()),
+            organization_id=organization_id,
+            owner_user_id=(
+                user_id if scope is RuntimeProfileScope.PERSONAL else None
+            ),
+            scope=scope,
+            runtime_type=RuntimeProfileType.GOOGLE_VERTEX,
+            name=normalized_name,
+            description=description.strip() if description else None,
+            default_model_name=selected_default_model,
+            model_catalog=catalog,
+            config=GoogleVertexRuntimeConfig(
+                project_id=project_id.strip(),
+                location=location.strip(),
+                model_settings=model_settings or {},
+            ),
+            credentials=(
+                GoogleVertexRuntimeCredentials(
+                    service_account_json=service_account_json
+                )
+                if service_account_json is not None
+                else None
+            ),
+            status=RuntimeProfileStatus.ACTIVE,
         )
         return await _create_profile(self.repository, profile, name=normalized_name)
 
@@ -445,7 +481,7 @@ class AgentRuntimeProfileService:
                 )
             raise RuntimeError(f"Agent runtime profile {profile_id!r} is not available")
         model = _selected_model(profile, runtime.model_name)
-        if model is None:
+        if model is None and profile.runtime_type is not RuntimeProfileType.HARNESS:
             raise RuntimeError(
                 f"Agent runtime profile {profile_id!r} has no selectable model"
             )
@@ -458,6 +494,366 @@ class AgentRuntimeProfileService:
             credentials=credentials,
         )
 
+    async def update_profile(
+        self,
+        *,
+        profile_id: str,
+        organization_id: UUID,
+        user_id: UUID,
+        changes: dict[str, object],
+    ) -> AgentRuntimeProfile:
+        if self.repository is None:
+            raise RuntimeError("Runtime profile repository is required")
+        profile = await self.get_profile(
+            profile_id=profile_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            include_disabled=True,
+        )
+        if profile is None or profile.scope is RuntimeProfileScope.SYSTEM:
+            raise ValueError("Runtime profile is not available")
+
+        common: dict[str, object] = {}
+        if "name" in changes:
+            common["name"] = _normalize_profile_name(str(changes["name"]))
+        if "description" in changes:
+            description = changes["description"]
+            common["description"] = (
+                str(description).strip() if description is not None else None
+            )
+        if "status" in changes:
+            common["status"] = changes["status"]
+        profile = profile.model_copy(update=common)
+
+        harness_changes = {
+            "default_model_name",
+            "harness_snapshot_revision",
+            "config_selections",
+            "host_wait_timeout_seconds",
+            "fallback_profile_id",
+        }
+        provider_changes = {
+            "default_model_name",
+            "base_url",
+            "azure_endpoint",
+            "api_version",
+            "project_id",
+            "location",
+            "service_account_json",
+            "api_key",
+            "model_names",
+            "headers",
+            "model_settings",
+            "refresh_provider_catalog",
+        }
+        if (
+            profile.runtime_type is RuntimeProfileType.HARNESS
+            and harness_changes.intersection(changes)
+        ):
+            profile = await self._update_harness_profile(
+                profile,
+                user_id=user_id,
+                changes=changes,
+            )
+        elif (
+            profile.runtime_type in MODEL_PROVIDER_TYPES
+            and provider_changes.intersection(changes)
+        ):
+            profile = await self._update_provider_profile(profile, changes=changes)
+        elif profile.runtime_type not in MODEL_PROVIDER_TYPES | {
+            RuntimeProfileType.HARNESS
+        }:
+            raise ValueError("Unsupported runtime profile type")
+        profile = AgentRuntimeProfile.model_validate(profile.model_dump())
+        return await self.repository.update(profile)
+
+    async def disable_profile(
+        self,
+        *,
+        profile_id: str,
+        organization_id: UUID,
+        user_id: UUID,
+    ) -> AgentRuntimeProfile:
+        return await self.update_profile(
+            profile_id=profile_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            changes={"status": RuntimeProfileStatus.DISABLED},
+        )
+
+    async def refresh_profile(
+        self,
+        *,
+        profile_id: str,
+        organization_id: UUID,
+        user_id: UUID,
+    ) -> AgentRuntimeProfile:
+        profile = await self.get_profile(
+            profile_id=profile_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            include_disabled=True,
+        )
+        if profile is None or profile.scope is RuntimeProfileScope.SYSTEM:
+            raise ValueError("Runtime profile is not available")
+        if profile.runtime_type is RuntimeProfileType.HARNESS:
+            if self.host_repository is None or profile.harness_id is None:
+                raise RuntimeError("Agent Host repository is required")
+            harness = await self.host_repository.get_harness(
+                harness_id=profile.harness_id
+            )
+            if harness is None:
+                raise ValueError("Agent Host harness is not available")
+            config = cast(HarnessRuntimeConfig, profile.config)
+            validate_agent_host_selections(
+                config_options=harness.config_options or [],
+                selections=config.config_selections,
+            )
+            validate_agent_host_model(
+                config_options=harness.config_options or [],
+                model_name=profile.default_model_name,
+            )
+            return await self.update_profile(
+                profile_id=profile_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                changes={"harness_snapshot_revision": harness.config_revision},
+            )
+        return await self.update_profile(
+            profile_id=profile_id,
+            organization_id=organization_id,
+            user_id=user_id,
+            changes={"refresh_provider_catalog": True},
+        )
+
+    async def _update_harness_profile(
+        self,
+        profile: AgentRuntimeProfile,
+        *,
+        user_id: UUID,
+        changes: dict[str, object],
+    ) -> AgentRuntimeProfile:
+        provider_fields = {
+            "base_url",
+            "azure_endpoint",
+            "api_version",
+            "project_id",
+            "location",
+            "service_account_json",
+            "api_key",
+            "model_names",
+            "headers",
+            "model_settings",
+        }
+        if provider_fields.intersection(changes):
+            raise ValueError("Provider settings cannot be applied to a harness profile")
+        if self.host_repository is None or profile.harness_id is None:
+            raise RuntimeError("Agent Host repository is required")
+        harness = await self.host_repository.get_harness(
+            harness_id=profile.harness_id
+        )
+        if harness is None:
+            raise ValueError("Agent Host harness is not available")
+        config = cast(HarnessRuntimeConfig, profile.config)
+        revision = str(
+            changes.get(
+                "harness_snapshot_revision",
+                config.harness_snapshot_revision,
+            )
+        )
+        if revision != harness.config_revision:
+            raise ValueError(
+                "Agent Host harness changed; refresh configuration before saving"
+            )
+        raw_selections = changes.get(
+            "config_selections",
+            config.config_selections,
+        )
+        if not isinstance(raw_selections, dict):
+            raise ValueError("config_selections must be an object")
+        selections = validate_agent_host_selections(
+            config_options=harness.config_options or [],
+            selections=raw_selections,
+        )
+        default_model = cast(
+            str | None,
+            changes.get("default_model_name", profile.default_model_name),
+        )
+        default_model = validate_agent_host_model(
+            config_options=harness.config_options or [],
+            model_name=default_model,
+        )
+        fallback = cast(
+            str | None,
+            changes.get("fallback_profile_id", config.fallback_profile_id),
+        )
+        if profile.organization_id is None:
+            raise ValueError("User runtime profiles require an organization")
+        await validate_fallback_profile(
+            service=self,
+            fallback_profile_id=fallback,
+            organization_id=profile.organization_id,
+            user_id=user_id,
+        )
+        return profile.model_copy(
+            update={
+                "default_model_name": default_model,
+                "config": HarnessRuntimeConfig(
+                    harness_snapshot_revision=revision,
+                    config_selections=selections,
+                    host_wait_timeout_seconds=int(
+                        changes.get(
+                            "host_wait_timeout_seconds",
+                            config.host_wait_timeout_seconds,
+                        )
+                    ),
+                    fallback_profile_id=fallback,
+                ),
+            }
+        )
+
+    async def _update_provider_profile(
+        self,
+        profile: AgentRuntimeProfile,
+        *,
+        changes: dict[str, object],
+    ) -> AgentRuntimeProfile:
+        harness_fields = {
+            "harness_snapshot_revision",
+            "config_selections",
+            "host_wait_timeout_seconds",
+            "fallback_profile_id",
+        }
+        if harness_fields.intersection(changes):
+            raise ValueError("Harness settings cannot be applied to a provider profile")
+        credentials = reveal_credentials(profile.credentials) or {}
+        api_key = cast(str | None, credentials.get("api_key"))
+        if "api_key" in changes:
+            api_key = cast(str | None, changes["api_key"])
+        fallback_names = cast(
+            list[str],
+            changes.get(
+                "model_names",
+                [entry.name for entry in profile.model_catalog],
+            ),
+        )
+
+        if profile.runtime_type is RuntimeProfileType.OPENAI_COMPATIBLE:
+            current = cast(OpenAICompatibleRuntimeConfig, profile.config)
+            base_url = str(changes.get("base_url", current.base_url))
+            headers = _normalized_headers(
+                cast(dict[str, str], changes.get("headers", current.headers))
+            )
+            discovered = await _discover_openai_compatible_models(
+                base_url=base_url,
+                api_key=api_key,
+                headers=headers,
+            )
+            catalog = _provider_model_catalog(
+                discovered_models=discovered,
+                fallback_model_names=fallback_names,
+            )
+            updated_config: object = OpenAICompatibleRuntimeConfig(
+                base_url=HttpUrl(base_url),
+                headers=headers,
+                model_settings=cast(
+                    dict[str, object],
+                    changes.get("model_settings", current.model_settings),
+                ),
+            )
+        elif profile.runtime_type is RuntimeProfileType.ANTHROPIC_COMPATIBLE:
+            if not api_key:
+                raise ValueError("Anthropic-compatible profiles require api_key")
+            current = cast(AnthropicCompatibleRuntimeConfig, profile.config)
+            base_url = str(
+                changes.get(
+                    "base_url",
+                    current.base_url or "https://api.anthropic.com",
+                )
+            )
+            headers = _normalized_headers(
+                cast(dict[str, str], changes.get("headers", current.headers))
+            )
+            discovered = await _discover_anthropic_compatible_models(
+                base_url=base_url,
+                api_key=api_key,
+                headers=headers,
+            )
+            catalog = _provider_model_catalog(
+                discovered_models=discovered,
+                fallback_model_names=fallback_names,
+                default_vision=True,
+            )
+            updated_config = AnthropicCompatibleRuntimeConfig(
+                base_url=HttpUrl(base_url),
+                headers=headers,
+                model_settings=cast(
+                    dict[str, object],
+                    changes.get("model_settings", current.model_settings),
+                ),
+            )
+        elif profile.runtime_type is RuntimeProfileType.AZURE_OPENAI:
+            if not api_key:
+                raise ValueError("Azure OpenAI profiles require api_key")
+            current = cast(AzureOpenAIRuntimeConfig, profile.config)
+            endpoint = str(
+                changes.get("azure_endpoint", current.azure_endpoint)
+            )
+            catalog = _provider_model_catalog(
+                discovered_models=[],
+                fallback_model_names=fallback_names,
+            )
+            updated_config = AzureOpenAIRuntimeConfig(
+                azure_endpoint=HttpUrl(endpoint),
+                api_version=cast(
+                    str | None,
+                    changes.get("api_version", current.api_version),
+                ),
+                model_settings=cast(
+                    dict[str, object],
+                    changes.get("model_settings", current.model_settings),
+                ),
+            )
+        elif profile.runtime_type is RuntimeProfileType.GOOGLE_VERTEX:
+            current = cast(GoogleVertexRuntimeConfig, profile.config)
+            catalog = _provider_model_catalog(
+                discovered_models=[],
+                fallback_model_names=fallback_names,
+                default_vision=True,
+            )
+            updated_config = GoogleVertexRuntimeConfig(
+                project_id=str(
+                    changes.get("project_id", current.project_id)
+                ).strip(),
+                location=str(changes.get("location", current.location)).strip(),
+                model_settings=cast(
+                    dict[str, object],
+                    changes.get("model_settings", current.model_settings),
+                ),
+            )
+        else:
+            raise ValueError("This provider type cannot be updated yet")
+
+        selected_default = _select_provider_default_model(
+            requested_model_name=cast(
+                str | None,
+                changes.get("default_model_name", profile.default_model_name),
+            ),
+            catalog=catalog,
+        )
+        return profile.model_copy(
+            update={
+                "default_model_name": selected_default,
+                "model_catalog": catalog,
+                "config": updated_config,
+                "credentials": _updated_provider_credentials(
+                    profile=profile,
+                    changes=changes,
+                    api_key=api_key,
+                ),
+            }
+        )
+
     def system_default_runtime_config(self) -> AgentRuntimeConfig:
         return AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID)
 
@@ -467,6 +863,7 @@ class AgentRuntimeProfileService:
         profile_id: str,
         organization_id: UUID | None,
         user_id: UUID,
+        include_disabled: bool = False,
     ) -> AgentRuntimeProfile | None:
         system_profile = _system_profile_by_id(profile_id)
         if system_profile is not None:
@@ -477,7 +874,32 @@ class AgentRuntimeProfileService:
             profile_id=profile_id,
             organization_id=organization_id,
             user_id=user_id,
+            include_disabled=include_disabled,
         )
+
+
+def _updated_provider_credentials(
+    *,
+    profile: AgentRuntimeProfile,
+    changes: dict[str, object],
+    api_key: str | None,
+) -> object | None:
+    if profile.runtime_type is RuntimeProfileType.GOOGLE_VERTEX:
+        if "service_account_json" not in changes:
+            return profile.credentials
+        service_account_json = changes["service_account_json"]
+        if service_account_json is None:
+            return None
+        if not isinstance(service_account_json, dict):
+            raise ValueError("service_account_json must be an object")
+        return GoogleVertexRuntimeCredentials(
+            service_account_json=service_account_json
+        )
+    return (
+        ApiKeyRuntimeCredentials(api_key=SecretStr(api_key))
+        if api_key
+        else None
+    )
 
 
 def _system_lemma_profile() -> AgentRuntimeProfile | None:
@@ -502,8 +924,7 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
     return AgentRuntimeProfile(
         id=SYSTEM_LEMMA_PROFILE_ID,
         scope=RuntimeProfileScope.SYSTEM,
-        kind=RuntimeProfileKind.MODEL_PROVIDER,
-        protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+        runtime_type=RuntimeProfileType.OPENAI_COMPATIBLE,
         name="Lemma",
         description="System Lemma model provider",
         default_model_name=default_model_name or model_catalog[0].name,
@@ -535,8 +956,7 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
     return AgentRuntimeProfile(
         id=SYSTEM_LEMMA_PROFILE_ID,
         scope=RuntimeProfileScope.SYSTEM,
-        kind=RuntimeProfileKind.MODEL_PROVIDER,
-        protocol=RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+        runtime_type=RuntimeProfileType.ANTHROPIC_COMPATIBLE,
         name="Lemma",
         description="System Lemma model provider",
         default_model_name=default_model_name or model_names[0],
@@ -599,117 +1019,19 @@ def _display_model_name(model_name: str) -> str:
     return model_name.replace("-", " ").replace("_", " ").title()
 
 
-def _user_daemon_model_catalog(
-    detected_models: list[dict[str, Any]],
-) -> list[RuntimeModelCatalogEntry]:
-    """Build the saved profile's model catalog from the daemon's entries.
-
-    Always leads with a ``default`` entry (the account's standard-context
-    default), then carries each detected model through with its display name,
-    provider model id, and metadata so the picker can advertise them.
-    """
-    entries = [_default_daemon_model_entry()]
-    seen = {"default"}
-    for item in detected_models:
-        name = str(item.get("name") or "").strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        provider_model_name = (
-            str(item.get("provider_model_name") or name).strip() or name
-        )
-        display_name = str(item.get("display_name") or "").strip() or name
-        metadata = item.get("metadata")
-        entries.append(
-            RuntimeModelCatalogEntry(
-                name=name,
-                display_name=display_name,
-                provider_model_name=provider_model_name,
-                capabilities=[
-                    RuntimeModelCapability.TEXT,
-                    RuntimeModelCapability.TOOLS,
-                ],
-                metadata=metadata if isinstance(metadata, dict) else {},
-            )
-        )
-    return entries
-
-
-def _default_daemon_model_entry() -> RuntimeModelCatalogEntry:
-    return RuntimeModelCatalogEntry(
-        name="default",
-        display_name="Default",
-        provider_model_name="default",
-        capabilities=[
-            RuntimeModelCapability.TEXT,
-            RuntimeModelCapability.TOOLS,
-        ],
-        metadata={"context_window": "standard"},
-    )
-
-
-def _daemon_harness_model_catalog(
-    *,
-    harness_catalog: object,
-    harness_kind: HarnessKind,
-) -> list[dict[str, Any]] | None:
-    """Structured model entries reported by the daemon for a harness.
-
-    Prefers the daemon's ``model_catalog`` (name/display_name/
-    provider_model_name/metadata); falls back to the flat ``models`` string
-    list for daemons that predate the structured catalog. Returns ``None`` when
-    the harness is unavailable.
-    """
-    if not isinstance(harness_catalog, dict):
-        return None
-    entry = harness_catalog.get(harness_kind.value)
-    if not isinstance(entry, dict):
-        return None
-    if entry.get("available") is False:
-        return None
-    raw_catalog = entry.get("model_catalog")
-    if isinstance(raw_catalog, list):
-        structured = [
-            item
-            for item in raw_catalog
-            if isinstance(item, dict) and str(item.get("name") or "").strip()
-        ]
-        if structured:
-            return structured
-    # Back-compat: older daemons only report a flat ``models`` list of strings.
-    raw_models = entry.get("models")
-    if not isinstance(raw_models, list):
-        return []
-    return [
-        {
-            "name": model,
-            "display_name": model,
-            "provider_model_name": model,
-            "metadata": {},
-        }
-        for model in raw_models
-        if isinstance(model, str) and model.strip()
-    ]
-
-
-def _select_user_daemon_default_model(
-    *,
-    requested_model_name: str | None,
-    model_names: list[str],
-) -> str:
-    if requested_model_name is None:
-        return "default"
-    normalized = requested_model_name.strip()
-    if normalized not in model_names:
-        raise ValueError("default_model_name must be one of the detected model names")
-    return normalized
-
-
 def _normalize_profile_name(name: str) -> str:
     normalized = name.strip()
     if not normalized:
         raise ValueError("Profile name cannot be empty")
     return normalized
+
+
+def _validate_user_profile_scope(scope: RuntimeProfileScope) -> None:
+    if scope not in {
+        RuntimeProfileScope.PERSONAL,
+        RuntimeProfileScope.ORGANIZATION,
+    }:
+        raise ValueError("User-created profiles must be PERSONAL or ORGANIZATION")
 
 
 def _normalized_headers(headers: dict[str, str] | None) -> dict[str, str]:
@@ -955,28 +1277,14 @@ def _selected_model(
     profile: AgentRuntimeProfile,
     requested_model_name: str | None,
 ) -> RuntimeModelCatalogEntry | None:
-    if profile.kind is RuntimeProfileKind.EXTERNAL_AGENT:
-        return selected_agent_host_model(profile, requested_model_name)
+    if profile.runtime_type is RuntimeProfileType.HARNESS:
+        return selected_harness_model(profile, requested_model_name)
     model_name = requested_model_name or profile.default_model_name
     if not model_name:
         return None
     for model in profile.model_catalog:
         if model_name == model.name:
             return model
-    # The requested model is not in the catalog (e.g. a pinned default whose
-    # model was later deprecated, or a swapped BYO key). Degrade gracefully to
-    # the profile's own default — and then the first catalog entry — rather than
-    # hard-failing every run that relies on this profile.
-    if requested_model_name:
-        logger.debug(
-            "agent.runtime_profile_service.requested_model_r_not_runtime.diagnostic"
-        )
-        if profile.default_model_name:
-            for model in profile.model_catalog:
-                if profile.default_model_name == model.name:
-                    return model
-    if profile.model_catalog:
-        return profile.model_catalog[0]
     return None
 
 

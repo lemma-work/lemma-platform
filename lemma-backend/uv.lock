@@ -1211,15 +1211,20 @@ grpc = [
 
 [[package]]
 name = "google-auth"
-version = "2.55.0"
+version = "2.56.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "pyasn1-modules" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/81/1c/70b23fc52b2bb3c70b379f3bd05c4a60ab3a873e30c6bd21c57e0154848a/google_auth-2.55.0.tar.gz", hash = "sha256:fcd3a130f575fa36403d38774af1c64a4fbfbca09215f0589d2372b5119697cb", size = 349379, upload-time = "2026-06-15T22:33:16.466Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/33/dbc946a407401b975f0719658f18e664ece2109f79ffd1ff3bf226c205f4/google_auth-2.56.2.tar.gz", hash = "sha256:e28f103ca8091fb7012b99c44243d7366c29863713b8e34a220c3322b7a07051", size = 365820, upload-time = "2026-07-21T21:53:28.188Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/44/71/c0321dc6d63d99946da45f7c06299b934e4f7f7da5c4f14d101bcb39adf1/google_auth-2.55.0-py3-none-any.whl", hash = "sha256:a17cef9dedf98c4ebae2fb0c48c8f75952c877cbc2efe09f329ef16c2783d88a", size = 252400, upload-time = "2026-06-15T22:33:14.992Z" },
+    { url = "https://files.pythonhosted.org/packages/88/63/50636aae68c9bf17c891c7eb18b49baa9bd6b31d2a97b8de4813a9fc8d1c/google_auth-2.56.2-py3-none-any.whl", hash = "sha256:c8270ea95b2697b74e3d8438ae9c5b898e38b623b915c7b5c5635921e7de68a6", size = 258588, upload-time = "2026-07-21T21:53:26.399Z" },
+]
+
+[package.optional-dependencies]
+requests = [
+    { name = "requests" },
 ]
 
 [[package]]
@@ -1254,6 +1259,27 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d2/7c/5c88cdde9664f6c75fb68aa11e0af4309a92bef38dd38df0456ffb0f469b/google_cloud_secret_manager-2.29.0.tar.gz", hash = "sha256:ee64133af8fdb3780affb65ec6ccf10ab15a0113d8edeba388665f4be87ce1be", size = 278437, upload-time = "2026-06-03T16:13:43.149Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/c2/fc3275bc42a522757cb5141d7dae51f048b93d2f5fe4574fcee5392cef03/google_cloud_secret_manager-2.29.0-py3-none-any.whl", hash = "sha256:21bac2d0adb0bb3c13c346d7223832f197c2266534528a1bf1402774e06395a3", size = 225042, upload-time = "2026-06-03T16:12:20.162Z" },
+]
+
+[[package]]
+name = "google-genai"
+version = "2.14.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "google-auth", extra = ["requests"] },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "requests" },
+    { name = "sniffio" },
+    { name = "tenacity" },
+    { name = "typing-extensions" },
+    { name = "websockets" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/df/4f820054c99f29f2fe3de4a8a7c9534dd795302e4a07483a0cb07c3a29b6/google_genai-2.14.0.tar.gz", hash = "sha256:a9d1f4f362d76280f1be1340fcb3c86e63dbca128f6a4ae09d86ab47ff7148e8", size = 641055, upload-time = "2026-07-22T21:35:44.717Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/86/5ac5fb53e44cca4a6607fb917eb331fa237c65a103b9ec2e8e8acc8a42db/google_genai-2.14.0-py3-none-any.whl", hash = "sha256:ae7172cdd35695189b516b33a878e4132e5daa2dbc03a5b44cddfa8a82fad664", size = 1030738, upload-time = "2026-07-22T21:35:42.785Z" },
 ]
 
 [[package]]
@@ -1775,7 +1801,7 @@ dependencies = [
     { name = "pillow" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
-    { name = "pydantic-ai-slim", extra = ["anthropic", "fastmcp", "mcp", "openai", "retries"] },
+    { name = "pydantic-ai-slim", extra = ["anthropic", "fastmcp", "google", "mcp", "openai", "retries"] },
     { name = "pydantic-deep" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
@@ -1866,7 +1892,7 @@ requires-dist = [
     { name = "pillow", specifier = ">=12.0.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.2" },
     { name = "pydantic", specifier = ">=2.11.9" },
-    { name = "pydantic-ai-slim", extras = ["anthropic", "fastmcp", "mcp", "openai", "retries"], specifier = ">=1.104.0" },
+    { name = "pydantic-ai-slim", extras = ["anthropic", "fastmcp", "google", "mcp", "openai", "retries"], specifier = ">=1.104.0" },
     { name = "pydantic-deep", specifier = ">=0.2.20" },
     { name = "pydantic-settings", specifier = ">=2.11.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10.1" },
@@ -3284,6 +3310,9 @@ anthropic = [
 ]
 fastmcp = [
     { name = "fastmcp" },
+]
+google = [
+    { name = "google-genai" },
 ]
 mcp = [
     { name = "fastmcp-slim", extra = ["client"] },

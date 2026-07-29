@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AgentHostCapacity } from './AgentHostCapacity.js';
+import type { AgentHostCommandRejection } from './AgentHostCommandRejection.js';
 import type { AgentHostRunCheckpoint } from './AgentHostRunCheckpoint.js';
 import type { HostHello } from './HostHello.js';
 export type AgentHostPollRequest = {
@@ -10,4 +11,5 @@ export type AgentHostPollRequest = {
     capacity?: AgentHostCapacity;
     checkpoints?: Array<AgentHostRunCheckpoint>;
     hello: HostHello;
+    rejections?: Array<AgentHostCommandRejection>;
 };

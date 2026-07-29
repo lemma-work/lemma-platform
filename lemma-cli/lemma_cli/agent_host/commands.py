@@ -206,8 +206,13 @@ def _target_command(command: str, target: str | None) -> None:
 
 
 @app.command("doctor")
-def doctor() -> None:
-    _run("doctor", "--json")
+def doctor(
+    repair: bool = typer.Option(False, "--repair", help="Repair the verified adapter cache."),
+) -> None:
+    arguments = ["doctor", "--json"]
+    if repair:
+        arguments.append("--repair")
+    _run(*arguments)
 
 
 @app.command("discover")

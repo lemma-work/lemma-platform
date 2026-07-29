@@ -26,7 +26,7 @@ def _row(
         type=event_type,
         object_id=object_id,
         payload=payload,
-        integration_key="codex",
+        harness_key="codex",
         adapter_version="1.2.3",
     )
 

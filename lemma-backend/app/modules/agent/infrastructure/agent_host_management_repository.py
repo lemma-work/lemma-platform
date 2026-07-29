@@ -1,4 +1,4 @@
-"""Pairing, host identity, and integration persistence for Agent Host."""
+"""Pairing, host identity, and harness persistence for Agent Host."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app.modules.agent.domain.agent_host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
     AgentHostCheckpoint,
     AgentHostCommandState,
-    AgentHostIntegrationSnapshot,
+    AgentHostHarnessSnapshot,
     AgentHostRunState,
     AgentHostStatus,
     HostHello,
@@ -28,7 +28,7 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostAuthNonceModel,
     AgentHostCommandModel,
-    AgentHostIntegrationModel,
+    AgentHostHarnessModel,
     AgentHostMcpRouteModel,
     AgentHostModel,
     AgentHostPairingModel,
@@ -317,22 +317,22 @@ class AgentHostRepository:
         await self.session.flush()
         return host
 
-    async def publish_integration(
+    async def publish_harness(
         self,
         *,
         host_id: UUID,
-        snapshot: AgentHostIntegrationSnapshot,
-    ) -> AgentHostIntegrationModel:
+        snapshot: AgentHostHarnessSnapshot,
+    ) -> AgentHostHarnessModel:
         host = await self.require(host_id)
         if host.revoked_at is not None:
             raise AgentHostProtocolViolation("Agent Host is revoked")
-        integration = (
+        harness = (
             await self.session.execute(
-                select(AgentHostIntegrationModel)
+                select(AgentHostHarnessModel)
                 .where(
-                    AgentHostIntegrationModel.host_id == host_id,
-                    AgentHostIntegrationModel.integration_key
-                    == snapshot.integration_key,
+                    AgentHostHarnessModel.host_id == host_id,
+                    AgentHostHarnessModel.harness_key
+                    == snapshot.harness_key,
                 )
                 .with_for_update()
             )
@@ -340,6 +340,7 @@ class AgentHostRepository:
         values = {
             "display_name": snapshot.display_name,
             "adapter_protocol": snapshot.adapter_protocol.value,
+            "adapter_protocol_version": snapshot.adapter_protocol_version,
             "adapter_version": snapshot.adapter_version,
             "upstream_version": snapshot.upstream_version,
             "auth_state": snapshot.auth_state,
@@ -352,42 +353,42 @@ class AgentHostRepository:
             "fetched_at": snapshot.fetched_at,
             "stale_after": snapshot.stale_after,
             "stale_reason": snapshot.stale_reason,
-            "integration_metadata": snapshot.metadata,
+            "harness_metadata": snapshot.metadata,
         }
-        if integration is None:
-            integration = AgentHostIntegrationModel(
+        if harness is None:
+            harness = AgentHostHarnessModel(
                 host_id=host_id,
-                integration_key=snapshot.integration_key,
+                harness_key=snapshot.harness_key,
                 **values,
             )
-            self.session.add(integration)
+            self.session.add(harness)
         else:
             for key, value in values.items():
-                setattr(integration, key, value)
+                setattr(harness, key, value)
         await self.session.flush()
-        return integration
+        return harness
 
-    async def get_integration(
+    async def get_harness(
         self,
         *,
-        integration_id: UUID,
+        harness_id: UUID,
         for_update: bool = False,
-    ) -> AgentHostIntegrationModel | None:
-        stmt = select(AgentHostIntegrationModel).where(
-            AgentHostIntegrationModel.id == integration_id
+    ) -> AgentHostHarnessModel | None:
+        stmt = select(AgentHostHarnessModel).where(
+            AgentHostHarnessModel.id == harness_id
         )
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def list_integrations(
+    async def list_harnesses(
         self,
         *,
         host_id: UUID,
-    ) -> list[AgentHostIntegrationModel]:
+    ) -> list[AgentHostHarnessModel]:
         result = await self.session.execute(
-            select(AgentHostIntegrationModel)
-            .where(AgentHostIntegrationModel.host_id == host_id)
-            .order_by(AgentHostIntegrationModel.display_name.asc())
+            select(AgentHostHarnessModel)
+            .where(AgentHostHarnessModel.host_id == host_id)
+            .order_by(AgentHostHarnessModel.display_name.asc())
         )
         return list(result.scalars())

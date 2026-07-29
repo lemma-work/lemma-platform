@@ -337,9 +337,9 @@ async def test_agent_run_uses_user_added_openai_compatible_profile(
     default_model = system_lemma_default_model()
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
     create_profile = await authenticated_client.post(
-        f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
+        f"/organizations/{fixed_test_org['id']}/runtime/profiles",
         json={
-            "source": "OPENAI_COMPATIBLE",
+            "runtime_type": "OPENAI_COMPATIBLE",
             "name": f"Custom System Lemma Compatible {uuid4().hex[:8]}",
             "base_url": base_url,
             "api_key": api_key,

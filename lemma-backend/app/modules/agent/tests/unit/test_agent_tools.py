@@ -169,7 +169,7 @@ async def test_user_created_agent_gets_only_its_selected_toolsets():
 
 @pytest.mark.asyncio
 async def test_todo_toolset_gated_by_agent_definition(monkeypatch):
-    # RunToolAssembler feeds BOTH the in-process harness and the daemon MCP path,
+    # RunToolAssembler feeds BOTH the in-process harness and the remote-harness MCP path,
     # so a user-created agent gets the todo tools only when its toolsets include
     # TODO — never implicitly.
     from app.modules.agent.tools import callable_tool_factory as ctf
@@ -603,8 +603,8 @@ async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_interaction_tools_guide_instead_of_pausing_on_daemon_harness():
-    """On daemon/MCP runs (no pause signal) the tools never raise or block; they
+async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness_harness():
+    """On remote-harness/MCP runs (no pause signal) the tools never raise or block; they
     return guidance so the model falls back to a conversational ask."""
     ask = await ask_user(
         _ask_ctx(supports_pause_signal=False),  # type: ignore[arg-type]
@@ -615,7 +615,7 @@ async def test_interaction_tools_guide_instead_of_pausing_on_daemon_harness():
     assert "continue this conversation" in (ask.message or "")
 
     approval = await request_approval(
-        _approval_ctx("approval-daemon", supports_pause_signal=False),  # type: ignore[arg-type]
+        _approval_ctx("approval-remote_harness", supports_pause_signal=False),  # type: ignore[arg-type]
         tool_name="exec_command",
         args={"cmd": "ls"},
         title="List files?",
@@ -754,8 +754,8 @@ def test_runtime_context_brief_is_appended_to_agent_prompt():
     assert prompt.index("Answer briefly.") < prompt.index("# Runtime Context")
 
 
-def test_daemon_prompt_includes_surface_platform_fragment():
-    # Daemon harnesses (include_toolset_prompts=True) get per-platform guidance
+def test_remote_harness_prompt_includes_surface_platform_fragment():
+    # Remote harnesses (include_toolset_prompts=True) get per-platform guidance
     # appended in build_agent_instructions; the in-process harness gets it from
     # SurfacePlatformCapability instead.
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
@@ -1585,10 +1585,10 @@ def test_persisted_agent_prompt_includes_web_search_with_toolset():
     assert "save-webpage https://example.com/article" in prompt
 
 
-def test_daemon_instructions_include_todo_guidance_only_with_toolset():
-    # Daemon harnesses get toolset prompts folded into instructions (no capability
+def test_remote_harness_instructions_include_todo_guidance_only_with_toolset():
+    # Remote harnesses get toolset prompts folded into instructions (no capability
     # layer). The todo task-list guidance must ride along — but only when the agent
-    # actually has TODO — so daemons behave like the in-process LEMMA harness.
+    # actually has TODO — so remote harnesses behave like the in-process LEMMA harness.
     pod_id, user_id = uuid4(), uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=user_id, agent_id=uuid4())
 
@@ -1606,10 +1606,10 @@ def test_daemon_instructions_include_todo_guidance_only_with_toolset():
         instruction="x",
         toolsets=[AgentToolset.TODO],
     )
-    daemon_prompt = build_agent_instructions(
+    remote_harness_prompt = build_agent_instructions(
         agent=with_todo, conversation=conversation, ctx=object()
     )
-    assert "# Task list" in daemon_prompt and "write_todos" in daemon_prompt
+    assert "# Task list" in remote_harness_prompt and "write_todos" in remote_harness_prompt
 
     # The in-process LEMMA harness suppresses toolset prompts (the TodoCapability
     # supplies the same guidance), so it's not double-included here.

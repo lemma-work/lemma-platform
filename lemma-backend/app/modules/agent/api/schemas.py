@@ -17,17 +17,20 @@ from app.modules.agent.domain.value_objects import (
     AgentToolset,
     ConversationStatus,
     ConversationType,
-    HarnessKind,
     JsonObject,
     JsonValue,
     MessageKind,
 )
 from app.modules.agent.domain.runtime_profiles import (
+    AnthropicCompatibleRuntimeConfig,
+    AzureOpenAIRuntimeConfig,
+    GoogleVertexRuntimeConfig,
+    HarnessRuntimeConfig,
+    OpenAICompatibleRuntimeConfig,
     RuntimeModelCatalogEntry,
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    RuntimeProfileType,
 )
 
 
@@ -252,53 +255,60 @@ class AgentMessageResponse(BaseModel):
     message: str
 
 
-class AgentHarnessInfo(BaseModel):
-    harness_kind: HarnessKind
-    display_name: str
-    models: list[str] = Field(default_factory=list)
-    # Structured model entries (display name, provider model id, context
-    # metadata) so the picker can advertise detected models nicely — not just
-    # the flat ``models`` aliases.
-    model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
-    available: bool = True
-    availability_status: str | None = None
-    daemon_id: UUID | None = None
-    daemon_display_name: str | None = None
-    daemon_status: str | None = None
-
-
-class AgentHarnessListResponse(BaseModel):
-    items: list[AgentHarnessInfo]
-
-
-class AgentRuntimeProfileResponse(BaseModel):
+class RuntimeProfileResponseBase(BaseModel):
     id: str
     organization_id: UUID | None = None
-    user_id: UUID | None = None
-    daemon_id: UUID | None = None
-    host_integration_id: UUID | None = None
+    owner_user_id: UUID | None = None
     scope: RuntimeProfileScope
-    kind: RuntimeProfileKind
-    protocol: RuntimeProfileProtocol
     name: str
     description: str | None = None
     default_model_name: str | None = None
     model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
-    config: JsonObject = Field(default_factory=dict)
     status: RuntimeProfileStatus
-    metadata: JsonObject = Field(default_factory=dict)
     has_credentials: bool = False
-    derived_harness_kind: HarnessKind
-    daemon_display_name: str | None = None
-    daemon_status: str | None = None
-    daemon_harness_available: bool | None = None
+    availability_status: str | None = None
+
+
+class OpenAICompatibleRuntimeProfileResponse(RuntimeProfileResponseBase):
+    runtime_type: Literal[RuntimeProfileType.OPENAI_COMPATIBLE]
+    config: OpenAICompatibleRuntimeConfig | None
+
+
+class AnthropicCompatibleRuntimeProfileResponse(RuntimeProfileResponseBase):
+    runtime_type: Literal[RuntimeProfileType.ANTHROPIC_COMPATIBLE]
+    config: AnthropicCompatibleRuntimeConfig | None
+
+
+class AzureOpenAIRuntimeProfileResponse(RuntimeProfileResponseBase):
+    runtime_type: Literal[RuntimeProfileType.AZURE_OPENAI]
+    config: AzureOpenAIRuntimeConfig | None
+
+
+class GoogleVertexRuntimeProfileResponse(RuntimeProfileResponseBase):
+    runtime_type: Literal[RuntimeProfileType.GOOGLE_VERTEX]
+    config: GoogleVertexRuntimeConfig | None
+
+
+class HarnessRuntimeProfileResponse(RuntimeProfileResponseBase):
+    runtime_type: Literal[RuntimeProfileType.HARNESS]
+    config: HarnessRuntimeConfig
+    harness_id: UUID
     host_id: UUID | None = None
     host_display_name: str | None = None
     host_status: str | None = None
-    integration_key: str | None = None
-    integration_health: str | None = None
-    integration_config_revision: str | None = None
-    availability_status: str | None = None
+    harness_key: str | None = None
+    harness_health: str | None = None
+    harness_config_revision: str | None = None
+
+
+AgentRuntimeProfileResponse = Annotated[
+    OpenAICompatibleRuntimeProfileResponse
+    | AnthropicCompatibleRuntimeProfileResponse
+    | AzureOpenAIRuntimeProfileResponse
+    | GoogleVertexRuntimeProfileResponse
+    | HarnessRuntimeProfileResponse,
+    Field(discriminator="runtime_type"),
+]
 
 
 class AgentRuntimeProfileListResponse(BaseModel):
@@ -306,18 +316,11 @@ class AgentRuntimeProfileListResponse(BaseModel):
     default_runtime: AgentRuntimeConfig
 
 
-class CreateUserDaemonRuntimeProfileRequest(BaseModel):
-    source: Literal["USER_DAEMON"] = "USER_DAEMON"
-    daemon_id: UUID
-    harness_kind: HarnessKind
-    scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION
-    name: str = Field(min_length=1, max_length=255)
-    description: str | None = None
-    default_model_name: str | None = Field(default=None, min_length=1)
-
-
 class CreateOpenAICompatibleRuntimeProfileRequest(BaseModel):
-    source: Literal["OPENAI_COMPATIBLE"] = "OPENAI_COMPATIBLE"
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_type: Literal[RuntimeProfileType.OPENAI_COMPATIBLE]
+    scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
     name: str = Field(min_length=1, max_length=255)
     base_url: HttpUrl
     api_key: str | None = Field(default=None, min_length=1)
@@ -329,7 +332,10 @@ class CreateOpenAICompatibleRuntimeProfileRequest(BaseModel):
 
 
 class CreateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
-    source: Literal["ANTHROPIC_COMPATIBLE"] = "ANTHROPIC_COMPATIBLE"
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_type: Literal[RuntimeProfileType.ANTHROPIC_COMPATIBLE]
+    scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
     name: str = Field(min_length=1, max_length=255)
     api_key: str = Field(min_length=1)
     base_url: HttpUrl | None = None
@@ -340,25 +346,84 @@ class CreateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
     model_settings: JsonObject = Field(default_factory=dict)
 
 
-class CreateAgentHostRuntimeProfileRequest(BaseModel):
-    source: Literal["AGENT_HOST"] = "AGENT_HOST"
-    host_integration_id: UUID
+class CreateAzureOpenAIRuntimeProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_type: Literal[RuntimeProfileType.AZURE_OPENAI]
+    scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
+    name: str = Field(min_length=1, max_length=255)
+    azure_endpoint: HttpUrl
+    api_version: str | None = Field(default=None, min_length=1)
+    api_key: str = Field(min_length=1)
+    description: str | None = None
+    default_model_name: str = Field(min_length=1)
+    model_names: list[str] = Field(min_length=1)
+    model_settings: JsonObject = Field(default_factory=dict)
+
+
+class CreateGoogleVertexRuntimeProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_type: Literal[RuntimeProfileType.GOOGLE_VERTEX]
+    scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
+    name: str = Field(min_length=1, max_length=255)
+    project_id: str = Field(min_length=1)
+    location: str = Field(min_length=1)
+    service_account_json: JsonObject | None = None
+    description: str | None = None
+    default_model_name: str = Field(min_length=1)
+    model_names: list[str] = Field(min_length=1)
+    model_settings: JsonObject = Field(default_factory=dict)
+
+
+class CreateHarnessRuntimeProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_type: Literal[RuntimeProfileType.HARNESS]
+    harness_id: UUID
     scope: RuntimeProfileScope = RuntimeProfileScope.PERSONAL
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
-    integration_snapshot_revision: str = Field(min_length=1, max_length=255)
+    default_model_name: str | None = Field(default=None, min_length=1)
+    harness_snapshot_revision: str = Field(min_length=1, max_length=255)
     config_selections: JsonObject = Field(default_factory=dict)
     host_wait_timeout_seconds: int = Field(default=300, ge=1, le=3600)
     fallback_profile_id: str | None = Field(default=None, min_length=1)
 
 
 CreateAgentRuntimeProfileRequest = Annotated[
-    CreateUserDaemonRuntimeProfileRequest
-    | CreateOpenAICompatibleRuntimeProfileRequest
+    CreateOpenAICompatibleRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest
-    | CreateAgentHostRuntimeProfileRequest,
-    Field(discriminator="source"),
+    | CreateAzureOpenAIRuntimeProfileRequest
+    | CreateGoogleVertexRuntimeProfileRequest
+    | CreateHarnessRuntimeProfileRequest,
+    Field(discriminator="runtime_type"),
 ]
+
+
+class UpdateRuntimeProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    status: RuntimeProfileStatus | None = None
+    default_model_name: str | None = Field(default=None, min_length=1)
+    base_url: HttpUrl | None = None
+    azure_endpoint: HttpUrl | None = None
+    api_version: str | None = Field(default=None, min_length=1)
+    project_id: str | None = Field(default=None, min_length=1)
+    location: str | None = Field(default=None, min_length=1)
+    service_account_json: JsonObject | None = None
+    api_key: str | None = Field(default=None, min_length=1)
+    model_names: list[str] | None = None
+    headers: dict[str, str] | None = None
+    model_settings: JsonObject | None = None
+    harness_snapshot_revision: str | None = Field(
+        default=None, min_length=1, max_length=255
+    )
+    config_selections: JsonObject | None = None
+    host_wait_timeout_seconds: int | None = Field(default=None, ge=1, le=3600)
+    fallback_profile_id: str | None = None
 
 
 class AgentRunResponse(BaseModel):

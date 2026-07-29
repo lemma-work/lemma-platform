@@ -24,14 +24,13 @@ _NAME_TO_MODULE = {
     'AgentDetailResponseInputSchemaType0': 'agent_detail_response_input_schema_type_0',
     'AgentDetailResponseMetadataType0': 'agent_detail_response_metadata_type_0',
     'AgentDetailResponseOutputSchemaType0': 'agent_detail_response_output_schema_type_0',
-    'AgentHarnessInfo': 'agent_harness_info',
-    'AgentHarnessListResponse': 'agent_harness_list_response',
     'AgentHostAdapterProtocol': 'agent_host_adapter_protocol',
     'AgentHostCapacity': 'agent_host_capacity',
     'AgentHostCheckpoint': 'agent_host_checkpoint',
     'AgentHostCommand': 'agent_host_command',
     'AgentHostCommandKind': 'agent_host_command_kind',
     'AgentHostCommandPayload': 'agent_host_command_payload',
+    'AgentHostCommandRejection': 'agent_host_command_rejection',
     'AgentHostConfigOption': 'agent_host_config_option',
     'AgentHostConfigOptionMetadata': 'agent_host_config_option_metadata',
     'AgentHostConfigOptionOptionsItem': 'agent_host_config_option_options_item',
@@ -40,16 +39,16 @@ _NAME_TO_MODULE = {
     'AgentHostEventBatch': 'agent_host_event_batch',
     'AgentHostEventPayload': 'agent_host_event_payload',
     'AgentHostEventType': 'agent_host_event_type',
-    'AgentHostIntegrationCapabilities': 'agent_host_integration_capabilities',
-    'AgentHostIntegrationHealth': 'agent_host_integration_health',
-    'AgentHostIntegrationListResponse': 'agent_host_integration_list_response',
-    'AgentHostIntegrationPublishRequest': 'agent_host_integration_publish_request',
-    'AgentHostIntegrationPublishResponse': 'agent_host_integration_publish_response',
-    'AgentHostIntegrationResponse': 'agent_host_integration_response',
-    'AgentHostIntegrationResponseCapabilities': 'agent_host_integration_response_capabilities',
-    'AgentHostIntegrationResponseMetadata': 'agent_host_integration_response_metadata',
-    'AgentHostIntegrationSnapshot': 'agent_host_integration_snapshot',
-    'AgentHostIntegrationSnapshotMetadata': 'agent_host_integration_snapshot_metadata',
+    'AgentHostHarnessCapabilities': 'agent_host_harness_capabilities',
+    'AgentHostHarnessHealth': 'agent_host_harness_health',
+    'AgentHostHarnessListResponse': 'agent_host_harness_list_response',
+    'AgentHostHarnessPublishRequest': 'agent_host_harness_publish_request',
+    'AgentHostHarnessPublishResponse': 'agent_host_harness_publish_response',
+    'AgentHostHarnessResponse': 'agent_host_harness_response',
+    'AgentHostHarnessResponseCapabilities': 'agent_host_harness_response_capabilities',
+    'AgentHostHarnessResponseMetadata': 'agent_host_harness_response_metadata',
+    'AgentHostHarnessSnapshot': 'agent_host_harness_snapshot',
+    'AgentHostHarnessSnapshotMetadata': 'agent_host_harness_snapshot_metadata',
     'AgentHostListResponse': 'agent_host_list_response',
     'AgentHostMcpRouteResponse': 'agent_host_mcp_route_response',
     'AgentHostMcpRouteResponseMcp': 'agent_host_mcp_route_response_mcp',
@@ -59,6 +58,7 @@ _NAME_TO_MODULE = {
     'AgentHostPairingCreated': 'agent_host_pairing_created',
     'AgentHostPollRequest': 'agent_host_poll_request',
     'AgentHostPollResponse': 'agent_host_poll_response',
+    'AgentHostRejectionCode': 'agent_host_rejection_code',
     'AgentHostResponse': 'agent_host_response',
     'AgentHostResponseCapacity': 'agent_host_response_capacity',
     'AgentHostRunCheckpoint': 'agent_host_run_checkpoint',
@@ -84,15 +84,16 @@ _NAME_TO_MODULE = {
     'AgentRunStatus': 'agent_run_status',
     'AgentRuntimeConfig': 'agent_runtime_config',
     'AgentRuntimeProfileListResponse': 'agent_runtime_profile_list_response',
-    'AgentRuntimeProfileResponse': 'agent_runtime_profile_response',
-    'AgentRuntimeProfileResponseConfig': 'agent_runtime_profile_response_config',
-    'AgentRuntimeProfileResponseMetadata': 'agent_runtime_profile_response_metadata',
     'AgentSummaryResponse': 'agent_summary_response',
     'AgentSummaryResponseMetadataType0': 'agent_summary_response_metadata_type_0',
     'AgentSurfaceListResponse': 'agent_surface_list_response',
     'AgentSurfaceResponse': 'agent_surface_response',
     'AgentSurfaceStatus': 'agent_surface_status',
     'AgentToolset': 'agent_toolset',
+    'AnthropicCompatibleRuntimeConfig': 'anthropic_compatible_runtime_config',
+    'AnthropicCompatibleRuntimeConfigHeaders': 'anthropic_compatible_runtime_config_headers',
+    'AnthropicCompatibleRuntimeConfigModelSettings': 'anthropic_compatible_runtime_config_model_settings',
+    'AnthropicCompatibleRuntimeProfileResponse': 'anthropic_compatible_runtime_profile_response',
     'AppBundleUploadRequest': 'app_bundle_upload_request',
     'AppBundleUploadResponse': 'app_bundle_upload_response',
     'AppDetailResponse': 'app_detail_response',
@@ -121,6 +122,9 @@ _NAME_TO_MODULE = {
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
     'AvailableSurfaceChannelsResponse': 'available_surface_channels_response',
     'AvailableSurfacesResponse': 'available_surfaces_response',
+    'AzureOpenAIRuntimeConfig': 'azure_open_ai_runtime_config',
+    'AzureOpenAIRuntimeConfigModelSettings': 'azure_open_ai_runtime_config_model_settings',
+    'AzureOpenAIRuntimeProfileResponse': 'azure_open_ai_runtime_profile_response',
     'BulkCreateRecordsRequest': 'bulk_create_records_request',
     'BulkCreateRecordsRequestRecordsItem': 'bulk_create_records_request_records_item',
     'BulkDeleteRecordsRequest': 'bulk_delete_records_request',
@@ -147,8 +151,6 @@ _NAME_TO_MODULE = {
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
     'ConversationType': 'conversation_type',
-    'CreateAgentHostRuntimeProfileRequest': 'create_agent_host_runtime_profile_request',
-    'CreateAgentHostRuntimeProfileRequestConfigSelections': 'create_agent_host_runtime_profile_request_config_selections',
     'CreateAgentRequest': 'create_agent_request',
     'CreateAgentRequestInputSchemaType0': 'create_agent_request_input_schema_type_0',
     'CreateAgentRequestMetadataType0': 'create_agent_request_metadata_type_0',
@@ -158,10 +160,17 @@ _NAME_TO_MODULE = {
     'CreateAnthropicCompatibleRuntimeProfileRequestModelSettings': 'create_anthropic_compatible_runtime_profile_request_model_settings',
     'CreateAppFromWidgetRequest': 'create_app_from_widget_request',
     'CreateAppRequest': 'create_app_request',
+    'CreateAzureOpenAIRuntimeProfileRequest': 'create_azure_open_ai_runtime_profile_request',
+    'CreateAzureOpenAIRuntimeProfileRequestModelSettings': 'create_azure_open_ai_runtime_profile_request_model_settings',
     'CreateConversationRequest': 'create_conversation_request',
     'CreateConversationRequestMetadataType0': 'create_conversation_request_metadata_type_0',
     'CreateFolderRequest': 'create_folder_request',
     'CreateFunctionRequest': 'create_function_request',
+    'CreateGoogleVertexRuntimeProfileRequest': 'create_google_vertex_runtime_profile_request',
+    'CreateGoogleVertexRuntimeProfileRequestModelSettings': 'create_google_vertex_runtime_profile_request_model_settings',
+    'CreateGoogleVertexRuntimeProfileRequestServiceAccountJsonType0': 'create_google_vertex_runtime_profile_request_service_account_json_type_0',
+    'CreateHarnessRuntimeProfileRequest': 'create_harness_runtime_profile_request',
+    'CreateHarnessRuntimeProfileRequestConfigSelections': 'create_harness_runtime_profile_request_config_selections',
     'CreateOpenAICompatibleRuntimeProfileRequest': 'create_open_ai_compatible_runtime_profile_request',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders': 'create_open_ai_compatible_runtime_profile_request_headers',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings': 'create_open_ai_compatible_runtime_profile_request_model_settings',
@@ -172,7 +181,6 @@ _NAME_TO_MODULE = {
     'CreateScheduleRequestFilterOutputSchemaType0': 'create_schedule_request_filter_output_schema_type_0',
     'CreateTableRequest': 'create_table_request',
     'CreateTableRequestConfigType0': 'create_table_request_config_type_0',
-    'CreateUserDaemonRuntimeProfileRequest': 'create_user_daemon_runtime_profile_request',
     'DataStoreWorkflowStartConfigInput': 'data_store_workflow_start_config_input',
     'DataStoreWorkflowStartConfigOutput': 'data_store_workflow_start_config_output',
     'DataStoreWorkflowStartInput': 'data_store_workflow_start_input',
@@ -255,7 +263,12 @@ _NAME_TO_MODULE = {
     'FunctionStatus': 'function_status',
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
-    'HarnessKind': 'harness_kind',
+    'GoogleVertexRuntimeConfig': 'google_vertex_runtime_config',
+    'GoogleVertexRuntimeConfigModelSettings': 'google_vertex_runtime_config_model_settings',
+    'GoogleVertexRuntimeProfileResponse': 'google_vertex_runtime_profile_response',
+    'HarnessRuntimeConfig': 'harness_runtime_config',
+    'HarnessRuntimeConfigConfigSelections': 'harness_runtime_config_config_selections',
+    'HarnessRuntimeProfileResponse': 'harness_runtime_profile_response',
     'HostHello': 'host_hello',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
@@ -283,6 +296,10 @@ _NAME_TO_MODULE = {
     'MessageResponseSchema': 'message_response_schema',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
+    'OpenAICompatibleRuntimeConfig': 'open_ai_compatible_runtime_config',
+    'OpenAICompatibleRuntimeConfigHeaders': 'open_ai_compatible_runtime_config_headers',
+    'OpenAICompatibleRuntimeConfigModelSettings': 'open_ai_compatible_runtime_config_model_settings',
+    'OpenAICompatibleRuntimeProfileResponse': 'open_ai_compatible_runtime_profile_response',
     'OperationDetail': 'operation_detail',
     'OperationDetailInputSchema': 'operation_detail_input_schema',
     'OperationDetailOutputSchemaType0': 'operation_detail_output_schema_type_0',
@@ -358,8 +375,6 @@ _NAME_TO_MODULE = {
     'RuntimeModelCatalogEntry': 'runtime_model_catalog_entry',
     'RuntimeModelCatalogEntryDefaultModelSettings': 'runtime_model_catalog_entry_default_model_settings',
     'RuntimeModelCatalogEntryMetadata': 'runtime_model_catalog_entry_metadata',
-    'RuntimeProfileKind': 'runtime_profile_kind',
-    'RuntimeProfileProtocol': 'runtime_profile_protocol',
     'RuntimeProfileScope': 'runtime_profile_scope',
     'RuntimeProfileStatus': 'runtime_profile_status',
     'ScheduleDetailResponse': 'schedule_detail_response',
@@ -433,6 +448,11 @@ _NAME_TO_MODULE = {
     'UpdateMemberRoleRequest': 'update_member_role_request',
     'UpdateRecordRequest': 'update_record_request',
     'UpdateRecordRequestData': 'update_record_request_data',
+    'UpdateRuntimeProfileRequest': 'update_runtime_profile_request',
+    'UpdateRuntimeProfileRequestConfigSelectionsType0': 'update_runtime_profile_request_config_selections_type_0',
+    'UpdateRuntimeProfileRequestHeadersType0': 'update_runtime_profile_request_headers_type_0',
+    'UpdateRuntimeProfileRequestModelSettingsType0': 'update_runtime_profile_request_model_settings_type_0',
+    'UpdateRuntimeProfileRequestServiceAccountJsonType0': 'update_runtime_profile_request_service_account_json_type_0',
     'UpdateScheduleRequest': 'update_schedule_request',
     'UpdateScheduleRequestConfigType0': 'update_schedule_request_config_type_0',
     'UpdateScheduleRequestFilterOutputSchemaType0': 'update_schedule_request_filter_output_schema_type_0',
@@ -515,14 +535,13 @@ if TYPE_CHECKING:
     from .agent_detail_response_input_schema_type_0 import AgentDetailResponseInputSchemaType0
     from .agent_detail_response_metadata_type_0 import AgentDetailResponseMetadataType0
     from .agent_detail_response_output_schema_type_0 import AgentDetailResponseOutputSchemaType0
-    from .agent_harness_info import AgentHarnessInfo
-    from .agent_harness_list_response import AgentHarnessListResponse
     from .agent_host_adapter_protocol import AgentHostAdapterProtocol
     from .agent_host_capacity import AgentHostCapacity
     from .agent_host_checkpoint import AgentHostCheckpoint
     from .agent_host_command import AgentHostCommand
     from .agent_host_command_kind import AgentHostCommandKind
     from .agent_host_command_payload import AgentHostCommandPayload
+    from .agent_host_command_rejection import AgentHostCommandRejection
     from .agent_host_config_option import AgentHostConfigOption
     from .agent_host_config_option_metadata import AgentHostConfigOptionMetadata
     from .agent_host_config_option_options_item import AgentHostConfigOptionOptionsItem
@@ -531,16 +550,16 @@ if TYPE_CHECKING:
     from .agent_host_event_batch import AgentHostEventBatch
     from .agent_host_event_payload import AgentHostEventPayload
     from .agent_host_event_type import AgentHostEventType
-    from .agent_host_integration_capabilities import AgentHostIntegrationCapabilities
-    from .agent_host_integration_health import AgentHostIntegrationHealth
-    from .agent_host_integration_list_response import AgentHostIntegrationListResponse
-    from .agent_host_integration_publish_request import AgentHostIntegrationPublishRequest
-    from .agent_host_integration_publish_response import AgentHostIntegrationPublishResponse
-    from .agent_host_integration_response import AgentHostIntegrationResponse
-    from .agent_host_integration_response_capabilities import AgentHostIntegrationResponseCapabilities
-    from .agent_host_integration_response_metadata import AgentHostIntegrationResponseMetadata
-    from .agent_host_integration_snapshot import AgentHostIntegrationSnapshot
-    from .agent_host_integration_snapshot_metadata import AgentHostIntegrationSnapshotMetadata
+    from .agent_host_harness_capabilities import AgentHostHarnessCapabilities
+    from .agent_host_harness_health import AgentHostHarnessHealth
+    from .agent_host_harness_list_response import AgentHostHarnessListResponse
+    from .agent_host_harness_publish_request import AgentHostHarnessPublishRequest
+    from .agent_host_harness_publish_response import AgentHostHarnessPublishResponse
+    from .agent_host_harness_response import AgentHostHarnessResponse
+    from .agent_host_harness_response_capabilities import AgentHostHarnessResponseCapabilities
+    from .agent_host_harness_response_metadata import AgentHostHarnessResponseMetadata
+    from .agent_host_harness_snapshot import AgentHostHarnessSnapshot
+    from .agent_host_harness_snapshot_metadata import AgentHostHarnessSnapshotMetadata
     from .agent_host_list_response import AgentHostListResponse
     from .agent_host_mcp_route_response import AgentHostMcpRouteResponse
     from .agent_host_mcp_route_response_mcp import AgentHostMcpRouteResponseMcp
@@ -550,6 +569,7 @@ if TYPE_CHECKING:
     from .agent_host_pairing_created import AgentHostPairingCreated
     from .agent_host_poll_request import AgentHostPollRequest
     from .agent_host_poll_response import AgentHostPollResponse
+    from .agent_host_rejection_code import AgentHostRejectionCode
     from .agent_host_response import AgentHostResponse
     from .agent_host_response_capacity import AgentHostResponseCapacity
     from .agent_host_run_checkpoint import AgentHostRunCheckpoint
@@ -575,15 +595,16 @@ if TYPE_CHECKING:
     from .agent_run_status import AgentRunStatus
     from .agent_runtime_config import AgentRuntimeConfig
     from .agent_runtime_profile_list_response import AgentRuntimeProfileListResponse
-    from .agent_runtime_profile_response import AgentRuntimeProfileResponse
-    from .agent_runtime_profile_response_config import AgentRuntimeProfileResponseConfig
-    from .agent_runtime_profile_response_metadata import AgentRuntimeProfileResponseMetadata
     from .agent_summary_response import AgentSummaryResponse
     from .agent_summary_response_metadata_type_0 import AgentSummaryResponseMetadataType0
     from .agent_surface_list_response import AgentSurfaceListResponse
     from .agent_surface_response import AgentSurfaceResponse
     from .agent_surface_status import AgentSurfaceStatus
     from .agent_toolset import AgentToolset
+    from .anthropic_compatible_runtime_config import AnthropicCompatibleRuntimeConfig
+    from .anthropic_compatible_runtime_config_headers import AnthropicCompatibleRuntimeConfigHeaders
+    from .anthropic_compatible_runtime_config_model_settings import AnthropicCompatibleRuntimeConfigModelSettings
+    from .anthropic_compatible_runtime_profile_response import AnthropicCompatibleRuntimeProfileResponse
     from .app_bundle_upload_request import AppBundleUploadRequest
     from .app_bundle_upload_response import AppBundleUploadResponse
     from .app_detail_response import AppDetailResponse
@@ -612,6 +633,9 @@ if TYPE_CHECKING:
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
     from .available_surface_channels_response import AvailableSurfaceChannelsResponse
     from .available_surfaces_response import AvailableSurfacesResponse
+    from .azure_open_ai_runtime_config import AzureOpenAIRuntimeConfig
+    from .azure_open_ai_runtime_config_model_settings import AzureOpenAIRuntimeConfigModelSettings
+    from .azure_open_ai_runtime_profile_response import AzureOpenAIRuntimeProfileResponse
     from .bulk_create_records_request import BulkCreateRecordsRequest
     from .bulk_create_records_request_records_item import BulkCreateRecordsRequestRecordsItem
     from .bulk_delete_records_request import BulkDeleteRecordsRequest
@@ -638,8 +662,6 @@ if TYPE_CHECKING:
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
     from .conversation_type import ConversationType
-    from .create_agent_host_runtime_profile_request import CreateAgentHostRuntimeProfileRequest
-    from .create_agent_host_runtime_profile_request_config_selections import CreateAgentHostRuntimeProfileRequestConfigSelections
     from .create_agent_request import CreateAgentRequest
     from .create_agent_request_input_schema_type_0 import CreateAgentRequestInputSchemaType0
     from .create_agent_request_metadata_type_0 import CreateAgentRequestMetadataType0
@@ -649,10 +671,17 @@ if TYPE_CHECKING:
     from .create_anthropic_compatible_runtime_profile_request_model_settings import CreateAnthropicCompatibleRuntimeProfileRequestModelSettings
     from .create_app_from_widget_request import CreateAppFromWidgetRequest
     from .create_app_request import CreateAppRequest
+    from .create_azure_open_ai_runtime_profile_request import CreateAzureOpenAIRuntimeProfileRequest
+    from .create_azure_open_ai_runtime_profile_request_model_settings import CreateAzureOpenAIRuntimeProfileRequestModelSettings
     from .create_conversation_request import CreateConversationRequest
     from .create_conversation_request_metadata_type_0 import CreateConversationRequestMetadataType0
     from .create_folder_request import CreateFolderRequest
     from .create_function_request import CreateFunctionRequest
+    from .create_google_vertex_runtime_profile_request import CreateGoogleVertexRuntimeProfileRequest
+    from .create_google_vertex_runtime_profile_request_model_settings import CreateGoogleVertexRuntimeProfileRequestModelSettings
+    from .create_google_vertex_runtime_profile_request_service_account_json_type_0 import CreateGoogleVertexRuntimeProfileRequestServiceAccountJsonType0
+    from .create_harness_runtime_profile_request import CreateHarnessRuntimeProfileRequest
+    from .create_harness_runtime_profile_request_config_selections import CreateHarnessRuntimeProfileRequestConfigSelections
     from .create_open_ai_compatible_runtime_profile_request import CreateOpenAICompatibleRuntimeProfileRequest
     from .create_open_ai_compatible_runtime_profile_request_headers import CreateOpenAICompatibleRuntimeProfileRequestHeaders
     from .create_open_ai_compatible_runtime_profile_request_model_settings import CreateOpenAICompatibleRuntimeProfileRequestModelSettings
@@ -663,7 +692,6 @@ if TYPE_CHECKING:
     from .create_schedule_request_filter_output_schema_type_0 import CreateScheduleRequestFilterOutputSchemaType0
     from .create_table_request import CreateTableRequest
     from .create_table_request_config_type_0 import CreateTableRequestConfigType0
-    from .create_user_daemon_runtime_profile_request import CreateUserDaemonRuntimeProfileRequest
     from .data_store_workflow_start_config_input import DataStoreWorkflowStartConfigInput
     from .data_store_workflow_start_config_output import DataStoreWorkflowStartConfigOutput
     from .data_store_workflow_start_input import DataStoreWorkflowStartInput
@@ -746,7 +774,12 @@ if TYPE_CHECKING:
     from .function_status import FunctionStatus
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
-    from .harness_kind import HarnessKind
+    from .google_vertex_runtime_config import GoogleVertexRuntimeConfig
+    from .google_vertex_runtime_config_model_settings import GoogleVertexRuntimeConfigModelSettings
+    from .google_vertex_runtime_profile_response import GoogleVertexRuntimeProfileResponse
+    from .harness_runtime_config import HarnessRuntimeConfig
+    from .harness_runtime_config_config_selections import HarnessRuntimeConfigConfigSelections
+    from .harness_runtime_profile_response import HarnessRuntimeProfileResponse
     from .host_hello import HostHello
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
@@ -774,6 +807,10 @@ if TYPE_CHECKING:
     from .message_response_schema import MessageResponseSchema
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
+    from .open_ai_compatible_runtime_config import OpenAICompatibleRuntimeConfig
+    from .open_ai_compatible_runtime_config_headers import OpenAICompatibleRuntimeConfigHeaders
+    from .open_ai_compatible_runtime_config_model_settings import OpenAICompatibleRuntimeConfigModelSettings
+    from .open_ai_compatible_runtime_profile_response import OpenAICompatibleRuntimeProfileResponse
     from .operation_detail import OperationDetail
     from .operation_detail_input_schema import OperationDetailInputSchema
     from .operation_detail_output_schema_type_0 import OperationDetailOutputSchemaType0
@@ -849,8 +886,6 @@ if TYPE_CHECKING:
     from .runtime_model_catalog_entry import RuntimeModelCatalogEntry
     from .runtime_model_catalog_entry_default_model_settings import RuntimeModelCatalogEntryDefaultModelSettings
     from .runtime_model_catalog_entry_metadata import RuntimeModelCatalogEntryMetadata
-    from .runtime_profile_kind import RuntimeProfileKind
-    from .runtime_profile_protocol import RuntimeProfileProtocol
     from .runtime_profile_scope import RuntimeProfileScope
     from .runtime_profile_status import RuntimeProfileStatus
     from .schedule_detail_response import ScheduleDetailResponse
@@ -924,6 +959,11 @@ if TYPE_CHECKING:
     from .update_member_role_request import UpdateMemberRoleRequest
     from .update_record_request import UpdateRecordRequest
     from .update_record_request_data import UpdateRecordRequestData
+    from .update_runtime_profile_request import UpdateRuntimeProfileRequest
+    from .update_runtime_profile_request_config_selections_type_0 import UpdateRuntimeProfileRequestConfigSelectionsType0
+    from .update_runtime_profile_request_headers_type_0 import UpdateRuntimeProfileRequestHeadersType0
+    from .update_runtime_profile_request_model_settings_type_0 import UpdateRuntimeProfileRequestModelSettingsType0
+    from .update_runtime_profile_request_service_account_json_type_0 import UpdateRuntimeProfileRequestServiceAccountJsonType0
     from .update_schedule_request import UpdateScheduleRequest
     from .update_schedule_request_config_type_0 import UpdateScheduleRequestConfigType0
     from .update_schedule_request_filter_output_schema_type_0 import UpdateScheduleRequestFilterOutputSchemaType0
@@ -1019,14 +1059,13 @@ __all__ = [
     'AgentDetailResponseInputSchemaType0',
     'AgentDetailResponseMetadataType0',
     'AgentDetailResponseOutputSchemaType0',
-    'AgentHarnessInfo',
-    'AgentHarnessListResponse',
     'AgentHostAdapterProtocol',
     'AgentHostCapacity',
     'AgentHostCheckpoint',
     'AgentHostCommand',
     'AgentHostCommandKind',
     'AgentHostCommandPayload',
+    'AgentHostCommandRejection',
     'AgentHostConfigOption',
     'AgentHostConfigOptionMetadata',
     'AgentHostConfigOptionOptionsItem',
@@ -1035,16 +1074,16 @@ __all__ = [
     'AgentHostEventBatch',
     'AgentHostEventPayload',
     'AgentHostEventType',
-    'AgentHostIntegrationCapabilities',
-    'AgentHostIntegrationHealth',
-    'AgentHostIntegrationListResponse',
-    'AgentHostIntegrationPublishRequest',
-    'AgentHostIntegrationPublishResponse',
-    'AgentHostIntegrationResponse',
-    'AgentHostIntegrationResponseCapabilities',
-    'AgentHostIntegrationResponseMetadata',
-    'AgentHostIntegrationSnapshot',
-    'AgentHostIntegrationSnapshotMetadata',
+    'AgentHostHarnessCapabilities',
+    'AgentHostHarnessHealth',
+    'AgentHostHarnessListResponse',
+    'AgentHostHarnessPublishRequest',
+    'AgentHostHarnessPublishResponse',
+    'AgentHostHarnessResponse',
+    'AgentHostHarnessResponseCapabilities',
+    'AgentHostHarnessResponseMetadata',
+    'AgentHostHarnessSnapshot',
+    'AgentHostHarnessSnapshotMetadata',
     'AgentHostListResponse',
     'AgentHostMcpRouteResponse',
     'AgentHostMcpRouteResponseMcp',
@@ -1054,6 +1093,7 @@ __all__ = [
     'AgentHostPairingCreated',
     'AgentHostPollRequest',
     'AgentHostPollResponse',
+    'AgentHostRejectionCode',
     'AgentHostResponse',
     'AgentHostResponseCapacity',
     'AgentHostRunCheckpoint',
@@ -1079,15 +1119,16 @@ __all__ = [
     'AgentRunStatus',
     'AgentRuntimeConfig',
     'AgentRuntimeProfileListResponse',
-    'AgentRuntimeProfileResponse',
-    'AgentRuntimeProfileResponseConfig',
-    'AgentRuntimeProfileResponseMetadata',
     'AgentSummaryResponse',
     'AgentSummaryResponseMetadataType0',
     'AgentSurfaceListResponse',
     'AgentSurfaceResponse',
     'AgentSurfaceStatus',
     'AgentToolset',
+    'AnthropicCompatibleRuntimeConfig',
+    'AnthropicCompatibleRuntimeConfigHeaders',
+    'AnthropicCompatibleRuntimeConfigModelSettings',
+    'AnthropicCompatibleRuntimeProfileResponse',
     'AppBundleUploadRequest',
     'AppBundleUploadResponse',
     'AppDetailResponse',
@@ -1116,6 +1157,9 @@ __all__ = [
     'AvailableSurfaceChannelResponse',
     'AvailableSurfaceChannelsResponse',
     'AvailableSurfacesResponse',
+    'AzureOpenAIRuntimeConfig',
+    'AzureOpenAIRuntimeConfigModelSettings',
+    'AzureOpenAIRuntimeProfileResponse',
     'BulkCreateRecordsRequest',
     'BulkCreateRecordsRequestRecordsItem',
     'BulkDeleteRecordsRequest',
@@ -1142,8 +1186,6 @@ __all__ = [
     'ConversationResponseMetadataType0',
     'ConversationStatus',
     'ConversationType',
-    'CreateAgentHostRuntimeProfileRequest',
-    'CreateAgentHostRuntimeProfileRequestConfigSelections',
     'CreateAgentRequest',
     'CreateAgentRequestInputSchemaType0',
     'CreateAgentRequestMetadataType0',
@@ -1153,10 +1195,17 @@ __all__ = [
     'CreateAnthropicCompatibleRuntimeProfileRequestModelSettings',
     'CreateAppFromWidgetRequest',
     'CreateAppRequest',
+    'CreateAzureOpenAIRuntimeProfileRequest',
+    'CreateAzureOpenAIRuntimeProfileRequestModelSettings',
     'CreateConversationRequest',
     'CreateConversationRequestMetadataType0',
     'CreateFolderRequest',
     'CreateFunctionRequest',
+    'CreateGoogleVertexRuntimeProfileRequest',
+    'CreateGoogleVertexRuntimeProfileRequestModelSettings',
+    'CreateGoogleVertexRuntimeProfileRequestServiceAccountJsonType0',
+    'CreateHarnessRuntimeProfileRequest',
+    'CreateHarnessRuntimeProfileRequestConfigSelections',
     'CreateOpenAICompatibleRuntimeProfileRequest',
     'CreateOpenAICompatibleRuntimeProfileRequestHeaders',
     'CreateOpenAICompatibleRuntimeProfileRequestModelSettings',
@@ -1167,7 +1216,6 @@ __all__ = [
     'CreateScheduleRequestFilterOutputSchemaType0',
     'CreateTableRequest',
     'CreateTableRequestConfigType0',
-    'CreateUserDaemonRuntimeProfileRequest',
     'DataStoreWorkflowStartConfigInput',
     'DataStoreWorkflowStartConfigOutput',
     'DataStoreWorkflowStartInput',
@@ -1250,7 +1298,12 @@ __all__ = [
     'FunctionStatus',
     'FunctionSummaryResponse',
     'FunctionType',
-    'HarnessKind',
+    'GoogleVertexRuntimeConfig',
+    'GoogleVertexRuntimeConfigModelSettings',
+    'GoogleVertexRuntimeProfileResponse',
+    'HarnessRuntimeConfig',
+    'HarnessRuntimeConfigConfigSelections',
+    'HarnessRuntimeProfileResponse',
     'HostHello',
     'IconUploadRequest',
     'IconUploadResponse',
@@ -1278,6 +1331,10 @@ __all__ = [
     'MessageResponseSchema',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
+    'OpenAICompatibleRuntimeConfig',
+    'OpenAICompatibleRuntimeConfigHeaders',
+    'OpenAICompatibleRuntimeConfigModelSettings',
+    'OpenAICompatibleRuntimeProfileResponse',
     'OperationDetail',
     'OperationDetailInputSchema',
     'OperationDetailOutputSchemaType0',
@@ -1353,8 +1410,6 @@ __all__ = [
     'RuntimeModelCatalogEntry',
     'RuntimeModelCatalogEntryDefaultModelSettings',
     'RuntimeModelCatalogEntryMetadata',
-    'RuntimeProfileKind',
-    'RuntimeProfileProtocol',
     'RuntimeProfileScope',
     'RuntimeProfileStatus',
     'ScheduleDetailResponse',
@@ -1428,6 +1483,11 @@ __all__ = [
     'UpdateMemberRoleRequest',
     'UpdateRecordRequest',
     'UpdateRecordRequestData',
+    'UpdateRuntimeProfileRequest',
+    'UpdateRuntimeProfileRequestConfigSelectionsType0',
+    'UpdateRuntimeProfileRequestHeadersType0',
+    'UpdateRuntimeProfileRequestModelSettingsType0',
+    'UpdateRuntimeProfileRequestServiceAccountJsonType0',
     'UpdateScheduleRequest',
     'UpdateScheduleRequestConfigType0',
     'UpdateScheduleRequestFilterOutputSchemaType0',

@@ -16,8 +16,6 @@ from app.modules.agent.domain.value_objects import JsonObject
 
 AGENT_HOST_PROTOCOL_VERSION = 2
 AGENT_HOST_OFFLINE_AFTER_SECONDS = 90
-FOLLOW_ADAPTER_DEFAULT = "FOLLOW_ADAPTER_DEFAULT"
-
 
 class AgentHostStatus(str, Enum):
     ONLINE = "ONLINE"
@@ -52,7 +50,7 @@ def effective_agent_host_status(
     return persisted
 
 
-class AgentHostIntegrationHealth(str, Enum):
+class AgentHostHarnessHealth(str, Enum):
     READY = "READY"
     AUTH_REQUIRED = "AUTH_REQUIRED"
     UNSUPPORTED_VERSION = "UNSUPPORTED_VERSION"
@@ -63,7 +61,7 @@ class AgentHostIntegrationHealth(str, Enum):
 
 
 class AgentHostAdapterProtocol(str, Enum):
-    ACP_V1 = "ACP_V1"
+    ACP = "ACP"
     NATIVE = "NATIVE"
 
 
@@ -72,7 +70,7 @@ class AgentHostCommandKind(str, Enum):
     CANCEL_RUN = "CANCEL_RUN"
     DRAIN = "DRAIN"
     RESUME = "RESUME"
-    REFRESH_INTEGRATION = "REFRESH_INTEGRATION"
+    REFRESH_HARNESS = "REFRESH_HARNESS"
     CLOSE_SESSION = "CLOSE_SESSION"
     ROTATE_DEVICE_KEY = "ROTATE_DEVICE_KEY"
 
@@ -83,6 +81,17 @@ class AgentHostCommandState(str, Enum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"
+
+
+class AgentHostRejectionCode(str, Enum):
+    DRAINING = "DRAINING"
+    COMMAND_EXPIRED = "COMMAND_EXPIRED"
+    HARNESS_NOT_FOUND = "HARNESS_NOT_FOUND"
+    CONFIG_REVISION_STALE = "CONFIG_REVISION_STALE"
+    INVALID_SELECTIONS = "INVALID_SELECTIONS"
+    CAPACITY_LOST = "CAPACITY_LOST"
+    ADAPTER_UNAVAILABLE = "ADAPTER_UNAVAILABLE"
+    INVALID_COMMAND = "INVALID_COMMAND"
 
 
 class AgentHostRunState(str, Enum):
@@ -184,7 +193,7 @@ class AgentHostCapacity(BaseModel):
         return self
 
 
-class AgentHostIntegrationCapabilities(BaseModel):
+class AgentHostHarnessCapabilities(BaseModel):
     load_session: bool = False
     resume_session: bool = False
     close_session: bool = False
@@ -206,16 +215,17 @@ class AgentHostConfigOption(BaseModel):
     metadata: JsonObject = Field(default_factory=dict)
 
 
-class AgentHostIntegrationSnapshot(BaseModel):
-    integration_key: str = Field(min_length=1, max_length=128)
+class AgentHostHarnessSnapshot(BaseModel):
+    harness_key: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=1, max_length=255)
     adapter_protocol: AgentHostAdapterProtocol
+    adapter_protocol_version: int = Field(default=1, ge=1)
     adapter_version: str = Field(min_length=1, max_length=128)
     upstream_version: str | None = Field(default=None, max_length=128)
     auth_state: str = Field(min_length=1, max_length=64)
-    health: AgentHostIntegrationHealth
-    capabilities: AgentHostIntegrationCapabilities = Field(
-        default_factory=AgentHostIntegrationCapabilities
+    health: AgentHostHarnessHealth
+    capabilities: AgentHostHarnessCapabilities = Field(
+        default_factory=AgentHostHarnessCapabilities
     )
     config_revision: str = Field(min_length=1, max_length=255)
     config_options: list[AgentHostConfigOption] = Field(default_factory=list)
@@ -224,12 +234,12 @@ class AgentHostIntegrationSnapshot(BaseModel):
     stale_reason: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
 
-    @field_validator("integration_key")
+    @field_validator("harness_key")
     @classmethod
-    def normalize_integration_key(cls, value: str) -> str:
+    def normalize_harness_key(cls, value: str) -> str:
         normalized = value.strip().lower().replace("_", "-")
         if not normalized:
-            raise ValueError("integration_key cannot be empty")
+            raise ValueError("harness_key cannot be empty")
         return normalized
 
 
@@ -241,18 +251,32 @@ class AgentHostRunCheckpoint(BaseModel):
     detail: JsonObject = Field(default_factory=dict)
 
 
+class AgentHostCommandRejection(BaseModel):
+    command_id: UUID
+    run_id: UUID
+    lease_epoch: int = Field(ge=1)
+    code: AgentHostRejectionCode
+    retryable: bool
+    detail: str | None = Field(default=None, max_length=1_000)
+
+
 class AgentHostPollRequest(BaseModel):
     hello: HostHello
     capacity: AgentHostCapacity = Field(default_factory=AgentHostCapacity)
     acknowledged_command_ids: list[UUID] = Field(default_factory=list, max_length=256)
     checkpoints: list[AgentHostRunCheckpoint] = Field(default_factory=list, max_length=256)
+    rejections: list[AgentHostCommandRejection] = Field(
+        default_factory=list,
+        max_length=256,
+    )
 
 
 class AgentHostRunSpec(BaseModel):
     agent_run_id: UUID
     conversation_id: UUID
-    integration_id: UUID
+    harness_id: UUID
     profile_revision: str = Field(min_length=1, max_length=255)
+    model_name: str | None = Field(default=None, min_length=1, max_length=512)
     config_selections: JsonObject = Field(default_factory=dict)
     system_prompt: str
     prompt: list[JsonObject] = Field(min_length=1)
@@ -300,7 +324,7 @@ class AgentHostEvent(BaseModel):
     type: AgentHostEventType
     object_id: str | None = Field(default=None, max_length=255)
     payload: JsonObject = Field(default_factory=dict)
-    integration_key: str = Field(min_length=1, max_length=128)
+    harness_key: str = Field(min_length=1, max_length=128)
     adapter_version: str = Field(min_length=1, max_length=128)
 
     @property
@@ -376,7 +400,7 @@ class AgentHostTokenClaims(BaseModel):
     organization_id: UUID | None
     expires_at_epoch: int
     capabilities: tuple[
-        Literal["control", "events", "integrations", "mcp"],
+        Literal["control", "events", "harnesses", "mcp"],
         ...,
     ]
 
@@ -425,15 +449,38 @@ def validate_agent_host_selections(
         option = options_by_key.get(normalized_key)
         if option is None:
             raise ValueError(f"Unknown Agent Host configuration selection: {key}")
-        if value == FOLLOW_ADAPTER_DEFAULT:
-            normalized[normalized_key] = value
-            continue
+        if str(option.get("category") or "").strip() == "model":
+            raise ValueError("Model must be configured through default_model_name")
         allowed_values = _agent_host_option_values(option.get("options"))
         if allowed_values and value not in allowed_values:
             raise ValueError(
                 f"Invalid value for Agent Host configuration selection: {key}"
             )
         normalized[normalized_key] = value
+    return normalized
+
+
+def validate_agent_host_model(
+    *,
+    config_options: list[object],
+    model_name: str | None,
+) -> str | None:
+    if model_name is None:
+        return None
+    normalized = model_name.strip()
+    if not normalized:
+        raise ValueError("default_model_name cannot be empty")
+    model_options: list[object] = []
+    has_model_option = False
+    for raw_option in config_options:
+        if not isinstance(raw_option, dict):
+            continue
+        if str(raw_option.get("category") or "").strip() != "model":
+            continue
+        has_model_option = True
+        model_options.extend(_agent_host_option_values(raw_option.get("options")))
+    if not has_model_option or normalized not in model_options:
+        raise ValueError("default_model_name is not offered by this harness")
     return normalized
 
 

@@ -15,7 +15,6 @@ import { PodBundleSettingsPanel } from '@/components/bundle/pod-bundle-settings'
 import { SettingsChoiceList, SettingsHelpText } from '@/components/settings/settings-kit';
 import {
     useAgentRuntimes,
-    useAvailableAgentRuntimeHarnesses,
     useUpdatePodDefaultAgentRuntime,
 } from '@/lib/hooks/use-agent-runtime';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
@@ -35,7 +34,6 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
     const podAccess = usePodAccess(podId);
     const { data: pod, isLoading: isLoadingPod } = usePod(podId);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const updatePodDefaultRuntime = useUpdatePodDefaultAgentRuntime();
     const [runtimeDraft, setRuntimeDraft] = useState<AgentRuntimeConfig | null>(null);
 
@@ -44,7 +42,7 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
     // provider-only default, resolving its model from the profile for display.
     const storedRuntime = pod?.config?.default_runtime
         ?? (pod?.config?.default_profile_id
-            ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id, availableHarnesses)
+            ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id)
             : null);
     const selectedRuntime = runtimeDraft ?? storedRuntime;
     const manageModelsHref = pod?.organization_id
@@ -93,7 +91,6 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
             >
                 <RuntimeModelPicker
                     catalog={runtimeCatalog}
-                    availableHarnesses={availableHarnesses}
                     defaultRuntime={runtimeCatalog?.default_runtime ?? null}
                     value={selectedRuntime}
                     onChange={handleRuntimeCommit}

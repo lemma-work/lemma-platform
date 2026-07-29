@@ -20,10 +20,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.runtime_profiles import (
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
+    RuntimeProfileType,
 )
 from app.modules.agent.infrastructure.models import (
     AgentRunModel,
@@ -556,10 +555,9 @@ async def _ensure_e2e_runtime_profile(
     if profile is None:
         profile = AgentRuntimeProfileModel(
             organization_id=organization_id,
-            user_id=None,
+            owner_user_id=None,
             scope=RuntimeProfileScope.ORGANIZATION.value,
-            kind=RuntimeProfileKind.MODEL_PROVIDER.value,
-            protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE.value,
+            runtime_type=RuntimeProfileType.OPENAI_COMPATIBLE.value,
             name=E2E_RUNTIME_PROFILE_NAME,
             description="Local runtime profile for surface e2e harness execution.",
             default_model_name=E2E_RUNTIME_MODEL_NAME,
@@ -580,7 +578,6 @@ async def _ensure_e2e_runtime_profile(
             },
             credentials={"api_key": "surface-e2e-key"},
             status=RuntimeProfileStatus.ACTIVE.value,
-            profile_metadata={"surface_e2e": True},
         )
         db_session.add(profile)
         await db_session.flush()

@@ -1,4 +1,4 @@
-"""Harness adapter for the durable Agent Host v2 control plane."""
+"""Remote harness adapter for the durable Agent Host control plane."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from uuid import UUID, uuid4
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.agent.domain.agent_host import (
-    FOLLOW_ADAPTER_DEFAULT,
     TERMINAL_AGENT_HOST_RUN_STATES,
     AgentHostRunSpec,
     AgentHostRunState,
@@ -38,9 +37,9 @@ from app.modules.agent.infrastructure.harnesses.agent_host_events import (
     error_event,
     is_terminal_event,
 )
-from app.modules.agent.infrastructure.harnesses.daemon import (
-    _mcp_payload,
-    _run_start_payload,
+from app.modules.agent.infrastructure.harnesses.remote_payload import (
+    mcp_payload,
+    run_start_payload,
 )
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostEventModel,
@@ -61,7 +60,7 @@ _AGENT_HOST_RUNTIME_INSTRUCTIONS = (
 
 @dataclass(frozen=True, slots=True)
 class _AgentHostRunConfig:
-    integration_id: UUID
+    harness_id: UUID
     runtime_profile_id: UUID
     config_selections: JsonObject
     wait_timeout_seconds: int
@@ -70,19 +69,17 @@ class _AgentHostRunConfig:
 
 def _agent_host_run_config(options: HarnessOptions) -> _AgentHostRunConfig:
     profile = _runtime_profile(options)
-    integration_id = UUID(str(profile["host_integration_id"]))
+    harness_id = UUID(str(profile["harness_id"]))
     runtime_profile_id = UUID(str(profile["profile_id"]))
     config = _json_object(profile.get("config"))
     # Read the saved revision so malformed legacy profiles fail before
     # dispatch. Admission intentionally uses the latest live revision after
     # selections are revalidated by the repository.
-    str(config["integration_snapshot_revision"])
+    str(config["harness_snapshot_revision"])
     config_selections = _json_object(config.get("config_selections"))
-    if options.model_name and options.model_name != FOLLOW_ADAPTER_DEFAULT:
-        config_selections["model"] = options.model_name
     fallback_profile_id = config.get("fallback_profile_id")
     return _AgentHostRunConfig(
-        integration_id=integration_id,
+        harness_id=harness_id,
         runtime_profile_id=runtime_profile_id,
         config_selections=config_selections,
         wait_timeout_seconds=_integer(
@@ -95,10 +92,10 @@ def _agent_host_run_config(options: HarnessOptions) -> _AgentHostRunConfig:
     )
 
 
-class AgentHostHarness:
+class RemoteHarness:
     """Dispatch one run through the PostgreSQL-backed Agent Host protocol."""
 
-    kind = HarnessKind.AGENT_HOST
+    kind = HarnessKind.HARNESS
 
     def __init__(
         self,
@@ -177,6 +174,26 @@ class AgentHostHarness:
                 yield event
                 if is_terminal_event(event):
                     return
+
+            if (
+                lease is not None
+                and lease.checkpoint is None
+                and lease.state == AgentHostRunState.FAILED.value
+            ):
+                if _can_fallback(AgentHostRunState.FAILED, run_config, options):
+                    assert run_config.fallback_profile_id is not None
+                    assert options.fallback_run is not None
+                    async for event in options.fallback_run(
+                        run_config.fallback_profile_id
+                    ):
+                        yield event
+                    return
+                yield error_event(
+                    agent_run_id,
+                    lease.error_detail
+                    or "Agent Host rejected the run before provider dispatch",
+                )
+                return
 
             terminal_checkpoint_seen_at, terminal_state = _terminal_checkpoint_state(
                 lease=lease,
@@ -268,7 +285,7 @@ class AgentHostHarness:
         agent_run_id: UUID,
         run_config: _AgentHostRunConfig,
     ) -> None:
-        payload = _run_start_payload(
+        payload = run_start_payload(
             agent=agent,
             conversation=conversation,
             messages=messages,
@@ -279,7 +296,7 @@ class AgentHostHarness:
             runtime_instructions=_AGENT_HOST_RUNTIME_INSTRUCTIONS,
         )
         prompt = _json_object(payload.get("prompt"))
-        mcp = await _mcp_payload(
+        mcp = await mcp_payload(
             agent_run_id=agent_run_id,
             conversation_id=conversation.id,
             ctx=ctx,
@@ -290,16 +307,17 @@ class AgentHostHarness:
         if encrypted_mcp is None:
             raise RuntimeError("could not create MCP route")
         async with self.uow_factory() as uow:
-            integration = await AgentHostRepository(uow).get_integration(
-                integration_id=run_config.integration_id
+            harness = await AgentHostRepository(uow).get_harness(
+                harness_id=run_config.harness_id
             )
-            if integration is None:
-                raise RuntimeError("Agent Host integration is unavailable")
+            if harness is None:
+                raise RuntimeError("Agent Host harness is unavailable")
             run_spec = AgentHostRunSpec(
                 agent_run_id=agent_run_id,
                 conversation_id=conversation.id,
-                integration_id=run_config.integration_id,
-                profile_revision=integration.config_revision,
+                harness_id=run_config.harness_id,
+                profile_revision=harness.config_revision,
+                model_name=options.model_name,
                 config_selections=run_config.config_selections,
                 system_prompt=str(
                     prompt.get("system_prompt")
@@ -323,8 +341,8 @@ class AgentHostHarness:
                 + timedelta(seconds=self.event_timeout_seconds),
             )
             await AgentHostDispatchRepository(uow).enqueue_run(
-                host_id=integration.host_id,
-                integration_id=run_config.integration_id,
+                host_id=harness.host_id,
+                harness_id=run_config.harness_id,
                 runtime_profile_id=run_config.runtime_profile_id,
                 run_spec=run_spec,
                 encrypted_mcp_payload=encrypted_mcp,

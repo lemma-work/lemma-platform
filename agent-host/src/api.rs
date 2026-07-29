@@ -14,22 +14,22 @@ use crate::adapters::AdapterManifest;
 use crate::config::TargetConfig;
 use crate::crypto::{DeviceIdentity, SecretVault, random_nonce};
 use crate::protocol::{
-    EventAck, EventBatch, HostCapacity, HostHello, IntegrationPublishRequest, IntegrationSnapshot,
-    McpRoute, PairingCompleteRequest, PairingCompleteResponse, PollRequest, PollResponse,
-    RunCheckpoint, TokenExchangeRequest, TokenResponse,
+    CommandRejection, EventAck, EventBatch, HarnessPublishRequest, HarnessSnapshot, HostCapacity,
+    HostHello, McpRoute, PairingCompleteRequest, PairingCompleteResponse, PollRequest,
+    PollResponse, RunCheckpoint, TokenExchangeRequest, TokenResponse,
 };
 
 #[derive(Clone, Debug, serde::Deserialize)]
-pub struct PublishedIntegration {
+pub struct PublishedHarness {
     pub id: Uuid,
-    pub integration_key: String,
+    pub harness_key: String,
     pub adapter_version: String,
     pub config_revision: String,
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
-struct IntegrationPublishResponse {
-    items: Vec<PublishedIntegration>,
+struct HarnessPublishResponse {
+    items: Vec<PublishedHarness>,
 }
 
 #[derive(Clone)]
@@ -51,7 +51,7 @@ pub enum ApiError {
     Http(#[from] reqwest::Error),
     #[error("Lemma returned HTTP {status}: {body}")]
     Status { status: StatusCode, body: String },
-    #[error("target requested Agent Host protocol {0}, but this host supports only v2")]
+    #[error("target requested Agent Host protocol {0} is unsupported")]
     Protocol(u16),
 }
 
@@ -127,7 +127,7 @@ impl TargetClient {
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(format!("lemma-agent-host/{}", crate::HOST_RELEASE))
             .build()?;
-        let endpoint = endpoint(&base_url, "agent-host/v2/pairings:complete")?;
+        let endpoint = endpoint(&base_url, "agent-host/pairings:complete")?;
         let response = client.post(endpoint).json(&request).send().await?;
         let response: PairingCompleteResponse = decode(response).await?;
         anyhow::ensure!(
@@ -164,15 +164,17 @@ impl TargetClient {
         capacity: HostCapacity,
         acknowledged_command_ids: Vec<Uuid>,
         checkpoints: Vec<RunCheckpoint>,
+        rejections: Vec<CommandRejection>,
     ) -> Result<PollResponse, ApiError> {
         let request = PollRequest {
             hello: self.hello(),
             capacity,
             acknowledged_command_ids,
             checkpoints,
+            rejections,
         };
         let response = self
-            .authenticated(Method::POST, "agent-host/v2/poll", Some(&request))
+            .authenticated(Method::POST, "agent-host/poll", Some(&request))
             .await?;
         let result: PollResponse = decode(response).await?;
         if result.protocol_version != crate::PROTOCOL_VERSION {
@@ -183,34 +185,34 @@ impl TargetClient {
 
     pub async fn append_events(&self, batch: &EventBatch) -> Result<EventAck, ApiError> {
         let response = self
-            .authenticated(Method::POST, "agent-host/v2/events:append", Some(batch))
+            .authenticated(Method::POST, "agent-host/events:append", Some(batch))
             .await?;
         decode(response).await
     }
 
     pub async fn resolve_mcp_route(&self, route_id: Uuid) -> Result<McpRoute, ApiError> {
-        let path = format!("agent-host/v2/mcp-routes/{route_id}");
+        let path = format!("agent-host/mcp-routes/{route_id}");
         let response = self.authenticated::<()>(Method::GET, &path, None).await?;
         decode(response).await
     }
 
-    pub async fn publish_integrations(
+    pub async fn publish_harnesses(
         &self,
-        snapshots: Vec<IntegrationSnapshot>,
-    ) -> Result<Vec<PublishedIntegration>, ApiError> {
-        let request = IntegrationPublishRequest {
-            integrations: snapshots,
+        snapshots: Vec<HarnessSnapshot>,
+    ) -> Result<Vec<PublishedHarness>, ApiError> {
+        let request = HarnessPublishRequest {
+            harnesses: snapshots,
         };
         let response = self
-            .authenticated(Method::PUT, "agent-host/v2/integrations", Some(&request))
+            .authenticated(Method::PUT, "agent-host/harnesses", Some(&request))
             .await?;
-        let response: IntegrationPublishResponse = decode(response).await?;
+        let response: HarnessPublishResponse = decode(response).await?;
         Ok(response.items)
     }
 
     pub async fn revoke(&self) -> Result<(), ApiError> {
         let response = self
-            .authenticated::<()>(Method::POST, "agent-host/v2/revoke", None)
+            .authenticated::<()>(Method::POST, "agent-host/revoke", None)
             .await?;
         if response.status().is_success() {
             return Ok(());
@@ -265,7 +267,7 @@ impl TargetClient {
                 .identity
                 .sign_token_exchange(self.target.host_id, timestamp, &nonce),
         };
-        let url = endpoint(&self.target.base_url, "agent-host/v2/token:exchange")?;
+        let url = endpoint(&self.target.base_url, "agent-host/token:exchange")?;
         let response = self.http.post(url).json(&request).send().await?;
         let token: TokenResponse = decode(response).await?;
         let access_token = token.access_token.clone();
@@ -320,10 +322,10 @@ mod tests {
     fn endpoint_preserves_api_prefix() {
         let url = endpoint(
             &Url::parse("https://example.com/api").unwrap(),
-            "agent-host/v2/poll",
+            "agent-host/poll",
         )
         .unwrap();
-        assert_eq!(url.as_str(), "https://example.com/api/agent-host/v2/poll");
+        assert_eq!(url.as_str(), "https://example.com/api/agent-host/poll");
     }
 
     #[test]

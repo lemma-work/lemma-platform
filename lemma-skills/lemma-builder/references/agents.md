@@ -323,7 +323,7 @@ the agent standalone so its output conforms before wiring it in.
 ## Runtime profiles
 
 By default agents run on the platform's system runtime. `agent_runtime: {"profile_id":
-"..."}` can pin an org-level runtime profile (daemon-backed harness, OpenAI-compatible,
+"..."}` can pin an organization runtime profile (Agent Host harness, OpenAI-compatible,
 or Anthropic-compatible endpoint — managed via `lemma runtime profiles`). Leave it
 unset unless the pod has a specific requirement.
 

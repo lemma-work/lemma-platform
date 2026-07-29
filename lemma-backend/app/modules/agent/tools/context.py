@@ -45,7 +45,7 @@ class BaseAgentContext(AgentContext):
 
     # True only when this tool runs inside the in-process pydantic harness, which
     # catches the AgentInputRequired pause signal and turns it into a clean run
-    # termination + WAITING conversation. Daemon/MCP and other dispatch paths leave
+    # termination + WAITING conversation. Remote-harness/MCP and other dispatch paths leave
     # this False: they own their own session and cannot be paused mid tool-call, so
     # ask_user/request_approval fall back to conversational guidance instead.
     supports_pause_signal: bool = False

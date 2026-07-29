@@ -3,16 +3,18 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::protocol::{
-    Checkpoint, Command, Event, EventAck, EventBatch, EventType, JsonMap, RunCheckpoint, RunSpec,
-    RunState,
+    Checkpoint, Command, CommandRejection, Event, EventAck, EventBatch, EventType, JsonMap,
+    RunCheckpoint, RunSpec, RunState,
 };
 
 const SCHEMA_VERSION: i64 = 1;
+
+type PendingControl = (Vec<Uuid>, Vec<RunCheckpoint>, Vec<CommandRejection>);
 
 #[derive(Clone, Debug)]
 pub struct Journal {
@@ -31,7 +33,7 @@ pub struct JournalRun {
     pub run_id: Uuid,
     pub lease_epoch: u32,
     pub command_id: Uuid,
-    pub integration_key: String,
+    pub harness_key: String,
     pub adapter_version: String,
     pub state: RunState,
     pub checkpoint: Checkpoint,
@@ -125,7 +127,7 @@ impl Journal {
                 run_id TEXT NOT NULL,
                 lease_epoch INTEGER NOT NULL,
                 command_id TEXT NOT NULL,
-                integration_key TEXT NOT NULL,
+                harness_key TEXT NOT NULL,
                 adapter_version TEXT NOT NULL,
                 state TEXT NOT NULL,
                 checkpoint TEXT NOT NULL,
@@ -140,6 +142,15 @@ impl Journal {
                 PRIMARY KEY (target_id, run_id),
                 FOREIGN KEY (target_id, command_id)
                     REFERENCES command_receipts(target_id, command_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS command_rejections (
+                target_id TEXT NOT NULL,
+                command_id TEXT NOT NULL,
+                rejection_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (target_id, command_id),
+                FOREIGN KEY (target_id) REFERENCES targets(target_id)
             );
 
             CREATE TABLE IF NOT EXISTS event_outbox (
@@ -234,7 +245,7 @@ impl Journal {
         target_id: Uuid,
         command: &Command,
         spec: &RunSpec,
-        integration_key: &str,
+        harness_key: &str,
         adapter_version: &str,
     ) -> Result<AcceptOutcome, JournalError> {
         self.register_target(target_id)?;
@@ -296,7 +307,7 @@ impl Journal {
         transaction.execute(
             r#"
             INSERT INTO runs(
-                target_id, run_id, lease_epoch, command_id, integration_key,
+                target_id, run_id, lease_epoch, command_id, harness_key,
                 adapter_version, state, checkpoint, checkpoint_detail,
                 checkpoint_pending, spec_json, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'ACCEPTED', 'ACCEPTED', '{}', 1, ?7, ?8, ?8)
@@ -306,7 +317,7 @@ impl Journal {
                 run_id.to_string(),
                 i64::from(lease_epoch),
                 command.command_id.to_string(),
-                integration_key,
+                harness_key,
                 adapter_version,
                 serde_json::to_string(spec)?,
                 now
@@ -440,10 +451,10 @@ impl Journal {
     ) -> Result<Event, JournalError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (sequence, integration_key, adapter_version): (i64, String, String) = transaction
+        let (sequence, harness_key, adapter_version): (i64, String, String) = transaction
             .query_row(
                 r#"
-                SELECT next_sequence, integration_key, adapter_version
+                SELECT next_sequence, harness_key, adapter_version
                   FROM runs WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
                 "#,
                 params![
@@ -465,7 +476,7 @@ impl Journal {
             event_type,
             object_id,
             payload,
-            integration_key,
+            harness_key,
             adapter_version,
         };
         transaction.execute(
@@ -578,10 +589,52 @@ impl Journal {
         Ok(())
     }
 
-    pub fn pending_control(
-        &self,
-        target_id: Uuid,
-    ) -> Result<(Vec<Uuid>, Vec<RunCheckpoint>), JournalError> {
+    pub fn cleanup_retained(&self, now: DateTime<Utc>) -> Result<u64, JournalError> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let cutoff = (now - chrono::Duration::days(30)).to_rfc3339();
+        let terminal_states = "'WAITING_INPUT','SUCCEEDED','FAILED','CANCELLED','DISPATCH_UNKNOWN'";
+        let old_terminal_runs = format!(
+            "SELECT target_id, run_id FROM runs \
+             WHERE state IN ({terminal_states}) AND updated_at < ?1"
+        );
+
+        let mut deleted = 0_u64;
+        deleted += u64::try_from(transaction.execute(
+            &format!("DELETE FROM event_outbox WHERE (target_id, run_id) IN ({old_terminal_runs})"),
+            params![cutoff],
+        )?)
+        .unwrap_or_default();
+        deleted += u64::try_from(transaction.execute(
+            &format!("DELETE FROM runs WHERE state IN ({terminal_states}) AND updated_at < ?1"),
+            params![cutoff],
+        )?)
+        .unwrap_or_default();
+        // Receipts for retained active runs are still referenced by `runs`, so
+        // the NOT EXISTS guard protects them even if their own timestamp is old.
+        deleted += u64::try_from(transaction.execute(
+            r#"
+            DELETE FROM command_receipts
+             WHERE updated_at < ?1
+               AND NOT EXISTS (
+                    SELECT 1 FROM runs
+                     WHERE runs.target_id=command_receipts.target_id
+                       AND runs.command_id=command_receipts.command_id
+               )
+            "#,
+            params![cutoff],
+        )?)
+        .unwrap_or_default();
+        deleted += u64::try_from(transaction.execute(
+            "DELETE FROM command_rejections WHERE created_at < ?1",
+            params![cutoff],
+        )?)
+        .unwrap_or_default();
+        transaction.commit()?;
+        Ok(deleted)
+    }
+
+    pub fn pending_control(&self, target_id: Uuid) -> Result<PendingControl, JournalError> {
         let connection = self.connection()?;
         let mut command_statement = connection.prepare(
             "SELECT command_id FROM command_receipts WHERE target_id=?1 AND ack_pending=1 ORDER BY received_at LIMIT 256",
@@ -643,7 +696,42 @@ impl Journal {
                 })
             })
             .collect::<Result<Vec<_>, JournalError>>()?;
-        Ok((command_ids, checkpoints))
+        let mut rejection_statement = connection.prepare(
+            "SELECT rejection_json FROM command_rejections WHERE target_id=?1 ORDER BY created_at LIMIT 256",
+        )?;
+        let rejections = rejection_statement
+            .query_map(params![target_id.to_string()], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|encoded| serde_json::from_str(&encoded).map_err(JournalError::from))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((command_ids, checkpoints, rejections))
+    }
+
+    pub fn record_rejection(
+        &self,
+        target_id: Uuid,
+        rejection: &CommandRejection,
+    ) -> Result<(), JournalError> {
+        let connection = self.connection()?;
+        connection.execute(
+            r#"
+            INSERT INTO command_rejections(
+                target_id, command_id, rejection_json, created_at
+            ) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(target_id, command_id) DO UPDATE SET
+                rejection_json=excluded.rejection_json
+            "#,
+            params![
+                target_id.to_string(),
+                rejection.command_id.to_string(),
+                serde_json::to_string(rejection)?,
+                Utc::now().to_rfc3339(),
+            ],
+        )?;
+        Ok(())
     }
 
     pub fn mark_control_applied(
@@ -651,6 +739,7 @@ impl Journal {
         target_id: Uuid,
         command_ids: &[Uuid],
         checkpoints: &[RunCheckpoint],
+        rejections: &[CommandRejection],
     ) -> Result<(), JournalError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -680,6 +769,12 @@ impl Journal {
                 ],
             )?;
         }
+        for rejection in rejections {
+            transaction.execute(
+                "DELETE FROM command_rejections WHERE target_id=?1 AND command_id=?2",
+                params![target_id.to_string(), rejection.command_id.to_string()],
+            )?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -693,7 +788,7 @@ impl Journal {
         let row = connection
             .query_row(
                 r#"
-                SELECT lease_epoch, command_id, integration_key, adapter_version,
+                SELECT lease_epoch, command_id, harness_key, adapter_version,
                        state, checkpoint, spec_json, provider_session_id, prompt_dispatched
                   FROM runs WHERE target_id=?1 AND run_id=?2
                 "#,
@@ -717,7 +812,7 @@ impl Journal {
             |(
                 lease_epoch,
                 command_id,
-                integration_key,
+                harness_key,
                 adapter_version,
                 state,
                 checkpoint,
@@ -734,7 +829,7 @@ impl Journal {
                     command_id: Uuid::parse_str(&command_id).map_err(|_| {
                         JournalError::InvalidEnum(format!("invalid command UUID {command_id}"))
                     })?,
-                    integration_key,
+                    harness_key,
                     adapter_version,
                     state: enum_parse(&state)?,
                     checkpoint: enum_parse(&checkpoint)?,
@@ -831,8 +926,9 @@ mod tests {
         let spec = RunSpec {
             agent_run_id: run_id,
             conversation_id: Uuid::new_v4(),
-            integration_id: Uuid::new_v4(),
+            harness_id: Uuid::new_v4(),
             profile_revision: "revision".into(),
+            model_name: None,
             config_selections: JsonMap::new(),
             system_prompt: "system".into(),
             prompt: vec![serde_json::json!({"role": "user", "content": "hello"})],
@@ -957,14 +1053,15 @@ mod tests {
         journal
             .accept_start(target, &command, &spec, "codex", "1.0")
             .unwrap();
-        let (commands, checkpoints) = journal.pending_control(target).unwrap();
+        let (commands, checkpoints, rejections) = journal.pending_control(target).unwrap();
         assert_eq!(commands, vec![command.command_id]);
         assert_eq!(checkpoints.len(), 1);
         journal
-            .mark_control_applied(target, &commands, &checkpoints)
+            .mark_control_applied(target, &commands, &checkpoints, &rejections)
             .unwrap();
-        let (commands, checkpoints) = journal.pending_control(target).unwrap();
+        let (commands, checkpoints, rejections) = journal.pending_control(target).unwrap();
         assert!(commands.is_empty());
+        assert!(rejections.is_empty());
         assert_eq!(checkpoints.len(), 1);
         assert_eq!(checkpoints[0].checkpoint, Checkpoint::Accepted);
 
@@ -978,10 +1075,87 @@ mod tests {
                 &JsonMap::new(),
             )
             .unwrap();
-        let (_, terminal) = journal.pending_control(target).unwrap();
+        let (_, terminal, rejections) = journal.pending_control(target).unwrap();
         journal
-            .mark_control_applied(target, &[], &terminal)
+            .mark_control_applied(target, &[], &terminal, &rejections)
             .unwrap();
-        assert_eq!(journal.pending_control(target).unwrap(), (vec![], vec![]));
+        assert_eq!(
+            journal.pending_control(target).unwrap(),
+            (vec![], vec![], vec![])
+        );
+    }
+
+    #[test]
+    fn retention_removes_only_old_terminal_runs() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        journal
+            .checkpoint(
+                target,
+                spec.agent_run_id,
+                1,
+                Checkpoint::Terminal,
+                RunState::Succeeded,
+                &JsonMap::new(),
+            )
+            .unwrap();
+        journal
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE runs SET updated_at=?1 WHERE target_id=?2 AND run_id=?3",
+                params![
+                    (Utc::now() - ChronoDuration::days(31)).to_rfc3339(),
+                    target.to_string(),
+                    spec.agent_run_id.to_string()
+                ],
+            )
+            .unwrap();
+        journal
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE command_receipts SET updated_at=?1 WHERE target_id=?2 AND command_id=?3",
+                params![
+                    (Utc::now() - ChronoDuration::days(31)).to_rfc3339(),
+                    target.to_string(),
+                    command.command_id.to_string()
+                ],
+            )
+            .unwrap();
+        assert!(journal.cleanup_retained(Utc::now()).unwrap() >= 2);
+        assert!(
+            journal
+                .get_run(target, spec.agent_run_id)
+                .unwrap()
+                .is_none()
+        );
+
+        let (_active_directory, active_journal, active_target, active_command, active_spec) =
+            fixture();
+        active_journal
+            .accept_start(active_target, &active_command, &active_spec, "codex", "1.0")
+            .unwrap();
+        active_journal
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE runs SET updated_at=?1 WHERE target_id=?2 AND run_id=?3",
+                params![
+                    (Utc::now() - ChronoDuration::days(31)).to_rfc3339(),
+                    active_target.to_string(),
+                    active_spec.agent_run_id.to_string()
+                ],
+            )
+            .unwrap();
+        active_journal.cleanup_retained(Utc::now()).unwrap();
+        assert!(
+            active_journal
+                .get_run(active_target, active_spec.agent_run_id)
+                .unwrap()
+                .is_some()
+        );
     }
 }

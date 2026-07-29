@@ -4,9 +4,9 @@
 /* eslint-disable */
 import type { AgentHostEventAck } from '../models/AgentHostEventAck.js';
 import type { AgentHostEventBatch } from '../models/AgentHostEventBatch.js';
-import type { AgentHostIntegrationListResponse } from '../models/AgentHostIntegrationListResponse.js';
-import type { AgentHostIntegrationPublishRequest } from '../models/AgentHostIntegrationPublishRequest.js';
-import type { AgentHostIntegrationPublishResponse } from '../models/AgentHostIntegrationPublishResponse.js';
+import type { AgentHostHarnessListResponse } from '../models/AgentHostHarnessListResponse.js';
+import type { AgentHostHarnessPublishRequest } from '../models/AgentHostHarnessPublishRequest.js';
+import type { AgentHostHarnessPublishResponse } from '../models/AgentHostHarnessPublishResponse.js';
 import type { AgentHostListResponse } from '../models/AgentHostListResponse.js';
 import type { AgentHostMcpRouteResponse } from '../models/AgentHostMcpRouteResponse.js';
 import type { AgentHostPairingComplete } from '../models/AgentHostPairingComplete.js';
@@ -35,7 +35,7 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostEventAck> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/agent-host/v2/events:append',
+            url: '/agent-host/events:append',
             headers: {
                 'authorization': authorization,
             },
@@ -47,19 +47,19 @@ export class AgentHostService {
         });
     }
     /**
-     * Publish Agent Host Integrations
+     * Publish Agent Host Harnesses
      * @param requestBody
      * @param authorization
-     * @returns AgentHostIntegrationPublishResponse Successful Response
+     * @returns AgentHostHarnessPublishResponse Successful Response
      * @throws ApiError
      */
-    public static agentHostIntegrationsPublish(
-        requestBody: AgentHostIntegrationPublishRequest,
+    public static agentHostHarnessesPublish(
+        requestBody: AgentHostHarnessPublishRequest,
         authorization?: (string | null),
-    ): CancelablePromise<AgentHostIntegrationPublishResponse> {
+    ): CancelablePromise<AgentHostHarnessPublishResponse> {
         return __request(OpenAPI, {
             method: 'PUT',
-            url: '/agent-host/v2/integrations',
+            url: '/agent-host/harnesses',
             headers: {
                 'authorization': authorization,
             },
@@ -83,7 +83,7 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostMcpRouteResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/agent-host/v2/mcp-routes/{route_id}',
+            url: '/agent-host/mcp-routes/{route_id}',
             path: {
                 'route_id': routeId,
             },
@@ -106,7 +106,7 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostPairingCompleted> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/agent-host/v2/pairings:complete',
+            url: '/agent-host/pairings:complete',
             body: requestBody,
             mediaType: 'application/json',
             errors: {
@@ -127,7 +127,7 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostPollResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/agent-host/v2/poll',
+            url: '/agent-host/poll',
             headers: {
                 'authorization': authorization,
             },
@@ -150,7 +150,7 @@ export class AgentHostService {
     ): CancelablePromise<void> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/agent-host/v2/revoke',
+            url: '/agent-host/revoke',
             headers: {
                 'authorization': authorization,
             },
@@ -170,7 +170,26 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostTokenResponse> {
         return __request(OpenAPI, {
             method: 'POST',
-            url: '/agent-host/v2/token:exchange',
+            url: '/agent-host/token:exchange',
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Create Agent Host Pairing
+     * @param requestBody
+     * @returns AgentHostPairingCreated Successful Response
+     * @throws ApiError
+     */
+    public static agentHostPairingCreate(
+        requestBody: AgentHostPairingCreate,
+    ): CancelablePromise<AgentHostPairingCreated> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/me/runtime/agent-host-pairings',
             body: requestBody,
             mediaType: 'application/json',
             errors: {
@@ -186,26 +205,7 @@ export class AgentHostService {
     public static agentHostList(): CancelablePromise<AgentHostListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/me/agent-hosts',
-        });
-    }
-    /**
-     * Create Agent Host Pairing
-     * @param requestBody
-     * @returns AgentHostPairingCreated Successful Response
-     * @throws ApiError
-     */
-    public static agentHostPairingCreate(
-        requestBody: AgentHostPairingCreate,
-    ): CancelablePromise<AgentHostPairingCreated> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/me/agent-hosts/pairings',
-            body: requestBody,
-            mediaType: 'application/json',
-            errors: {
-                422: `Validation Error`,
-            },
+            url: '/me/runtime/agent-hosts',
         });
     }
     /**
@@ -219,7 +219,7 @@ export class AgentHostService {
     ): CancelablePromise<AgentHostResponse> {
         return __request(OpenAPI, {
             method: 'DELETE',
-            url: '/me/agent-hosts/{host_id}',
+            url: '/me/runtime/agent-hosts/{host_id}',
             path: {
                 'host_id': hostId,
             },
@@ -229,17 +229,17 @@ export class AgentHostService {
         });
     }
     /**
-     * List Agent Host Integrations
+     * List Agent Host Harnesses
      * @param hostId
-     * @returns AgentHostIntegrationListResponse Successful Response
+     * @returns AgentHostHarnessListResponse Successful Response
      * @throws ApiError
      */
-    public static agentHostIntegrationsList(
+    public static agentHostHarnessesList(
         hostId: string,
-    ): CancelablePromise<AgentHostIntegrationListResponse> {
+    ): CancelablePromise<AgentHostHarnessListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
-            url: '/me/agent-hosts/{host_id}/integrations',
+            url: '/me/runtime/agent-hosts/{host_id}/harnesses',
             path: {
                 'host_id': hostId,
             },

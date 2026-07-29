@@ -34,7 +34,7 @@ _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 # instead. The pod-default assistant has all of these, so it gets them all.
 # NB: in-process runs get these fragments through the matching pydantic-ai
 # capabilities (build_agent_instructions is called with include_toolset_prompts=
-# False); this map is the daemon-harness path, which has no capability layer.
+# False); this map is the remote harness-harness path, which has no capability layer.
 FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     AgentToolset.WORKSPACE_CLI: _WORKSPACE_CLI_PROMPT_PATH,
     AgentToolset.SKILLS: _SKILLS_PROMPT_PATH,
@@ -99,7 +99,7 @@ def build_agent_instructions(
     ``include_toolset_prompts`` controls whether the per-toolset fragments are
     folded in here. The in-process LEMMA harness passes ``False`` because those
     fragments are contributed by the matching pydantic-ai capabilities instead;
-    daemon harnesses keep ``True`` since they have no capability layer.
+    remote harnesses keep ``True`` since they have no capability layer.
     """
 
     if conversation.is_pod_assistant:
@@ -114,7 +114,7 @@ def build_agent_instructions(
             if toolset in enabled:
                 sections.append(_read_required_prompt(path))
 
-        # Per-platform surface guidance for daemon harnesses (which have no
+        # Per-platform surface guidance for remote harnesses (which have no
         # capability layer). The in-process LEMMA harness passes
         # include_toolset_prompts=False and gets this from SurfacePlatformCapability
         # instead, so this never double-injects. Lazy import avoids an
@@ -129,7 +129,7 @@ def build_agent_instructions(
 
     # The agent's actual working directory is dynamic (per conversation), so it
     # can't live in a static fragment. Inject it here so BOTH harnesses (in-process
-    # passes include_toolset_prompts=False; daemon passes True) and BOTH agent types
+    # passes include_toolset_prompts=False; remote_harness passes True) and BOTH agent types
     # (pod-default + user) get told their cwd whenever they can run workspace tools.
     if AgentToolset.WORKSPACE_CLI in enabled:
         sections.append(_workspace_directory_section(ctx=ctx, conversation=conversation))

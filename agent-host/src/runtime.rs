@@ -16,18 +16,21 @@ use uuid::Uuid;
 
 use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use crate::adapters::{AdapterManifest, ResolvedAdapter};
-use crate::api::{PublishedIntegration, TargetClient};
+use crate::api::{PublishedHarness, TargetClient};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::crypto::SecretVault;
 use crate::journal::{AcceptOutcome, Journal};
 use crate::protocol::{
-    Checkpoint, Command, CommandKind, EventType, HostCapacity, HostStatus, IntegrationCapabilities,
-    IntegrationHealth, IntegrationSnapshot, JsonMap, RunSpec, RunState,
+    Checkpoint, Command, CommandKind, CommandRejection, EventType, HarnessCapabilities,
+    HarnessHealth, HarnessSnapshot, HostCapacity, HostStatus, JsonMap, RejectionCode, RunSpec,
+    RunState,
 };
 
-const INTEGRATION_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 
 pub struct HostRuntime {
     config: HostConfig,
@@ -47,7 +50,7 @@ impl HostRuntime {
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let journal = Journal::open(&paths.journal)?;
-        let manifest = AdapterManifest::builtin()?;
+        let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
         Ok(Self {
             config,
             paths,
@@ -67,11 +70,16 @@ impl HostRuntime {
     }
 
     pub async fn serve(self) -> anyhow::Result<()> {
+        let deleted = self.journal.cleanup_retained(Utc::now())?;
+        if deleted > 0 {
+            tracing::info!(deleted, "cleaned retained Agent Host journal records");
+        }
         let global_capacity = Arc::new(Semaphore::new(usize::from(self.config.max_runs)));
         let mut targets =
             HashMap::<Uuid, (watch::Sender<bool>, JoinHandle<anyhow::Result<()>>)>::new();
         let mut scan = tokio::time::interval(Duration::from_secs(2));
         scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut cleanup_due = std::time::Instant::now() + JOURNAL_CLEANUP_INTERVAL;
         let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
         loop {
@@ -82,6 +90,17 @@ impl HostRuntime {
                     break;
                 }
                 _ = scan.tick() => {
+                    if std::time::Instant::now() >= cleanup_due {
+                        let deleted = self.journal.cleanup_retained(Utc::now())?;
+                        if deleted > 0 {
+                            tracing::info!(
+                                deleted,
+                                "cleaned retained Agent Host journal records"
+                            );
+                        }
+                        cleanup_due =
+                            std::time::Instant::now() + JOURNAL_CLEANUP_INTERVAL;
+                    }
                     let current = HostConfig::load_or_create(&self.paths)?;
                     current.validate()?;
                     let enabled = current
@@ -130,6 +149,7 @@ impl HostRuntime {
                             self.vault.as_ref(),
                             Arc::clone(&self.driver),
                             Arc::clone(&global_capacity),
+                            current.max_runs,
                             shutdown_rx,
                         )?;
                         targets.insert(target_id, (
@@ -176,8 +196,9 @@ struct TargetWorker {
     manifest: AdapterManifest,
     driver: Arc<dyn AgentDriver>,
     global_capacity: Arc<Semaphore>,
+    max_runs: u16,
     shutdown: watch::Receiver<bool>,
-    integrations: BTreeMap<Uuid, PublishedIntegration>,
+    harnesses: BTreeMap<Uuid, PublishedHarness>,
     active_runs: HashMap<Uuid, JoinHandle<anyhow::Result<()>>>,
     draining: bool,
     refresh_due: std::time::Instant,
@@ -195,6 +216,7 @@ impl TargetWorker {
         vault: &dyn SecretVault,
         driver: Arc<dyn AgentDriver>,
         global_capacity: Arc<Semaphore>,
+        max_runs: u16,
         shutdown: watch::Receiver<bool>,
     ) -> anyhow::Result<Self> {
         let client = TargetClient::new(
@@ -214,8 +236,9 @@ impl TargetWorker {
             manifest,
             driver,
             global_capacity,
+            max_runs,
             shutdown,
-            integrations: BTreeMap::new(),
+            harnesses: BTreeMap::new(),
             active_runs: HashMap::new(),
             draining,
             refresh_due: std::time::Instant::now(),
@@ -227,20 +250,19 @@ impl TargetWorker {
         let mut retry = RETRY_MIN;
         loop {
             if *self.shutdown.borrow() {
-                self.cancel_all("Agent Host is shutting down")?;
-                return Ok(());
+                return self.graceful_shutdown().await;
             }
             self.reap_finished().await;
             self.apply_local_controls()?;
             if self.refresh_due <= std::time::Instant::now() {
-                if let Err(error) = self.refresh_integrations().await {
+                if let Err(error) = self.refresh_harnesses().await {
                     tracing::warn!(
                         target = %self.target.name,
                         %error,
-                        "integration refresh failed"
+                        "harness refresh failed"
                     );
                 }
-                self.refresh_due = std::time::Instant::now() + INTEGRATION_REFRESH_INTERVAL;
+                self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
             }
             if let Err(error) = self.flush_events().await {
                 self.note_offline(&error.to_string())?;
@@ -248,23 +270,24 @@ impl TargetWorker {
                 retry = (retry * 2).min(RETRY_MAX);
                 continue;
             }
-            let (command_ids, checkpoints) = self.journal.pending_control(self.target.target_id)?;
-            let active = u16::try_from(self.active_runs.len()).unwrap_or(u16::MAX);
-            let max_runs = u16::try_from(self.global_capacity.available_permits())
-                .unwrap_or(u16::MAX)
-                .saturating_add(active);
+            let (command_ids, checkpoints, rejections) =
+                self.journal.pending_control(self.target.target_id)?;
+            let available =
+                u16::try_from(self.global_capacity.available_permits()).unwrap_or(u16::MAX);
+            let active = self.max_runs.saturating_sub(available);
             let capacity = HostCapacity {
-                max_runs,
+                max_runs: self.max_runs,
                 active_runs: active,
-                available_runs: if self.draining {
-                    0
-                } else {
-                    max_runs.saturating_sub(active)
-                },
+                available_runs: if self.draining { 0 } else { available },
             };
             match self
                 .client
-                .poll(capacity, command_ids.clone(), checkpoints.clone())
+                .poll(
+                    capacity,
+                    command_ids.clone(),
+                    checkpoints.clone(),
+                    rejections.clone(),
+                )
                 .await
             {
                 Ok(response) => {
@@ -275,6 +298,7 @@ impl TargetWorker {
                         self.target.target_id,
                         &command_ids,
                         &checkpoints,
+                        &rejections,
                     )?;
                     if response.host_status == HostStatus::Revoked {
                         anyhow::bail!("target revoked this Agent Host");
@@ -284,6 +308,10 @@ impl TargetWorker {
                     }
                     for command in response.commands {
                         if let Err(error) = self.handle_command(&command) {
+                            if let Some(rejection) = command_rejection(&command, &error) {
+                                self.journal
+                                    .record_rejection(self.target.target_id, &rejection)?;
+                            }
                             tracing::error!(
                                 target = %self.target.name,
                                 %error,
@@ -347,7 +375,7 @@ impl TargetWorker {
                 self.draining = false;
                 Ok(())
             }
-            CommandKind::RefreshIntegration => {
+            CommandKind::RefreshHarness => {
                 self.journal
                     .record_simple_command(self.target.target_id, command)?;
                 self.refresh_due = std::time::Instant::now();
@@ -370,20 +398,20 @@ impl TargetWorker {
         anyhow::ensure!(!self.draining, "Agent Host is draining");
         let spec: RunSpec = serde_json::from_value(command.payload.clone())?;
         let published = self
-            .integrations
-            .get(&spec.integration_id)
+            .harnesses
+            .get(&spec.harness_id)
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("command references an unknown integration"))?;
+            .ok_or_else(|| anyhow::anyhow!("command references an unknown harness"))?;
         anyhow::ensure!(
             published.config_revision == spec.profile_revision,
-            "integration configuration revision changed"
+            "harness configuration revision changed"
         );
         if self.active_runs.contains_key(&spec.agent_run_id) {
             let outcome = self.journal.accept_start(
                 self.target.target_id,
                 command,
                 &spec,
-                &published.integration_key,
+                &published.harness_key,
                 &published.adapter_version,
             )?;
             anyhow::ensure!(
@@ -396,7 +424,7 @@ impl TargetWorker {
         // ACCEPTED. Once ACCEPTED is durable, Lemma must not start a cloud
         // fallback, so waiting on the semaphore after that point can duplicate
         // provider work.
-        let adapter = self.manifest.resolve(&published.integration_key)?;
+        let adapter = self.manifest.resolve(&published.harness_key)?;
         let permit = Arc::clone(&self.global_capacity)
             .try_acquire_owned()
             .map_err(|_| anyhow::anyhow!("Agent Host capacity changed; command will be retried"))?;
@@ -404,7 +432,7 @@ impl TargetWorker {
             self.target.target_id,
             command,
             &spec,
-            &published.integration_key,
+            &published.harness_key,
             &published.adapter_version,
         )?;
         if outcome == AcceptOutcome::Duplicate {
@@ -592,20 +620,16 @@ impl TargetWorker {
         Ok(())
     }
 
-    async fn refresh_integrations(&mut self) -> anyhow::Result<()> {
+    async fn refresh_harnesses(&mut self) -> anyhow::Result<()> {
         let mut snapshots = self.manifest.discover();
         for snapshot in &mut snapshots {
-            if snapshot.health != IntegrationHealth::Ready {
+            if snapshot.health != HarnessHealth::Ready {
                 continue;
             }
-            let Ok(adapter) = self.manifest.resolve(&snapshot.integration_key) else {
+            let Ok(adapter) = self.manifest.resolve(&snapshot.harness_key) else {
                 continue;
             };
-            let scratch = self
-                .paths
-                .root
-                .join("probe")
-                .join(&snapshot.integration_key);
+            let scratch = self.paths.root.join("probe").join(&snapshot.harness_key);
             match tokio::time::timeout(Duration::from_secs(20), self.driver.probe(adapter, scratch))
                 .await
             {
@@ -618,19 +642,19 @@ impl TargetWorker {
                         .insert("acp_capabilities".into(), probe.capabilities);
                 }
                 Ok(Err(error)) => {
-                    snapshot.health = IntegrationHealth::ProbeFailed;
+                    snapshot.health = HarnessHealth::ProbeFailed;
                     snapshot.stale_reason = Some(redact_error(&error.to_string()));
                 }
                 Err(_) => {
-                    snapshot.health = IntegrationHealth::ProbeFailed;
+                    snapshot.health = HarnessHealth::ProbeFailed;
                     snapshot.stale_reason = Some("ACP probe timed out".to_owned());
                 }
             }
         }
-        let published = self.client.publish_integrations(snapshots).await?;
-        self.integrations = published
+        let published = self.client.publish_harnesses(snapshots).await?;
+        self.harnesses = published
             .into_iter()
-            .map(|integration| (integration.id, integration))
+            .map(|harness| (harness.id, harness))
             .collect();
         Ok(())
     }
@@ -657,6 +681,58 @@ impl TargetWorker {
                 tracing::error!(%run_id, %error, "agent run task terminated unexpectedly");
             }
         }
+    }
+
+    async fn graceful_shutdown(&mut self) -> anyhow::Result<()> {
+        self.draining = true;
+        let deadline = tokio::time::Instant::now() + SHUTDOWN_GRACE;
+        loop {
+            self.reap_finished().await;
+            if let Err(error) = self.flush_events().await {
+                tracing::warn!(%error, "could not flush Agent Host events during shutdown");
+            }
+            let (command_ids, checkpoints, rejections) =
+                self.journal.pending_control(self.target.target_id)?;
+            let capacity = HostCapacity {
+                max_runs: self.max_runs,
+                active_runs: self.max_runs.saturating_sub(
+                    u16::try_from(self.global_capacity.available_permits()).unwrap_or(u16::MAX),
+                ),
+                available_runs: 0,
+            };
+            if let Ok(response) = self
+                .client
+                .poll(
+                    capacity,
+                    command_ids.clone(),
+                    checkpoints.clone(),
+                    rejections.clone(),
+                )
+                .await
+            {
+                self.journal.mark_control_applied(
+                    self.target.target_id,
+                    &command_ids,
+                    &checkpoints,
+                    &rejections,
+                )?;
+                for command in response.commands {
+                    if command.kind == CommandKind::CancelRun {
+                        let _ = self.handle_cancel(&command);
+                    }
+                }
+            }
+            if self.active_runs.is_empty() {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        self.cancel_all("Agent Host shutdown grace elapsed")?;
+        self.flush_events().await?;
+        Ok(())
     }
 
     fn cancel_all(&mut self, reason: &str) -> anyhow::Result<()> {
@@ -696,6 +772,39 @@ impl TargetWorker {
             _ = self.shutdown.changed() => {}
         }
     }
+}
+
+fn command_rejection(command: &Command, error: &anyhow::Error) -> Option<CommandRejection> {
+    if command.kind != CommandKind::StartRun {
+        return None;
+    }
+    let run_id = command.run_id?;
+    let lease_epoch = command.lease_epoch?;
+    let detail = redact_error(&error.to_string());
+    let normalized = detail.to_ascii_lowercase();
+    let (code, retryable) = if normalized.contains("draining") {
+        (RejectionCode::Draining, true)
+    } else if normalized.contains("expired") {
+        (RejectionCode::CommandExpired, false)
+    } else if normalized.contains("unknown harness") {
+        (RejectionCode::HarnessNotFound, false)
+    } else if normalized.contains("revision changed") {
+        (RejectionCode::ConfigRevisionStale, false)
+    } else if normalized.contains("capacity changed") {
+        (RejectionCode::CapacityLost, true)
+    } else if normalized.contains("adapter") || normalized.contains("executable") {
+        (RejectionCode::AdapterUnavailable, false)
+    } else {
+        (RejectionCode::InvalidCommand, false)
+    };
+    Some(CommandRejection {
+        command_id: command.command_id,
+        run_id,
+        lease_epoch,
+        code,
+        retryable,
+        detail: Some(detail.chars().take(1_000).collect()),
+    })
 }
 
 struct JournalCallbacks {
@@ -783,7 +892,7 @@ fn scratch_directory(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> PathBu
         .join(run_id.to_string())
 }
 
-fn snapshot_revision(snapshot: &IntegrationSnapshot) -> String {
+fn snapshot_revision(snapshot: &HarnessSnapshot) -> String {
     let value = serde_json::json!({
         "adapter_version": snapshot.adapter_version,
         "upstream_version": snapshot.upstream_version,
@@ -795,16 +904,18 @@ fn snapshot_revision(snapshot: &IntegrationSnapshot) -> String {
     ))
 }
 
-fn capabilities_from_acp(value: &Value) -> IntegrationCapabilities {
-    IntegrationCapabilities {
+fn capabilities_from_acp(value: &Value) -> HarnessCapabilities {
+    HarnessCapabilities {
         load_session: value.get("loadSession") == Some(&Value::Bool(true)),
         resume_session: value.pointer("/sessionCapabilities/resume").is_some(),
         close_session: value.pointer("/sessionCapabilities/close").is_some(),
         images: value.pointer("/promptCapabilities/image") == Some(&Value::Bool(true)),
         plans: true,
         usage: true,
-        durable_session_recovery: value.get("loadSession") == Some(&Value::Bool(true))
-            || value.pointer("/sessionCapabilities/resume").is_some(),
+        // Session loading/resume can support cross-turn continuity, but ACP
+        // does not provide a durable fence proving an in-flight prompt is safe
+        // to replay after a crash.
+        durable_session_recovery: false,
     }
 }
 
@@ -837,6 +948,6 @@ mod capability_tests {
         assert!(capabilities.resume_session);
         assert!(capabilities.close_session);
         assert!(capabilities.images);
-        assert!(capabilities.durable_session_recovery);
+        assert!(!capabilities.durable_session_recovery);
     }
 }

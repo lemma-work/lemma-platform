@@ -1,4 +1,4 @@
-//! Wire contracts shared with the Lemma Agent Host v2 API.
+//! Wire contracts shared with the Lemma Agent Host API.
 
 use std::collections::BTreeMap;
 
@@ -106,6 +106,31 @@ pub struct PollRequest {
     pub acknowledged_command_ids: Vec<Uuid>,
     #[serde(default)]
     pub checkpoints: Vec<RunCheckpoint>,
+    #[serde(default)]
+    pub rejections: Vec<CommandRejection>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommandRejection {
+    pub command_id: Uuid,
+    pub run_id: Uuid,
+    pub lease_epoch: u32,
+    pub code: RejectionCode,
+    pub retryable: bool,
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RejectionCode {
+    Draining,
+    CommandExpired,
+    HarnessNotFound,
+    ConfigRevisionStale,
+    InvalidSelections,
+    CapacityLost,
+    AdapterUnavailable,
+    InvalidCommand,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -150,7 +175,7 @@ pub enum CommandKind {
     CancelRun,
     Drain,
     Resume,
-    RefreshIntegration,
+    RefreshHarness,
     CloseSession,
     RotateDeviceKey,
 }
@@ -173,8 +198,10 @@ impl Command {
 pub struct RunSpec {
     pub agent_run_id: Uuid,
     pub conversation_id: Uuid,
-    pub integration_id: Uuid,
+    pub harness_id: Uuid,
     pub profile_revision: String,
+    #[serde(default)]
+    pub model_name: Option<String>,
     #[serde(default)]
     pub config_selections: JsonMap,
     pub system_prompt: String,
@@ -197,7 +224,7 @@ pub struct Event {
     pub object_id: Option<String>,
     #[serde(default)]
     pub payload: JsonMap,
-    pub integration_key: String,
+    pub harness_key: String,
     pub adapter_version: String,
 }
 
@@ -276,21 +303,22 @@ pub struct McpRoute {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IntegrationPublishRequest {
-    pub integrations: Vec<IntegrationSnapshot>,
+pub struct HarnessPublishRequest {
+    pub harnesses: Vec<HarnessSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IntegrationSnapshot {
-    pub integration_key: String,
+pub struct HarnessSnapshot {
+    pub harness_key: String,
     pub display_name: String,
     pub adapter_protocol: AdapterProtocol,
+    pub adapter_protocol_version: u16,
     pub adapter_version: String,
     pub upstream_version: Option<String>,
     pub auth_state: String,
-    pub health: IntegrationHealth,
+    pub health: HarnessHealth,
     #[serde(default)]
-    pub capabilities: IntegrationCapabilities,
+    pub capabilities: HarnessCapabilities,
     pub config_revision: String,
     #[serde(default)]
     pub config_options: Vec<ConfigOption>,
@@ -304,13 +332,13 @@ pub struct IntegrationSnapshot {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AdapterProtocol {
-    AcpV1,
+    Acp,
     Native,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum IntegrationHealth {
+pub enum HarnessHealth {
     Ready,
     AuthRequired,
     UnsupportedVersion,
@@ -321,7 +349,7 @@ pub enum IntegrationHealth {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct IntegrationCapabilities {
+pub struct HarnessCapabilities {
     pub load_session: bool,
     pub resume_session: bool,
     pub close_session: bool,

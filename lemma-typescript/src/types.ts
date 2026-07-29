@@ -1,11 +1,13 @@
 import type {
   AgentRuntimeConfig,
-  AgentHarnessInfo,
-  AgentHarnessListResponse,
   AgentDetailResponse,
   AgentSummaryResponse,
   AgentRuntimeProfileListResponse,
-  AgentRuntimeProfileResponse,
+  AnthropicCompatibleRuntimeProfileResponse,
+  AzureOpenAIRuntimeProfileResponse,
+  GoogleVertexRuntimeProfileResponse,
+  HarnessRuntimeProfileResponse,
+  OpenAICompatibleRuntimeProfileResponse,
   ColumnSchema,
   ConversationResponse as GeneratedConversationResponse,
   CreateAgentRequest,
@@ -23,7 +25,6 @@ import type {
   FunctionDetailResponse,
   FunctionRunResponse,
   FunctionRunSummaryResponse,
-  HarnessKind,
   IconUploadResponse,
   OrganizationInvitationResponse,
   OrganizationMemberResponse,
@@ -56,18 +57,23 @@ export interface AvailableModelInfo {
   runtime?: AgentRuntimeConfig;
   agentRuntime?: AgentRuntimeResponse;
   agentRuntimeId?: string;
-  profile?: AgentRuntimeProfileResponse;
+  profile?: AgentRuntimeResponse;
   profile_id?: string;
-  harness_kind?: HarnessKind;
+  harness_kind?: "LEMMA" | "HARNESS";
   description?: string | null;
 }
 
 export type AvailableModels = ConversationModel;
 export type AgentRuntime = AgentRuntimeConfig;
-export type AgentRuntimeAvailability = AgentHarnessInfo;
-export type AgentRuntimeAvailabilityList = AgentHarnessListResponse;
+export type AgentRuntimeAvailability = AgentRuntimeResponse;
+export type AgentRuntimeAvailabilityList = AgentRuntimeProfileListResponse;
 export type AgentRuntimeListResponse = AgentRuntimeProfileListResponse;
-export type AgentRuntimeResponse = AgentRuntimeProfileResponse;
+export type AgentRuntimeResponse =
+  | OpenAICompatibleRuntimeProfileResponse
+  | AnthropicCompatibleRuntimeProfileResponse
+  | AzureOpenAIRuntimeProfileResponse
+  | GoogleVertexRuntimeProfileResponse
+  | HarnessRuntimeProfileResponse;
 
 export interface PageResult<T> {
   items: T[];

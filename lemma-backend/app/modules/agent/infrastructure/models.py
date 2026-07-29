@@ -27,13 +27,7 @@ from app.modules.agent.domain.entities import (
     Conversation as ConversationEntity,
     Message as MessageEntity,
 )
-from app.modules.agent.domain.runtime_profiles import (
-    AgentRuntimeProfile,
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
-    RuntimeProfileScope,
-    RuntimeProfileStatus,
-)
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileStatus
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -50,8 +44,7 @@ from app.modules.agent.infrastructure import runtime_models as _runtime_models  
 
 if TYPE_CHECKING:
     from app.modules.agent.infrastructure.runtime_models import (
-        AgentHostIntegrationModel,
-        AgentRuntimeDaemonModel,
+        AgentHostHarnessModel,
     )
 
 
@@ -137,10 +130,23 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         Index(
             "uq_agent_runtime_profile_personal_name",
             "organization_id",
-            "user_id",
+            "owner_user_id",
             "name",
             unique=True,
             postgresql_where=text("scope = 'PERSONAL'"),
+        ),
+        CheckConstraint(
+            "scope != 'PERSONAL' OR owner_user_id IS NOT NULL",
+            name="ck_agent_runtime_profile_personal_owner",
+        ),
+        CheckConstraint(
+            "scope != 'ORGANIZATION' OR owner_user_id IS NULL",
+            name="ck_agent_runtime_profile_organization_owner",
+        ),
+        CheckConstraint(
+            "(runtime_type = 'HARNESS' AND harness_id IS NOT NULL) "
+            "OR (runtime_type != 'HARNESS' AND harness_id IS NULL)",
+            name="ck_agent_runtime_profile_harness_binding",
         ),
     )
 
@@ -149,24 +155,18 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         nullable=False,
         index=True,
     )
-    user_id: Mapped[UUID | None] = mapped_column(
+    owner_user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    daemon_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runtime_daemons.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    host_integration_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_host_integrations.id", ondelete="CASCADE"),
+    harness_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_host_harnesses.id", ondelete="RESTRICT"),
         nullable=True,
         index=True,
     )
     scope: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    protocol: Mapped[str] = mapped_column(String(32), nullable=False)
+    runtime_type: Mapped[str] = mapped_column(String(32), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     default_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -179,42 +179,16 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         default=RuntimeProfileStatus.ACTIVE.value,
         index=True,
     )
-    profile_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     organization: Mapped[Any] = relationship(
         "Organization",
         foreign_keys=[organization_id],
     )
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-    daemon: Mapped["AgentRuntimeDaemonModel | None"] = relationship(
-        "AgentRuntimeDaemonModel",
-        foreign_keys=[daemon_id],
+    owner: Mapped[Any] = relationship("User", foreign_keys=[owner_user_id])
+    harness: Mapped["AgentHostHarnessModel | None"] = relationship(
+        "AgentHostHarnessModel",
+        foreign_keys=[harness_id],
     )
-    host_integration: Mapped["AgentHostIntegrationModel | None"] = relationship(
-        "AgentHostIntegrationModel",
-        foreign_keys=[host_integration_id],
-    )
-
-    def to_entity(self) -> AgentRuntimeProfile:
-        return AgentRuntimeProfile(
-            id=str(self.id),
-            organization_id=self.organization_id,
-            user_id=self.user_id,
-            daemon_id=self.daemon_id,
-            host_integration_id=self.host_integration_id,
-            scope=RuntimeProfileScope(self.scope),
-            kind=RuntimeProfileKind(self.kind),
-            protocol=RuntimeProfileProtocol(self.protocol),
-            name=self.name,
-            description=self.description,
-            default_model_name=self.default_model_name,
-            model_catalog=self.model_catalog or [],
-            config=self.config or {},
-            credentials=self.credentials,
-            status=RuntimeProfileStatus(self.status),
-            metadata=self.profile_metadata or {},
-        )
-
 
 class ConversationModel(UUIDAuditBase):
     """Conversation shared by the pod assistant and pod agents."""

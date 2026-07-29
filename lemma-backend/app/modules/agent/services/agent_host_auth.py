@@ -1,4 +1,4 @@
-"""Device proof, pairing, and scoped tokens for Agent Host v2."""
+"""Device proof, pairing, and scoped tokens for Agent Host."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from app.core.crypto import get_secret_signer
 from app.modules.agent.domain.agent_host import AgentHostTokenClaims
 
 
-_TOKEN_PURPOSE = "agent-host-device-v2"
-_TOKEN_CAPABILITIES = ("control", "events", "integrations", "mcp")
+_TOKEN_PURPOSE = "agent-host-device"
+_TOKEN_CAPABILITIES = ("control", "events", "harnesses", "mcp")
 DEFAULT_AGENT_HOST_TOKEN_TTL_SECONDS = 600
 MAX_AGENT_HOST_CLOCK_SKEW_SECONDS = 120
 
@@ -62,7 +62,7 @@ def public_key_fingerprint(public_key: str) -> str:
 
 
 def host_signature_payload(*, host_id: UUID, nonce: str, timestamp: int) -> bytes:
-    return f"lemma-agent-host-v2\n{host_id}\n{timestamp}\n{nonce}".encode()
+    return f"lemma-agent-host\n{host_id}\n{timestamp}\n{nonce}".encode()
 
 
 def pairing_signature_payload(
@@ -73,7 +73,7 @@ def pairing_signature_payload(
     timestamp: int,
 ) -> bytes:
     return (
-        "lemma-agent-host-pair-v2\n"
+        "lemma-agent-host-pair\n"
         f"{pairing_code}\n{installation_id}\n{timestamp}\n{nonce}"
     ).encode()
 

@@ -51,7 +51,7 @@ call is persisted). When the user answers/decides, the backend synthesizes the t
 return value and starts a **fresh run** that resumes from history — the agent sees the
 answer as that tool's result and continues.
 
-Daemon harnesses (Codex / Claude Code / OpenCode) own their own session and **cannot
+Remote Agent Host harnesses (Codex / Claude Code / OpenCode) own their own session and **cannot
 pause mid tool-call**; there, `ask_user` returns `success:false` with a message telling
 the agent to ask the question in prose and end its turn instead. Build agents so a
 prose-question fallback still works.
