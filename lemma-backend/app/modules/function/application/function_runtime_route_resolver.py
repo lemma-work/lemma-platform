@@ -184,6 +184,27 @@ class FunctionRuntimeRouteResolver:
         pod_id: UUID,
         required_valid_until: datetime,
     ) -> FunctionRuntimeEndpoint:
+        self._validate_lease(
+            lease,
+            pod_id=pod_id,
+            required_valid_until=required_valid_until,
+        )
+        return FunctionRuntimeEndpoint(
+            url=lease.url.rstrip("/") + "/",
+            request_headers=self._runtime_request_headers(lease),
+            allocation_id=lease.allocation_id,
+            allocation_epoch=lease.allocation_epoch,
+            profile_digest=lease.profile.digest,
+            expires_at=lease.expires_at,
+        )
+
+    def _validate_lease(
+        self,
+        lease: FunctionRuntimeLease,
+        *,
+        pod_id: UUID,
+        required_valid_until: datetime,
+    ) -> None:
         parsed = urlsplit(lease.url)
         lease_expiry_is_absolute = (
             lease.expires_at.tzinfo is not None
@@ -204,6 +225,11 @@ class FunctionRuntimeRouteResolver:
             or parsed.fragment
         ):
             raise ValueError("AgentBox returned a mismatched function runtime lease")
+
+    @staticmethod
+    def _runtime_request_headers(
+        lease: FunctionRuntimeLease,
+    ) -> tuple[tuple[str, str], ...]:
         headers: list[tuple[str, str]] = []
         names: set[str] = set()
         for item in lease.request_headers:
@@ -220,14 +246,7 @@ class FunctionRuntimeRouteResolver:
                 raise ValueError("AgentBox returned an invalid runtime request header")
             names.add(normalized)
             headers.append((item.name, item.value))
-        return FunctionRuntimeEndpoint(
-            url=lease.url.rstrip("/") + "/",
-            request_headers=tuple(headers),
-            allocation_id=lease.allocation_id,
-            allocation_epoch=lease.allocation_epoch,
-            profile_digest=lease.profile.digest,
-            expires_at=lease.expires_at,
-        )
+        return tuple(headers)
 
     async def _ensure_sandbox(
         self,
