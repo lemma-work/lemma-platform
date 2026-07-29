@@ -57,7 +57,7 @@ from app.modules.agent.services.realtime import (
     publish_conversation_event,
 )
 from app.modules.agent.services.serialization import message_to_payload
-from app.modules.agent.services.workspace_location import resolve_workspace_location
+from app.modules.agent.services.workspace_location import new_workspace_cwd, resolve_workspace_location
 from app.modules.pod.contracts import PodConfig
 from app.composition.agent_pod import create_agent_pod_repository
 from app.composition.agent_usage import UsageLimitExceededError, UsageService
@@ -228,7 +228,7 @@ class ConversationService:
                 if key in parent_meta:
                     metadata.setdefault(key, parent_meta[key])
         else:
-            metadata["cwd"] = resolve_workspace_location(conversation).cwd
+            metadata["cwd"] = new_workspace_cwd(conversation)
         conversation.metadata = metadata
 
     async def list_conversations(

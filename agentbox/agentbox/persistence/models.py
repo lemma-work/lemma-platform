@@ -4,7 +4,6 @@ from datetime import datetime
 from uuid import UUID
 
 from sqlalchemy import (
-    JSON,
     BigInteger,
     CheckConstraint,
     DateTime,
@@ -13,7 +12,6 @@ from sqlalchemy import (
     Integer,
     MetaData,
     String,
-    Text,
     UniqueConstraint,
     Uuid,
 )
@@ -77,6 +75,9 @@ class LogicalSandboxRow(TimestampMixin, Base):
     profile_digest: Mapped[str] = mapped_column(String(71), nullable=False)
     current_allocation_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), nullable=True
+    )
+    resource_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=1
     )
     allocation_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     last_used_at: Mapped[datetime] = mapped_column(
@@ -185,6 +186,9 @@ class AllocationRow(TimestampMixin, Base):
     admission_state: Mapped[str] = mapped_column(
         String(16), nullable=False, default="unreserved"
     )
+    resource_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=1
+    )
     allocation_epoch: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     retry_after: Mapped[datetime | None] = mapped_column(
@@ -221,115 +225,6 @@ class CreateAttemptRow(TimestampMixin, Base):
     provider_request_id: Mapped[str | None] = mapped_column(String(256))
     last_reconcile_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reconcile_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class ProcessIntentRow(TimestampMixin, Base):
-    __tablename__ = "processes"
-    __table_args__ = (
-        CheckConstraint(
-            "workload_kind IN ('workspace', 'function')", name="workload_kind"
-        ),
-        CheckConstraint(
-            "state IN ('reserved', 'starting', 'unknown', 'running', "
-            "'succeeded', 'failed', 'cancelled', 'timed_out')",
-            name="process_state",
-        ),
-        Index("ix_processes_allocation", "allocation_id", "state"),
-    )
-
-    workload_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
-    logical_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    allocation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("allocations.allocation_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    allocation_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    env_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    cwd: Mapped[str] = mapped_column(String(4096), nullable=False)
-    tty: Mapped[bool] = mapped_column(nullable=False, default=False)
-    output_limit_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    provider_process_id: Mapped[str | None] = mapped_column(String(256))
-    provider_tag: Mapped[str | None] = mapped_column(String(256))
-    state: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
-    deadline_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    exit_code: Mapped[int | None] = mapped_column(Integer)
-    output_tail: Mapped[str | None] = mapped_column(Text)
-    truncated_before_seq: Mapped[int | None] = mapped_column(BigInteger)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class SessionRow(TimestampMixin, Base):
-    __tablename__ = "sessions"
-    __table_args__ = (
-        CheckConstraint("workload_kind = 'workspace'", name="workspace_only"),
-        CheckConstraint(
-            "state IN ('reserved', 'creating', 'unknown', 'active', 'stale', "
-            "'deleted')",
-            name="session_state",
-        ),
-        Index("ix_sessions_allocation", "allocation_id", "state"),
-    )
-
-    workload_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
-    logical_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    session_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    allocation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("allocations.allocation_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    allocation_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    provider_context_id: Mapped[str | None] = mapped_column(String(256))
-    cwd: Mapped[str] = mapped_column(String(4096), nullable=False)
-    env_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    state: Mapped[str] = mapped_column(String(32), nullable=False)
-    last_used_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False
-    )
-
-
-class PythonExecutionRow(TimestampMixin, Base):
-    __tablename__ = "python_executions"
-    __table_args__ = (
-        CheckConstraint("workload_kind = 'workspace'", name="workspace_only"),
-        CheckConstraint(
-            "state IN ('reserved', 'starting', 'unknown', 'succeeded', 'failed', "
-            "'timed_out')",
-            name="python_execution_state",
-        ),
-        Index("ix_python_executions_session", "session_id", "created_at"),
-    )
-
-    workload_kind: Mapped[str] = mapped_column(String(16), primary_key=True)
-    logical_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    operation_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    session_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
-    allocation_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("allocations.allocation_id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    allocation_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    state: Mapped[str] = mapped_column(String(16), nullable=False, default="reserved")
-    deadline_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    stdout: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    stderr: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    result: Mapped[str | None] = mapped_column(Text)
-    error_name: Mapped[str | None] = mapped_column(String(256))
-    error_message: Mapped[str | None] = mapped_column(Text)
-    traceback: Mapped[str | None] = mapped_column(Text)
-    output_truncated: Mapped[bool] = mapped_column(nullable=False, default=False)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class ProviderAdmissionRow(TimestampMixin, Base):

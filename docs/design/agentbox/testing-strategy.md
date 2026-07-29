@@ -40,7 +40,7 @@ protocol-v2 implementation branch:
 | --- | ---: | --- |
 | AgentBox hermetic unit/contract suite | 143 passed, 6 skipped | Typed SQLAlchemy state, API, adapters, workspace runtime, resident function runtime, streaming files, fault paths, and exact cleanup reconciliation |
 | Real Docker adapter suite | 4 passed | Workspace lifecycle/volume, shell, PTY, Python, files, browser/port access, resident runtime health, exact destruction, and private-network manager topology |
-| Real E2B adapter suite | 2 passed | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, pause/auto-resume, resident runtime TLS port access, ten concurrent proxied runtime requests, and exact deletion |
+| Real E2B adapter suite | 2 passed | Immutable create, Node/pnpm/uv/LiteParse, shell/stdin, PTY/resize, native files, Code Interpreter state, headful browser, explicit pause/resume, resident runtime TLS port access, ten concurrent proxied runtime requests, and exact deletion |
 | Function backend and executor suites | 65 unit and 28 E2E passed | Direct API dispatch, durable JOB dispatch, canonical delegated-token authorization, token cache, revision artifacts, repository concurrency, schema prewarming, cancellation, exact-run invocation deduplication, and real Docker API/JOB execution |
 | Full backend unit suite | 2,607 passed, 1 skipped | The replacement preserves the wider backend contract; the sole skip is the existing optional MarkItDown test when that package is not installed |
 | Generated AgentBox client | 6 passed | The checked-in OpenAPI document and typed client are in sync with the server contract |
@@ -287,8 +287,8 @@ run repository smoke tests and downgrade is not required. CI also verifies:
 Model/property tests generate valid and invalid lifecycle sequences over ensure,
 release, resume, profile replacement, destroy, callbacks, manager restart, and late
 provider observations. Invariants include one current allocation, monotonic epoch,
-no resurrection after tombstone, and at most one create dispatch per allocation
-token.
+no resurrection after tombstone, at most one create dispatch per allocation token,
+and explicit loss of runtime handles after a manager restart.
 
 ## 6. Portable workspace case catalog
 
@@ -313,12 +313,12 @@ Every case below is mandatory on both Docker and E2B.
 | --- | --- | --- |
 | `WS-SH-001` | Foreground | argv/cwd/env, stdout/stderr, exit 0 and nonzero are exact |
 | `WS-SH-002` | Yield | Yield returns before completion with stable operation/process reference |
-| `WS-SH-003` | Background/reconnect | Process survives client disconnect; cursor reconnect receives ordered output |
+| `WS-SH-003` | Background/reconnect | Process survives client disconnect while the same manager lives; cursor reconnect receives ordered output |
 | `WS-SH-004` | stdin/EOF | Multiple writes and EOF reach the exact process once |
 | `WS-SH-005` | List/inspect | Only current logical sandbox and epoch processes are visible |
 | `WS-SH-006` | Terminate tree | TERM/grace/KILL removes child and grandchildren before acknowledgment |
 | `WS-SH-007` | Timeout | Deadline stops the process tree and reports typed timeout |
-| `WS-SH-008` | Deduplication | Same operation ID joins; conflicting payload rejects; lost acknowledgment starts once |
+| `WS-SH-008` | Deduplication | Same operation ID joins; conflicting payload rejects; lost acknowledgment is not replayed |
 | `WS-SH-009` | PTY lifecycle | Create, binary input/output, resize, disconnect/reconnect, exit, terminate |
 | `WS-SH-010` | High output | Bounded buffers expose sequence/truncation gap without manager memory growth |
 | `WS-SH-011` | Parallel operations | Shell/Python/file operations overlap without session/cwd contamination |
@@ -350,7 +350,7 @@ public-site availability never decides core correctness.
 | `WS-FS-004` | Boundary | traversal, symlink escape, special devices and disallowed roots fail closed |
 | `WS-LC-001` | Idle release | Five-minute logical idle path quiesces processes/sessions before provider release |
 | `WS-LC-002` | Resume | `/workspace` digest is preserved; nonportable session/process references are stale |
-| `WS-LC-003` | Profile replacement | Files migrate/reuse correctly, epoch increments, failed replacement leaves old current |
+| `WS-LC-003` | Profile replacement | Provider storage policy is explicit, epoch increments, and no stale completion becomes current |
 | `WS-LC-004` | Permanent delete | Exact compute/storage disappear and late events cannot resurrect them |
 | `WS-LC-005` | Retention | Activity before seven days resumes; expiry permanently deletes |
 | `WS-LC-006` | Concurrent lifecycle | Ensure/release/destroy races converge without duplicate provider create/delete |
@@ -369,16 +369,16 @@ public-site availability never decides core correctness.
 
 ### 7.2 E2B
 
-- Full-memory pause and auto-resume reconnect the same sandbox ID without a list or
-  duplicate create.
+- Explicit pause/resume reconnects the same sandbox ID under a new allocation epoch
+  without duplicate create.
 - AgentBox-directed idle release quiesces code contexts, commands, PTYs, browser,
   dynamic values, and port grants before pause.
-- A provider safety auto-pause observed after manager outage is scrubbed before the
-  allocation is republished.
+- Provider auto-resume is disabled; no command or file access bypasses the
+  lifecycle controller.
 - Native commands, tags, stdin, PTY reconnect/resize, files, code contexts, and
   secured traffic satisfy the portable cases.
-- Profile replacement copies/verifies the complete allowed manifest before atomic
-  bind; injected copy failure keeps the original current.
+- Sandbox-native profile replacement never claims that storage was independently
+  preserved; delayed old-generation completions are exact-destroyed.
 - Every running or paused sandbox created by the run is exact-killed and the final
   metadata sweep is empty.
 

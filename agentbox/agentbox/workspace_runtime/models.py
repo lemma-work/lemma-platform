@@ -126,7 +126,11 @@ class RuntimeExecutePythonRequest(StrictApiModel):
     operation_id: UUID
     code: str = Field(min_length=1, max_length=4 * 1024 * 1024)
     environment: tuple[EnvironmentVariableModel, ...] = ()
-    output_limit_bytes: int = Field(default=1024 * 1024, ge=1, le=64 * 1024 * 1024)
+    output_limit_bytes: int = Field(
+        default=1024 * 1024,
+        ge=1,
+        le=2 * 1024 * 1024,
+    )
     deadline_at: datetime
 
     def to_domain(self) -> ExecutePythonRequest:

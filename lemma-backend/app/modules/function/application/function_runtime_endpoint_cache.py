@@ -70,17 +70,17 @@ class FunctionRuntimeEndpointCache:
         self,
         key: FunctionRuntimeEndpointKey,
         *,
+        required_valid_until: datetime,
+        wait_until: datetime | None = None,
         loader: RuntimeEndpointLoader,
     ) -> FunctionRuntimeEndpoint:
+        self._validate_deadlines(required_valid_until, wait_until)
         for attempt in range(2):
             now = self._clock()
             async with self._lock:
-                cached = self._entries.get(key)
-                if cached is not None and cached.valid_until > now:
-                    self._entries.move_to_end(key)
-                    return cached.endpoint
+                cached = self._take_cached(key, now, required_valid_until)
                 if cached is not None:
-                    self._entries.pop(key, None)
+                    return cached
                 task = self._inflight.get(key)
                 joined = task is not None
                 if task is None:
@@ -90,15 +90,58 @@ class FunctionRuntimeEndpointCache:
                     )
                     self._inflight[key] = task
 
-            await asyncio.wait((task,))
-            if task.cancelled():
-                raise asyncio.CancelledError
-            failure = task.exception()
-            if failure is None:
-                return task.result()
-            if joined and attempt == 0:
-                continue
-            raise failure
+            endpoint, failure = await self._wait_for_endpoint(task, wait_until)
+            if failure is not None:
+                if joined and attempt == 0:
+                    continue
+                raise failure
+            assert endpoint is not None
+            if self._covers(endpoint, required_valid_until):
+                return endpoint
+            await self.invalidate(key, endpoint=endpoint)
+        raise TimeoutError(
+            "function runtime grant does not cover the invocation deadline"
+        )
+
+    def _take_cached(
+        self,
+        key: FunctionRuntimeEndpointKey,
+        now: float,
+        required_valid_until: datetime,
+    ) -> FunctionRuntimeEndpoint | None:
+        cached = self._entries.get(key)
+        if cached is None:
+            return None
+        if cached.valid_until > now and self._covers(
+            cached.endpoint,
+            required_valid_until,
+        ):
+            self._entries.move_to_end(key)
+            return cached.endpoint
+        self._entries.pop(key, None)
+        return None
+
+    async def _wait_for_endpoint(
+        self,
+        task: asyncio.Task[FunctionRuntimeEndpoint],
+        wait_until: datetime | None,
+    ) -> tuple[FunctionRuntimeEndpoint | None, BaseException | None]:
+        timeout = (
+            None
+            if wait_until is None
+            else max(0.0, (wait_until - self._wall_clock()).total_seconds())
+        )
+        completed, _ = await asyncio.wait((task,), timeout=timeout)
+        if not completed:
+            raise TimeoutError(
+                "function runtime endpoint was not ready before the caller deadline"
+            )
+        if task.cancelled():
+            raise asyncio.CancelledError
+        failure = task.exception()
+        if failure is not None:
+            return None, failure
+        return task.result(), None
         raise AssertionError("unreachable runtime endpoint cache retry state")
 
     async def invalidate(
@@ -144,3 +187,24 @@ class FunctionRuntimeEndpointCache:
             async with self._lock:
                 if self._inflight.get(key) is task:
                     self._inflight.pop(key, None)
+
+    @staticmethod
+    def _covers(
+        endpoint: FunctionRuntimeEndpoint, required_valid_until: datetime
+    ) -> bool:
+        return endpoint.expires_at >= required_valid_until
+
+    @staticmethod
+    def _validate_deadlines(
+        required_valid_until: datetime,
+        wait_until: datetime | None,
+    ) -> None:
+        if (
+            required_valid_until.tzinfo is None
+            or required_valid_until.utcoffset() is None
+        ):
+            raise ValueError("required endpoint lifetime must include a timezone")
+        if wait_until is not None and (
+            wait_until.tzinfo is None or wait_until.utcoffset() is None
+        ):
+            raise ValueError("endpoint wait deadline must include a timezone")

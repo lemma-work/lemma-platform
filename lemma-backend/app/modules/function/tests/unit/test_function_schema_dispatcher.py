@@ -59,7 +59,7 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
                 port=port,
                 protocol=PortProtocol.HTTP,
                 url="https://agentbox.test/port-access/signed/",
-                expires_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+                expires_at=_kwargs["expires_at"],
             )
 
         async def close(self):

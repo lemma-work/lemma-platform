@@ -119,6 +119,12 @@ class AgentBoxSandbox(ISandbox):
             image="",
             created_at=None,
             endpoint=f"agentbox://{sandbox_id}",
+            allocation_id=(
+                str(sandbox.allocation_id)
+                if sandbox.allocation_id is not None
+                else None
+            ),
+            allocation_epoch=sandbox.allocation_epoch,
         )
 
     def _to_container_info(

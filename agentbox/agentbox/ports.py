@@ -69,6 +69,7 @@ class ProviderAllocationRef:
     allocation_id: UUID
     allocation_token: UUID
     key: SandboxKey
+    resource_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,11 +177,15 @@ class ProviderProcessStartResult:
 
 
 class ProviderProcessStartAmbiguous(RuntimeError):
-    """Process start may have been accepted and must be reconciled by operation ID."""
+    """Process start may have been accepted and must never be replayed."""
 
 
 class ProviderProcessStartRejected(RuntimeError):
     """Process start definitively failed before a process was created."""
+
+
+class ProviderProcessMissing(RuntimeError):
+    """The exact provider process no longer accepts process operations."""
 
 
 class ProviderFilesystemNotFound(RuntimeError):
@@ -323,7 +328,7 @@ class ProviderPythonSessionCreateResult:
 
 
 class ProviderPythonSessionCreateAmbiguous(RuntimeError):
-    """Session creation may have succeeded and must be reconciled by session ID."""
+    """Session creation may have succeeded and the handle must be invalidated."""
 
 
 class ProviderPythonSessionCreateRejected(RuntimeError):
