@@ -28,7 +28,9 @@ immutable artifacts, durable runs, API/JOB scheduling, deadlines, callbacks,
 cancellation policy, results, and domain events. A function
 sandbox contains one profile-owned resident runtime on a fixed private port.
 AgentBox starts and health-checks that opaque profile runtime and exposes it only
-through a short-lived, allocation-bound port grant. AgentBox does not interpret its
+through a fixed-key, manager-authenticated service route. The delegated function
+bearer still authorizes the exact caller, function and revision at the runtime;
+AgentBox strips its manager key before forwarding. AgentBox does not interpret the
 invocation protocol. No durable queue or public result registry runs inside a
 sandbox.
 

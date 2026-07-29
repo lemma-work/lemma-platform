@@ -154,26 +154,18 @@ class PortAccessService:
         now = datetime.now(timezone.utc)
         if not 1 <= port <= 65535:
             raise self._invalid("port must be in 1..65535")
-        if key.workload_kind == WorkloadKind.FUNCTION and port != 8090:
+        if key.workload_kind == WorkloadKind.FUNCTION:
             raise AgentBoxError(
                 ErrorCode.UNSUPPORTED_CAPABILITY,
-                "function profile exposes only the resident runtime port",
+                "function runtime access requires the trusted manager route",
                 retry=RetryDisposition.DO_NOT_RETRY,
                 status_code=422,
             )
         if expires_at.tzinfo is None or expires_at <= now:
             raise self._invalid("expires_at must be a future absolute timestamp")
-        maximum_lifetime = (
-            timedelta(hours=24)
-            if key.workload_kind == WorkloadKind.FUNCTION
-            else timedelta(hours=1)
-        )
+        maximum_lifetime = timedelta(hours=1)
         if expires_at > now + maximum_lifetime:
-            raise self._invalid(
-                "function runtime access cannot exceed 24 hours"
-                if key.workload_kind == WorkloadKind.FUNCTION
-                else "port access cannot exceed one hour"
-            )
+            raise self._invalid("port access cannot exceed one hour")
         async with self._database.uow() as uow:
             logical = await uow.repository.get_logical(key)
             allocation = await uow.repository.current_allocation(key)

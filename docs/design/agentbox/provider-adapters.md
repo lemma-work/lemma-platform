@@ -217,8 +217,8 @@ confirmed absent. Volume deletion never uses a broad name prefix.
   development.
 - Probe `/healthz` before marking the allocation active.
 - Proxy authenticated invocation and cancellation requests through AgentBox's
-  short-lived signed port grant; never return the container address or host binding
-  to the backend.
+  stable manager-key-authenticated function route; strip the manager key before
+  the sandbox and never return the container address or host binding to the backend.
 - Keep revision worker processes inside the resident runtime. A worker imports one
   immutable revision once, handles one invocation at a time, and is reused only for
   that exact `(function_id, artifact_sha256)`.
@@ -227,8 +227,8 @@ confirmed absent. Volume deletion never uses a broad name prefix.
 - Remove the container after five idle minutes or profile drain.
 
 The backend owns the public `function_run_id` and run transition. AgentBox owns
-only the function allocation and signed access grant; it does not create a generic
-AgentBox process row for each function invocation.
+only the function allocation and trusted runtime proxy; it does not create a
+generic AgentBox process row for each function invocation.
 
 ### 5.4 Files and port access
 
@@ -486,13 +486,13 @@ For each invocation:
 1. AgentBox resolves `sandbox.get_host(8090)` and obtains the sandbox's
    `traffic_access_token`;
 2. the provider hop always uses `https://<host>` and
-   `E2B-Traffic-Access-Token`, even though the caller-facing grant describes an HTTP
-   application port;
+   `E2B-Traffic-Access-Token`, while the trusted caller-facing route remains an
+   HTTP application proxy;
 3. AgentBox extends the sandbox timeout once, coalesced across a burst, to at least
    `run deadline + idle grace`;
 4. the backend atomically starts the run, then sends the complete protocol-v2
-   envelope and its cached delegated function-session bearer through the signed
-   AgentBox port proxy;
+   envelope and its cached delegated function-session bearer through the stable
+   AgentBox function proxy using the manager API key;
 5. the resident runtime uses that bearer to download the exact verified artifact
    on a cache miss and leases an exact revision worker. API invocations return
    their terminal report directly; JOB invocations post the terminal report with
@@ -504,7 +504,7 @@ For each invocation:
 No runtime claim, callback capability, heartbeat, or provider process polling is
 used. The invocation response and durable JOB callback are guarded by the backend
 run state. After an ambiguous invocation response, the backend may retry once
-through the exact same AgentBox grant; the runtime's run registry deduplicates it.
+through the same trusted AgentBox route; the runtime's run registry deduplicates it.
 
 ### 7.6 Network and ports
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import random
+from uuid import UUID
 
 import httpx
 
@@ -24,21 +25,41 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
     FunctionRuntimeEndpointKey,
 )
-from app.modules.function.application.runtime_policy import (
-    FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
-)
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
     FunctionExecutionDispatch,
 )
 
 
-_FUNCTION_RUNTIME_PORT = 8090
 AgentBoxClientFactory = Callable[[], AgentBoxClient]
 
 
+def trusted_function_runtime_endpoint(pod_id: UUID) -> FunctionRuntimeEndpoint:
+    api_url = settings.agentbox_api_url
+    if not api_url:
+        raise RuntimeError("AGENTBOX_API_URL is required")
+    return FunctionRuntimeEndpoint(
+        url=f"{api_url.rstrip('/')}/trusted/function-runtimes/{pod_id}/"
+    )
+
+
+def trusted_function_runtime_headers(
+    *,
+    activity_until: datetime | None = None,
+) -> dict[str, str]:
+    api_key = settings.agentbox_api_key
+    if not api_key:
+        raise RuntimeError("AGENTBOX_API_KEY is required")
+    headers = {"X-API-Key": api_key}
+    if activity_until is not None:
+        if activity_until.tzinfo is None or activity_until.utcoffset() is None:
+            raise ValueError("AgentBox activity deadline must include a timezone")
+        headers["X-AgentBox-Activity-Until"] = activity_until.isoformat()
+    return headers
+
+
 class FunctionRuntimeRouteResolver:
-    """Create and cache exact AgentBox grants for one pod runtime."""
+    """Verify and cache the trusted AgentBox route for one pod runtime."""
 
     def __init__(
         self,
@@ -57,14 +78,8 @@ class FunctionRuntimeRouteResolver:
         self,
         dispatch: FunctionExecutionDispatch,
     ) -> FunctionRuntimeEndpoint:
-        required_valid_until = min(
-            dispatch.deadline_at
-            + timedelta(seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS),
-            self._now() + timedelta(hours=23, minutes=55),
-        )
         return await self._endpoint_cache.get(
             self._key(dispatch),
-            required_valid_until=required_valid_until,
             wait_until=dispatch.deadline_at,
             loader=lambda: self._load(
                 dispatch,
@@ -78,23 +93,7 @@ class FunctionRuntimeRouteResolver:
     ) -> FunctionRuntimeEndpoint:
         """Resolve an existing allocation without creating a sandbox."""
 
-        client = self._agentbox_client_factory()
-        try:
-            grant = await client.create_port_access(
-                WorkloadKind.FUNCTION,
-                dispatch.pod_id,
-                _FUNCTION_RUNTIME_PORT,
-                expires_at=max(
-                    dispatch.deadline_at,
-                    self._now() + timedelta(seconds=5),
-                ),
-            )
-            return FunctionRuntimeEndpoint(
-                url=grant.url,
-                expires_at=grant.expires_at,
-            )
-        finally:
-            await client.close()
+        return trusted_function_runtime_endpoint(dispatch.pod_id)
 
     async def invalidate(
         self,
@@ -119,20 +118,7 @@ class FunctionRuntimeRouteResolver:
                 dispatch,
                 deadline_at=deadline_at,
             )
-            grant = await client.create_port_access(
-                WorkloadKind.FUNCTION,
-                dispatch.pod_id,
-                _FUNCTION_RUNTIME_PORT,
-                expires_at=min(
-                    deadline_at
-                    + timedelta(seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS),
-                    self._now() + timedelta(hours=23, minutes=55),
-                ),
-            )
-            return FunctionRuntimeEndpoint(
-                url=grant.url,
-                expires_at=grant.expires_at,
-            )
+            return trusted_function_runtime_endpoint(dispatch.pod_id)
         finally:
             await client.close()
 
