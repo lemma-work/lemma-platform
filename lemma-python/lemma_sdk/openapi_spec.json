@@ -6905,6 +6905,17 @@
             ],
             "title": "Error"
           },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
           "events_url": {
             "title": "Events Url",
             "type": "string"
@@ -6932,12 +6943,24 @@
           "progress": {
             "$ref": "#/components/schemas/ExportProgressResponse"
           },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
           "source_kind": {
             "title": "Source Kind",
             "type": "string"
           },
           "status": {
             "$ref": "#/components/schemas/ImportStatus"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
@@ -9350,27 +9373,33 @@
         "title": "PodUpdateRequest",
         "type": "object"
       },
+      "PublishMode": {
+        "enum": [
+          "CREATE",
+          "UPDATE"
+        ],
+        "title": "PublishMode",
+        "type": "string"
+      },
       "PublishStartRequest": {
         "description": "Body for publishing a pod to GitHub.",
         "properties": {
           "account_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "GitHub connector account to publish as (optional).",
-            "title": "Account Id"
+            "description": "GitHub connector account to publish as.",
+            "format": "uuid",
+            "title": "Account Id",
+            "type": "string"
           },
           "ai_readme": {
             "default": false,
             "description": "Polish the generated README with the system model.",
             "title": "Ai Readme",
             "type": "boolean"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PublishMode",
+            "default": "CREATE",
+            "description": "CREATE refuses an existing repository. UPDATE requires an existing repository and replaces only Lemma-managed files."
           },
           "private": {
             "default": false,
@@ -9379,14 +9408,16 @@
             "type": "boolean"
           },
           "repo_name": {
-            "description": "Name for the new GitHub repo.",
+            "description": "GitHub repository name (letters, numbers, dot, dash, underscore).",
+            "maxLength": 100,
             "minLength": 1,
             "title": "Repo Name",
             "type": "string"
           }
         },
         "required": [
-          "repo_name"
+          "repo_name",
+          "account_id"
         ],
         "title": "PublishStartRequest",
         "type": "object"
@@ -9405,6 +9436,18 @@
       "PublishStatusResponse": {
         "description": "Status of a pod publish job (pure Redis read).",
         "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
           "error": {
             "anyOf": [
               {
@@ -9416,14 +9459,32 @@
             ],
             "title": "Error"
           },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
           "events_url": {
             "title": "Events Url",
             "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PublishMode"
           },
           "pod_id": {
             "format": "uuid",
             "title": "Pod Id",
             "type": "string"
+          },
+          "private": {
+            "title": "Private",
+            "type": "boolean"
           },
           "progress": {
             "$ref": "#/components/schemas/ExportProgressResponse"
@@ -9448,8 +9509,20 @@
             ],
             "title": "Repo Url"
           },
+          "retryable": {
+            "default": false,
+            "title": "Retryable",
+            "type": "boolean"
+          },
           "status": {
             "$ref": "#/components/schemas/PublishStatus"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
@@ -9457,6 +9530,9 @@
           "pod_id",
           "status",
           "repo_name",
+          "mode",
+          "private",
+          "account_id",
           "events_url"
         ],
         "title": "PublishStatusResponse",
@@ -14969,7 +15045,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.7"
+    "version": "0.6.8"
   },
   "openapi": "3.1.0",
   "paths": {

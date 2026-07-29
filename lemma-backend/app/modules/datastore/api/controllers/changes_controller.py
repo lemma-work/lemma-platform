@@ -7,10 +7,10 @@ are ignored and only serve to detect disconnects.
 
 Design notes
 ------------
-* **Source.** Record writes already publish ``DatastoreRecordEvent`` to the
-  unified ``datastore.events`` Redis stream. This handler tails that stream
-  directly (per connection) via :class:`RedisStreamReader`, so nothing new is
-  published and there is no dependency on the worker process.
+* **Source.** Record writes transactionally stage ``DatastoreRecordEvent`` in
+  the outbox. The worker publishes those events to the unified
+  ``datastore.events`` Redis stream, which this handler tails directly (per
+  connection) via :class:`RedisStreamReader`.
 * **Auth.** ``verify_auth`` skips this path for websockets (it cannot run the
   session machinery without an HTTP response), so the session is resolved here
   manually — from a bearer ``Authorization`` header (CLI/SDK), the SuperTokens

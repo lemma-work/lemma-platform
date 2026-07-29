@@ -2,6 +2,8 @@ import pytest
 from httpx import AsyncClient
 from uuid import uuid4
 
+from app.modules.test_support.e2e_authz import signup_user
+
 pytestmark = pytest.mark.e2e
 
 
@@ -156,20 +158,9 @@ async def _add_org_member(
 
     Returns ``(bearer_token, organization_member_id)``.
     """
-    email = f"test+pod-del-{uuid4().hex[:10]}@example.com"
-    password = "TestPassword@123"
-    signup = await async_client.post(
-        "/st/auth/signup",
-        json={
-            "formFields": [
-                {"id": "email", "value": email},
-                {"id": "password", "value": password},
-            ]
-        },
-    )
-    assert signup.status_code == 200, signup.text
-    token = signup.headers.get("st-access-token") or signup.cookies.get("sAccessToken")
-    assert token
+    user = await signup_user(async_client, f"pod-del-{uuid4().hex[:10]}")
+    email = user["email"]
+    token = user["token"]
 
     invite = await authenticated_client.post(
         f"/organizations/{org_id}/invitations",
@@ -415,22 +406,11 @@ async def test_list_pods_by_organization_only_returns_member_pods(
     org_id = fixed_test_org["id"]
     pod = await _create_pod(authenticated_client, org_id, name="Visible To Creator")
 
-    outsider_email = f"test+pod-list-{uuid4().hex[:10]}@example.com"
-    password = "TestPassword@123"
-    signup_response = await async_client.post(
-        "/st/auth/signup",
-        json={
-            "formFields": [
-                {"id": "email", "value": outsider_email},
-                {"id": "password", "value": password},
-            ]
-        },
+    outsider = await signup_user(
+        async_client, f"pod-list-{uuid4().hex[:10]}"
     )
-    assert signup_response.status_code == 200, signup_response.text
-    outsider_token = signup_response.headers.get("st-access-token") or signup_response.cookies.get(
-        "sAccessToken"
-    )
-    assert outsider_token
+    outsider_email = outsider["email"]
+    outsider_token = outsider["token"]
 
     invite_response = await authenticated_client.post(
         f"/organizations/{org_id}/invitations",

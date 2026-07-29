@@ -60,6 +60,31 @@ def public_surface_api_url(monkeypatch):
     monkeypatch.setattr(settings, "api_url", "https://surface-e2e.test")
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def hermetic_telegram_api(fake_telegram, monkeypatch):
+    """Keep every surface E2E call inside the fake Telegram boundary.
+
+    Surface creation now synchronizes commands and the chat menu even in tests
+    that exercise only routing or onboarding. Those tests previously had no
+    reason to request ``fake_telegram`` and consequently reached Telegram's
+    public API with test tokens. Making the provider boundary suite-wide keeps
+    all create/update paths deterministic while preserving the per-test fake's
+    request recording.
+    """
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.telegram.client._TELEGRAM_API_BASE",
+        f"{fake_telegram.api_base}/bot",
+    )
+    from app.modules.agent_surfaces.config import surface_settings
+
+    monkeypatch.setattr(
+        surface_settings,
+        "telegram_bot_token",
+        "surface-e2e-system-telegram",
+    )
+    yield
+
+
 @pytest_asyncio.fixture(scope="session")
 async def fake_composio_server():
     server = FakeComposioServer()
@@ -96,11 +121,6 @@ async def worker(e2e_settings, fake_composio_server, request):
                 "MICROSOFT_BOT_APP_ID": "teams-app-id",
                 "MICROSOFT_BOT_APP_PASSWORD": "teams-app-secret",
             },
-            readiness_markers=(
-                "`HandleAgentRunEvent` waiting for messages",
-                "`HandleScheduleEvents` waiting for messages",
-                "`HandleSurfaceWebhook` waiting for messages",
-            ),
         ) as process:
             yield process
             if request.session.testsfailed:

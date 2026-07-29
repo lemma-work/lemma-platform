@@ -49,6 +49,7 @@ class _AssetReadInputs:
     normalized_asset_path: str
     quoted_etag: str
     app: dict[str, str] | None = None
+    branding: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +126,7 @@ class AppStoragePhase:
                 content,
                 inputs.pod_id,
                 app=inputs.app,
+                branding=inputs.branding,
             )
         return AppAssetDocument(
             content=content,

@@ -749,6 +749,8 @@ class FakeTelegramServer:
         app.router.add_post("/bot{token}/deleteWebhook", self._delete_webhook)
         app.router.add_post("/bot{token}/getWebhookInfo", self._get_webhook_info)
         app.router.add_post("/bot{token}/getUpdates", self._get_updates)
+        app.router.add_post("/bot{token}/setMyCommands", self._set_my_commands)
+        app.router.add_post("/bot{token}/setChatMenuButton", self._set_chat_menu_button)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -969,6 +971,32 @@ class FakeTelegramServer:
                 },
             }
         )
+
+    async def _set_my_commands(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setMyCommands",
+                "token": request.match_info["token"],
+                "body": body,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
+
+    async def _set_chat_menu_button(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        self._store.add(
+            "TELEGRAM_CONFIGURATION",
+            {
+                "method": "setChatMenuButton",
+                "token": request.match_info["token"],
+                "body": body,
+                **_request_contract(request),
+            },
+        )
+        return web.json_response({"ok": True, "result": True})
 
 
 class FakeGmailServer:

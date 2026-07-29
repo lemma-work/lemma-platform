@@ -367,6 +367,9 @@ class PodBundleStateStore:
                 raise BundleStateConflictError(
                     "A failed pod bundle job requires an explicit retry."
                 )
+        elif current.retryable and not candidate.retryable:
+            if candidate.attempt != current.attempt + 1:
+                raise BundleStateConflictError("A retry must advance exactly once.")
         elif candidate.attempt != current.attempt:
             raise BundleStateConflictError("A job attempt can change only on retry.")
         if old_status == ImportStatus.CANCELLING.value and new_status not in {

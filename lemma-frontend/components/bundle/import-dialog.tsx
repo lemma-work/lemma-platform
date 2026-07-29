@@ -64,7 +64,7 @@ interface ImportDialogProps {
 
 type ImportSource =
     | { mode: 'upload'; file: File }
-    | { mode: 'github'; owner: string; repo: string; ref?: string };
+    | { mode: 'github'; owner: string; repo: string; ref?: string; accountId?: string };
 
 const ACTION_STYLES: Record<StepAction, { label: string; className: string }> = {
     CREATE: { label: 'New', className: 'state-surface-success' },
@@ -125,6 +125,7 @@ export function ImportDialog({
     const [sourceMode, setSourceMode] = useState<SourceMode>('upload');
     const [file, setFile] = useState<File | null>(null);
     const [githubUrl, setGithubUrl] = useState('');
+    const [githubAccountId, setGithubAccountId] = useState('');
     const [newPodName, setNewPodName] = useState('');
     const [plan, setPlan] = useState<ImportPlan | null>(null);
     const [variables, setVariables] = useState<Record<string, string>>({});
@@ -153,6 +154,7 @@ export function ImportDialog({
         setSourceMode('upload');
         setFile(null);
         setGithubUrl('');
+        setGithubAccountId('');
         setNewPodName('');
         setPlan(null);
         setVariables({});
@@ -208,6 +210,7 @@ export function ImportDialog({
     );
 
     async function resolveTargetPod(source: ImportSource): Promise<string> {
+        if (targetPodRef.current) return targetPodRef.current;
         if (podId) {
             targetPodRef.current = podId;
             return podId;
@@ -249,6 +252,7 @@ export function ImportDialog({
                     owner: source.owner,
                     repo: source.repo,
                     ref: source.ref,
+                    account_id: source.accountId || undefined,
                 });
             }
             importIdRef.current = started.import_id;
@@ -259,12 +263,24 @@ export function ImportDialog({
                 podId: target,
                 eventsUrl: started.events_url,
                 fetchStatus: () => getImport(target, started.import_id),
-                stopStatuses: ['AWAITING_CONFIRMATION', 'FAILED', 'CANCELLED'],
+                stopStatuses: ['AWAITING_CONFIRMATION', 'FAILED', 'CANCELLED', 'PARTIALLY_CANCELLED'],
                 onProgress: (v) =>
                     setProgressLabel(v.status === 'FETCHING' ? 'Fetching bundle…' : 'Planning changes…'),
                 signal: abort.signal,
             });
 
+            if (
+                source.mode === 'github' &&
+                !source.accountId &&
+                (planned.error_code === 'GITHUB_REPOSITORY_NOT_FOUND' ||
+                    planned.error_code === 'GITHUB_IMPORT_UNAUTHORIZED')
+            ) {
+                setSourceMode('github');
+                setGithubUrl(`github.com/${source.owner}/${source.repo}`);
+                setErrorMessage('Select a GitHub account and retry. This may be a private repository.');
+                setStep('source');
+                return;
+            }
             if (planned.status !== 'AWAITING_CONFIRMATION' || !planned.plan) {
                 throw new Error(planned.error || 'Could not plan the import.');
             }
@@ -303,7 +319,12 @@ export function ImportDialog({
             setErrorMessage('Enter a GitHub repo, e.g. github.com/owner/repo.');
             return;
         }
-        void beginImport({ mode: 'github', owner: repo.owner, repo: repo.repo });
+        void beginImport({
+            mode: 'github',
+            owner: repo.owner,
+            repo: repo.repo,
+            accountId: githubAccountId || undefined,
+        });
     }
 
     // Preset source (import link) → skip the picker and plan immediately on open.
@@ -359,7 +380,7 @@ export function ImportDialog({
                 podId: target,
                 eventsUrl,
                 fetchStatus: () => getImport(target, importId),
-                stopStatuses: ['COMPLETED', 'FAILED', 'CANCELLED'],
+                stopStatuses: ['COMPLETED', 'FAILED', 'CANCELLED', 'PARTIALLY_CANCELLED'],
                 onProgress: setApplyView,
                 onFrame: (frame) => {
                     if (frame.type === 'step' && typeof frame.step.index === 'number') {
@@ -512,19 +533,31 @@ export function ImportDialog({
                                     />
                                 </label>
                             ) : (
-                                <div className="space-y-1.5">
-                                    <Label htmlFor="import-github-url" className="text-xs">
-                                        Public GitHub repository
-                                    </Label>
-                                    <Input
-                                        id="import-github-url"
-                                        value={githubUrl}
-                                        onChange={(e) => {
-                                            setGithubUrl(e.target.value);
-                                            const repo = parseGithubRepo(e.target.value);
-                                            if (repo && !newPodName) setNewPodName(repo.repo);
-                                        }}
-                                        placeholder="github.com/owner/repo"
+                                <div className="space-y-3">
+                                    <div className="space-y-1.5">
+                                        <Label htmlFor="import-github-url" className="text-xs">
+                                            GitHub repository
+                                        </Label>
+                                        <Input
+                                            id="import-github-url"
+                                            value={githubUrl}
+                                            onChange={(e) => {
+                                                setGithubUrl(e.target.value);
+                                                const repo = parseGithubRepo(e.target.value);
+                                                if (repo && !newPodName) setNewPodName(repo.repo);
+                                            }}
+                                            placeholder="github.com/owner/repo"
+                                        />
+                                    </div>
+                                    <AccountVariableField
+                                        organizationId={organizationId}
+                                        podId={targetPodId}
+                                        connectorId="github"
+                                        provider="COMPOSIO"
+                                        label="GitHub account"
+                                        description="Optional for public repositories; required for private repositories and higher rate limits."
+                                        value={githubAccountId}
+                                        onChange={setGithubAccountId}
                                     />
                                 </div>
                             )}

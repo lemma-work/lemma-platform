@@ -14,9 +14,15 @@ from fastapi import status
 from httpx import AsyncClient
 from sqlalchemy import select
 
-from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.config import settings
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
+from app.core.infrastructure.events.message_bus import get_message_bus
+from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
 from app.core.test_utils import shared_kreuzberg
+from app.modules.datastore.infrastructure.session import get_datastore_session_maker
+from app.modules.datastore.infrastructure.transactional_events import (
+    ensure_datastore_event_outbox,
+)
 from app.modules.datastore.tests.e2e.harness import (
     DatastoreApi,
     invite_to_pod,
@@ -79,6 +85,19 @@ fixed_test_org = e2e_fixtures.fixed_test_org
 scenario = e2e_fixtures.scenario
 
 DocumentProcessorName = Literal["kreuzberg", "docling", "markitdown"]
+
+
+@pytest_asyncio.fixture
+async def datastore_outbox_dispatcher(e2e_settings, db_manager):
+    """Run the production datastore outbox publisher for realtime API tests."""
+    del e2e_settings, db_manager
+    await ensure_datastore_event_outbox()
+    message_bus = get_message_bus()
+    await message_bus.connect()
+    async with outbox_dispatcher_lifespan(
+        get_datastore_session_maker(), message_bus
+    ):
+        yield
 
 
 @pytest_asyncio.fixture(scope="session")

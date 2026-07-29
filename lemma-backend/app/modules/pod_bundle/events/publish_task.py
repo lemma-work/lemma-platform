@@ -8,6 +8,8 @@ import zipfile
 from datetime import datetime, timezone
 from uuid import UUID
 
+from streaq import StreaqRetry
+
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.concurrency.offload import run_blocking
@@ -36,6 +38,10 @@ from app.modules.pod_bundle.infrastructure.github_publisher import (
     RepoCreateResult,
 )
 from app.modules.pod_bundle.infrastructure.readme import render_readme
+from app.modules.pod_bundle.infrastructure.publish_lock import (
+    get_publish_concurrency_lock,
+)
+from app.modules.pod_bundle.infrastructure.social_card import render_social_card
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
     error_payload,
@@ -55,15 +61,30 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+async def _release_publish_lock(state: PublishState) -> None:
+    # ``account_id`` was optional in pre-0.6.8 job snapshots. New jobs always
+    # have one, while a rolling worker can still finish an older snapshot.
+    if state.account_id is None:
+        return
+    await get_publish_concurrency_lock().release(
+        account_id=state.account_id,
+        repo_name=state.repo_name,
+        owner=state.publish_id,
+    )
+
+
 async def _mark_exporting(store, state: PublishState) -> None:
-    retrying = state.status is PublishStatus.FAILED
+    reopening = state.status is PublishStatus.FAILED
+    retrying = state.retryable or state.error is not None
+    if retrying:
+        state.attempt += 1
     state.status = PublishStatus.EXPORTING
     state.error = None
     state.error_type = None
     state.error_code = None
+    state.retryable = False
     state.completed_at = None
-    if retrying:
-        state.attempt += 1
+    if reopening:
         await store.reopen_publish(state)
     else:
         await store.save_publish(state)
@@ -100,7 +121,7 @@ async def _load_or_export_archive(
         )
         organization_id = ctx.organization_id
         async with context_scope(ctx):
-            pod_name, archive, _warnings = await BundleExporter().export(
+            pod_name, archive, warnings = await BundleExporter().export(
                 pod_id=pod_id,
                 user_id=user_id,
                 with_data=False,
@@ -109,6 +130,7 @@ async def _load_or_export_archive(
                 uow=uow,
                 on_progress=_noop_progress,
             )
+    state.warnings = warnings
     state.staging_key = await staging.put_archive("pod-publishes", publish_id, archive)
     await store.save_publish(state)
     return pod_name, archive, organization_id
@@ -155,6 +177,8 @@ def _persisted_repo(state: PublishState) -> RepoCreateResult | None:
         owner=state.repo_owner,
         repo=state.repo_slug,
         html_url=state.repo_url,
+        default_branch=state.repo_branch or "main",
+        private=state.private,
     )
 
 
@@ -169,11 +193,15 @@ async def _ensure_repo(
         repo_name=state.repo_name,
         private=state.private,
         description=description,
+        mode=state.mode,
     )
     state.repo_url = repo.html_url
     state.repo_created = True
     state.repo_owner = repo.owner
     state.repo_slug = repo.repo
+    state.repo_branch = repo.default_branch
+    if repo.private is not None:
+        state.private = repo.private
     await store.save_publish(state)
     return repo
 
@@ -259,6 +287,8 @@ async def _publish_files(
         )
 
     return await publisher.publish(
+        publish_id=str(publish_id),
+        mode=state.mode,
         repo_name=state.repo_name,
         private=state.private,
         description=description,
@@ -280,7 +310,10 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
     user_id = UUID(str(context["user_id"]))
     store = get_pod_bundle_state_store()
     state = await store.get_publish(publish_id)
-    if state is None or state.status is PublishStatus.COMPLETED:
+    if state is None:
+        return
+    if state.is_terminal:
+        await _release_publish_lock(state)
         return
 
     try:
@@ -324,6 +357,13 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             publisher=publisher,
             description=description,
         )
+        display_name = pod_meta.get("name") or pod_name.removesuffix(".zip")
+        files["social-card.png"] = await run_blocking(
+            render_social_card,
+            pod_name=display_name,
+            source_label=f"github.com/{repo.owner}/{repo.repo}",
+            limiter="cpu_bound",
+        )
         readme = await _ensure_readme(
             worker_ctx=worker_ctx,
             state=state,
@@ -355,32 +395,82 @@ async def publish_pod_github(context: dict[str, str | None]) -> None:
             publish_id,
             completed_payload(state.status.value, state.seq, repo_url=repo.html_url),
         )
+        await _release_publish_lock(state)
     except DomainError as exc:
-        await _fail_publish(store, state, str(exc))
+        if _is_retryable_publish_error(exc) and state.attempt < 3:
+            await _record_publish_retry(store, state, exc)
+            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+        await _fail_publish(store, state, exc)
+        await _release_publish_lock(state)
         logger.warning(
             "pod_bundle.publish_task.pod_publish_s_terminal_s.degraded",
             publish_id=publish_id,
         )
-    except Exception:
-        await _fail_publish(store, state, "Publish failed due to a transient error.")
+    except Exception as exc:
+        if state.attempt < 3:
+            await _record_publish_retry(store, state, exc)
+            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+        await _fail_publish(
+            store,
+            state,
+            exc,
+            public_message="Publish failed after three transient attempts.",
+        )
+        await _release_publish_lock(state)
         logger.debug(
-            'pod_bundle.publish_task.pod_publish_s_retryable_s.propagated',
+            "pod_bundle.publish_task.pod_publish_s_retryable_s.propagated",
             publish_id=publish_id,
-        exc_info=True,
+            exc_info=True,
+        )
+
+
+def _is_retryable_publish_error(exc: DomainError) -> bool:
+    if getattr(exc, "code", None) == "GITHUB_PUBLISH_CAPABILITY_UNAVAILABLE":
+        return False
+    status_code = getattr(exc, "status_code", None)
+    return status_code in {408, 429} or (
+        isinstance(status_code, int) and status_code >= 500
     )
-        raise
 
 
-async def _fail_publish(store, state: PublishState, message: str) -> None:
+async def _record_publish_retry(
+    store,
+    state: PublishState,
+    exc: Exception,
+) -> None:
+    state.error = "GitHub is temporarily unavailable; retrying publish."
+    state.error_type = type(exc).__name__
+    state.error_code = str(
+        getattr(exc, "code", None) or "POD_BUNDLE_GITHUB_TRANSIENT"
+    )
+    state.retryable = True
+    await store.save_publish(state)
+
+
+async def _fail_publish(
+    store,
+    state: PublishState,
+    exc: Exception,
+    *,
+    public_message: str | None = None,
+) -> None:
     state.status = PublishStatus.FAILED
-    state.error = message
+    state.error = public_message or str(exc)
+    state.error_type = type(exc).__name__
+    state.error_code = str(
+        getattr(exc, "code", None) or "POD_BUNDLE_PUBLISH_FAILED"
+    )
+    state.retryable = False
     state.completed_at = _now()
     try:
         await store.save_publish(state)
-        await publish_bundle_event(state.publish_id, error_payload(message, state.seq))
+        await publish_bundle_event(
+            state.publish_id,
+            error_payload(state.error, state.seq),
+        )
     except Exception:
         logger.debug(
-            'pod_bundle.publish_task.persist_publish_s_s.diagnostic',
+            "pod_bundle.publish_task.persist_publish_s_s.diagnostic",
             publish_id=state.publish_id,
         )
 

@@ -244,6 +244,7 @@ class ImportUseCases:
                 pod_id=pod_id,
                 user_id=user_id,
                 status=ImportStatus.QUEUED,
+                account_id=account_id,
                 source=BundleSource(
                     kind=BundleSourceKind.GITHUB,
                     repo_url=url or f"https://github.com/{owner}/{repo}",

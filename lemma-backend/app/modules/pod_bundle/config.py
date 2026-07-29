@@ -9,6 +9,7 @@ from lemma_pod_bundle.limits import (
     MAX_RECORDS_TOTAL,
 )
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.core.settings_env import dotenv_path
 
@@ -56,6 +57,21 @@ class PodBundleSettings(BaseSettings):
     pod_bundle_github_fetch_timeout_seconds: float = Field(
         default=30.0,
         description="HTTP timeout (seconds) for fetching a GitHub repo zipball.",
+    )
+    pod_bundle_github_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Optional server-side GitHub token used before anonymous public "
+            "archive fetching. Selected connector accounts take precedence."
+        ),
+    )
+    pod_bundle_publish_lock_ttl_seconds: int = Field(
+        default=2 * 60 * 60,
+        description=(
+            "Expiry for the distributed account/repository publish lock. "
+            "The worker releases the lock on every terminal outcome; the TTL "
+            "only recovers locks orphaned by a hard worker failure."
+        ),
     )
 
     # --- Per-user daily abuse guard --------------------------------------

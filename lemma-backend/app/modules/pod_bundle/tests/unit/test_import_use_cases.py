@@ -201,19 +201,22 @@ async def test_start_import_url_missing_url_rejected():
 
 async def test_start_import_github_enqueues():
     uc, store, _, queue = _use_cases()
-    pod_id, user_id = uuid4(), uuid4()
+    pod_id, user_id, account_id = uuid4(), uuid4(), uuid4()
     state = await uc.start_import(
         pod_id=pod_id,
         user_id=user_id,
         kind=BundleSourceKind.GITHUB,
         url="https://github.com/acme/crm",
         ref="main",
+        account_id=account_id,
     )
     assert state.status == ImportStatus.QUEUED
     assert state.source.kind == BundleSourceKind.GITHUB
     assert state.source.repo_url.endswith("acme/crm")
+    assert state.account_id == account_id
     call = next(c for c in queue.calls if c[0] == "import_pod_github")
     assert call[1]["owner"] == "acme" and call[1]["repo"] == "crm"
+    assert call[1]["account_id"] == str(account_id)
 
 
 async def test_start_import_github_bad_repo_rejected():

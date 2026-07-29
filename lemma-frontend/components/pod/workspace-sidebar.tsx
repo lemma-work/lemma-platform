@@ -221,6 +221,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canCreateWorkflows = podAccess.can('workflow.create');
     const canCreateSchedules = podAccess.can('schedule.create');
     const canCreateTables = podAccess.can('datastore.table.create');
+    const canUpdatePod = podAccess.can('pod.update');
     const basePath = `/pod/${podId}`;
     const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
     const isDocsRoute = isActive(`${basePath}/files`);
@@ -272,7 +273,14 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         : profile?.email?.split('@')[0] || 'User';
     const assistantCreationCopy = assistantCreationKind ? ASSISTANT_CREATION_COPY[assistantCreationKind] : null;
 
-    const canShowCreateMenu = canWriteConversations || canCreateAgents || canCreateApps || canCreateWorkflows || canCreateSchedules || canCreateTables;
+    const canShowCreateMenu =
+        canWriteConversations ||
+        canCreateAgents ||
+        canCreateApps ||
+        canCreateWorkflows ||
+        canCreateSchedules ||
+        canCreateTables ||
+        canUpdatePod;
     const visibleConversations = canUseConversations ? conversations.slice(0, hasRouteWorktree ? 3 : 7) : [];
     const docsFolderPath = isDocsRoute ? searchParams.get('folder') : null;
     const docsDirectoryPath = isDocsRoute ? (docsFolderPath || '/') : '/';
@@ -790,14 +798,18 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             Add from a starter
                                         </DropdownMenu.Item>
                                     ) : null}
-                                    <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
-                                    <DropdownMenu.Item
-                                        onSelect={() => setBundleImportOpen(true)}
-                                        className="lemma-menu-row px-2"
-                                    >
-                                        <Upload className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-                                        Install a bundle
-                                    </DropdownMenu.Item>
+                                    {canUpdatePod ? (
+                                        <>
+                                            <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
+                                            <DropdownMenu.Item
+                                                onSelect={() => setBundleImportOpen(true)}
+                                                className="lemma-menu-row px-2"
+                                            >
+                                                <Upload className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                                                Install a bundle
+                                            </DropdownMenu.Item>
+                                        </>
+                                    ) : null}
                                 </DropdownMenu.Content>
                             </DropdownMenu.Portal>
                         </DropdownMenu.Root>
@@ -892,8 +904,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 podName={podName}
                 open={bundleShareOpen}
                 onOpenChange={setBundleShareOpen}
+                canPublish={canUpdatePod}
             />
-            {canShowCreateMenu ? (
+            {canUpdatePod ? (
                 <ImportDialog
                     podId={podId}
                     podName={podName}
