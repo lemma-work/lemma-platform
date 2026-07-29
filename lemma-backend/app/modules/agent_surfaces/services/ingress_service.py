@@ -1280,9 +1280,7 @@ class AgentSurfaceIngressService:
         adapter = None
         credentials = None
         try:
-            if parsed.action:
-                if parsed.action != "retry":
-                    return
+            if parsed.action == "retry":
                 tool_call_id = ""
                 delivery = await resolve_current_interaction_delivery(self, parsed)
             else:
