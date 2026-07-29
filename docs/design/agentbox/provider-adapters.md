@@ -212,22 +212,24 @@ confirmed absent. Volume deletion never uses a broad name prefix.
   at `/run/lemma-function-cache` for digest-verified artifacts, because native
   wheels must map executable shared-library segments.
 - Start `lemma-function-runtime serve` as PID 1 behind `tini`.
-- Publish port 8090 only to the AgentBox manager: over the private Docker network in
-  the installed topology, or through a loopback-bound random host port in standalone
-  development.
+- Publish port 8090 only to the trusted service network shared by AgentBox and the
+  backend in the installed topology, or through a loopback-bound random host port
+  when both run on one standalone development host.
 - Probe `/healthz` before marking the allocation active.
-- Proxy authenticated invocation and cancellation requests through AgentBox's
-  stable manager-key-authenticated function route; strip the manager key before
-  the sandbox and never return the container address or host binding to the backend.
+- Lease the current allocation's runtime address to the trusted backend. In the
+  installed topology this is a private container-network address; standalone
+  development uses a loopback-published random port. AgentBox is not in the
+  per-invocation data path.
 - Keep revision worker processes inside the resident runtime. A worker imports one
   immutable revision once, handles one invocation at a time, and is reused only for
   that exact `(function_id, artifact_sha256)`.
 - Bound total workers and cached revision pools. Least-recently-used idle revision
   pools are terminated before their cache budget can grow without bound.
-- Remove the container after five idle minutes or profile drain.
+- Remove the container after its endpoint-lease protection and idle threshold
+  expire, or on profile drain.
 
 The backend owns the public `function_run_id` and run transition. AgentBox owns
-only the function allocation and trusted runtime proxy; it does not create a
+only the function allocation and direct runtime lease; it does not create a
 generic AgentBox process row for each function invocation.
 
 ### 5.4 Files and port access
@@ -240,7 +242,9 @@ User port access goes through an AgentBox signed reverse proxy. On the installed
 stack, the manager reaches the container IP over their shared private network and
 the sandbox port is not host-published. A standalone development fallback may proxy
 to a loopback-bound random host port. Raw host ports and Docker container addresses
-are never returned to the backend or user.
+are never returned to users. A trusted backend may receive the current function
+allocation's address from `runtime:lease`; the address is allocation-fenced and
+profile-bound.
 
 ### 5.5 Inventory and recovery
 
@@ -481,30 +485,30 @@ The immutable template starts `lemma-function-runtime serve` on port 8090 and wa
 for that port during build. On allocation readiness AgentBox connects by exact
 sandbox ID and validates the runtime health endpoint.
 
-For each invocation:
+For each direct endpoint lease and subsequent invocation:
 
-1. AgentBox resolves `sandbox.get_host(8090)` and obtains the sandbox's
-   `traffic_access_token`;
-2. the provider hop always uses `https://<host>` and
-   `E2B-Traffic-Access-Token`, while the trusted caller-facing route remains an
-   HTTP application proxy;
-3. AgentBox extends the sandbox timeout once, coalesced across a burst, to at least
-   `run deadline + idle grace`;
+1. AgentBox resolves `sandbox.get_host(8090)`, obtains the sandbox's
+   `traffic_access_token`, and returns an HTTPS base URL plus an opaque
+   `E2B-Traffic-Access-Token` request header to the trusted backend;
+2. AgentBox extends the sandbox timeout at lease acquisition to cover the lease
+   horizon; it does not proxy ordinary invocations;
+3. the backend caches the allocation/profile-fenced lease within its absolute
+   expiry;
 4. the backend atomically starts the run, then sends the complete protocol-v2
-   envelope and its cached delegated function-session bearer through the stable
-   AgentBox function proxy using the manager API key;
+   envelope and cached delegated function-session bearer directly to E2B's secured
+   gateway;
 5. the resident runtime uses that bearer to download the exact verified artifact
    on a cache miss and leases an exact revision worker. API invocations return
    their terminal report directly; JOB invocations post the terminal report with
    the same bearer;
-6. cancellation is routed through the already-authenticated AgentBox manager to
-   the exact pod sandbox and kills only the matching function/run worker group;
-7. AgentBox kills the exact sandbox after five idle minutes.
+6. cancellation uses the current direct lease and kills only the matching
+   function/run worker group;
+7. AgentBox kills the exact sandbox after its protected lease/idle horizon.
 
 No runtime claim, callback capability, heartbeat, or provider process polling is
 used. The invocation response and durable JOB callback are guarded by the backend
-run state. After an ambiguous invocation response, the backend may retry once
-through the same trusted AgentBox route; the runtime's run registry deduplicates it.
+run state. An ambiguous invocation response is not replayed. A pre-runtime secured
+gateway rejection invalidates the lease and permits one fresh-allocation retry.
 
 ### 7.6 Network and ports
 

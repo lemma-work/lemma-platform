@@ -442,8 +442,9 @@ Every full-stack case is mandatory with `FUNCTION/pod_id` on both Docker and E2B
   identity/token/config are supplied only through the invocation `ContextVar`.
 - argv, environment, writable files, provider inspection, and diagnostics contain
   no reusable human/provider/object-store credential.
-- Function allocation is destroyed after five idle minutes; the next cold run
-  succeeds with no required state from the old allocation.
+- Function allocation is destroyed after endpoint-lease protection and the idle
+  threshold expire; the next cold run succeeds with no required state from the old
+  allocation.
 
 ## 9. Fault, restart, and ambiguity matrix
 

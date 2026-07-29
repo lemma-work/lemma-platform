@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -20,6 +20,22 @@ def _key() -> FunctionRuntimeEndpointKey:
     )
 
 
+def _endpoint(
+    url: str,
+    *,
+    expires_at: datetime | None = None,
+) -> FunctionRuntimeEndpoint:
+    return FunctionRuntimeEndpoint(
+        url=url,
+        request_headers=(("X-Provider-Token", "secret"),),
+        allocation_id=uuid4(),
+        allocation_epoch=1,
+        profile_digest=f"sha256:{'a' * 64}",
+        expires_at=expires_at
+        or datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+
+
 @pytest.mark.asyncio
 async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value() -> (
     None
@@ -30,8 +46,9 @@ async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value
         clock=lambda: monotonic,
     )
     key = _key()
-    first = FunctionRuntimeEndpoint(url="https://runtime.example/first/")
-    second = FunctionRuntimeEndpoint(url="https://runtime.example/second/")
+    required_until = datetime.now(timezone.utc) + timedelta(minutes=1)
+    first = _endpoint("https://runtime.example/first/")
+    second = _endpoint("https://runtime.example/second/")
     calls = 0
     release = asyncio.Event()
 
@@ -41,7 +58,16 @@ async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value
         await release.wait()
         return first
 
-    tasks = [asyncio.create_task(cache.get(key, loader=load_first)) for _ in range(20)]
+    tasks = [
+        asyncio.create_task(
+            cache.get(
+                key,
+                required_valid_until=required_until,
+                loader=load_first,
+            )
+        )
+        for _ in range(20)
+    ]
     await asyncio.sleep(0)
     release.set()
 
@@ -49,7 +75,14 @@ async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value
     assert calls == 1
 
     await cache.invalidate(key, endpoint=second)
-    assert await cache.get(key, loader=load_first) == first
+    assert (
+        await cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=load_first,
+        )
+        == first
+    )
     assert calls == 1
 
     await cache.invalidate(key, endpoint=first)
@@ -59,7 +92,14 @@ async def test_runtime_endpoint_cache_single_flights_and_invalidates_exact_value
         calls += 1
         return second
 
-    assert await cache.get(key, loader=load_second) == second
+    assert (
+        await cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=load_second,
+        )
+        == second
+    )
     assert calls == 2
 
 
@@ -71,20 +111,83 @@ async def test_runtime_endpoint_cache_expires_at_configured_ttl() -> None:
         clock=lambda: monotonic,
     )
     key = _key()
+    required_until = datetime.now(timezone.utc) + timedelta(minutes=1)
     calls = 0
 
     async def loader() -> FunctionRuntimeEndpoint:
         nonlocal calls
         calls += 1
-        return FunctionRuntimeEndpoint(url=f"https://runtime.example/{calls}/")
+        return _endpoint(f"https://runtime.example/{calls}/")
 
-    first = await cache.get(key, loader=loader)
+    first = await cache.get(
+        key,
+        required_valid_until=required_until,
+        loader=loader,
+    )
     monotonic += 29.9
-    assert await cache.get(key, loader=loader) == first
+    assert (
+        await cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=loader,
+        )
+        == first
+    )
     monotonic += 0.2
-    refreshed = await cache.get(key, loader=loader)
+    refreshed = await cache.get(
+        key,
+        required_valid_until=required_until,
+        loader=loader,
+    )
 
     assert refreshed != first
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_endpoint_cache_never_outlives_provider_lease() -> None:
+    now = datetime.now(timezone.utc)
+    monotonic = 100.0
+    cache = FunctionRuntimeEndpointCache(
+        ttl_seconds=4 * 60 * 60,
+        refresh_headroom_seconds=30,
+        clock=lambda: monotonic,
+        wall_clock=lambda: now,
+    )
+    key = _key()
+    calls = 0
+
+    async def loader() -> FunctionRuntimeEndpoint:
+        nonlocal calls
+        calls += 1
+        return _endpoint(
+            f"https://runtime.example/{calls}/",
+            expires_at=now + timedelta(minutes=6),
+        )
+
+    first = await cache.get(
+        key,
+        required_valid_until=now + timedelta(minutes=1),
+        loader=loader,
+    )
+    monotonic += 5 * 60 + 29
+    assert (
+        await cache.get(
+            key,
+            required_valid_until=now + timedelta(minutes=1),
+            loader=loader,
+        )
+        == first
+    )
+    monotonic += 2
+    assert (
+        await cache.get(
+            key,
+            required_valid_until=now + timedelta(minutes=1),
+            loader=loader,
+        )
+        != first
+    )
     assert calls == 2
 
 
@@ -95,7 +198,8 @@ async def test_runtime_endpoint_cache_joiner_reloads_after_leader_deadline() -> 
     key = _key()
     first_started = asyncio.Event()
     fail_first = asyncio.Event()
-    endpoint = FunctionRuntimeEndpoint(url="https://runtime.example/recovered/")
+    required_until = now + timedelta(minutes=1)
+    endpoint = _endpoint("https://runtime.example/recovered/")
     first_calls = 0
     second_calls = 0
 
@@ -111,9 +215,21 @@ async def test_runtime_endpoint_cache_joiner_reloads_after_leader_deadline() -> 
         second_calls += 1
         return endpoint
 
-    leader = asyncio.create_task(cache.get(key, loader=expired_loader))
+    leader = asyncio.create_task(
+        cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=expired_loader,
+        )
+    )
     await first_started.wait()
-    joiner = asyncio.create_task(cache.get(key, loader=later_loader))
+    joiner = asyncio.create_task(
+        cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=later_loader,
+        )
+    )
     await asyncio.sleep(0)
     fail_first.set()
 
@@ -132,19 +248,27 @@ async def test_runtime_endpoint_cache_joiner_does_not_wait_past_own_deadline() -
     key = _key()
     started = asyncio.Event()
     release = asyncio.Event()
-    endpoint = FunctionRuntimeEndpoint(url="https://runtime.example/slow/")
+    required_until = now + timedelta(minutes=1)
+    endpoint = _endpoint("https://runtime.example/slow/")
 
     async def slow_loader() -> FunctionRuntimeEndpoint:
         started.set()
         await release.wait()
         return endpoint
 
-    leader = asyncio.create_task(cache.get(key, loader=slow_loader))
+    leader = asyncio.create_task(
+        cache.get(
+            key,
+            required_valid_until=required_until,
+            loader=slow_loader,
+        )
+    )
     await started.wait()
 
     with pytest.raises(TimeoutError, match="caller deadline"):
         await cache.get(
             key,
+            required_valid_until=required_until,
             wait_until=now,
             loader=slow_loader,
         )

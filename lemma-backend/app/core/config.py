@@ -837,9 +837,9 @@ class Settings(BaseSettings):
         ge=5 * 60,
         le=24 * 60 * 60,
         description=(
-            "Seconds to reuse function-runtime readiness for the stable AgentBox "
-            "manager route. Missing or replaced allocations invalidate the entry "
-            "and trigger readiness immediately."
+            "Maximum seconds to reuse an allocation-fenced direct function-runtime "
+            "lease. The provider lease expiry can shorten this horizon; stale "
+            "allocation responses invalidate it immediately."
         ),
     )
     function_runtime_endpoint_cache_max_entries: int = Field(

@@ -453,23 +453,20 @@ disconnects close the upstream stream and incomplete upload temporaries are remo
 
 ```text
 POST .../ports/{port}:access
-ANY  /trusted/function-runtimes/{logical_id}/{path}
+POST .../sandboxes/function/{logical_id}/runtime:lease
 ```
 
-The signed-access request contains protocol and TTL. Workspace ports are
-constrained by the workspace profile. Function workloads reject signed port
-grants with `UNSUPPORTED_CAPABILITY`; their private runtime is reachable only
-through the trusted manager route.
+The signed-access request contains protocol and TTL and remains the user-facing
+port mechanism. Function runtime execution instead uses the manager-key-protected
+lease endpoint. It resolves only the current active allocation at immutable port
+`8090`, binds the response to allocation ID/epoch and profile, protects activity
+through the requested bounded horizon, and returns the provider URL plus opaque
+request headers and absolute expiry. It never forwards an invocation.
 
-The trusted function-runtime route is the service-to-service data plane. It
-requires the fixed AgentBox manager `X-API-Key`, resolves the current function
-allocation, and refreshes its activity lease through the bounded
-`X-AgentBox-Activity-Until` horizon supplied by the backend. Both private
-headers are stripped before proxying to port `8090`. The delegated function
-bearer remains in
-`Authorization` and is validated by the runtime/backend. Signed port grants
-remain available for callers that cannot hold the manager key, including
-user-facing workspace routes.
+The trusted backend caches a lease only by logical pod plus immutable profile and
+never beyond its expiry. The manager key is used only to obtain or refresh the
+lease. The delegated function bearer remains in `Authorization` on the subsequent
+direct runtime request and is validated by the runtime/backend.
 
 ## 6. Durable persistence model
 

@@ -15,7 +15,6 @@ from agentbox_client.models import (
     RetryDisposition,
 )
 
-from app.core.config import settings
 from app.modules.function.application.function_dispatcher import (
     FunctionDispatcher,
     InvocationOutcomeUnconfirmed,
@@ -35,11 +34,6 @@ from app.modules.function.domain.entities import (
     FunctionRunRuntimeContext,
     FunctionRunStatus,
 )
-
-
-@pytest.fixture(autouse=True)
-def _trusted_agentbox_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "agentbox_api_key", "manager-secret")
 
 
 class _UowFactory:
@@ -91,6 +85,17 @@ def _context(dispatch: FunctionExecutionDispatch) -> FunctionRunRuntimeContext:
         pod_id=dispatch.pod_id,
         function_id=dispatch.function_id,
         function_name=dispatch.function_name,
+    )
+
+
+def _endpoint(url: str) -> FunctionRuntimeEndpoint:
+    return FunctionRuntimeEndpoint(
+        url=url,
+        request_headers=(("E2B-Traffic-Access-Token", "provider-secret"),),
+        allocation_id=uuid4(),
+        allocation_epoch=1,
+        profile_digest=f"sha256:{'2' * 64}",
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
 
@@ -148,7 +153,7 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
             )
 
     dispatcher = _dispatcher(_Runtime())
-    endpoint = FunctionRuntimeEndpoint(url="https://agentbox.test/runtime/")
+    endpoint = _endpoint("https://agentbox.test/runtime/")
     monkeypatch.setattr(
         dispatcher,
         "_resolve_dispatch",
@@ -175,11 +180,8 @@ async def test_api_dispatch_sends_complete_v2_envelope_and_uses_direct_result(
     start.assert_awaited_once_with(dispatch)
     complete.assert_awaited_once()
     assert observed["headers"]["Authorization"] == "Bearer delegated-function-token"
-    assert observed["headers"]["X-API-Key"] == "manager-secret"
-    assert (
-        observed["headers"]["X-AgentBox-Activity-Until"]
-        == dispatch.deadline_at.isoformat()
-    )
+    assert observed["headers"]["E2B-Traffic-Access-Token"] == "provider-secret"
+    assert "X-API-Key" not in observed["headers"]
     assert "X-Lemma-Run-Token" not in observed["headers"]
     assert "Prefer" not in observed["headers"]
     assert observed["json"]["protocol_version"] == 2
@@ -216,9 +218,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
         dispatcher,
         "_runtime_endpoint",
         AsyncMock(
-            return_value=FunctionRuntimeEndpoint(
-                url="https://agentbox.test/runtime/",
-            )
+            return_value=_endpoint("https://agentbox.test/runtime/")
         ),
     )
     monkeypatch.setattr(
@@ -236,11 +236,7 @@ async def test_job_returns_after_runtime_acceptance_and_uses_same_function_token
     assert result.status == FunctionRunStatus.RUNNING
     assert observed["headers"]["Prefer"] == "respond-async"
     assert observed["headers"]["Authorization"] == "Bearer delegated-function-token"
-    assert observed["headers"]["X-API-Key"] == "manager-secret"
-    assert (
-        observed["headers"]["X-AgentBox-Activity-Until"]
-        == (dispatch.deadline_at + timedelta(seconds=60)).isoformat()
-    )
+    assert observed["headers"]["E2B-Traffic-Access-Token"] == "provider-secret"
 
 
 @pytest.mark.asyncio
@@ -268,7 +264,7 @@ async def test_ambiguous_response_is_not_replayed() -> None:
             )
 
     dispatcher = _dispatcher(_Runtime())
-    endpoint = FunctionRuntimeEndpoint(url="https://agentbox.test/runtime/")
+    endpoint = _endpoint("https://agentbox.test/runtime/")
 
     with pytest.raises(InvocationOutcomeUnconfirmed):
         await dispatcher._invoke_runtime_with_recovery(
@@ -312,16 +308,14 @@ async def test_unavailable_agentbox_allocation_is_refreshed_once_before_runtime_
             )
 
     dispatcher = _dispatcher(_Runtime())
-    refreshed = FunctionRuntimeEndpoint(url="https://agentbox.test/fresh-allocation/")
+    refreshed = _endpoint("https://agentbox.test/fresh-allocation/")
     resolver = AsyncMock(return_value=refreshed)
     monkeypatch.setattr(dispatcher, "_runtime_endpoint", resolver)
 
     result = await dispatcher._invoke_runtime_with_recovery(
         dispatch,
         context=context,
-        endpoint=FunctionRuntimeEndpoint(
-            url="https://agentbox.test/stale-allocation/",
-        ),
+        endpoint=_endpoint("https://agentbox.test/stale-allocation/"),
         function_token="delegated-function-token",
         organization_id=None,
     )
@@ -353,15 +347,15 @@ async def test_runtime_cancel_uses_allocation_channel_without_bearer() -> None:
     dispatcher = _dispatcher(_Runtime())
     await dispatcher._best_effort_cancel(
         dispatch,
-        endpoint=FunctionRuntimeEndpoint(
-            url="https://agentbox.test/exact-allocation/",
-        ),
+        endpoint=_endpoint("https://agentbox.test/exact-allocation/"),
     )
 
     assert str(observed["url"]).endswith(
         f"/functions/{dispatch.function_id}/runs/{dispatch.run_id}:cancel"
     )
-    assert observed["kwargs"]["headers"] == {"X-API-Key": "manager-secret"}
+    assert observed["kwargs"]["headers"] == {
+        "E2B-Traffic-Access-Token": "provider-secret"
+    }
 
 
 def test_timeout_keeps_stable_user_facing_error() -> None:

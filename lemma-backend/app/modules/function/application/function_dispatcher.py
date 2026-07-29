@@ -32,7 +32,6 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
 from app.modules.function.application.function_runtime_route_resolver import (
     AgentBoxClientFactory,
     FunctionRuntimeRouteResolver,
-    trusted_function_runtime_headers,
 )
 from app.modules.function.contracts.runtime import (
     RuntimeAcceptedResponse,
@@ -252,10 +251,9 @@ class FunctionDispatcher:
         function_token: str,
         organization_id: str | None,
     ) -> RuntimeTerminalRequest | RuntimeAcceptedResponse:
-        # A trusted AgentBox 404/410 is generated while resolving the current
-        # allocation, before the runtime receives the invocation. Re-running
-        # readiness once is therefore safe. Transport errors and runtime 5xx
-        # responses may arrive after user code started and must never be replayed.
+        # Provider-gateway 401/403/404/410 responses happen before user code can
+        # start. Refreshing an allocation-fenced endpoint once is safe. Transport
+        # errors and runtime 5xx responses are ambiguous and must never be replayed.
         try:
             return await self._invoke_runtime(
                 dispatch,
@@ -265,7 +263,7 @@ class FunctionDispatcher:
                 organization_id=organization_id,
             )
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code not in {404, 410}:
+            if exc.response.status_code not in {401, 403, 404, 410}:
                 raise
             refreshed = await self._runtime_endpoint(dispatch)
             return await self._invoke_runtime(
@@ -292,11 +290,8 @@ class FunctionDispatcher:
             endpoint.url,
             f"functions/{dispatch.function_id}/runs/{dispatch.run_id}",
         )
-        activity_until = dispatch.deadline_at
-        if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
-            activity_until += timedelta(seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS)
         headers = {
-            **trusted_function_runtime_headers(activity_until=activity_until),
+            **endpoint.headers(),
             "Authorization": f"Bearer {function_token}",
             "If-Match": f'"{dispatch.revision_hash}"',
             "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
@@ -336,7 +331,7 @@ class FunctionDispatcher:
             raise InvocationOutcomeUnconfirmed(
                 f"function runtime returned {response.status_code}"
             )
-        if response.status_code in {404, 410}:
+        if response.status_code in {401, 403, 404, 410}:
             await self._routes.invalidate(dispatch, endpoint)
         response.raise_for_status()
         if dispatch.mode == FunctionDispatchMode.ASYNCHRONOUS:
@@ -370,7 +365,7 @@ class FunctionDispatcher:
                     control_endpoint.url,
                     (f"functions/{dispatch.function_id}/runs/{dispatch.run_id}:cancel"),
                 ),
-                headers=trusted_function_runtime_headers(),
+                headers=control_endpoint.headers(),
                 timeout=httpx.Timeout(5),
             )
         except Exception:

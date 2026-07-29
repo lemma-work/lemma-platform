@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin
@@ -10,14 +9,7 @@ from uuid import UUID
 
 import httpx
 
-from agentbox_client import (
-    AdmissionClass,
-    AgentBoxApiError,
-    AgentBoxClient,
-    ProfileRef,
-    RetryDisposition,
-    WorkloadKind,
-)
+from agentbox_client import AdmissionClass
 
 from app.core.config import settings
 from app.modules.function.application.function_session_token_cache import (
@@ -28,11 +20,10 @@ from app.modules.function.application.function_session_token_cache import (
 from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpoint,
     FunctionRuntimeEndpointCache,
-    FunctionRuntimeEndpointKey,
 )
 from app.modules.function.application.function_runtime_route_resolver import (
-    trusted_function_runtime_endpoint,
-    trusted_function_runtime_headers,
+    AgentBoxClientFactory,
+    FunctionRuntimeRouteResolver,
 )
 from app.modules.function.contracts.runtime import RuntimeSchemaInspection
 from app.modules.function.domain.entities import (
@@ -42,7 +33,6 @@ from app.modules.function.domain.entities import (
 from app.modules.function.domain.errors import FunctionValidationError
 
 
-AgentBoxClientFactory = Callable[[], AgentBoxClient]
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
 TokenMinter = Callable[..., Awaitable[FunctionSessionToken]]
 
@@ -60,16 +50,14 @@ class FunctionSchemaDispatcher:
         runtime_http_client_factory: RuntimeHttpClientFactory,
         delegated_tokens_enabled: bool,
     ) -> None:
-        self._agentbox_client_factory = agentbox_client_factory
         self._token_minter = token_minter
         self._token_cache = token_cache
-        self._endpoint_cache = endpoint_cache
+        self._routes = FunctionRuntimeRouteResolver(
+            agentbox_client_factory=agentbox_client_factory,
+            endpoint_cache=endpoint_cache,
+        )
         self._runtime_http_client_factory = runtime_http_client_factory
         self._delegated_tokens_enabled = delegated_tokens_enabled
-        self._profile = ProfileRef(
-            name=settings.agentbox_function_profile_name,
-            digest=settings.agentbox_function_profile_digest,
-        )
 
     async def extract_schemas(
         self,
@@ -109,7 +97,7 @@ class FunctionSchemaDispatcher:
                 response = await runtime.post(
                     urljoin(endpoint.url, f"functions/{function_id}/schemas"),
                     headers={
-                        **trusted_function_runtime_headers(activity_until=deadline_at),
+                        **endpoint.headers(),
                         "Authorization": f"Bearer {function_token.value}",
                         "If-Match": f'"{artifact.revision_hash}"',
                         "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
@@ -139,79 +127,19 @@ class FunctionSchemaDispatcher:
         *,
         deadline_at: datetime,
     ) -> FunctionRuntimeEndpoint:
-        return await self._endpoint_cache.get(
-            self._endpoint_key(pod_id),
-            wait_until=deadline_at,
-            loader=lambda: self._load_runtime_endpoint(
-                pod_id,
-                deadline_at=deadline_at,
-            ),
+        return await self._routes.endpoint_for(
+            pod_id,
+            admission_class=AdmissionClass.LATENCY,
+            deadline_at=deadline_at,
+            required_valid_until=deadline_at,
         )
-
-    async def _load_runtime_endpoint(
-        self,
-        pod_id: UUID,
-        *,
-        deadline_at: datetime,
-    ) -> FunctionRuntimeEndpoint:
-        client = self._agentbox_client_factory()
-        try:
-            await self._ensure_sandbox(
-                client,
-                pod_id=pod_id,
-                deadline_at=deadline_at,
-            )
-            return trusted_function_runtime_endpoint(pod_id)
-        finally:
-            await client.close()
-
-    async def _ensure_sandbox(
-        self,
-        client: AgentBoxClient,
-        *,
-        pod_id: UUID,
-        deadline_at: datetime,
-    ) -> None:
-        while self._now() < deadline_at:
-            try:
-                handle = await client.ensure_sandbox(
-                    WorkloadKind.FUNCTION,
-                    pod_id,
-                    profile=self._profile,
-                    admission_class=AdmissionClass.LATENCY,
-                    deadline_at=deadline_at,
-                )
-            except AgentBoxApiError as exc:
-                if exc.retry not in {
-                    RetryDisposition.WAIT,
-                    RetryDisposition.SAFE_SAME_OPERATION,
-                }:
-                    raise
-                await self._wait_retry(exc.retry_after_ms, deadline_at)
-                continue
-            except httpx.TransportError:
-                await self._wait_retry(None, deadline_at)
-                continue
-            if handle.ready:
-                return
-            await self._wait_retry(handle.retry_after_ms, deadline_at)
-        raise TimeoutError("function sandbox was not ready before the deadline")
 
     async def _invalidate(
         self,
         pod_id: UUID,
         endpoint: FunctionRuntimeEndpoint,
     ) -> None:
-        await self._endpoint_cache.invalidate(
-            self._endpoint_key(pod_id),
-            endpoint=endpoint,
-        )
-
-    def _endpoint_key(self, pod_id: UUID) -> FunctionRuntimeEndpointKey:
-        return FunctionRuntimeEndpointKey(
-            pod_id=pod_id,
-            profile_digest=self._profile.digest,
-        )
+        await self._routes.invalidate_for(pod_id, endpoint)
 
     @staticmethod
     def _validated_schemas(
@@ -249,17 +177,6 @@ class FunctionSchemaDispatcher:
             output=inspection.schemas.output,
             config=inspection.schemas.config,
         )
-
-    @staticmethod
-    async def _wait_retry(
-        retry_after_ms: int | None,
-        deadline_at: datetime,
-    ) -> None:
-        remaining = (deadline_at - FunctionSchemaDispatcher._now()).total_seconds()
-        if remaining <= 0:
-            return
-        delay = max(0.05, (retry_after_ms or 200) / 1000)
-        await asyncio.sleep(min(delay, remaining))
 
     @staticmethod
     def _runtime_gateway_url() -> str:

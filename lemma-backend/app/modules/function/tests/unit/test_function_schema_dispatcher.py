@@ -6,7 +6,11 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from agentbox_client import SandboxHandle
+from agentbox_client import (
+    FunctionRuntimeLease,
+    RuntimeRequestHeader,
+    SandboxHandle,
+)
 from agentbox_client.models import ProfileRef, WorkloadKind
 
 from app.modules.function.application.function_session_token_cache import (
@@ -51,6 +55,32 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
                 retry_after_ms=None,
             )
 
+        async def lease_function_runtime(
+            self,
+            logical_id,
+            *,
+            required_valid_until,
+            deadline_at,
+        ):
+            del deadline_at
+            return FunctionRuntimeLease(
+                logical_id=logical_id,
+                allocation_id=uuid4(),
+                allocation_epoch=1,
+                profile=ProfileRef(
+                    name="function-python-v1",
+                    digest=f"sha256:{'2' * 64}",
+                ),
+                url="https://direct-runtime.e2b.example/",
+                request_headers=(
+                    RuntimeRequestHeader(
+                        name="E2B-Traffic-Access-Token",
+                        value="provider-secret",
+                    ),
+                ),
+                expires_at=required_valid_until + timedelta(minutes=1),
+            )
+
         async def close(self):
             return None
 
@@ -76,17 +106,6 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
         "function_runtime_gateway_url",
         "http://127.0.0.1:8711",
     )
-    monkeypatch.setattr(
-        "app.modules.function.application.function_runtime_route_resolver.settings."
-        "agentbox_api_url",
-        "https://agentbox.test",
-    )
-    monkeypatch.setattr(
-        "app.modules.function.application.function_runtime_route_resolver.settings."
-        "agentbox_api_key",
-        "manager-secret",
-    )
-
     async def mint_token(**kwargs) -> FunctionSessionToken:
         observed["token_claims"] = kwargs
         return FunctionSessionToken(
@@ -118,10 +137,8 @@ async def test_schema_inspection_uses_pod_function_runtime_without_workspace(
     headers = observed["headers"]
     assert isinstance(headers, dict)
     assert headers["Authorization"] == "Bearer delegated-function-token"
-    assert headers["X-API-Key"] == "manager-secret"
-    assert datetime.fromisoformat(headers["X-AgentBox-Activity-Until"]) > datetime.now(
-        timezone.utc
-    )
+    assert headers["E2B-Traffic-Access-Token"] == "provider-secret"
+    assert "X-API-Key" not in headers
     assert headers["If-Match"] == f'"{revision_hash}"'
     token_claims = observed["token_claims"]
     assert isinstance(token_claims, dict)
