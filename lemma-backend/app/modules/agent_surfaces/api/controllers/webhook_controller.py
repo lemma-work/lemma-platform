@@ -25,6 +25,9 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
+from app.modules.agent_surfaces.services.telegram_manager_service import (
+    TelegramManagedBotProvisioningInProgressError,
+)
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
 
@@ -145,7 +148,14 @@ async def handle_telegram_manager_webhook(
     if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
     payload = _decode_webhook_payload(await request.body(), dict(request.headers))
-    await service.handle_update(payload)
+    try:
+        await service.handle_update(payload)
+    except TelegramManagedBotProvisioningInProgressError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram managed-bot setup is still provisioning",
+            headers={"Retry-After": "1"},
+        ) from exc
     return {"message": "Webhook received"}
 
 

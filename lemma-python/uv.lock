@@ -130,7 +130,7 @@ wheels = [
 
 [[package]]
 name = "lemma-sdk"
-version = "0.6.5"
+version = "0.6.7"
 source = { editable = "." }
 dependencies = [
     { name = "attrs" },

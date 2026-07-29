@@ -60,12 +60,21 @@ async def _dedup_store_lifespan(app):
 
 @asynccontextmanager
 async def _telegram_manager_webhook_lifespan(app):
+    import asyncio
+
     from app.modules.agent_surfaces.services.telegram_manager_receiver import (
-        register_telegram_manager_webhook,
+        run_telegram_manager_webhook_registration,
     )
 
-    await register_telegram_manager_webhook()
-    yield
+    task = create_background_task(
+        run_telegram_manager_webhook_registration(),
+        name="telegram-manager-webhook-registration",
+    )
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 @asynccontextmanager

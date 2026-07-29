@@ -9,9 +9,11 @@ from PIL import Image
 
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import SurfaceConfig
+from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TelegramApiError,
     TelegramClient,
+    classify_telegram_error,
 )
 from app.modules.agent_surfaces.services.telegram_mini_app_service import (
     resolve_telegram_mini_app,
@@ -49,7 +51,12 @@ async def configure_managed_bot(
     ):
         try:
             await child.call(method, payload)
-        except TelegramApiError:
+        except TelegramApiError as exc:
+            if (
+                classify_telegram_error(exc)
+                is DeliveryClassification.TRANSIENT
+            ):
+                raise
             logger.debug(
                 "agent_surfaces.telegram_manager.bot_branding_best_effort",
                 method=method,
@@ -71,7 +78,11 @@ async def configure_managed_bot(
                 )
             },
         )
-    except OSError, TelegramApiError:
+    except TelegramApiError as exc:
+        if classify_telegram_error(exc) is DeliveryClassification.TRANSIENT:
+            raise
+        logger.debug("agent_surfaces.telegram_manager.bot_profile_photo_best_effort")
+    except OSError:
         logger.debug("agent_surfaces.telegram_manager.bot_profile_photo_best_effort")
 
 

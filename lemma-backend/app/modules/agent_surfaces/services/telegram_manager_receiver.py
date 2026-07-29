@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
 from redis.exceptions import RedisError
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -21,14 +22,22 @@ from app.modules.agent_surfaces.platforms.common import (
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TelegramApiError,
     TelegramClient,
+    classify_telegram_error,
+    telegram_retry_after,
 )
+from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
 from app.modules.agent_surfaces.services.telegram_manager_service import (
     TELEGRAM_MANAGER_ALLOWED_UPDATES,
-    TelegramManagedBotSetupStore,
     TelegramManagerService,
+)
+from app.modules.agent_surfaces.services.telegram_manager_store import (
+    TelegramManagedBotSetupStore,
 )
 
 logger = get_logger(__name__)
+
+_WEBHOOK_RETRY_INITIAL_SECONDS = 5.0
+_WEBHOOK_RETRY_MAX_SECONDS = 300.0
 
 
 class TelegramManagerPollingReceiver:
@@ -72,13 +81,20 @@ class TelegramManagerPollingReceiver:
     async def run(self) -> None:
         if not self.should_start():
             return
-        await self._client.call(
-            "deleteWebhook",
-            {"drop_pending_updates": False},
-        )
-        offset = await self._store.load_offset()
+        webhook_deleted = False
+        offset_loaded = False
+        offset: int | None = None
         while True:
             try:
+                if not webhook_deleted:
+                    await self._client.call(
+                        "deleteWebhook",
+                        {"drop_pending_updates": False},
+                    )
+                    webhook_deleted = True
+                if not offset_loaded:
+                    offset = await self._store.load_offset()
+                    offset_loaded = True
                 payload: dict[str, Any] = {
                     "timeout": 30,
                     "allowed_updates": TELEGRAM_MANAGER_ALLOWED_UPDATES,
@@ -87,16 +103,19 @@ class TelegramManagerPollingReceiver:
                     payload["offset"] = offset
                 response = await self._client.call("getUpdates", payload)
                 for update in response.get("result") or []:
+                    if not isinstance(update, dict):
+                        continue
+                    await self._service.handle_update(update)
                     update_id = update.get("update_id")
                     if isinstance(update_id, int):
-                        offset = update_id + 1
-                        await self._store.save_offset(offset)
-                    if isinstance(update, dict):
-                        await self._service.handle_update(update)
+                        next_offset = update_id + 1
+                        await self._store.save_offset(next_offset)
+                        offset = next_offset
             except asyncio.CancelledError:
                 raise
             except (
                 DomainError,
+                httpx.RequestError,
                 RedisError,
                 RuntimeError,
                 SQLAlchemyError,
@@ -132,18 +151,46 @@ async def register_telegram_manager_webhook() -> None:
     webhook_url = (
         f"{settings.api_url.rstrip('/')}/surfaces/webhooks/telegram-manager"
     )
-    try:
-        await client.call(
-            "setWebhook",
-            {
-                "url": webhook_url,
-                "secret_token": secret,
-                "allowed_updates": TELEGRAM_MANAGER_ALLOWED_UPDATES,
-                "drop_pending_updates": False,
-            },
+    await client.call(
+        "setWebhook",
+        {
+            "url": webhook_url,
+            "secret_token": secret,
+            "allowed_updates": TELEGRAM_MANAGER_ALLOWED_UPDATES,
+            "drop_pending_updates": False,
+        },
+    )
+
+
+async def run_telegram_manager_webhook_registration() -> None:
+    delay = _WEBHOOK_RETRY_INITIAL_SECONDS
+    while True:
+        try:
+            await register_telegram_manager_webhook()
+            return
+        except asyncio.CancelledError:
+            raise
+        except TelegramApiError as exc:
+            logger.error(
+                "agent_surfaces.telegram_manager.webhook_registration_failed",
+                exc_info=True,
+            )
+            if (
+                classify_telegram_error(exc)
+                is DeliveryClassification.PERMANENT
+            ):
+                return
+            retry_after = telegram_retry_after(exc)
+        except httpx.RequestError:
+            logger.error(
+                "agent_surfaces.telegram_manager.webhook_registration_failed",
+                exc_info=True,
+            )
+            retry_after = None
+        await asyncio.sleep(
+            min(
+                _WEBHOOK_RETRY_MAX_SECONDS,
+                max(delay, retry_after or 0),
+            )
         )
-    except TelegramApiError:
-        logger.error(
-            "agent_surfaces.telegram_manager.webhook_registration_failed",
-            exc_info=True,
-        )
+        delay = min(delay * 2, _WEBHOOK_RETRY_MAX_SECONDS)

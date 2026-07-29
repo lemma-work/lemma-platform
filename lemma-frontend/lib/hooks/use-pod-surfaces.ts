@@ -137,6 +137,20 @@ export const useStartTelegramManagedBotSetup = () => {
     });
 };
 
+export function telegramManagedBotSetupPollInterval(
+    status: TelegramManagedBotSetupResponse['status'] | undefined,
+    queryStatus: 'pending' | 'error' | 'success',
+): number | false {
+    if (
+        queryStatus === 'error' ||
+        status === 'COMPLETE' ||
+        status === 'FAILED'
+    ) {
+        return false;
+    }
+    return 1500;
+}
+
 export const useTelegramManagedBotSetup = (
     podId: string,
     setupId: string | null | undefined,
@@ -149,11 +163,11 @@ export const useTelegramManagedBotSetup = (
                 setupId as string,
             ) as Promise<TelegramManagedBotSetupResponse>,
         enabled: Boolean(podId && setupId),
-        refetchInterval: (query) => {
-            const status = query.state.data?.status;
-            if (status === 'COMPLETE' || status === 'FAILED') return false;
-            return 1500;
-        },
+        refetchInterval: (query) =>
+            telegramManagedBotSetupPollInterval(
+                query.state.data?.status,
+                query.state.status,
+            ),
         refetchIntervalInBackground: true,
     });
 };

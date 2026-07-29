@@ -194,7 +194,10 @@ export function PodSurfacesPanel({
     const [draftTelegramAppName, setDraftTelegramAppName] = useState(NO_TELEGRAM_APP_VALUE);
     const [telegramSetupId, setTelegramSetupId] = useState<string | null>(null);
     const [telegramLaunchUrl, setTelegramLaunchUrl] = useState<string | null>(null);
-    const { data: telegramSetup } = useTelegramManagedBotSetup(podId, telegramSetupId);
+    const {
+        data: telegramSetup,
+        isError: isTelegramSetupError,
+    } = useTelegramManagedBotSetup(podId, telegramSetupId);
 
     const assistants = assistantsData?.items ?? [];
     const readyPodApps = useMemo(
@@ -631,6 +634,7 @@ export function PodSurfacesPanel({
                                 {editingDefinition.platform === 'TELEGRAM' && telegramSetupId ? (
                                     <ManagedTelegramSetupCard
                                         setup={telegramSetup}
+                                        hasError={isTelegramSetupError}
                                         launchUrl={telegramLaunchUrl}
                                         onRetry={() => {
                                             setTelegramSetupId(null);
@@ -1113,15 +1117,33 @@ function StatusPill({ label, tone }: { label: string; tone: SurfaceTone }) {
 
 function ManagedTelegramSetupCard({
     setup,
+    hasError,
     launchUrl,
     onRetry,
     onDone,
 }: {
     setup: TelegramManagedBotSetupResponse | undefined;
+    hasError: boolean;
     launchUrl: string | null;
     onRetry: () => void;
     onDone: () => void;
 }) {
+    if (hasError) {
+        return (
+            <div className="surface-inline-callout">
+                <p className="text-sm font-medium text-[var(--state-error)]">
+                    Telegram setup expired or is unavailable
+                </p>
+                <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                    Start the setup again to create and connect your bot.
+                </p>
+                <Button type="button" variant="outline" size="sm" className="mt-3" onClick={onRetry}>
+                    Try again
+                </Button>
+            </div>
+        );
+    }
+
     if (setup?.status === 'FAILED') {
         return (
             <div className="surface-inline-callout">

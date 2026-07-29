@@ -85,3 +85,15 @@ class TelegramManagedBotSetupNotFoundError(AgentSurfaceError):
             code="TELEGRAM_MANAGED_BOT_SETUP_NOT_FOUND",
             status_code=404,
         )
+
+
+class TelegramManagedBotSetupAlreadyInProgressError(AgentSurfaceError):
+    def __init__(self, surface_name: str):
+        super().__init__(
+            message=(
+                f"Telegram managed-bot setup for surface '{surface_name}' "
+                "is already in progress"
+            ),
+            code="TELEGRAM_MANAGED_BOT_SETUP_ALREADY_IN_PROGRESS",
+            status_code=409,
+        )
