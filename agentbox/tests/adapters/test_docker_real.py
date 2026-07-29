@@ -960,7 +960,7 @@ async def test_real_docker_function_runtime_port_and_exact_destroy(
     port_access = PortAccessService(
         database,
         adapter,
-        PortAccessSigner(b"function-runtime-lease-key-0001"),
+        PortAccessSigner(b"function-runtime-lease-key-00001"),
         public_base_url="http://agentbox.test",
     )
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
