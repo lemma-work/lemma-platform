@@ -14,12 +14,7 @@ export AGENT_BROWSER_PROFILE=/tmp/agentbox-browser/profile
 export AGENT_BROWSER_SESSION=workspace
 export AGENT_BROWSER_HEADED=true
 export MPLBACKEND=Agg
-export PYTHONPATH="/opt/agentbox-python/lib/python3.14/site-packages${PYTHONPATH:+:${PYTHONPATH}}"
 case ":${PATH}:" in
   *:/opt/node24/bin:*) ;;
   *) export PATH="/opt/node24/bin:${PATH}" ;;
-esac
-case ":${PATH}:" in
-  *:/opt/agentbox-python/bin:*) ;;
-  *) export PATH="/opt/agentbox-python/bin:${PATH}" ;;
 esac

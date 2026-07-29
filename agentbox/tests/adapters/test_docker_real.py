@@ -55,6 +55,7 @@ from agentbox.persistence.uow import StateDatabase
 from agentbox.processes import ProcessExecutionService
 from agentbox.python_sessions import PythonSessionService
 from agentbox.profiles import DockerProfileArtifact, ProfileRegistry, SandboxProfile
+from tests.adapters.workspace_python_contract import python_install_probe_command
 
 
 pytestmark = [
@@ -595,6 +596,16 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
                     "printf 'node:%s\\n' \"$(node --version)\"; "
                     "printf 'pnpm:%s\\n' \"$(pnpm --version)\"; "
                     "printf 'uv:%s\\n' \"$(uv --version)\"; "
+                    "printf 'python:%s\\n' "
+                    "\"$(python -c 'import sys; "
+                    'print("%d.%d" % sys.version_info[:2])\')"; '
+                    "printf 'python3:%s\\n' "
+                    "\"$(python3 -c 'import sys; "
+                    'print("%d.%d" % sys.version_info[:2])\')"; '
+                    "printf 'python-path:%s\\n' \"$(command -v python)\"; "
+                    "printf 'python3-path:%s\\n' \"$(command -v python3)\"; "
+                    "printf 'pip:%s\\n' \"$(pip --version)\"; "
+                    "printf 'pip3:%s\\n' \"$(pip3 --version)\"; "
                     "lit --help >/dev/null"
                 ),
                 argv=None,
@@ -612,6 +623,32 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         assert b"node:v24.18.0" in versions_output
         assert b"pnpm:11.15.1" in versions_output
         assert b"uv:uv 0.11.31" in versions_output
+        assert b"python:3.14" in versions_output
+        assert b"python3:3.14" in versions_output
+        assert b"python-path:" in versions_output
+        assert b"python3-path:" in versions_output
+        assert b"pip 26.1.2 from /opt/agentbox-python/" in versions_output
+        assert versions_output.count(b"(python 3.14)") == 2
+
+        install_id = uuid4()
+        await processes.start(
+            key,
+            StartProcessRequest(
+                operation_id=install_id,
+                shell_command=python_install_probe_command(),
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=65536,
+                deadline_at=deadline,
+            ),
+        )
+        installed, install_output = await _read_terminal(
+            processes, key, install_id, deadline_at=deadline
+        )
+        assert installed.state == ProcessState.SUCCEEDED, install_output
+        assert b"shared-3.14" in install_output
 
         operation_id = uuid4()
         started, created = await processes.start(
@@ -770,10 +807,10 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
             ExecutePythonRequest(
                 operation_id=uuid4(),
                 code=(
-                    "import os, sys\n"
+                    "import agentbox_install_probe, os, sys\n"
                     "os.write(1, b'native-python\\n')\n"
                     "(value + 2, os.environ['PYTHON_MARK'], "
-                    "sys.version_info[:2])"
+                    "sys.version_info[:2], agentbox_install_probe.VALUE)"
                 ),
                 environment=(EnvironmentVariable("PYTHON_MARK", "docker"),),
                 output_limit_bytes=65536,
@@ -786,7 +823,9 @@ async def test_real_docker_runtime_process_pty_input_resize_and_reconnect(
         assert python_created is True
         assert python_result.state == PythonExecutionState.SUCCEEDED
         assert python_result.stdout == "native-python\n"
-        assert python_result.result == "(42, 'docker', (3, 14))"
+        assert python_result.result == (
+            "(42, 'docker', (3, 14), 'shared-3.14')"
+        )
 
         await filesystem.write(
             key,

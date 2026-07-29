@@ -38,6 +38,7 @@ from agentbox.port_access import PortAccessService, PortAccessSigner
 from agentbox.processes import ProcessExecutionService
 from agentbox.profiles import E2BProfileArtifact, ProfileRegistry, SandboxProfile
 from agentbox.python_sessions import PythonSessionService
+from tests.adapters.workspace_python_contract import python_install_probe_command
 
 
 _REQUIRED_ENV = (
@@ -199,6 +200,13 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
                     "printf 'python:%s\\n' "
                     "\"$(python -c 'import sys; "
                     'print("%d.%d" % sys.version_info[:2])\')"; '
+                    "printf 'python3:%s\\n' "
+                    "\"$(python3 -c 'import sys; "
+                    'print("%d.%d" % sys.version_info[:2])\')"; '
+                    "printf 'python-path:%s\\n' \"$(command -v python)\"; "
+                    "printf 'python3-path:%s\\n' \"$(command -v python3)\"; "
+                    "printf 'pip:%s\\n' \"$(pip --version)\"; "
+                    "printf 'pip3:%s\\n' \"$(pip3 --version)\"; "
                     "printf 'lemma:%s\\n' \"$(lemma --version)\"; "
                     "lit --help >/dev/null"
                 ),
@@ -218,7 +226,32 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
         assert b"pnpm:11.15.1" in versions_output
         assert b"uv:uv 0.11.31" in versions_output
         assert b"python:3.14" in versions_output
+        assert b"python3:3.14" in versions_output
+        assert b"python-path:" in versions_output
+        assert b"python3-path:" in versions_output
+        assert b"pip 26.1.2 from /opt/agentbox-python/" in versions_output
+        assert versions_output.count(b"(python 3.14)") == 2
         assert b"lemma:lemma " in versions_output
+
+        install_id = uuid4()
+        await processes.start(
+            key,
+            StartProcessRequest(
+                operation_id=install_id,
+                shell_command=python_install_probe_command(),
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=65536,
+                deadline_at=deadline,
+            ),
+        )
+        installed, install_output = await _read_terminal(
+            processes, key, install_id, deadline_at=deadline
+        )
+        assert installed.state == ProcessState.SUCCEEDED, install_output
+        assert b"shared-3.14" in install_output
 
         shell_id = uuid4()
         await processes.start(
@@ -328,10 +361,10 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
             ExecutePythonRequest(
                 operation_id=uuid4(),
                 code=(
-                    "import os, sys\n"
+                    "import agentbox_install_probe, os, sys\n"
                     "print('native-python')\n"
                     "(value + 2, os.environ['PYTHON_MARK'], "
-                    "sys.version_info[:2])"
+                    "sys.version_info[:2], agentbox_install_probe.VALUE)"
                 ),
                 environment=(EnvironmentVariable("PYTHON_MARK", "e2b"),),
                 output_limit_bytes=65536,
@@ -343,7 +376,7 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
         assert first_python.state == PythonExecutionState.SUCCEEDED
         assert second_python.state == PythonExecutionState.SUCCEEDED
         assert second_python.stdout == "native-python\n"
-        assert second_python.result == "(42, 'e2b', (3, 14))"
+        assert second_python.result == "(42, 'e2b', (3, 14), 'shared-3.14')"
 
         await filesystem.write(
             key,
