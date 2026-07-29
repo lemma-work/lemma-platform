@@ -7,6 +7,8 @@ reply_parameters, and forum-topic threading.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
 from app.modules.agent_surfaces.platforms.rendering import (
     chunk_text,
     escape_markdown_v2,
@@ -169,6 +171,29 @@ async def test_send_message_sets_forum_topic_thread_id():
 
     _, payload = recorder.calls[0]
     assert payload["message_thread_id"] == 99
+
+
+async def test_send_message_retry_button_stores_only_the_action():
+    recorder = _RecordingClient()
+    service = _service(recorder)
+
+    with patch(
+        "app.modules.agent_surfaces.platforms.telegram.service.put_callback_token",
+        new=AsyncMock(return_value="retry-token"),
+    ) as put_token:
+        await service.send_message(
+            _event(),
+            "The run failed.",
+            metadata={"retry_action": True},
+        )
+
+    put_token.assert_awaited_once_with({"action": "retry"})
+    _, payload = recorder.calls[0]
+    assert payload["reply_markup"] == {
+        "inline_keyboard": [
+            [{"text": "Try again", "callback_data": "retry-token"}],
+        ]
+    }
 
 
 def test_parser_combines_burst_text_and_album_attachments():

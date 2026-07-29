@@ -87,22 +87,22 @@ async def _telegram_mini_app_for_context(
 ) -> TelegramMiniApp | None:
     if context.pod_id is None or context.surface_config is None:
         return None
-    app_id = context.surface_config.telegram.app_id
-    if app_id is None:
+    app_name = context.surface_config.telegram.app_name
+    if app_name is None:
         return None
     if uow_factory is not None:
         async with uow_factory() as scoped_uow:
             return await resolve_telegram_mini_app(
                 uow=scoped_uow,
                 pod_id=context.pod_id,
-                app_id=app_id,
+                app_name=app_name,
             )
     if uow is None:
         return None
     return await resolve_telegram_mini_app(
         uow=uow,
         pod_id=context.pod_id,
-        app_id=app_id,
+        app_name=app_name,
     )
 
 

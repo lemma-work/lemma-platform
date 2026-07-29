@@ -52,7 +52,7 @@ class SurfaceSendPolicyConfig(BaseModel):
 class SurfaceTelegramConfigInput(BaseModel):
     """Selects the pod app exposed as this bot's Telegram Mini App."""
 
-    app_id: UUID | None = None
+    app_name: str | None = None
 
     model_config = ConfigDict(extra="forbid")
 
@@ -125,7 +125,7 @@ def surface_config_from_input(
         ),
         channels=channel_routes,
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
-        telegram=SurfaceTelegramConfig(app_id=config_input.telegram.app_id),
+        telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
     )
 
 

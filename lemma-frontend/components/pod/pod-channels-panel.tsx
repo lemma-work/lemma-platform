@@ -191,7 +191,7 @@ export function PodSurfacesPanel({
     const [draftAllowedDomains, setDraftAllowedDomains] = useState('');
     const [draftAllowedEmails, setDraftAllowedEmails] = useState('');
     const [draftAllowSend, setDraftAllowSend] = useState(false);
-    const [draftTelegramAppId, setDraftTelegramAppId] = useState(NO_TELEGRAM_APP_VALUE);
+    const [draftTelegramAppName, setDraftTelegramAppName] = useState(NO_TELEGRAM_APP_VALUE);
     const [telegramSetupId, setTelegramSetupId] = useState<string | null>(null);
     const [telegramLaunchUrl, setTelegramLaunchUrl] = useState<string | null>(null);
     const { data: telegramSetup } = useTelegramManagedBotSetup(podId, telegramSetupId);
@@ -327,8 +327,8 @@ export function PodSurfacesPanel({
         setDraftAllowedDomains((identity.allowed_domains || []).join(', '));
         setDraftAllowedEmails((identity.allowed_email_addresses || []).join(', '));
         setDraftAllowSend(Boolean((config as { send_policy?: { allow_send?: boolean } }).send_policy?.allow_send));
-        const telegramAppId = (config as { telegram?: { app_id?: string | null } }).telegram?.app_id;
-        setDraftTelegramAppId(telegramAppId || NO_TELEGRAM_APP_VALUE);
+        const telegramAppName = (config as { telegram?: { app_name?: string | null } }).telegram?.app_name;
+        setDraftTelegramAppName(telegramAppName || NO_TELEGRAM_APP_VALUE);
     };
 
     const openCreate = (definition: SurfaceDefinition) => {
@@ -405,9 +405,9 @@ export function PodSurfacesPanel({
             ...(editingDefinition.platform === 'TELEGRAM'
                 ? {
                       telegram: {
-                          app_id: draftTelegramAppId === NO_TELEGRAM_APP_VALUE
+                          app_name: draftTelegramAppName === NO_TELEGRAM_APP_VALUE
                               ? null
-                              : draftTelegramAppId,
+                              : draftTelegramAppName,
                       },
                   }
                 : {}),
@@ -643,7 +643,7 @@ export function PodSurfacesPanel({
                                 {editingDefinition.platform === 'TELEGRAM' && !telegramSetupId ? (
                                     <div className="grid gap-2">
                                         <label className="type-eyebrow-medium">Telegram Mini App</label>
-                                        <Select value={draftTelegramAppId} onValueChange={setDraftTelegramAppId}>
+                                        <Select value={draftTelegramAppName} onValueChange={setDraftTelegramAppName}>
                                             <SelectTrigger className="h-10 bg-[var(--field-bg)]">
                                                 <SelectValue placeholder="Choose a pod app" />
                                             </SelectTrigger>
@@ -652,7 +652,7 @@ export function PodSurfacesPanel({
                                                     No Mini App
                                                 </SelectItem>
                                                 {readyPodApps.map((app) => (
-                                                    <SelectItem key={app.id} value={app.id}>
+                                                    <SelectItem key={app.id} value={app.name}>
                                                         {app.name}
                                                     </SelectItem>
                                                 ))}

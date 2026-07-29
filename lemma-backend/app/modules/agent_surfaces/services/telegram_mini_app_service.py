@@ -10,7 +10,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
 from app.modules.agent_surfaces.platforms.telegram.client import TelegramClient
-from app.modules.apps.contracts import get_ready_pod_app
+from app.modules.apps.contracts import get_ready_pod_app_by_name
 
 
 @dataclass(frozen=True)
@@ -50,9 +50,13 @@ async def resolve_telegram_mini_app(
     *,
     uow,
     pod_id: UUID,
-    app_id: UUID | None,
+    app_name: str | None,
 ) -> TelegramMiniApp | None:
-    app = await get_ready_pod_app(uow=uow, pod_id=pod_id, app_id=app_id)
+    app = await get_ready_pod_app_by_name(
+        uow=uow,
+        pod_id=pod_id,
+        app_name=app_name,
+    )
     if app is None:
         return None
     return TelegramMiniApp(
@@ -79,7 +83,7 @@ async def sync_telegram_mini_app(
     mini_app = await resolve_telegram_mini_app(
         uow=uow,
         pod_id=surface.pod_id,
-        app_id=surface.config.telegram.app_id,
+        app_name=surface.config.telegram.app_name,
     )
     menu_button: dict = {"type": "commands"}
     if mini_app and mini_app.url:

@@ -108,7 +108,7 @@ async def start_telegram_managed_bot_setup(
         uow=uow,
         pod_id=pod_id,
         platform=SurfacePlatform.TELEGRAM,
-        app_id=request.config.telegram.app_id,
+        app_name=request.config.telegram.app_name,
         ctx=ctx,
     )
     setup = await service.start_setup(

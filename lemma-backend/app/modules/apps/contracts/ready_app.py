@@ -16,20 +16,20 @@ class ReadyPodApp:
     public_slug: str
 
 
-async def get_ready_pod_app(
+async def get_ready_pod_app_by_name(
     *,
     uow,
     pod_id: UUID,
-    app_id: UUID | None,
+    app_name: str | None,
     ctx: Any | None = None,
 ) -> ReadyPodApp | None:
-    if app_id is None:
+    resolved_name = str(app_name or "").strip()
+    if not resolved_name:
         return None
-    app = await AppRepository(uow).get(app_id, ctx=ctx)
+    app = await AppRepository(uow).get_by_name(pod_id, resolved_name, ctx=ctx)
     if (
         app is None
         or app.id is None
-        or app.pod_id != pod_id
         or app.status is not AppStatus.READY
     ):
         return None

@@ -131,7 +131,9 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         common_kwargs: dict[str, Any] = {
             "platform": "TELEGRAM",
             "external_channel_id": chat_id,
-            "external_thread_id": str(thread_id) if thread_id is not None else None,
+            "external_thread_id": (
+                str(thread_id) if thread_id is not None else chat_id
+            ),
             "external_user_id": str(from_user.get("id") or "").strip() or None,
             "reply_target": {"chat_id": chat_id} if chat_id else {},
             "dedup_id": str(callback_query.get("id") or "").strip() or None,
@@ -144,11 +146,9 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
                 **common_kwargs,
             )
         action = str(stored.get("action") or "").strip()
-        conversation_id = str(stored.get("conversation_id") or "").strip()
         if action:
             return ParsedSurfaceInteraction(
                 action=action,
-                conversation_id=conversation_id or None,
                 **common_kwargs,
             )
         callback_id = str(stored.get("callback_id") or "").strip()

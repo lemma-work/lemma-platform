@@ -123,7 +123,7 @@ class SurfaceSendPolicy(BaseModel):
 class SurfaceTelegramConfig(BaseModel):
     """Telegram-only presentation settings for a surface."""
 
-    app_id: UUID | None = None
+    app_name: str | None = None
 
 
 class SurfaceConfig(BaseModel):
@@ -186,9 +186,10 @@ class ParsedInboundSurfaceEvent(BaseModel):
 class ParsedSurfaceInteraction(BaseModel):
     """A native-form submission (Slack block_actions / Teams Action.Submit).
 
-    ``callback_id`` encodes ``conversation_id|tool_call_id`` (see
-    ``display_resource_renderer.parse_callback_id``) so the submission can be
-    routed back to the originating conversation; ``values`` holds the collected
+    For prompts, ``callback_id`` encodes ``conversation_id|tool_call_id`` (see
+    ``display_resource_renderer.parse_callback_id``). Conversation-level actions
+    resolve the current conversation through the durable surface/thread link
+    instead of carrying another copy of its id. ``values`` holds the collected
     field name → value map; ``dedup_id`` uniquely identifies this submission for
     replay protection.
     """
@@ -200,7 +201,6 @@ class ParsedSurfaceInteraction(BaseModel):
     external_user_id: str | None = None
     callback_id: str = ""
     action: str | None = None
-    conversation_id: str | None = None
     interaction_state: str | None = None
     values: dict[str, Any] = Field(default_factory=dict)
     # Set when the tapped control is a native approval button; carries the

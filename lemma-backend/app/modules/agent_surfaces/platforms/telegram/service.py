@@ -151,14 +151,11 @@ class TelegramPlatformService:
         thread_id = self._message_thread_id(event)
         reply_to = event.reply_target.get("message_id")
         reply_markup = (metadata or {}).get("reply_markup")
-        retry_conversation_id = str(
-            (metadata or {}).get("retry_conversation_id") or ""
-        ).strip()
-        if retry_conversation_id and not isinstance(reply_markup, dict):
+        retry_action = (metadata or {}).get("retry_action") is True
+        if retry_action and not isinstance(reply_markup, dict):
             retry_token = await put_callback_token(
                 {
                     "action": "retry",
-                    "conversation_id": retry_conversation_id,
                 }
             )
             reply_markup = {

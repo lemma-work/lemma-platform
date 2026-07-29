@@ -99,6 +99,7 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
 from app.modules.agent_surfaces.services.interaction_helpers import (
     interaction_sender_matches,
     parse_interaction_target,
+    resolve_current_interaction_delivery,
     resolve_interaction_delivery,
     retry_interaction_conversation,
 )
@@ -1279,19 +1280,25 @@ class AgentSurfaceIngressService:
         adapter = None
         credentials = None
         try:
-            target = parse_interaction_target(parsed)
-            if target is None:
-                return
-            conversation_id, tool_call_id = target
-
-            delivery = await resolve_interaction_delivery(
-                self,
-                parsed,
-                conversation_id,
-            )
+            if parsed.action:
+                if parsed.action != "retry":
+                    return
+                tool_call_id = ""
+                delivery = await resolve_current_interaction_delivery(self, parsed)
+            else:
+                target = parse_interaction_target(parsed)
+                if target is None:
+                    return
+                conversation_id, tool_call_id = target
+                delivery = await resolve_interaction_delivery(
+                    self,
+                    parsed,
+                    conversation_id,
+                )
             if delivery is None:
                 return
             link, surface, adapter, credentials = delivery
+            conversation_id = link.conversation_id
 
             if parsed.interaction_state == "other":
                 await adapter.acknowledge_interaction(
@@ -1339,6 +1346,23 @@ class AgentSurfaceIngressService:
                 return
 
             if parsed.action == "retry":
+                refreshed = await self._refresh_interaction_conversation(
+                    link=link,
+                    surface=surface,
+                    conversation=conversation,
+                )
+                if refreshed is None:
+                    return
+                link, conversation, restarted = refreshed
+                if restarted:
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="This chat started a new conversation. Send your message again.",
+                        show_alert=True,
+                        clear_actions=True,
+                    )
+                    return
                 await retry_interaction_conversation(
                     conversation_service=self.conversation_service,
                     uow=self.uow,
@@ -1396,6 +1420,43 @@ class AgentSurfaceIngressService:
                     text="I couldn’t complete that action.",
                     show_alert=True,
                 )
+
+    async def _refresh_interaction_conversation(
+        self,
+        *,
+        link: AgentSurfaceConversationLink,
+        surface: AgentSurfaceEntity,
+        conversation,
+    ) -> tuple[AgentSurfaceConversationLink, Any, bool] | None:
+        """Apply the normal DM agent/TTL reset policy before an action runs."""
+
+        try:
+            last_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
+        except (TypeError, ValueError):
+            return link, conversation, False
+        route = await self._resolve_route(surface=surface, parsed=last_event)
+        if route is None:
+            return link, conversation, False
+        refreshed_link = await self._get_or_create_conversation_link(
+            surface=surface,
+            parsed=last_event,
+            resolved_user=ResolvedSurfaceUser(
+                internal_user_id=conversation.user_id,
+                external_user_id=link.external_user_id,
+            ),
+            route=route,
+            current_conversation_agent_id=conversation.agent_id,
+        )
+        if refreshed_link.conversation_id == link.conversation_id:
+            return refreshed_link, conversation, False
+        refreshed_conversation = (
+            await self.conversation_service.conversation_repository.get_conversation(
+                refreshed_link.conversation_id
+            )
+        )
+        if refreshed_conversation is None:
+            return None
+        return refreshed_link, refreshed_conversation, True
 
     async def send_processing_indicator_for_conversation(
         self,
@@ -2002,6 +2063,7 @@ class AgentSurfaceIngressService:
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
+        current_conversation_agent_id: UUID | None = None,
     ) -> AgentSurfaceConversationLink:
         external_user_id = resolved_user.external_user_id
         link = await self.conversation_link_repository.get_by_external_thread(
@@ -2017,6 +2079,7 @@ class AgentSurfaceIngressService:
                 surface=surface,
                 link=link,
                 route=route,
+                current_conversation_agent_id=current_conversation_agent_id,
             ):
                 conversation = await self._create_surface_conversation(
                     surface=surface,
@@ -2080,9 +2143,16 @@ class AgentSurfaceIngressService:
         surface: AgentSurfaceEntity,
         link: AgentSurfaceConversationLink,
         route: ResolvedSurfaceRoute | None = None,
+        current_conversation_agent_id: UUID | None = None,
     ) -> bool:
         if surface.mode is not SurfaceMode.DM:
             return False
+        if (
+            route is not None
+            and current_conversation_agent_id is not None
+            and current_conversation_agent_id != route.agent_id
+        ):
+            return True
         if route is not None and link.routed_agent_id != route.agent_id:
             return True
         reset_hours = surface.config.dm_conversation_reset_after_hours

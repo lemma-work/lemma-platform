@@ -231,6 +231,10 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
     }
     if identity_entry:
         behavior_config["identity"] = identity_entry
+    telegram = config.get("telegram") or {}
+    app_name = str(telegram.get("app_name") or "").strip()
+    if app_name:
+        behavior_config["telegram"] = {"app_name": app_name}
 
     status = str(surface.get("status") or "").upper()
     # Prefer the surface's own pod-unique name so several surfaces of the same

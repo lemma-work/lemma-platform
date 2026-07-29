@@ -387,9 +387,7 @@ class SurfaceAgentRunProgressObserver:
                     self._run_error_text
                     or "I couldn’t finish that request. You can try it again."
                 ),
-                metadata={
-                    "retry_conversation_id": str(conversation.id),
-                },
+                metadata={"retry_action": True},
             )
             self._error_delivered = True
         except Exception:

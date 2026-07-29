@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, TypeVar, cast
-from uuid import UUID
 
 from attrs import define as _attrs_define
 
@@ -16,25 +15,23 @@ class SurfaceTelegramConfigInput:
     """Selects the pod app exposed as this bot's Telegram Mini App.
 
     Attributes:
-        app_id (None | Unset | UUID):
+        app_name (None | str | Unset):
     """
 
-    app_id: None | Unset | UUID = UNSET
+    app_name: None | str | Unset = UNSET
 
     def to_dict(self) -> dict[str, Any]:
-        app_id: None | str | Unset
-        if isinstance(self.app_id, Unset):
-            app_id = UNSET
-        elif isinstance(self.app_id, UUID):
-            app_id = str(self.app_id)
+        app_name: None | str | Unset
+        if isinstance(self.app_name, Unset):
+            app_name = UNSET
         else:
-            app_id = self.app_id
+            app_name = self.app_name
 
         field_dict: dict[str, Any] = {}
 
         field_dict.update({})
-        if app_id is not UNSET:
-            field_dict["app_id"] = app_id
+        if app_name is not UNSET:
+            field_dict["app_name"] = app_name
 
         return field_dict
 
@@ -42,25 +39,17 @@ class SurfaceTelegramConfigInput:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
 
-        def _parse_app_id(data: object) -> None | Unset | UUID:
+        def _parse_app_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                app_id_type_0 = UUID(data)
+            return cast(None | str | Unset, data)
 
-                return app_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | Unset | UUID, data)
-
-        app_id = _parse_app_id(d.pop("app_id", UNSET))
+        app_name = _parse_app_name(d.pop("app_name", UNSET))
 
         surface_telegram_config_input = cls(
-            app_id=app_id,
+            app_name=app_name,
         )
 
         return surface_telegram_config_input

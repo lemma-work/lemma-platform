@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -1742,6 +1742,120 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     assert kwargs["decision"] == expected
     # An approval button carries a decision, not an answer payload.
     assert kwargs["response"] == {}
+
+
+async def test_handle_retry_resolves_conversation_from_current_thread_link():
+    surface = _telegram_surface()
+    user_id = uuid4()
+    conversation = _conversation(surface, user_id)
+    event = _telegram_event(chat_id="123", message_id="5")
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        routed_agent_id=surface.agent_id,
+        last_event=event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        existing_link=link,
+    )
+    service.conversation_link_repository.find_surface_id_for_external_thread.return_value = (
+        surface.id
+    )
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=conversation)
+    )
+    service._refresh_interaction_conversation = AsyncMock(
+        return_value=(link, conversation, False)
+    )
+    interaction = ParsedSurfaceInteraction(
+        platform=SurfacePlatform.TELEGRAM,
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        action="retry",
+        dedup_id="cbq-retry",
+    )
+
+    with patch(
+        "app.modules.agent_surfaces.services.ingress_service."
+        "retry_interaction_conversation",
+        new=AsyncMock(),
+    ) as retry:
+        await service.handle_interaction(interaction)
+
+    service.conversation_link_repository.get_by_conversation_id.assert_not_awaited()
+    service.conversation_link_repository.get_by_external_thread.assert_awaited_once_with(
+        surface_id=surface.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+    )
+    retry.assert_awaited_once()
+    assert retry.await_args.kwargs["conversation"] is conversation
+    adapter.acknowledge_interaction.assert_awaited_once_with(
+        credentials={},
+        interaction=interaction,
+        text="Retrying…",
+        clear_actions=True,
+    )
+
+
+async def test_refresh_retry_uses_normal_agent_change_reset_policy():
+    old_agent_id = uuid4()
+    new_agent_id = uuid4()
+    surface = _telegram_surface(agent_id=new_agent_id)
+    user_id = uuid4()
+    old_conversation = _conversation(surface, user_id).model_copy(
+        update={"agent_id": old_agent_id}
+    )
+    new_conversation = _conversation(surface, user_id)
+    event = _telegram_event(chat_id="123", message_id="5")
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=old_conversation.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        # Even if denormalized route metadata was already updated, the actual
+        # conversation's agent remains authoritative for deciding to reset.
+        routed_agent_id=new_agent_id,
+        last_event=event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        conversation=new_conversation,
+        existing_link=link,
+    )
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=new_conversation)
+    )
+
+    refreshed = await service._refresh_interaction_conversation(
+        link=link,
+        surface=surface,
+        conversation=old_conversation,
+    )
+
+    assert refreshed is not None
+    refreshed_link, refreshed_conversation, restarted = refreshed
+    assert restarted is True
+    assert refreshed_link.conversation_id == new_conversation.id
+    assert refreshed_conversation is new_conversation
+    service.conversation_service.create_conversation.assert_awaited_once()
+    update = service.conversation_link_repository.update_conversation.await_args.kwargs
+    assert update["conversation_id"] == new_conversation.id
+    assert update["routed_agent_id"] == new_agent_id
 
 
 _REQUEST_APPROVAL_TOOL_ARGS = {

@@ -11355,17 +11355,16 @@
         "additionalProperties": false,
         "description": "Selects the pod app exposed as this bot's Telegram Mini App.",
         "properties": {
-          "app_id": {
+          "app_name": {
             "anyOf": [
               {
-                "format": "uuid",
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "App Id"
+            "title": "App Name"
           }
         },
         "title": "SurfaceTelegramConfigInput",
@@ -14970,7 +14969,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.6"
+    "version": "0.6.7"
   },
   "openapi": "3.1.0",
   "paths": {

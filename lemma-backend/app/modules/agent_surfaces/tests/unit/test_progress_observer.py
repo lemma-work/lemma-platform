@@ -424,7 +424,7 @@ async def test_progress_observer_delivers_retryable_telegram_error():
                 "I couldn’t finish that request. "
                 "Try it again without resending your message."
             ),
-            "metadata": {"retry_conversation_id": str(conversation.id)},
+            "metadata": {"retry_action": True},
         }
     ]
 
@@ -446,7 +446,7 @@ async def test_progress_observer_delivers_preflight_telegram_error():
                 "I couldn’t finish that request. "
                 "Try it again without resending your message."
             ),
-            "metadata": {"retry_conversation_id": str(conversation.id)},
+            "metadata": {"retry_action": True},
         }
     ]
 

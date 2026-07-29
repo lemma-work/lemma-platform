@@ -40,7 +40,7 @@ async def configure_managed_bot(
         mini_app = await resolve_telegram_mini_app(
             uow=uow,
             pod_id=pod_id,
-            app_id=config.telegram.app_id,
+            app_name=config.telegram.app_name,
         )
     for method, payload in _profile_calls(
         surface_name=surface_name,

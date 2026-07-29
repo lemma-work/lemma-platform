@@ -16,10 +16,7 @@ logger = get_logger(__name__)
 
 
 def parse_interaction_target(parsed) -> tuple[UUID, str] | None:
-    if parsed.action:
-        raw_target = (str(parsed.conversation_id or ""), "")
-    else:
-        raw_target = parse_callback_id(parsed.callback_id)
+    raw_target = parse_callback_id(parsed.callback_id)
     if raw_target is None or not raw_target[0]:
         logger.debug(
             "agent_surfaces.ingress_service."
@@ -61,12 +58,42 @@ async def resolve_interaction_delivery(
             conversation_id=conversation_id,
         )
         return None
+    return await _resolve_link_delivery(ingress, parsed, link)
+
+
+async def resolve_current_interaction_delivery(ingress, parsed):
+    external_thread_id = str(parsed.external_thread_id or "").strip()
+    if not external_thread_id:
+        return None
+    surface_id = (
+        await ingress.conversation_link_repository.find_surface_id_for_external_thread(
+            platform=parsed.platform.value,
+            external_channel_id=parsed.external_channel_id,
+            external_thread_id=external_thread_id,
+            external_user_id=parsed.external_user_id,
+        )
+    )
+    if surface_id is None:
+        return None
+    link = await ingress.conversation_link_repository.get_by_external_thread(
+        surface_id=surface_id,
+        platform=parsed.platform.value,
+        external_channel_id=parsed.external_channel_id,
+        external_thread_id=external_thread_id,
+        external_user_id=parsed.external_user_id,
+    )
+    if link is None:
+        return None
+    return await _resolve_link_delivery(ingress, parsed, link)
+
+
+async def _resolve_link_delivery(ingress, parsed, link):
     surface = await ingress.surface_repository.get(link.surface_id)
     if surface is None or not surface.is_active:
         logger.debug(
             "agent_surfaces.ingress_service."
             "surface_interaction_dropped_surface_missing.diagnostic",
-            conversation_id=conversation_id,
+            conversation_id=link.conversation_id,
             surface_id=link.surface_id,
         )
         return None

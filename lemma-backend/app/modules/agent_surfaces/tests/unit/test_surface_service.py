@@ -63,22 +63,24 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
         credential_resolver=credential_resolver,
     )
     app_id = uuid4()
+    app_name = "pocket-desk"
     surface = _surface_entity(
         pod_id=uuid4(),
         surface_type=SurfacePlatform.TELEGRAM,
-        config=SurfaceConfig(telegram={"app_id": app_id}),
+        config=SurfaceConfig(telegram={"app_name": app_name}),
     )
     client = AsyncMock()
+    mini_app_resolver = AsyncMock(
+        return_value=TelegramMiniApp(
+            app_id=app_id,
+            name=app_name,
+            url="https://apps.example.test/pocket-desk",
+        )
+    )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.telegram_mini_app_service."
         "resolve_telegram_mini_app",
-        AsyncMock(
-            return_value=TelegramMiniApp(
-                app_id=app_id,
-                name="pocket-desk",
-                url="https://apps.example.test/pocket-desk",
-            )
-        ),
+        mini_app_resolver,
     )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.telegram_mini_app_service."
@@ -88,6 +90,11 @@ async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
 
     await service.sync_telegram_mini_app(surface)
 
+    mini_app_resolver.assert_awaited_once_with(
+        uow=repo.uow,
+        pod_id=surface.pod_id,
+        app_name=app_name,
+    )
     calls = {call.args[0]: call.args[1] for call in client.call.await_args_list}
     assert calls["setChatMenuButton"]["menu_button"] == {
         "type": "web_app",

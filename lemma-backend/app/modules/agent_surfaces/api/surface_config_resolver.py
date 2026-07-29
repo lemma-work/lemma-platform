@@ -17,7 +17,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceTelegramConfig,
 )
 from app.modules.agent_surfaces.domain.errors import AgentSurfaceValidationError
-from app.modules.apps.contracts import get_ready_pod_app
+from app.modules.apps.contracts import get_ready_pod_app_by_name
 
 
 async def require_surface_agent_action(
@@ -76,26 +76,27 @@ async def resolve_telegram_config(
     uow,
     pod_id: UUID,
     platform: SurfacePlatform,
-    app_id: UUID | None,
+    app_name: str | None,
     ctx,
 ) -> SurfaceTelegramConfig:
-    if app_id is None:
+    resolved_name = str(app_name or "").strip()
+    if not resolved_name:
         return SurfaceTelegramConfig()
     if platform is not SurfacePlatform.TELEGRAM:
         raise AgentSurfaceValidationError(
             "A Telegram Mini App can only be set on a Telegram surface"
         )
-    app = await get_ready_pod_app(
+    app = await get_ready_pod_app_by_name(
         uow=uow,
         pod_id=pod_id,
-        app_id=app_id,
+        app_name=resolved_name,
         ctx=ctx,
     )
     if app is None:
         raise AgentSurfaceValidationError(
             "The selected Telegram Mini App must belong to this pod and be deployed"
         )
-    return SurfaceTelegramConfig(app_id=app.id)
+    return SurfaceTelegramConfig(app_name=app.name)
 
 
 async def resolve_surface_config(
@@ -118,7 +119,7 @@ async def resolve_surface_config(
         uow=uow,
         pod_id=pod_id,
         platform=platform,
-        app_id=config_input.telegram.app_id,
+        app_name=config_input.telegram.app_name,
         ctx=ctx,
     )
     return config
@@ -160,7 +161,7 @@ async def merge_surface_config(
             uow=uow,
             pod_id=pod_id,
             platform=platform,
-            app_id=config_input.telegram.app_id,
+            app_name=config_input.telegram.app_name,
             ctx=ctx,
         )
     return existing.model_copy(update=updates)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -196,6 +196,7 @@ async def test_configure_managed_bot_sets_selected_app_as_web_app(monkeypatch):
         manager_username="@lemma_manager_bot",
     )
     app_id = uuid4()
+    app_name = "support-queue"
     setup = await service.start_setup(
         user_id=uuid4(),
         organization_id=uuid4(),
@@ -203,7 +204,7 @@ async def test_configure_managed_bot_sets_selected_app_as_web_app(monkeypatch):
         surface_name="telegram-support",
         agent_id=None,
         surface_config=SurfaceConfig(
-            telegram=SurfaceTelegramConfig(app_id=app_id)
+            telegram=SurfaceTelegramConfig(app_name=app_name)
         ),
         is_enabled=True,
         pod_name="Customer Success",
@@ -213,16 +214,17 @@ async def test_configure_managed_bot_sets_selected_app_as_web_app(monkeypatch):
         "app.modules.agent_surfaces.services.managed_bot_configurator.TelegramClient",
         lambda **_: child,
     )
+    mini_app_resolver = AsyncMock(
+        return_value=TelegramMiniApp(
+            app_id=app_id,
+            name=app_name,
+            url="https://support.apps.example.test",
+        )
+    )
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.managed_bot_configurator."
         "resolve_telegram_mini_app",
-        AsyncMock(
-            return_value=TelegramMiniApp(
-                app_id=app_id,
-                name="support-queue",
-                url="https://support.apps.example.test",
-            )
-        ),
+        mini_app_resolver,
     )
 
     await service._configure_managed_bot(
@@ -230,6 +232,11 @@ async def test_configure_managed_bot_sets_selected_app_as_web_app(monkeypatch):
         bot_token="child-token",
     )
 
+    mini_app_resolver.assert_awaited_once_with(
+        uow=ANY,
+        pod_id=setup.pod_id,
+        app_name=app_name,
+    )
     calls = {call.args[0]: call.args[1] for call in child.call.await_args_list}
     assert calls["setChatMenuButton"]["menu_button"] == {
         "type": "web_app",
