@@ -91,7 +91,7 @@ def _duplicate_identity_error() -> IntegrityError:
         "INSERT INTO accounts ...",
         {},
         Exception(
-            'duplicate key value violates unique constraint '
+            "duplicate key value violates unique constraint "
             '"uq_accounts_provider_identity"'
         ),
     )
@@ -102,7 +102,7 @@ def _unrelated_error() -> IntegrityError:
         "INSERT INTO accounts ...",
         {},
         Exception(
-            'duplicate key value violates unique constraint '
+            "duplicate key value violates unique constraint "
             '"uq_accounts_default_per_auth_config"'
         ),
     )
@@ -114,6 +114,16 @@ async def test_create_translates_duplicate_identity_violation():
 
     with pytest.raises(AccountAlreadyConnectedError):
         await repo.create(_account_entity())
+
+
+async def test_write_model_ignores_read_side_connector_relationship():
+    session = _FakeSession()
+    repo = AccountRepository(uow=_FakeUow(session), encryption=_NoopEncryption())
+
+    model = await repo._to_model(_account_entity(connector=None))
+
+    assert model.connector_id == "asana"
+    assert "connector" not in model.__dict__
 
 
 async def test_create_reraises_unrelated_integrity_error():
