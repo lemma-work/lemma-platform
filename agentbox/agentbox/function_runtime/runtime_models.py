@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from .types import JsonObject
 
@@ -22,15 +22,11 @@ class RuntimeIdentity(RuntimeModel):
     organization_id: UUID | None = None
 
 
-class RunClaim(RuntimeModel):
-    run_id: UUID
-    callback_token: str = Field(min_length=32)
-    artifact_url: str
-    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    input_data: JsonObject
+class RuntimeInvocation(RuntimeModel):
+    protocol_version: Literal[2] = 2
+    input: JsonObject
     config: JsonObject | None = None
     identity: RuntimeIdentity
-    lemma_token: str
     lemma_base_url: str
     deadline_at: datetime
 
@@ -38,6 +34,12 @@ class RunClaim(RuntimeModel):
 class RunAccepted(RuntimeModel):
     accepted: Literal[True] = True
     run_id: UUID
+
+
+class FunctionSchemaSet(RuntimeModel):
+    input: JsonObject
+    output: JsonObject
+    config: JsonObject | None = None
 
 
 class FunctionArtifactManifest(RuntimeModel):
@@ -70,6 +72,16 @@ class RuntimeFailure(RuntimeModel):
     traceback: tuple[str, ...] = ()
 
 
+class SchemaInspection(RuntimeModel):
+    ok: bool
+    schemas: FunctionSchemaSet | None = None
+    error: RuntimeFailure | None = None
+
+    def model_post_init(self, _context: Any) -> None:
+        if self.ok != (self.schemas is not None) or self.ok == (self.error is not None):
+            raise ValueError("schema inspection result is inconsistent")
+
+
 class WorkerResult(RuntimeModel):
     ok: bool
     output_data: JsonObject | None = None
@@ -88,11 +100,14 @@ class WorkerResponse(WorkerResult):
 
 class WorkerReady(RuntimeModel):
     ready: bool
+    schemas: FunctionSchemaSet | None = None
     error: RuntimeFailure | None = None
 
     def model_post_init(self, _context: Any) -> None:
         if self.ready == (self.error is not None):
             raise ValueError("ready workers cannot contain an error")
+        if not self.ready and self.schemas is not None:
+            raise ValueError("failed workers cannot return schemas")
 
 
 class TerminalReport(RuntimeModel):

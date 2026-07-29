@@ -165,7 +165,7 @@
           },
           "output_limit_bytes": {
             "default": 1048576,
-            "maximum": 67108864.0,
+            "maximum": 2097152.0,
             "minimum": 1.0,
             "title": "Output Limit Bytes",
             "type": "integer"
@@ -250,6 +250,77 @@
           "mode"
         ],
         "title": "FileStatResponse",
+        "type": "object"
+      },
+      "FunctionRuntimeLeaseRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "required_valid_until": {
+            "format": "date-time",
+            "title": "Required Valid Until",
+            "type": "string"
+          }
+        },
+        "required": [
+          "required_valid_until",
+          "deadline_at"
+        ],
+        "title": "FunctionRuntimeLeaseRequest",
+        "type": "object"
+      },
+      "FunctionRuntimeLeaseResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allocation_epoch": {
+            "minimum": 1.0,
+            "title": "Allocation Epoch",
+            "type": "integer"
+          },
+          "allocation_id": {
+            "format": "uuid",
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "logical_id": {
+            "format": "uuid",
+            "title": "Logical Id",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/ProfileRefModel"
+          },
+          "request_headers": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeRequestHeaderResponse"
+            },
+            "title": "Request Headers",
+            "type": "array"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "logical_id",
+          "allocation_id",
+          "allocation_epoch",
+          "profile",
+          "url",
+          "request_headers",
+          "expires_at"
+        ],
+        "title": "FunctionRuntimeLeaseResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -396,7 +467,7 @@
             "type": "string"
           },
           "output_limit_bytes": {
-            "maximum": 67108864.0,
+            "maximum": 2097152.0,
             "minimum": 1.0,
             "title": "Output Limit Bytes",
             "type": "integer"
@@ -642,6 +713,29 @@
         "title": "ResizeProcessRequest",
         "type": "object"
       },
+      "RuntimeRequestHeaderResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$",
+            "title": "Name",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 65536,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "RuntimeRequestHeaderResponse",
+        "type": "object"
+      },
       "SandboxDesiredState": {
         "enum": [
           "present",
@@ -794,7 +888,7 @@
           },
           "output_limit_bytes": {
             "default": 1048576,
-            "maximum": 67108864.0,
+            "maximum": 2097152.0,
             "minimum": 1.0,
             "title": "Output Limit Bytes",
             "type": "integer"
@@ -986,6 +1080,72 @@
         "summary": "Health Live"
       }
     },
+    "/sandboxes/function/{logical_id}/runtime:lease": {
+      "post": {
+        "operationId": "post_sandboxes_function_logical_id_runtime_lease",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "logical_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Logical Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-api-key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FunctionRuntimeLeaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FunctionRuntimeLeaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Lease Function Runtime"
+      }
+    },
     "/sandboxes/{workload_kind}/{logical_id}": {
       "delete": {
         "operationId": "delete_sandboxes_workload_kind_logical_id",
@@ -1133,6 +1293,16 @@
               "format": "uuid",
               "title": "Logical Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "verify_ready",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Verify Ready",
+              "type": "boolean"
             }
           },
           {

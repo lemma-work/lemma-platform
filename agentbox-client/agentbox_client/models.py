@@ -71,6 +71,21 @@ class PortAccessGrant(StrictModel):
     expires_at: datetime
 
 
+class RuntimeRequestHeader(StrictModel):
+    name: str
+    value: str = Field(repr=False)
+
+
+class FunctionRuntimeLease(StrictModel):
+    logical_id: UUID
+    allocation_id: UUID
+    allocation_epoch: int
+    profile: ProfileRef
+    url: str
+    request_headers: tuple[RuntimeRequestHeader, ...] = Field(repr=False)
+    expires_at: datetime
+
+
 class ProcessState(StrEnum):
     RESERVED = "reserved"
     STARTING = "starting"

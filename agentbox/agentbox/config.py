@@ -1,4 +1,6 @@
-from pydantic import AliasChoices, Field
+from __future__ import annotations
+
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -131,6 +133,16 @@ class Settings(BaseSettings):
         ),
     )
     agentbox_e2b_request_timeout_seconds: float = Field(default=20, ge=1, le=120)
+    agentbox_e2b_workspace_timeout_seconds: int = Field(
+        default=3600,
+        ge=600,
+        le=24 * 60 * 60,
+        description=(
+            "Provider safety timeout for an unmanaged E2B workspace. It must "
+            "comfortably exceed AgentBox idle cleanup so AgentBox remains the "
+            "normal pause/resume authority."
+        ),
+    )
     agentbox_workspace_idle_seconds: float = Field(default=300, ge=1)
     agentbox_function_idle_seconds: float = Field(default=300, ge=1)
     agentbox_cleanup_interval_seconds: float = Field(default=30, ge=1)
@@ -138,11 +150,33 @@ class Settings(BaseSettings):
     agentbox_reconcile_operation_timeout_seconds: float = Field(
         default=20, ge=1, le=120
     )
-    agentbox_ambiguous_create_absence_grace_seconds: float = Field(
-        default=30, ge=1, le=600
+    agentbox_reserved_create_stale_seconds: float = Field(
+        default=30,
+        ge=5,
+        le=300,
+        description=(
+            "Age after which a manager reservation with no provider dispatch "
+            "is reclaimed safely."
+        ),
+    )
+    agentbox_dispatched_create_stale_seconds: float = Field(
+        default=15 * 60,
+        ge=30,
+        le=24 * 60 * 60,
+        description=(
+            "Age after which an unfinalized provider create dispatch is treated "
+            "as ambiguous and reconciled by exact allocation metadata."
+        ),
     )
     agentbox_reconcile_claim_seconds: float = Field(default=30, ge=5, le=300)
-    agentbox_workspace_retention_seconds: float = Field(default=604800, ge=1)
+    agentbox_workspace_retention_seconds: float = Field(
+        default=7 * 24 * 60 * 60,
+        ge=1,
+        description=(
+            "Total workspace inactivity before physical sandbox and storage "
+            "are destroyed. The logical workspace remains recreatable."
+        ),
+    )
     agentbox_add_host_gateway: bool = False
     agentbox_host_alias: str | None = None
     agentbox_local_runtime_cli: str = ""
@@ -156,6 +190,28 @@ class Settings(BaseSettings):
     agentbox_local_callback_url: str | None = None
     agentbox_local_callback_health_path: str = "/health"
     agentbox_local_callback_timeout_seconds: float = Field(default=30, ge=1, le=300)
+
+    @model_validator(mode="after")
+    def validate_workspace_lifecycle(self) -> Settings:
+        if (
+            self.agentbox_workspace_retention_seconds
+            <= self.agentbox_workspace_idle_seconds
+        ):
+            raise ValueError(
+                "AGENTBOX_WORKSPACE_RETENTION_SECONDS must exceed "
+                "AGENTBOX_WORKSPACE_IDLE_SECONDS"
+            )
+        if (
+            self.agentbox_provider == "e2b"
+            and self.agentbox_e2b_workspace_timeout_seconds
+            <= self.agentbox_workspace_idle_seconds
+            + 2 * self.agentbox_cleanup_interval_seconds
+        ):
+            raise ValueError(
+                "AGENTBOX_E2B_WORKSPACE_TIMEOUT_SECONDS must exceed idle cleanup "
+                "by at least two cleanup intervals"
+            )
+        return self
 
     @property
     def agentbox_e2b_function_allow_out_hosts(self) -> tuple[str, ...]:

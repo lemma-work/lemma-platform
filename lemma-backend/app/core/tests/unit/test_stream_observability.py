@@ -1,0 +1,77 @@
+from __future__ import annotations
+
+from unittest.mock import AsyncMock
+
+import pytest
+
+from app.core.config import settings
+from app.core.infrastructure.events import stream_observability as observation
+
+
+class _Logger:
+    def __init__(self) -> None:
+        self.records: list[tuple[str, dict]] = []
+
+    def info(self, event: str, **fields) -> None:
+        self.records.append((event, fields))
+
+
+@pytest.mark.asyncio
+async def test_snapshot_accepts_normalized_last_delivered_id(monkeypatch) -> None:
+    client = AsyncMock()
+    client.exists.return_value = 1
+    client.xinfo_stream.return_value = {
+        "length": 120,
+        "last-generated-id": b"1000000-0",
+    }
+    client.xinfo_groups.return_value = [
+        {
+            "name": b"workers",
+            "consumers": 2,
+            "pending": 1,
+            "last-delivered-id": b"900000-0",
+            "lag": 42,
+        }
+    ]
+    client.xpending_range.return_value = [
+        {"message_id": b"800000-0", "time_since_delivered": 1_234}
+    ]
+    client.xinfo_consumers.return_value = [
+        {"name": b"active", "idle": 100},
+        {"name": b"stale", "idle": 1_000_000},
+    ]
+    client.memory_usage.return_value = 4_096
+    logger = _Logger()
+    monkeypatch.setattr(observation, "logger", logger)
+    monkeypatch.setattr(observation.time, "time", lambda: 1_000.0)
+
+    await observation._snapshot_stream(client, "function_run_events")
+
+    assert logger.records == [
+        (
+            "redis.stream.snapshot",
+            {
+                "stream": "function_run_events",
+                "group": "workers",
+                "length": 120,
+                "delayed": 0,
+                "caught_up": False,
+                "pending": 1,
+                "reported_lag": 42,
+                "last_delivered_age_seconds": 100,
+                "oldest_pending_ms": 1_234,
+                "consumers": 2,
+                "active_consumers": 1,
+                "memory_bytes": 4_096,
+                "maxlen": 50_000,
+            },
+        )
+    ]
+
+
+def test_streaq_queue_is_observed_but_not_managed(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "worker_queue_name", "priority")
+
+    streams = observation.observable_streams()
+
+    assert "streaq:priority:queues:normal" in streams

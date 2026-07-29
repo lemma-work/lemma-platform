@@ -282,6 +282,36 @@ async def test_write_stdin_internal_falls_back_to_default_session_when_mapping_e
 
 
 @pytest.mark.asyncio
+async def test_write_stdin_setup_failure_preserves_process_binding(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    runtime = _FakeRuntime({})
+    runtime.process_sessions["proc-1"] = "original-session"
+
+    async def fail_get_session(**kwargs):
+        del kwargs
+        raise RuntimeError("agentbox manager returned 500")
+
+    runtime.get_session = fail_get_session  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        workspace_cli,
+        "get_workspace_tool_runtime",
+        lambda: runtime,
+    )
+
+    result = await workspace_cli.write_stdin_internal(
+        _context(),
+        WriteStdinRequest(process_id="proc-1", chars=""),
+    )
+
+    assert result.success is False
+    assert result.completed is False
+    assert result.process_id == "proc-1"
+    assert runtime.process_sessions == {"proc-1": "original-session"}
+    assert runtime.cleared_processes == []
+
+
+@pytest.mark.asyncio
 async def test_terminate_process_internal_routes_by_process_id(
     monkeypatch: pytest.MonkeyPatch,
 ):

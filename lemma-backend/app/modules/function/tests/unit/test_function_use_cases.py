@@ -22,6 +22,7 @@ from app.modules.function.domain.entities import (
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
+    FunctionSchemaSet,
     FunctionStatus,
     FunctionType,
 )
@@ -96,9 +97,13 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
     captured = {}
     operations: list[str] = []
 
-    async def _fake_extract(user_id, code, code_path, pod_id, function_id):
+    async def _fake_extract(function, artifact, *, user_id):
         captured["open"] = factory.state["open"]
-        return ({"a": 1}, {"b": 2}, None)
+        assert function is created
+        assert artifact.revision_hash == f"sha256:{'b' * 64}"
+        assert user_id == created.user_id
+        operations.append("schemas")
+        return FunctionSchemaSet(input={"a": 1}, output={"b": 2})
 
     compiler.extract_schemas.side_effect = _fake_extract
 
@@ -138,7 +143,7 @@ async def test_create_extracts_schemas_with_no_connection_held(monkeypatch):
     assert factory.state["open"] is False
     # Resolve (insert) + persist happened in distinct short UoWs.
     assert factory.state["opens"] >= 2
-    assert operations == ["artifact", "source"]
+    assert operations == ["artifact", "schemas", "source"]
     assert created.code_path == f"revisions/{'b' * 64}/function.py"
     assert result is created
 

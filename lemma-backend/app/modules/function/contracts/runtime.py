@@ -15,11 +15,6 @@ class RuntimeContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class RuntimeClaimRequest(RuntimeContract):
-    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    input_data: JsonObject
-
-
 class RuntimeIdentity(RuntimeContract):
     user_id: UUID
     user_email: str | None = None
@@ -29,15 +24,11 @@ class RuntimeIdentity(RuntimeContract):
     organization_id: UUID | None = None
 
 
-class RuntimeClaimResponse(RuntimeContract):
-    run_id: UUID
-    callback_token: str = Field(min_length=32)
-    artifact_url: str
-    revision_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    input_data: JsonObject
+class RuntimeInvocationRequest(RuntimeContract):
+    protocol_version: Literal[2] = 2
+    input: JsonObject
     config: JsonObject | None = None
     identity: RuntimeIdentity
-    lemma_token: str
     lemma_base_url: str
     deadline_at: datetime
 
@@ -51,6 +42,26 @@ class RuntimeFailure(RuntimeContract):
     name: str = Field(min_length=1, max_length=256)
     message: str = Field(max_length=16_384)
     traceback: tuple[str, ...] = Field(default=(), max_length=256)
+
+
+class RuntimeFunctionSchemaSet(RuntimeContract):
+    input: JsonObject
+    output: JsonObject
+    config: JsonObject | None = None
+
+
+class RuntimeSchemaInspection(RuntimeContract):
+    ok: bool
+    schemas: RuntimeFunctionSchemaSet | None = None
+    error: RuntimeFailure | None = None
+
+    @model_validator(mode="after")
+    def validate_inspection_shape(self) -> RuntimeSchemaInspection:
+        if self.ok != (self.schemas is not None) or self.ok == (
+            self.error is not None
+        ):
+            raise ValueError("schema inspection result is inconsistent")
+        return self
 
 
 class RuntimeTerminalRequest(RuntimeContract):

@@ -18,6 +18,7 @@ from lemma_sdk.runtime import FunctionInvocationBinding, function_invocation_sco
 
 from .runtime_models import (
     FunctionArtifactManifest,
+    FunctionSchemaSet,
     RuntimeFailure,
     WorkerReady,
     WorkerRequest,
@@ -223,7 +224,10 @@ def serve(root: Path) -> int:
     except BaseException as exc:
         _write_protocol(protocol_out, WorkerReady(ready=False, error=_failure(exc)))
         return 1
-    _write_protocol(protocol_out, WorkerReady(ready=True))
+    _write_protocol(
+        protocol_out,
+        WorkerReady(ready=True, schemas=_revision_schemas(revision)),
+    )
     for line in sys.stdin.buffer:
         if not line.strip():
             continue
@@ -236,15 +240,25 @@ def serve(root: Path) -> int:
     return 0
 
 
+def _revision_schemas(revision: LoadedRevision) -> FunctionSchemaSet:
+    return FunctionSchemaSet(
+        input=revision.input_model.model_json_schema(),
+        output=revision.output_model.model_json_schema(),
+        config=(
+            revision.config_model.model_json_schema()
+            if revision.config_model is not None
+            else None
+        ),
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--serve", action="store_true")
+    parser.add_argument("--serve", action="store_true", required=True)
     parser.add_argument("--artifact-root", type=Path)
     args = parser.parse_args()
-    if not args.serve:
-        parser.error("--serve is required")
     if args.artifact_root is None:
-        parser.error("--artifact-root is required with --serve")
+        parser.error("--artifact-root is required")
     raise SystemExit(serve(args.artifact_root))
 
 

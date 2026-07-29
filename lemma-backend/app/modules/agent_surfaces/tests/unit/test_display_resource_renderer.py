@@ -3,6 +3,8 @@ from __future__ import annotations
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
+import pytest
+
 from app.core.config import settings
 from app.modules.agent.tools.user_interaction.models import (
     DisplayResourceRequest,
@@ -122,3 +124,70 @@ def test_display_resource_renderer_links_inline_widget_to_lemma(monkeypatch):
         "toolCallId": ["tool-widget-inline"],
     }
     assert "External widget" not in plan.to_plain_text()
+
+
+@pytest.mark.parametrize(
+    ("request_payload", "path_suffix", "expected_query"),
+    [
+        (
+            {"type": "AGENT", "name": "incident triage"},
+            "/agents/incident%20triage",
+            {},
+        ),
+        ({"type": "AGENT"}, "/ai", {}),
+        (
+            {"type": "FUNCTION", "name": "summarize/incident"},
+            "/functions/summarize%2Fincident",
+            {},
+        ),
+        ({"type": "FUNCTION"}, "/functions", {}),
+        (
+            {"type": "WORKFLOW", "name": "incident response"},
+            "/flows/incident%20response",
+            {},
+        ),
+        ({"type": "WORKFLOW"}, "/flows", {}),
+        (
+            {"type": "APP", "name": "incident dashboard"},
+            "/app/view",
+            {"page": ["incident dashboard"]},
+        ),
+        ({"type": "APP"}, "/app/pages", {}),
+        (
+            {"type": "SCHEDULE", "name": "daily triage"},
+            "/schedules",
+            {},
+        ),
+        ({"type": "SCHEDULE"}, "/schedules", {}),
+        ({"type": "TABLE", "name": "incident log"}, "/data", {"tab": ["incident log"]}),
+        ({"type": "TABLE"}, "/data", {}),
+        (
+            {"type": "FILE", "path": "/me/reports/incident review.pdf"},
+            "/files",
+            {"file": ["/me/reports/incident review.pdf"]},
+        ),
+        ({"type": "FILE"}, "/files", {}),
+        ({"type": "WIDGET", "content": "<div>Ready</div>"}, "/widgets/view", {}),
+    ],
+)
+def test_display_resource_internal_urls_match_frontend_route_contract(
+    monkeypatch,
+    request_payload,
+    path_suffix,
+    expected_query,
+):
+    """Every internal link shared by all surface adapters targets a real UI route."""
+    monkeypatch.setattr(settings, "frontend_url", "https://app.example.test/")
+    pod_id = uuid4()
+
+    plan = build_display_resource_render_plan(
+        pod_id=pod_id,
+        request=DisplayResourceRequest.model_validate(request_payload),
+    )
+
+    assert plan.primary_action is not None
+    parsed = urlparse(plan.primary_action.url)
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "app.example.test"
+    assert parsed.path == f"/pod/{pod_id}{path_suffix}"
+    assert parse_qs(parsed.query) == expected_query

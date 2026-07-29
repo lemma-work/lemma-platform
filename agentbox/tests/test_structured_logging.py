@@ -137,6 +137,7 @@ def test_dependency_records_keep_message_and_follow_configured_level(
             "request completed authorization=Bearer abc.def.ghi "
             "url=https://user:password@example.test/path?token=secret"
         )
+        dependency.warning("request failed token=secret")
     finally:
         root.handlers = original_handlers
         root.setLevel(original_level)
@@ -145,11 +146,8 @@ def test_dependency_records_keep_message_and_follow_configured_level(
     lines = [json.loads(line) for line in output.getvalue().splitlines()]
     assert len(lines) == 1
     assert lines[0]["logger"] == "httpx"
-    assert lines[0]["level"] == "info"
-    assert lines[0]["event"] == (
-        "request completed authorization=[REDACTED] [REDACTED] "
-        "url=https://[REDACTED]@example.test/path?token=%5BREDACTED%5D"
-    )
+    assert lines[0]["level"] == "warning"
+    assert lines[0]["event"] == "request failed token=[REDACTED]"
     assert "abc.def.ghi" not in output.getvalue()
     assert "password" not in output.getvalue()
     assert "secret" not in output.getvalue()

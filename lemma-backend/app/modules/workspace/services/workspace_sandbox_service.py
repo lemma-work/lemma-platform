@@ -8,7 +8,7 @@ from typing import Optional
 from uuid import UUID, uuid4
 
 from app.core.config import settings
-from app.core.request_context import correlation_headers
+from app.core.request_context import correlation_headers, create_inherited_task
 from agentbox_client import (
     AgentBoxApiError,
     AgentBoxClient,
@@ -67,6 +67,13 @@ class WorkspaceSandboxService:
     # Process-shared manager client, keyed by (base_url, api_key). Reused across
     # tool calls so each call doesn't open a fresh httpx connection pool.
     _shared_manager_client: "tuple[tuple[str, str, int], AgentBoxClient] | None" = None
+    _inflight_ensures: dict[
+        tuple[int, str, UUID], asyncio.Task[SandboxInfo]
+    ] = {}
+    _inflight_directories: dict[
+        tuple[int, str, UUID, str, int, str], asyncio.Task[SandboxInfo]
+    ] = {}
+    _stopping: dict[tuple[int, str, UUID], asyncio.Event] = {}
 
     def __init__(
         self,
@@ -98,6 +105,12 @@ class WorkspaceSandboxService:
     async def close_shared_manager_client(cls) -> None:
         cached = cls._shared_manager_client
         cls._shared_manager_client = None
+        directory_tasks = tuple(cls._inflight_directories.values())
+        for task in directory_tasks:
+            task.cancel()
+        if directory_tasks:
+            await asyncio.gather(*directory_tasks, return_exceptions=True)
+        cls._inflight_directories.clear()
         if cached is not None:
             await cached[1].close()
 
@@ -155,8 +168,29 @@ class WorkspaceSandboxService:
             workspace_url=sandbox_info.endpoint if sandbox_info else None,
         )
 
-    async def get_or_create_sandbox(self, user_id: UUID) -> SandboxInfo:
-        """Ensure a ready sandbox; AgentBox owns allocation concurrency."""
+    async def _get_or_create_sandbox_once(
+        self,
+        user_id: UUID,
+        *,
+        force_reconcile: bool,
+    ) -> SandboxInfo:
+        # A read is cheap and cannot consume create admission. Only issue the
+        # idempotent PUT when AgentBox says the sandbox is absent/not ready.
+        existing = None if force_reconcile else await self._get_sandbox_info(user_id)
+        if existing is not None and existing.status == "RUNNING":
+            await self.state_store.mark_running(
+                runtime=self.runtime,
+                user_id=user_id,
+                pod_name=None,
+                container_name=existing.sandbox_id,
+                namespace=existing.namespace,
+                workspace_url=existing.endpoint,
+            )
+            await self._touch_workspace_activity(
+                user_id=user_id,
+                sandbox_info=existing,
+            )
+            return existing
         await self.state_store.mark_creating(runtime=self.runtime, user_id=user_id)
         try:
             sandbox_info = await self._ensure_sandbox_info(user_id)
@@ -181,11 +215,74 @@ class WorkspaceSandboxService:
         )
         return sandbox_info
 
+    async def get_or_create_sandbox(
+        self,
+        user_id: UUID,
+        *,
+        force_reconcile: bool = False,
+    ) -> SandboxInfo:
+        """Ensure one ready sandbox per user without concurrent PUT herds."""
+        key = (id(asyncio.get_running_loop()), self.runtime, user_id)
+        while stopping := self._stopping.get(key):
+            await stopping.wait()
+        # There is deliberately no await between the stop-marker check and
+        # singleflight insertion. On one event loop, stop cannot interleave in
+        # this critical section.
+        task = self._inflight_ensures.get(key)
+        if task is None:
+            task = create_inherited_task(
+                self._get_or_create_sandbox_once(
+                    user_id,
+                    force_reconcile=force_reconcile,
+                ),
+                name=f"workspace-sandbox-ensure:{user_id}",
+            )
+            self._inflight_ensures[key] = task
+
+            def clear(completed: asyncio.Task[SandboxInfo]) -> None:
+                if self._inflight_ensures.get(key) is completed:
+                    self._inflight_ensures.pop(key, None)
+
+            task.add_done_callback(clear)
+        return await asyncio.shield(task)
+
     async def stop_sandbox(self, user_id: UUID) -> None:
-        sandbox_info = await self._get_sandbox_info(user_id)
-        await self._delete_sandbox(user_id, sandbox_info)
-        await self.activity_store.remove(runtime=self.runtime, user_id=user_id)
-        await self.state_store.mark_stopped(runtime=self.runtime, user_id=user_id)
+        key = (id(asyncio.get_running_loop()), self.runtime, user_id)
+        existing_stop = self._stopping.get(key)
+        if existing_stop is not None:
+            await existing_stop.wait()
+            return
+
+        stopped = asyncio.Event()
+        self._stopping[key] = stopped
+        try:
+            directory_tasks = tuple(
+                task
+                for cache_key, task in self._inflight_directories.items()
+                if cache_key[:3] == key
+            )
+            for task in directory_tasks:
+                task.cancel()
+            if directory_tasks:
+                await asyncio.gather(*directory_tasks, return_exceptions=True)
+            inflight = self._inflight_ensures.get(key)
+            if inflight is not None:
+                try:
+                    await asyncio.shield(inflight)
+                except Exception:
+                    # Stop still inspects and releases whatever the provider owns.
+                    pass
+            sandbox_info = await self._get_sandbox_info(user_id)
+            await self._delete_sandbox(user_id, sandbox_info)
+            await self.activity_store.remove(runtime=self.runtime, user_id=user_id)
+            await self.state_store.mark_stopped(
+                runtime=self.runtime,
+                user_id=user_id,
+            )
+        finally:
+            if self._stopping.get(key) is stopped:
+                self._stopping.pop(key, None)
+            stopped.set()
 
     async def create_browser_access(
         self,
@@ -325,8 +422,52 @@ class WorkspaceSandboxService:
         deadline_at = datetime.now(timezone.utc) + timedelta(
             seconds=_SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS
         )
+        sandbox_info = await self.get_or_create_sandbox(user_id)
+        cache_key = self._directory_cache_key(user_id, path, sandbox_info)
+        if cache_key is None:
+            return await self._create_workspace_directory_until_ready(
+                user_id,
+                path,
+                sandbox_info=sandbox_info,
+                deadline_at=deadline_at,
+            )
+
+        task = self._inflight_directories.get(cache_key)
+        if task is None:
+            task = create_inherited_task(
+                self._create_workspace_directory_until_ready(
+                    user_id,
+                    path,
+                    sandbox_info=sandbox_info,
+                    deadline_at=deadline_at,
+                ),
+                name=f"workspace-directory-ensure:{user_id}:{path}",
+            )
+            self._inflight_directories[cache_key] = task
+
+            def clear(completed: asyncio.Task[SandboxInfo]) -> None:
+                if self._inflight_directories.get(cache_key) is completed:
+                    self._inflight_directories.pop(cache_key, None)
+
+            task.add_done_callback(clear)
+
+        return await asyncio.shield(task)
+
+    async def _create_workspace_directory_until_ready(
+        self,
+        user_id: UUID,
+        path: str,
+        *,
+        sandbox_info: SandboxInfo,
+        deadline_at: datetime,
+    ) -> SandboxInfo:
+        force_reconcile = False
         while datetime.now(timezone.utc) < deadline_at:
-            sandbox_info = await self.get_or_create_sandbox(user_id)
+            if force_reconcile:
+                sandbox_info = await self.get_or_create_sandbox(
+                    user_id,
+                    force_reconcile=True,
+                )
             try:
                 await self._get_manager_client().create_directory(
                     agentbox_sandbox_id(user_id),
@@ -346,10 +487,31 @@ class WorkspaceSandboxService:
                     break
                 delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
                 await asyncio.sleep(min(delay, remaining))
+                force_reconcile = True
                 continue
             return sandbox_info
         raise TimeoutError(
             f"workspace sandbox {agentbox_sandbox_id(user_id)} did not become usable"
+        )
+
+    def _directory_cache_key(
+        self,
+        user_id: UUID,
+        path: str,
+        sandbox_info: SandboxInfo,
+    ) -> tuple[int, str, UUID, str, int, str] | None:
+        if (
+            sandbox_info.allocation_id is None
+            or sandbox_info.allocation_epoch is None
+        ):
+            return None
+        return (
+            id(asyncio.get_running_loop()),
+            self.runtime,
+            user_id,
+            sandbox_info.allocation_id,
+            sandbox_info.allocation_epoch,
+            path,
         )
 
     def _get_manager_client(self) -> AgentBoxClient:

@@ -61,12 +61,72 @@ async def test_client_uses_typed_workload_route_and_absolute_deadline() -> None:
         profile=ProfileRef(name="workspace-python-v1", digest=f"sha256:{'a' * 64}"),
         admission_class=AdmissionClass.INTERACTIVE,
         deadline_at=deadline(),
+        verify_ready=True,
     )
 
     assert result.ready is True
     assert captured[0].url.path == f"/sandboxes/workspace/{logical_id}"
+    assert captured[0].url.params["verify_ready"] == "true"
     assert captured[0].headers["X-API-Key"] == "secret"
     assert b'"deadline_at"' in captured[0].content
+    assert b'"verify_ready"' not in captured[0].content
+    await http.aclose()
+
+
+async def test_client_leases_provider_neutral_function_runtime_endpoint() -> None:
+    logical_id = uuid4()
+    allocation_id = uuid4()
+    required_valid_until = deadline() + timedelta(minutes=4)
+    request_deadline = deadline()
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "logical_id": str(logical_id),
+                "allocation_id": str(allocation_id),
+                "allocation_epoch": 2,
+                "profile": {
+                    "name": "function-python-v1",
+                    "digest": f"sha256:{'f' * 64}",
+                },
+                "url": "https://8090-sandbox.e2b.app/",
+                "request_headers": [
+                    {
+                        "name": "E2B-Traffic-Access-Token",
+                        "value": "provider-secret",
+                    }
+                ],
+                "expires_at": required_valid_until.isoformat(),
+            },
+        )
+
+    http = httpx.AsyncClient(
+        base_url="http://agentbox.test", transport=httpx.MockTransport(handler)
+    )
+    client = AgentBoxClient(
+        base_url="http://agentbox.test", api_key="manager-secret", client=http
+    )
+
+    lease = await client.lease_function_runtime(
+        logical_id,
+        required_valid_until=required_valid_until,
+        deadline_at=request_deadline,
+    )
+
+    assert lease.allocation_id == allocation_id
+    assert lease.allocation_epoch == 2
+    assert lease.url == "https://8090-sandbox.e2b.app/"
+    assert lease.request_headers[0].value == "provider-secret"
+    assert "provider-secret" not in repr(lease)
+    request = captured[0]
+    assert request.method == "POST"
+    assert request.url.path == f"/sandboxes/function/{logical_id}/runtime:lease"
+    assert request.headers["X-API-Key"] == "manager-secret"
+    assert request_deadline.isoformat().encode() in request.content
+    assert required_valid_until.isoformat().encode() in request.content
     await http.aclose()
 
 

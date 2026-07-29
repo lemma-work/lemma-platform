@@ -92,6 +92,15 @@ def registered_stream_groups() -> set[tuple[str, str]]:
     return set(_REGISTERED_STREAM_GROUPS | _DECLARED_STREAM_GROUPS)
 
 
+def registered_groups_for_stream(stream: str) -> set[str]:
+    """Return the declared consumer groups for one static stream name."""
+    return {
+        group
+        for declared_stream, group in registered_stream_groups()
+        if declared_stream == stream
+    }
+
+
 async def ensure_stream_groups(redis_client, stream: str) -> int:
     """Strictly ensure every declared group for one stream before publication."""
     created = 0

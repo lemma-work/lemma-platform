@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -38,6 +38,8 @@ from agentbox.domain import (
     PortAccessGrant,
     PortProtocol,
 )
+if TYPE_CHECKING:
+    from agentbox.port_access import FunctionRuntimeEndpointLease
 
 
 class StrictApiModel(BaseModel):
@@ -120,7 +122,7 @@ class StartProcessModel(StrictApiModel):
     cwd: str = Field(min_length=1, max_length=4096, pattern=r"^/")
     environment: tuple[EnvironmentVariableModel, ...] = ()
     tty: TerminalSizeModel | None = None
-    output_limit_bytes: int = Field(default=1048576, ge=1, le=67108864)
+    output_limit_bytes: int = Field(default=1048576, ge=1, le=2097152)
     deadline_at: datetime
     initial_input_base64: str | None = Field(
         default=None,
@@ -176,7 +178,7 @@ class ProcessRefResponse(StrictApiModel):
     state: ProcessState
     cwd: str
     tty: bool
-    output_limit_bytes: int = Field(ge=1, le=64 * 1024 * 1024)
+    output_limit_bytes: int = Field(ge=1, le=2 * 1024 * 1024)
     deadline_at: datetime
     started_at: datetime | None
     completed_at: datetime | None
@@ -298,7 +300,7 @@ class ExecutePythonModel(StrictApiModel):
     operation_id: UUID
     code: str = Field(min_length=1, max_length=4 * 1024 * 1024)
     environment: tuple[EnvironmentVariableModel, ...] = ()
-    output_limit_bytes: int = Field(default=1024 * 1024, ge=1, le=64 * 1024 * 1024)
+    output_limit_bytes: int = Field(default=1024 * 1024, ge=1, le=2 * 1024 * 1024)
     deadline_at: datetime
 
     @field_validator("deadline_at")
@@ -384,6 +386,61 @@ class PortAccessResponse(StrictApiModel):
             protocol=grant.protocol,
             url=grant.url,
             expires_at=grant.expires_at,
+        )
+
+
+class FunctionRuntimeLeaseRequest(StrictApiModel):
+    required_valid_until: datetime
+    deadline_at: datetime
+
+    @field_validator("required_valid_until", "deadline_at")
+    @classmethod
+    def require_absolute_deadline(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("function runtime lease deadlines must include a timezone")
+        return value
+
+
+class RuntimeRequestHeaderResponse(StrictApiModel):
+    name: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$",
+    )
+    value: str = Field(max_length=65536, repr=False)
+
+    @field_validator("value")
+    @classmethod
+    def reject_header_injection(cls, value: str) -> str:
+        if "\r" in value or "\n" in value or "\x00" in value:
+            raise ValueError("runtime request header value contains control characters")
+        return value
+
+
+class FunctionRuntimeLeaseResponse(StrictApiModel):
+    logical_id: UUID
+    allocation_id: UUID
+    allocation_epoch: int = Field(ge=1)
+    profile: ProfileRefModel
+    url: str
+    request_headers: tuple[RuntimeRequestHeaderResponse, ...] = Field(repr=False)
+    expires_at: datetime
+
+    @classmethod
+    def from_domain(
+        cls, lease: FunctionRuntimeEndpointLease
+    ) -> FunctionRuntimeLeaseResponse:
+        return cls(
+            logical_id=lease.key.logical_id,
+            allocation_id=lease.allocation_id,
+            allocation_epoch=lease.allocation_epoch,
+            profile=ProfileRefModel.from_domain(lease.profile),
+            url=lease.url,
+            request_headers=tuple(
+                RuntimeRequestHeaderResponse(name=item.name, value=item.value)
+                for item in lease.request_headers
+            ),
+            expires_at=lease.expires_at,
         )
 
 

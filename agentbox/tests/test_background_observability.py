@@ -6,6 +6,7 @@ import logging
 import pytest
 
 from agentbox import maintenance, reconciliation
+from agentbox.api.app import _reconcile_before_serving
 
 
 async def _stop_after_first_pass(_seconds: float) -> None:
@@ -53,6 +54,27 @@ async def test_reconcile_loop_reports_unexpected_failure(monkeypatch, caplog) ->
                 interval_seconds=1,
                 operation_timeout_seconds=1,
             )
+
+    record = next(
+        item for item in caplog.records if item.msg == "agentbox.reconcile.failed"
+    )
+    assert record.lemma_fields["error_type"] == "RuntimeError"
+    assert len(record.lemma_fields["error_stack_hash"]) == 64
+    assert "CANARY" not in repr(record.lemma_fields)
+
+
+@pytest.mark.asyncio
+async def test_initial_reconcile_failure_does_not_block_serving(caplog) -> None:
+    class FailingReconciler:
+        async def reconcile_once(self, *, deadline_at):
+            del deadline_at
+            raise RuntimeError("CANARY provider response")
+
+    with caplog.at_level(logging.WARNING):
+        await _reconcile_before_serving(
+            FailingReconciler(),
+            operation_timeout_seconds=1,
+        )
 
     record = next(
         item for item in caplog.records if item.msg == "agentbox.reconcile.failed"

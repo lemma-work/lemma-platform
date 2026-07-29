@@ -535,6 +535,11 @@ def setup_logging(*, level: str = "INFO") -> None:
         _install_safe_exception_filter(preserved_handler)
     root.handlers = [handler, *preserved]
     root.setLevel(resolved_level)
+    quiet_at_info = {
+        "httpcore",
+        "httpx",
+        "uvicorn.access",
+    }
     for name in (
         "azure",
         "e2b",
@@ -554,4 +559,8 @@ def setup_logging(*, level: str = "INFO") -> None:
         for existing in dependency.handlers:
             _install_safe_exception_filter(existing)
         dependency.propagate = True
-        dependency.setLevel(resolved_level)
+        dependency.setLevel(
+            logging.WARNING
+            if resolved_level == logging.INFO and name in quiet_at_info
+            else resolved_level
+        )

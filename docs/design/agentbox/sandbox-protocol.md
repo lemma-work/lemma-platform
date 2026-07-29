@@ -248,18 +248,20 @@ class StartProcessRequest(BaseModel):
 Exactly one of `command` and `argv` is supplied. Workspace shell tools normally use
 `command`; trusted platform launchers use `argv` to avoid shell interpretation.
 
-`operation_id` identifies the intention to start one process. AgentBox persists the
-intent and a hash of all non-secret request fields before dispatch. Reusing the same
-ID with a different hash is `OPERATION_CONFLICT`. Reusing it with the same hash
-returns or reconnects to the original process; it does not start a second process.
+`operation_id` identifies the intention to start one process within a live manager
+incarnation. AgentBox keeps a bounded in-memory record and a request fingerprint;
+neither the request nor its fingerprint is persisted or logged. Reusing the same
+ID with a different fingerprint is
+`OPERATION_CONFLICT`. Reusing it with the same hash returns the same process while
+that routing record is available; it does not start a second process.
 
 Environment values and initial stdin are transmitted to the adapter but are not
-stored. Durable state keeps environment key names and a request hash that excludes
-secret values. Logs must never print env values or stdin.
+stored. Logs must never print env values or stdin.
 
 `background=False` is a client convenience, not a different provider primitive.
-AgentBox starts a process intent and waits under the same absolute deadline. If the
-HTTP connection ends, the process intent remains inspectable by operation ID.
+If a response is lost after the provider may have started the process, AgentBox
+returns `UNKNOWN_DISPATCH` and does not replay it. A process remains inspectable
+only while its manager routing record and allocation incarnation remain live.
 
 Streams are sequence-numbered. `after_seq` permits reconnect without requiring an
 adapter to replay unlimited output. AgentBox stores only a bounded output tail; the
@@ -404,8 +406,8 @@ AgentBox state notification; clients do not poll every second.
 
 | Method and route | Behavior |
 | --- | --- |
-| `POST .../processes` | Persist and start one operation ID |
-| `GET .../processes` | List managed process intents for current epoch |
+| `POST .../processes` | Start one manager-local operation ID |
+| `GET .../processes` | List bounded process handles for current manager/allocation |
 | `GET .../processes/{operation_id}` | Inspect status and bounded result tail |
 | `GET .../processes/{operation_id}/stream` | WebSocket output stream/reconnect |
 | `POST .../processes/{operation_id}:input` | Send binary/text stdin |
@@ -416,8 +418,9 @@ AgentBox state notification; clients do not poll every second.
 
 - `201` when the provider acknowledged the process;
 - `200` for an identical existing operation;
-- `202` with `state=unknown` if dispatch may have occurred;
-- a typed error only when the request definitively did not start.
+- `UNKNOWN_DISPATCH` with `DO_NOT_RETRY` if dispatch may have occurred;
+- a retryable typed error only when the provider definitively rejected the start
+  before execution.
 
 ### 5.3 Python-session routes
 
@@ -450,234 +453,50 @@ disconnects close the upstream stream and incomplete upload temporaries are remo
 
 ```text
 POST .../ports/{port}:access
+POST .../sandboxes/function/{logical_id}/runtime:lease
 ```
 
-The request contains protocol, audience, and TTL. Workspace ports are constrained
-by the workspace profile. Function workloads accept only the profile's private
-resident-runtime port and backend audience; every other function port returns
-`UNSUPPORTED_CAPABILITY`.
+The signed-access request contains protocol and TTL and remains the user-facing
+port mechanism. Function runtime execution instead uses the manager-key-protected
+lease endpoint. It resolves only the current active allocation at immutable port
+`8090`, binds the response to allocation ID/epoch and profile, protects activity
+through the requested bounded horizon, and returns the provider URL plus opaque
+request headers and absolute expiry. It never forwards an invocation.
+
+The trusted backend caches a lease only by logical pod plus immutable profile and
+never beyond its expiry. The manager key is used only to obtain or refresh the
+lease. The delegated function bearer remains in `Authorization` on the subsequent
+direct runtime request and is validated by the runtime/backend.
 
 ## 6. Durable persistence model
 
-PostgreSQL is mandatory for shared/prod AgentBox. SQLite may implement the same
-schema for a single-process local manager but is not a production option.
-SQLAlchemy 2.x async is the mandatory persistence implementation for both dialects;
-provider and lifecycle services do not contain SQL strings or own database sessions.
+PostgreSQL stores only lifecycle state that can support reconciliation. The
+normative rationale and failure contract are in
+[Lifecycle state model](lifecycle-state-model.md).
 
-### 6.1 `sandbox_logical`
-
-```text
-workload_kind             PK part 1
-logical_id                PK part 2
-desired_state
-profile_name
-profile_digest
-current_allocation_id     nullable FK
-allocation_epoch          bigint
-last_used_at
-released_at               nullable
-delete_after              nullable
-created_at / updated_at
-```
-
-### 6.2 `sandbox_workspace_storage`
-
-```text
-workload_kind             WORKSPACE, PK part 1
-logical_id                PK part 2 / FK
-provider_name
-storage_kind              volume | pvc | sandbox_native
-provider_storage_id       nullable, unique within provider scope
-bound_allocation_id       nullable FK
-state                     provisioning | ready | migrating | deleting | deleted | error
-content_generation        bigint
-delete_token              nullable, unique
-last_error_code           nullable
-created_at / updated_at / deleted_at
-```
-
-Workspace storage belongs to the logical workspace, not to an allocation attempt.
-Docker volumes and Kubernetes PVCs therefore survive arbitrary compute replacement.
-E2B uses `sandbox_native` because its filesystem belongs to the sandbox; during a
-profile replacement the adapter copies and verifies `/workspace` into the new
-sandbox before changing `bound_allocation_id` and the logical allocation epoch.
-
-This resource makes permanent deletion and storage reconciliation explicit. A
-workspace tombstone cannot be finalized until this row reaches `deleted`. Function
-workloads never have a storage row.
-
-### 6.3 `sandbox_allocations`
-
-```text
-allocation_id             PK
-workload_kind / logical_id FK
-allocation_token          unique
-provider_name
-provider_scope
-provider_id               nullable, unique within provider scope
-provider_instance_id      nullable
-profile_digest
-state
-admission_class
-last_error_code           nullable
-retry_after               nullable
-created_at / ready_at / released_at / destroyed_at
-```
-
-Several historical allocations may exist for one logical sandbox, but only one can
-be current. A replacement allocation cannot receive new operations until the
-logical row atomically points to it and increments the epoch.
-
-### 6.4 `sandbox_create_attempts`
-
-```text
-allocation_token          PK/FK
-request_hash
-dispatch_state            reserved | dispatched | acknowledged | unknown | resolved
-dispatch_started_at
-provider_request_id       nullable
-last_reconcile_at         nullable
-reconcile_after           nullable
-```
-
-The row is committed before calling the provider. `dispatched` or `unknown` can
-never return to `reserved` and cannot issue another create call.
-
-### 6.5 `sandbox_processes`
-
-```text
-workload_kind / logical_id
-operation_id              composite PK
-allocation_id / epoch
-request_hash
-env_keys                  text[]
-provider_process_id       nullable
-provider_tag              nullable
-state
-deadline_at
-started_at / completed_at
-exit_code                 nullable
-output_tail               bounded encrypted/blob reference
-truncated_before_seq
-expires_at
-```
-
-Process records exist for deduplication/reconnect, not as the source of truth for a
-function's business result.
-
-### 6.6 `sandbox_sessions`
-
-```text
-workload_kind / logical_id / session_id   composite PK
-allocation_id / epoch
-provider_context_id       nullable
-cwd
-env_keys                  text[]
-state
-created_at / last_used_at
-```
-
-No environment value is durable.
-
-### 6.7 Admission tables
-
-Provider scope rows hold configured concurrent limits, reserved capacity by
-admission class, current active/reserved counts, token-bucket creation rate, and a
-scope-wide `blocked_until` derived from provider `Retry-After` responses.
-
-All counter changes and allocation reservations occur in the same PostgreSQL
-transaction. Periodic reconciliation repairs counters from durable allocation
-rows; provider inventory does not directly overwrite them.
-
-### 6.8 SQLAlchemy persistence architecture
-
-AgentBox uses one SQLAlchemy 2.x declarative schema and one repository/unit-of-work
-implementation across PostgreSQL and SQLite:
-
-| Concern | Decision |
+| Table | Durable responsibility |
 | --- | --- |
-| ORM/API | SQLAlchemy 2.x typed declarative mappings and Core expressions |
-| Production driver | Async psycopg 3 through `postgresql+psycopg` |
-| Local/test driver | `aiosqlite` through `sqlite+aiosqlite` |
-| Session factory | `async_sessionmaker`, one short-lived session per unit of work |
-| Migrations | Alembic, versioned and reviewed with the code |
-| Production database | PostgreSQL only |
-| Local single-manager database | SQLite with WAL/busy timeout configured on connect |
+| `sandboxes` | Logical desired state, immutable profile selection, resource generation, current allocation epoch, activity protection, and maintenance claim |
+| `allocations` | Exact physical provider allocation, generation/epoch, lifecycle state, and admission ownership |
+| `allocation_create_attempts` | Write-ahead dispatch state used to reconcile an ambiguous provider create without issuing it twice |
+| `workspace_storage` | Logical storage ownership and deletion; may be allocation-bound for sandbox-native providers |
+| `provider_admission` | Provider-scope capacity reservations and token-bucket state |
 
-The async engine/session model follows the
-[SQLAlchemy asyncio documentation](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html).
-SQLAlchemy's psycopg dialect selects its async implementation when used with
-`create_async_engine`; see the
-[official PostgreSQL dialect documentation](https://docs.sqlalchemy.org/en/20/dialects/postgresql.html#module-sqlalchemy.dialects.postgresql.psycopg).
+`resource_generation` is a desired-state fence. Any delayed create, ready, release,
+or destroy completion must match the current generation before it can publish
+state. `allocation_epoch` is a data-plane fence. A process, Python session, port
+grant, or filesystem operation from an older epoch cannot be redirected to the
+replacement.
 
-ORM entities are persistence-private. API, domain, lifecycle, and provider code use
-typed domain records and ports; repositories map between domain records and ORM
-entities. Lazy loading is disabled by convention, relationships required by an
-operation are loaded explicitly, and committed entities are never used as mutable
-domain state outside their unit of work.
+Process handles, Python sessions/results, output buffers, and stream cursors are
+bounded manager memory. They deliberately disappear across manager or allocation
+incarnations. The schema therefore has no `processes`, `sessions`, or
+`python_executions` tables.
 
-The package boundary is:
-
-```text
-agentbox/domain/                 state machines, policies, domain records
-agentbox/ports/state.py          repository and unit-of-work protocols
-agentbox/adapters/state/models.py SQLAlchemy declarative mappings
-agentbox/adapters/state/repos.py shared SQLAlchemy repository implementation
-agentbox/adapters/state/uow.py   AsyncEngine/session/transaction ownership
-agentbox/adapters/state/alembic/ versioned schema migrations
-```
-
-Lifecycle/application services receive an `AgentBoxUnitOfWork` factory. They may
-coordinate several repositories in one transaction, but they cannot access an
-`AsyncSession`, engine, dialect, or ORM entity directly. Provider adapters have no
-state-store dependency; orchestration persists provider intent/result around adapter
-calls.
-
-Transaction boundaries follow the external-side-effect rule:
-
-1. open a unit of work, lock/validate state, reserve capacity, and commit intent;
-2. close the transaction before any provider, runtime, stream, or webhook call;
-3. perform the bounded external operation;
-4. open a new unit of work and conditionally persist the observation using the
-   allocation token, operation ID, epoch, and expected state as fences.
-
-No database transaction remains open while waiting on provider I/O. A process crash
-between these transactions is an expected reconciliation state, not a reason to
-repeat an external create/start.
-
-Concurrency-sensitive repository operations use SQLAlchemy expressions for:
-
-- `SELECT ... FOR UPDATE` on logical sandbox, allocation, and admission rows;
-- `FOR UPDATE SKIP LOCKED` for distributed cleanup/reconciliation claims;
-- unique constraints for allocation token and process operation ID;
-- compare-and-set `UPDATE ... WHERE state = :expected AND epoch = :epoch`;
-- dialect-provided `INSERT ... ON CONFLICT` only where it preserves the same
-  semantics on both supported databases.
-
-PostgreSQL is the semantic authority for distributed locking, skip-locked workers,
-and concurrent admission. SQLite runs one AgentBox manager and serializes claim
-selection; it is a developer convenience and may not be used to certify distributed
-correctness.
-
-Raw textual SQL is prohibited in API handlers, lifecycle/application services,
-provider adapters, and ordinary repositories. A dialect-specific expression is
-allowed only when SQLAlchemy has no safe portable construct, and then it must be
-isolated in the state adapter, documented with the invariant it protects, and
-covered on real PostgreSQL. Alembic migration operations and a minimal migration
-lock/bootstrap are the only routine schema-level exceptions.
-
-Production deployment runs `alembic upgrade head` as an explicit one-shot migration
-step. AgentBox startup verifies the expected schema revision and fails closed on a
-mismatch; multiple manager replicas do not race to migrate. Local/test factories may
-create and upgrade a temporary database automatically. Alembic is the SQLAlchemy
-change-management tool used for these revisions; see the
-[official Alembic documentation](https://alembic.sqlalchemy.org/en/latest/).
-
-State tests never reach into a private connection or mutate tables through an ORM
-session owned by the system under test. A dedicated test-state builder creates
-fenced fixtures/corruption scenarios through documented test-only repository APIs.
-The same repository contract runs against temporary SQLite and real PostgreSQL;
-distributed concurrency and locking assertions run only on PostgreSQL.
+AgentBox uses SQLAlchemy 2.x async mappings and short-lived units of work.
+Transactions end before provider I/O. ORM rows never escape the persistence
+adapter. Alembic migrations define the shared PostgreSQL schema and the equivalent
+single-manager SQLite test schema.
 
 ## 7. Lifecycle algorithms
 
@@ -716,10 +535,16 @@ scheduler.
 4. Terminate remaining managed processes and Python contexts.
 5. Clear dynamic session data and provider port grants.
 6. Invoke provider release.
-7. Mark `RELEASED`, record retention deadline, and release active provider capacity.
+7. Mark `RELEASED`, record the configured hard-expiry deadline relative to the last
+   accepted activity, and release active provider capacity.
 
 If the deadline expires before safe quiescence, release fails and leaves the
 allocation active or explicitly degraded; it never pauses behind an active process.
+
+At hard expiry, AgentBox destroys the exact allocation and workspace storage but
+retains a recreatable logical workspace. The next ensure creates a new allocation
+and storage generation. An explicit delete is different: it permanently tombstones
+the logical workspace and future ensure returns `SANDBOX_NOT_FOUND`.
 
 ### 7.3 Function idle destruction
 
@@ -808,11 +633,13 @@ Normative mapping:
 | `RATE_LIMITED` | 429 | `WAIT` | Provider scope is blocked until retry-after |
 | `PROVISIONING` | 409/202 | `WAIT` | Matching allocation is still becoming ready |
 | `AMBIGUOUS_CREATE` | 503 | `WAIT` | Create may have been accepted; do not recreate |
-| `UNKNOWN_DISPATCH` | 202/503 | `DO_NOT_RETRY` | Process may have started; inspect same operation |
+| `UNKNOWN_DISPATCH` | 409 | `DO_NOT_RETRY` | Work may have started; do not replay the same operation |
+| `PROCESS_NOT_RUNNING` | 410 | `DO_NOT_RETRY` | The manager/PID handle is gone; do not replay stdin |
 | `DEADLINE_EXCEEDED` | 504 | `DO_NOT_RETRY` | Caller deadline expired |
 | `UNSUPPORTED_CAPABILITY` | 422 | `DO_NOT_RETRY` | Profile/provider cannot perform requested operation |
 | `PROVIDER_UNAVAILABLE` | 503 | contextual | Definitive pre-dispatch failure or unavailable read |
 | `ALLOCATION_CHANGED` | 409 | `DO_NOT_RETRY` | Session/process belongs to a stale epoch |
+| `PROCESS_NOT_RUNNING` | 410 | `DO_NOT_RETRY` | Manager handle or exact provider process no longer exists |
 | `OPERATION_CONFLICT` | 409 | `DO_NOT_RETRY` | Operation ID reused with different request |
 | `FILE_NOT_FOUND` | 404 | `DO_NOT_RETRY` | Filesystem path definitively does not exist |
 | `FILE_CONFLICT` | 409 | `DO_NOT_RETRY` | Digest precondition, destination, or directory constraint failed |
@@ -834,7 +661,7 @@ Reconciliation is background repair, never a prerequisite for a warm request.
 
 Inputs:
 
-- durable AgentBox allocation/process state;
+- durable logical sandbox, allocation, create-attempt, storage, and admission state;
 - exact provider-ID inspection;
 - allocation-token metadata/label queries for unknown creates;
 - signed E2B lifecycle webhooks;
@@ -847,9 +674,10 @@ Rules:
 - Only exact-ID delete/not-found postconditions make deletion terminal.
 - An allocation-token query may bind one exact provider object; duplicate objects
   are quarantined and exact-deleted after review/grace.
-- Unknown process dispatch is resolved by provider tag/PID or the adapter-private
-  process supervisor. It is never resolved by starting again.
-- Stale profile allocations drain and destroy after their processes become terminal.
+- Unknown process dispatch is not replayed or promoted into durable lifecycle
+  state. The caller receives a typed non-retryable ambiguity.
+- Stale profile allocations drain and destroy after bounded activity protection
+  expires.
 - Orphans are quarantined before destruction and cannot be adopted merely because
   their logical ID matches.
 

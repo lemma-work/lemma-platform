@@ -1,59 +1,159 @@
 export const podBlocks = [
   {
-    key: "data",
-    title: "Data Stores",
-    icon: "/landing-page/pod-icons/data.svg",
-    stat: "5 typed tables",
-    summary:
-      "Structured business data created by the pod and ingested from external sources.",
+    key: "apps",
+    title: "Apps",
+    iconKind: "apps",
+    count: "2",
+    summary: "The software your team opens and uses.",
     detail:
-      "Pull from SQL databases, REST APIs, or SaaS apps. Lemma stores it in typed tables. Your leads, tickets, events, and pipeline records are readable by agents, queryable by your app, and owned by the pod.",
+      "Full interfaces for the job, built on everything else in the pod.",
+    items: [
+      {
+        name: "Campaign Manager",
+        meta: "Briefs, approvals, calendar, performance",
+        state: "Live",
+      },
+      {
+        name: "Codex CRM",
+        meta: "Accounts, pipeline, inbox, follow-ups",
+        state: "Live",
+      },
+      {
+        name: "Monday Brief",
+        meta: "A focused review surface for leadership",
+        state: "Internal",
+      },
+    ],
   },
   {
     key: "agents",
     title: "Agents",
-    icon: "/landing-page/pod-icons/agents.svg",
-    stat: "4 active agents",
-    summary: "LLM workers that execute judgment tasks inside the pod.",
+    iconKind: "agents",
+    count: "4",
+    summary: "AI workers with a specific job and access.",
     detail:
-      "Each agent receives a role, input schema, tool grants, accessible tables, folders, and connected apps - never vague access to everything. Results come back as structured data before a workflow or human reviewer decides what happens next.",
+      "Each agent knows what it can read, what it can change, and when to stop.",
+    items: [
+      {
+        name: "Campaign Analyst",
+        meta: "Claude · reads campaign data and briefs",
+        state: "Working",
+      },
+      {
+        name: "CRM Operator",
+        meta: "Codex · researches accounts and drafts replies",
+        state: "Working",
+      },
+      {
+        name: "Budget Advisor",
+        meta: "Prepares changes · cannot publish them",
+        state: "Waiting",
+      },
+    ],
   },
   {
     key: "workflows",
     title: "Workflows",
-    icon: "/landing-page/pod-icons/workflows.svg",
-    stat: "8 workflow graphs",
-    summary:
-      "Real business processes with agents, humans, approvals, and handoffs.",
+    iconKind: "workflows",
+    count: "3",
+    summary: "The repeatable steps that keep work moving.",
     detail:
-      "Workflows mix forms, agents, functions, decisions, waits, loops, and approval steps. The same graph can start from a schedule, a Slack action, a new record, a webhook, or a button in the app.",
+      "They connect triggers, agent work, decisions, people, and outside actions.",
+    items: [
+      {
+        name: "Weekly campaign review",
+        meta: "Schedule → analysis → approval → publish",
+        state: "Waiting",
+      },
+      {
+        name: "Account enrichment",
+        meta: "New account → research → update record",
+        state: "Running",
+      },
+      {
+        name: "Follow-up queue",
+        meta: "Reply signal → draft → human review",
+        state: "Ready",
+      },
+    ],
   },
   {
-    key: "apps",
-    title: "App Interface",
-    icon: "/landing-page/pod-icons/apps.svg",
-    stat: "2 operator apps",
-    summary: "The operator UI your team runs on, deployed at a URL.",
+    key: "data",
+    title: "Data",
+    iconKind: "data",
+    count: "4",
+    summary: "The shared records every part of the pod uses.",
     detail:
-      "Real multi-screen apps, not screenshots - record tables, detail pages, workflow launch forms, review queues, and embedded assistants, all built on the same pod APIs.",
+      "Apps, agents, and workflows read and update the same typed tables.",
+    items: [
+      {
+        name: "campaign_metrics",
+        meta: "128 rows · synced 41 seconds ago",
+        state: "Healthy",
+      },
+      {
+        name: "accounts",
+        meta: "124 records · 8 updated today",
+        state: "Healthy",
+      },
+      {
+        name: "decisions",
+        meta: "31 records · 2 need review",
+        state: "Attention",
+      },
+    ],
   },
   {
-    key: "access",
-    title: "RBAC + Auth",
-    icon: "/landing-page/pod-icons/auth-rbac.svg",
-    stat: "People + agent grants",
-    summary: "Roles decide what people and agents can access or change.",
+    key: "docs",
+    title: "Docs",
+    iconKind: "docs",
+    count: "3",
+    summary: "The context and working files behind the job.",
     detail:
-      "Pod roles, table grants, resource visibility, and approval policies decide who can view data, change records, run workflows, or let an agent take an external action.",
+      "People and agents work from the same briefs, policies, and notes.",
+    items: [
+      {
+        name: "Q3 launch brief.md",
+        meta: "Used by Campaign Manager + 2 agents",
+        state: "Updated",
+      },
+      {
+        name: "Positioning notes.md",
+        meta: "Used by Campaign Analyst",
+        state: "Current",
+      },
+      {
+        name: "Weekly review.md",
+        meta: "Used by Monday review workflow",
+        state: "Current",
+      },
+    ],
   },
   {
     key: "connectors",
     title: "Connectors",
-    icon: "/landing-page/pod-icons/connectors.svg",
-    stat: "4 connected",
-    summary: "Connect the pod to tools your team already uses.",
+    iconKind: "connectors",
+    count: "4",
+    summary: "The accounts the pod can use to get work done.",
     detail:
-      "Gmail, Slack, GitHub, Salesforce, Teams, and custom APIs can be called by functions, workflows, and agents - using the current user's account or a fixed service account, per the pod's rules.",
+      "Every connection shows the account, its access, and what uses it.",
+    items: [
+      {
+        name: "Google Ads",
+        meta: "growth@northstar.co · read campaign data",
+        state: "Connected",
+      },
+      {
+        name: "Gmail",
+        meta: "maya@northstar.co · read threads, create drafts",
+        state: "Connected",
+      },
+      {
+        name: "Slack",
+        meta: "Northstar · send approvals and reviewed briefs",
+        state: "Connected",
+      },
+    ],
   },
 ] as const;
 
@@ -163,47 +263,6 @@ export const showcaseCards = [
 ] as const;
 
 export const githubUrl = "https://github.com/lemma-work/lemma-platform";
-
-export const machineStations = [
-  {
-    key: "inbound",
-    label: "INBOUND",
-    sub: "ST/01",
-    caption: "Email from Northwind hits the pod inbox.",
-  },
-  {
-    key: "agent",
-    label: "AGENT:QUILL",
-    sub: "ST/02",
-    caption: "Quill parses intent and drafts the lead record.",
-  },
-  {
-    key: "table",
-    label: "TABLE:LEADS",
-    sub: "ST/03",
-    caption: "Row written, row-level security applied.",
-  },
-  {
-    key: "approval",
-    label: "HUMAN:APPROVAL",
-    sub: "ST/04",
-    caption: "The gate pauses the work for a person.",
-  },
-  {
-    key: "routed",
-    label: "ROUTED",
-    sub: "ST/05",
-    caption: "Owner assigned. State updated for everyone.",
-  },
-] as const;
-
-export const heroTickerEvents = [
-  "lead northwind.com hit the inbox",
-  "quill scored it 87 · qualified",
-  "row written to leads · rls applied",
-  "approval sent to #sales on slack",
-  "dana approved · routed to enterprise",
-] as const;
 
 export const terminalScript = [
   { command: "uv tool install lemma-terminal", output: [] },

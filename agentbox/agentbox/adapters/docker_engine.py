@@ -117,6 +117,10 @@ class DockerContainerInspect(DockerApiModel):
     container_id: str = Field(alias="Id")
     state: DockerContainerState = Field(alias="State")
     config: DockerContainerConfig = Field(alias="Config")
+    host_config: DockerHostConfig = Field(
+        default_factory=DockerHostConfig,
+        alias="HostConfig",
+    )
     network_settings: DockerNetworkSettings = Field(alias="NetworkSettings")
 
 

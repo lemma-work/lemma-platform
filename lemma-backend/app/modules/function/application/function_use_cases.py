@@ -21,7 +21,6 @@ from fastapi import Request
 
 from app.core.authorization.scope import context_scope, pod_context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
-from app.core.helpers.slug import slugify
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.function.application.function_definition_compiler import (
@@ -79,7 +78,7 @@ class FunctionUseCases:
         self,
         function: FunctionEntity,
         code: str,
-        display_path: str,
+        *,
         user_id: UUID,
     ) -> None:
         """Build and stage one immutable executable revision with no DB connection."""
@@ -87,21 +86,19 @@ class FunctionUseCases:
             raise ValueError("function must be persisted before code is compiled")
         # Fail fast on a bad dependency spec before the heavier schema extraction.
         python_packages = tuple(parse_python_packages(code))
-        (
-            input_schema,
-            output_schema,
-            config_schema,
-        ) = await self._compiler.extract_schemas(
-            user_id, code, display_path, function.pod_id, function.id
-        )
-        function.input_schema = input_schema
-        function.output_schema = output_schema
-        function.config_schema = config_schema
         function.pending_artifact = await self._compiler.build_artifact(
             function,
             code,
             python_packages=python_packages,
         )
+        schemas = await self._compiler.extract_schemas(
+            function,
+            function.pending_artifact,
+            user_id=user_id,
+        )
+        function.input_schema = schemas.input
+        function.output_schema = schemas.output
+        function.config_schema = schemas.config
         function.revision_hash = function.pending_artifact.revision_hash
         function.code_path = (
             f"revisions/{function.revision_hash.removeprefix('sha256:')}/function.py"
@@ -187,8 +184,7 @@ class FunctionUseCases:
         await self._apply_code(
             created,
             code,
-            f"{slugify(created.name)}.py",
-            user_id,
+            user_id=user_id,
         )
 
         async with pod_context_scope(
@@ -227,8 +223,7 @@ class FunctionUseCases:
             await self._apply_code(
                 plan.function,
                 plan.code,
-                f"{slugify(plan.function.name)}.py",
-                user_id,
+                user_id=user_id,
             )
 
         async with pod_context_scope(
@@ -296,8 +291,7 @@ class FunctionUseCases:
             await self._apply_code(
                 created,
                 code,
-                f"{slugify(created.name)}.py",
-                user_id,
+                user_id=user_id,
             )
         else:
             assert plan is not None
@@ -305,8 +299,7 @@ class FunctionUseCases:
                 await self._apply_code(
                     plan.function,
                     plan.code,
-                    f"{slugify(plan.function.name)}.py",
-                    user_id,
+                    user_id=user_id,
                 )
 
         async with uow_scope(self._uow_factory) as uow:
@@ -514,7 +507,8 @@ class FunctionUseCases:
         The run and its deterministic ``job_id`` dispatch intent are already
         committed when this method is called. If publication has an ambiguous
         outcome, the reconciler safely republishes the same task identity and
-        the run claim prevents a second execution.
+        the atomic ``PENDING`` to ``RUNNING`` transition prevents a second
+        execution attempt.
         """
 
         if run.id is None:

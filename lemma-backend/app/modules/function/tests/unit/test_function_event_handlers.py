@@ -122,13 +122,11 @@ def test_worker_function_service_composition_matches_current_constructor(
 @pytest.mark.asyncio
 async def test_worker_error_fallback_terminalizes_the_same_run(monkeypatch) -> None:
     run_id = uuid4()
-    signer = object()
     failed: list[tuple[object, str]] = []
 
     class _Repository:
-        def __init__(self, uow, received_signer):
+        def __init__(self, uow):
             assert uow == "uow"
-            assert received_signer is signer
 
         async def fail_unfinished(self, received_run_id, *, error):
             failed.append((received_run_id, error))
@@ -139,11 +137,6 @@ async def test_worker_error_fallback_terminalizes_the_same_run(monkeypatch) -> N
             yield "uow"
 
     monkeypatch.setattr(handlers, "FunctionExecutionRepository", _Repository)
-    monkeypatch.setattr(
-        "app.modules.function.api.dependencies."
-        "build_function_callback_credential_signer",
-        lambda: signer,
-    )
 
     await handlers._fail_run_after_worker_error(
         _WorkerContext(),

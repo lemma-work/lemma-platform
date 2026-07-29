@@ -33,7 +33,7 @@ one monolithic provider class is not required or preferred.
 | Native stateful Python contexts | No | No | Yes |
 | Native file API | Archive API is insufficient | No | Yes |
 | Workspace control runtime required | Yes | Yes | No |
-| Provider-native auto-resume | No | No | Yes, workspace only |
+| Provider-native auto-resume | No | No | Disabled; lifecycle is explicit |
 | Strong production isolation | No | With approved RuntimeClass | Managed microVM boundary |
 | Public ingress for functions | Disabled | Disabled | Disabled |
 | Provider create rate admission | Configured local limit | Configured pool/resource limit | E2B project limit |
@@ -212,23 +212,25 @@ confirmed absent. Volume deletion never uses a broad name prefix.
   at `/run/lemma-function-cache` for digest-verified artifacts, because native
   wheels must map executable shared-library segments.
 - Start `lemma-function-runtime serve` as PID 1 behind `tini`.
-- Publish port 8090 only to the AgentBox manager: over the private Docker network in
-  the installed topology, or through a loopback-bound random host port in standalone
-  development.
+- Publish port 8090 only to the trusted service network shared by AgentBox and the
+  backend in the installed topology, or through a loopback-bound random host port
+  when both run on one standalone development host.
 - Probe `/healthz` before marking the allocation active.
-- Proxy authenticated invocation and cancellation requests through AgentBox's
-  short-lived signed port grant; never return the container address or host binding
-  to the backend.
+- Lease the current allocation's runtime address to the trusted backend. In the
+  installed topology this is a private container-network address; standalone
+  development uses a loopback-published random port. AgentBox is not in the
+  per-invocation data path.
 - Keep revision worker processes inside the resident runtime. A worker imports one
   immutable revision once, handles one invocation at a time, and is reused only for
   that exact `(function_id, artifact_sha256)`.
 - Bound total workers and cached revision pools. Least-recently-used idle revision
   pools are terminated before their cache budget can grow without bound.
-- Remove the container after five idle minutes or profile drain.
+- Remove the container after its endpoint-lease protection and idle threshold
+  expire, or on profile drain.
 
 The backend owns the public `function_run_id` and run transition. AgentBox owns
-only the function allocation and signed access grant; it does not create a generic
-AgentBox process row for each function invocation.
+only the function allocation and direct runtime lease; it does not create a
+generic AgentBox process row for each function invocation.
 
 ### 5.4 Files and port access
 
@@ -240,7 +242,9 @@ User port access goes through an AgentBox signed reverse proxy. On the installed
 stack, the manager reaches the container IP over their shared private network and
 the sandbox port is not host-published. A standalone development fallback may proxy
 to a loopback-bound random host port. Raw host ports and Docker container addresses
-are never returned to the backend or user.
+are never returned to users. A trusted backend may receive the current function
+allocation's address from `runtime:lease`; the address is allocation-fenced and
+profile-bound.
 
 ### 5.5 Inventory and recovery
 
@@ -391,12 +395,12 @@ the template build.
 
 ### 7.2 Workspace lifecycle
 
-Use full-memory pause and auto-resume:
+Use explicit pause with provider auto-resume disabled:
 
 ```python
 lifecycle={
     "on_timeout": "pause",
-    "auto_resume": True,
+    "auto_resume": False,
 }
 ```
 
@@ -412,50 +416,30 @@ release, AgentBox:
 5. clears ephemeral credentials and browser state;
 6. calls exact sandbox pause.
 
-The E2B timeout is a longer safety bound than the five-minute logical threshold, and
-delegated credentials expire before that bound. If E2B auto-pauses first during an
-AgentBox outage, reconciliation does not publish that allocation directly as clean:
-it fences new work, connects/resumes internally, performs the same quiesce/scrub,
-and pauses it again before normal ensure may return it. This keeps provider timeout
-from bypassing the portable release contract.
+The E2B timeout is a longer safety bound than the five-minute logical threshold,
+and delegated credentials expire before that bound. Provider timeout is a safety
+fallback, not a second lifecycle controller.
 
-Thus the E2B snapshot contains the static clean template/runtime state plus workspace
-files, not live delegated credentials. Although E2B can preserve process memory,
-portable callers are promised files only.
-
-With auto-resume enabled, native commands, file operations, and authenticated tunnel
-traffic can resume a paused sandbox. An adapter operation may use its cached handle;
-otherwise it connects by exact provider ID. It does not call list/status first.
-E2B documents that normal pause preserves filesystem and memory, connection resumes
-the same sandbox, and auto-resume is valid only for full-memory pause. See
+Thus the paused sandbox contains the static clean template/runtime state plus
+workspace files, not live delegated credentials. Resume is an explicit AgentBox
+operation against the exact sandbox ID and produces a new allocation epoch before
+new data-plane work is accepted. Native file or command traffic cannot silently
+resume a sandbox behind the lifecycle controller. See
 [persistence](https://e2b.dev/docs/sandbox/persistence) and
-[auto-resume](https://e2b.dev/docs/sandbox/auto-resume).
+[automatic resume](https://e2b.dev/docs/sandbox/auto-resume).
 
 Paused E2B sandboxes are retained indefinitely by the provider, so AgentBox's
-seven-day logical retention worker must explicitly kill them.
+configured retention worker must explicitly kill them.
 
 ### 7.3 Workspace profile replacement
 
 An E2B sandbox filesystem is native to that physical sandbox, unlike a Docker
-volume or Kubernetes PVC. Replacing a workspace profile therefore uses an explicit
-two-allocation migration:
-
-1. quiesce the old allocation and keep it as the current fenced allocation;
-2. reserve temporary replacement capacity and create the new template allocation
-   with a new allocation token;
-3. enumerate `/workspace` through native file APIs and build a manifest containing
-   path, type, mode, size, and content digest;
-4. stream allowed regular files and directories into the new allocation without
-   passing whole files through shell/base64 commands;
-5. reject path or symlink escapes and verify the destination manifest and digests;
-6. run the new profile readiness checks;
-7. transactionally bind the storage row and logical sandbox to the new allocation,
-   increment the allocation epoch, and only then destroy the old sandbox.
-
-If copy or verification fails, the old allocation remains current and recoverable;
-the incomplete replacement is destroyed. New operations cannot observe the new
-allocation before the atomic bind. This is the only E2B path that migrates files
-between sandbox IDs; ordinary pause/auto-resume reconnects the same exact sandbox.
+volume or Kubernetes PVC. A profile replacement therefore fences and quiesces the
+old allocation, destroys its exact sandbox ID, increments the storage generation,
+and creates a fresh sandbox from the new immutable template. Availability and
+profile correctness take precedence over attempting an implicit cross-sandbox
+file migration. Ordinary pause/resume still reconnects the same exact sandbox and
+preserves its filesystem.
 
 ### 7.4 Workspace execution
 
@@ -477,9 +461,10 @@ custom process tags; its PTY API supports reconnect and resize. See
 [Process Start API](https://e2b.dev/docs/api-reference/process/start), and
 [interactive PTY](https://e2b.dev/docs/sandbox/pty).
 
-Use `operation_id` as the provider process tag when supported. Persist the PID only
-after acknowledgment. On ambiguous start, search the exact sandbox's process list
-for that tag; never submit another start solely because the PID response was lost.
+Use `operation_id` as the provider process tag when supported. The bounded
+manager-local handle records the acknowledged PID. Every stdin/resize/terminate
+operation verifies that the PID still carries the expected operation tag. An
+ambiguous start is reported as `UNKNOWN_DISPATCH` and is never resubmitted.
 
 One E2B Code Interpreter context maps to one AgentBox session. Context cwd matches
 the session cwd; context restart maps to session restart. See
@@ -500,27 +485,30 @@ The immutable template starts `lemma-function-runtime serve` on port 8090 and wa
 for that port during build. On allocation readiness AgentBox connects by exact
 sandbox ID and validates the runtime health endpoint.
 
-For each invocation:
+For each direct endpoint lease and subsequent invocation:
 
-1. AgentBox resolves `sandbox.get_host(8090)` and obtains the sandbox's
-   `traffic_access_token`;
-2. the provider hop always uses `https://<host>` and
-   `E2B-Traffic-Access-Token`, even though the caller-facing grant describes an HTTP
-   application port;
-3. AgentBox extends the sandbox timeout once, coalesced across a burst, to at least
-   `run deadline + idle grace`;
-4. the backend sends its cached delegated function-session bearer, exact revision
-   hash, run ID, gateway URL, run control capability, and typed input through the
-   signed AgentBox port proxy;
-5. the resident runtime claims the run, uses/downloads the verified artifact,
-   leases an exact revision worker, and reports started/terminal callbacks;
-6. cancellation authenticates the run control capability and kills
-   only the leased worker process group;
-7. AgentBox kills the exact sandbox after five idle minutes.
+1. AgentBox resolves `sandbox.get_host(8090)`, obtains the sandbox's
+   `traffic_access_token`, and returns an HTTPS base URL plus an opaque
+   `E2B-Traffic-Access-Token` request header to the trusted backend;
+2. AgentBox extends the sandbox timeout at lease acquisition to cover the lease
+   horizon; it does not proxy ordinary invocations;
+3. the backend caches the allocation/profile-fenced lease within its absolute
+   expiry;
+4. the backend atomically starts the run, then sends the complete protocol-v2
+   envelope and cached delegated function-session bearer directly to E2B's secured
+   gateway;
+5. the resident runtime uses that bearer to download the exact verified artifact
+   on a cache miss and leases an exact revision worker. API invocations return
+   their terminal report directly; JOB invocations post the terminal report with
+   the same bearer;
+6. cancellation uses the current direct lease and kills only the matching
+   function/run worker group;
+7. AgentBox kills the exact sandbox after its protected lease/idle horizon.
 
-No heartbeat or provider process polling is used. The invocation response and
-durable callbacks are guarded by the backend run state. Neither AgentBox nor the
-backend replays an invocation after an ambiguous response.
+No runtime claim, callback capability, heartbeat, or provider process polling is
+used. The invocation response and durable JOB callback are guarded by the backend
+run state. An ambiguous invocation response is not replayed. A pre-runtime secured
+gateway rejection invalidates the lease and permits one fresh-allocation retry.
 
 ### 7.6 Network and ports
 
@@ -531,7 +519,7 @@ memory for the upstream request, and never persisted or returned to backend call
 Function sandboxes set `allow_public_traffic=false`; E2B's authenticated TLS traffic
 gateway remains reachable with the per-sandbox traffic token. For the initial
 release their outbound network allowlist contains only the exact Lemma runtime
-gateway host needed for claim, artifact, SDK, and callback traffic. DNS needed to
+gateway host needed for artifact, SDK, and JOB callback traffic. DNS needed to
 resolve that host is provider-controlled. If the selected E2B template/account
 cannot enforce this restriction, the function profile is rejected rather than
 weakened. Revision-declared third-party egress is a later gateway feature, not an

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from agentbox.domain import (
@@ -16,13 +17,35 @@ from agentbox.domain import (
     PortProtocol,
     RetryDisposition,
     SandboxKey,
+    SandboxProfileRef,
     WorkloadKind,
 )
 from agentbox.persistence.uow import StateDatabase
 from agentbox.ports import (
     ProviderAllocationRef,
+    ProviderMetadataEntry,
     ProviderPortAccessPort,
     ProviderPortTarget,
+)
+
+_HTTP_HEADER_TOKEN = frozenset(
+    "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+)
+_RESERVED_RUNTIME_HEADERS = frozenset(
+    {
+        "authorization",
+        "connection",
+        "content-length",
+        "host",
+        "if-match",
+        "prefer",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "x-lemma-gateway-url",
+    }
 )
 
 
@@ -111,6 +134,48 @@ class PortAccessSigner:
         return decoded
 
 
+@dataclass(frozen=True, slots=True)
+class FunctionRuntimeEndpointLease:
+    """Allocation-fenced direct endpoint for one resident function runtime."""
+
+    key: SandboxKey
+    allocation_id: UUID
+    allocation_epoch: int
+    profile: SandboxProfileRef
+    url: str
+    request_headers: tuple[ProviderMetadataEntry, ...] = field(repr=False)
+    expires_at: datetime
+
+    def __post_init__(self) -> None:
+        parsed = urlsplit(self.url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("function runtime endpoint must be an HTTP(S) URL")
+        if self.key.workload_kind != WorkloadKind.FUNCTION:
+            raise ValueError("function runtime lease requires a function sandbox")
+        if self.allocation_epoch < 1:
+            raise ValueError("function runtime allocation epoch must be positive")
+        if self.expires_at.tzinfo is None or self.expires_at.utcoffset() is None:
+            raise ValueError("function runtime lease expiry must include a timezone")
+        names: set[str] = set()
+        for header in self.request_headers:
+            normalized = header.name.lower()
+            if (
+                not header.name
+                or any(character not in _HTTP_HEADER_TOKEN for character in header.name)
+                or normalized in _RESERVED_RUNTIME_HEADERS
+                or normalized in names
+            ):
+                raise ValueError("function runtime provider header is invalid")
+            if "\r" in header.value or "\n" in header.value or "\x00" in header.value:
+                raise ValueError("function runtime provider header value is invalid")
+            names.add(normalized)
+
+
 class PortAccessService:
     def __init__(
         self,
@@ -119,11 +184,27 @@ class PortAccessService:
         signer: PortAccessSigner,
         *,
         public_base_url: str,
+        trusted_function_activity_seconds: float = 300,
+        trusted_function_activity_refresh_seconds: float = 60,
     ) -> None:
+        if not 1 <= trusted_function_activity_seconds <= 24 * 60 * 60:
+            raise ValueError(
+                "trusted function activity lease must be in 1..86400 seconds"
+            )
+        if not 1 <= trusted_function_activity_refresh_seconds <= 60 * 60:
+            raise ValueError(
+                "trusted function activity refresh must be in 1..3600 seconds"
+            )
         self._database = database
         self._provider = provider
         self._signer = signer
         self._public_base_url = public_base_url.rstrip("/")
+        self._trusted_function_activity = timedelta(
+            seconds=trusted_function_activity_seconds
+        )
+        self._trusted_function_activity_refresh = timedelta(
+            seconds=trusted_function_activity_refresh_seconds
+        )
 
     async def create(
         self,
@@ -237,6 +318,93 @@ class PortAccessService:
             activity_until=claims.expires_at,
         )
         return claims, target
+
+    async def lease_function_runtime(
+        self,
+        logical_id: UUID,
+        *,
+        deadline_at: datetime,
+        required_valid_until: datetime | None = None,
+    ) -> FunctionRuntimeEndpointLease:
+        """Lease a provider-neutral direct endpoint to the current allocation."""
+
+        key = SandboxKey(
+            workload_kind=WorkloadKind.FUNCTION,
+            logical_id=logical_id,
+        )
+        now = datetime.now(timezone.utc)
+        if deadline_at.tzinfo is None or deadline_at.utcoffset() is None:
+            raise self._invalid("deadline_at must include a timezone")
+        if required_valid_until is not None and (
+            required_valid_until.tzinfo is None
+            or required_valid_until.utcoffset() is None
+        ):
+            raise self._invalid("required_valid_until must include a timezone")
+        minimum_valid_until = now + self._trusted_function_activity
+        required_valid_until = max(
+            minimum_valid_until,
+            required_valid_until or minimum_valid_until,
+        )
+        maximum_valid_until = now + timedelta(hours=24)
+        if required_valid_until > maximum_valid_until:
+            raise self._invalid("required_valid_until cannot exceed 24 hours")
+        lease_until = min(
+            required_valid_until + self._trusted_function_activity_refresh,
+            maximum_valid_until,
+        )
+        async with self._database.uow() as uow:
+            logical = await uow.repository.get_logical(key, for_update=True)
+            if logical is None:
+                raise AgentBoxError(
+                    ErrorCode.SANDBOX_NOT_FOUND,
+                    "function sandbox does not exist",
+                    retry=RetryDisposition.DO_NOT_RETRY,
+                    status_code=404,
+                )
+            allocation = await uow.repository.current_allocation(key)
+            if (
+                allocation is None
+                or allocation.provider_id is None
+                or allocation.state != AllocationState.ACTIVE
+                or allocation.allocation_epoch is None
+                or allocation.allocation_epoch != logical.allocation_epoch
+                or allocation.profile != logical.profile
+            ):
+                raise AgentBoxError(
+                    ErrorCode.PROVISIONING,
+                    "function sandbox is not ready for direct runtime access",
+                    retry=RetryDisposition.WAIT,
+                    status_code=409,
+                    retry_after_ms=250,
+                )
+            logical = await uow.repository.protect_activity(
+                key,
+                until=lease_until,
+                now=now,
+            )
+            await uow.commit()
+        target = await self._provider.resolve_port_target(
+            ProviderAllocationRef(
+                provider_id=allocation.provider_id,
+                provider_instance_id=allocation.provider_instance_id,
+                allocation_id=allocation.allocation_id,
+                allocation_token=allocation.allocation_token,
+                key=allocation.key,
+            ),
+            port=8090,
+            protocol=PortProtocol.HTTP,
+            deadline_at=deadline_at,
+            activity_until=lease_until,
+        )
+        return FunctionRuntimeEndpointLease(
+            key=key,
+            allocation_id=allocation.allocation_id,
+            allocation_epoch=allocation.allocation_epoch,
+            profile=logical.profile,
+            url=target.base_url.rstrip("/") + "/",
+            request_headers=target.headers,
+            expires_at=lease_until,
+        )
 
     @staticmethod
     def _invalid(message: str) -> AgentBoxError:

@@ -46,7 +46,15 @@ def _positive_float(name: str, default: float) -> float:
 def _latency_budgets(provider: str) -> tuple[LatencyBudget, ...]:
     del provider
     budgets: list[LatencyBudget] = []
-    for case in ("api_noop", "api_read", "api_write", "job_read", "job_write"):
+    for case in (
+        "api_noop",
+        "api_read_single",
+        "api_write_single",
+        "api_read_batch",
+        "api_write_batch",
+        "job_read_batch",
+        "job_write_batch",
+    ):
         prefix = f"FUNCTION_BENCH_{case.upper()}"
         budgets.append(
             LatencyBudget(
@@ -114,8 +122,7 @@ async def test_function_execution_quality_benchmark(
         provider=provider,
         concurrency=_positive_int("FUNCTION_BENCH_CONCURRENCY", 5),
         invocations=_positive_int("FUNCTION_BENCH_INVOCATIONS", 5),
-        source_rows_per_table=_positive_int("FUNCTION_BENCH_SOURCE_ROWS", 1_000),
-        rows_per_write=_positive_int("FUNCTION_BENCH_WRITE_ROWS", 1_000),
+        batch_rows=_positive_int("FUNCTION_BENCH_BATCH_ROWS", 1_000),
         poll_interval_seconds=_positive_float(
             "FUNCTION_BENCH_POLL_INTERVAL_SECONDS",
             0.5,
@@ -142,9 +149,15 @@ async def test_function_execution_quality_benchmark(
                 "cases": [
                     {
                         "case": case.case,
+                        "rows_per_invocation": case.rows_per_invocation,
+                        "sdk_calls_per_invocation": case.sdk_calls_per_invocation,
                         "success_rate": case.success_rate,
+                        "terminal_mean_seconds": case.terminal.mean_seconds,
                         "terminal_p95_seconds": case.terminal.p95_seconds,
                         "submit_p95_seconds": case.submit.p95_seconds,
+                        "function_call_mean_seconds": (
+                            case.function_call.mean_seconds
+                        ),
                         "platform_overhead_p95_seconds": (
                             case.platform_overhead.p95_seconds
                         ),

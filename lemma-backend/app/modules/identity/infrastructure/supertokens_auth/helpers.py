@@ -1,4 +1,6 @@
 from uuid import UUID
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from sqlalchemy import select
 from supertokens_python.asyncio import get_user
 from supertokens_python.recipe.session.asyncio import (
@@ -19,6 +21,12 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.modules.identity.infrastructure.models.user_models import User
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class IssuedUserToken:
+    value: str
+    expires_at: datetime
 
 
 async def _assert_local_user_can_authenticate(user_id: UUID) -> None:
@@ -61,6 +69,38 @@ async def get_user_token(
         payload,
     )
     return session.access_token
+
+
+async def get_user_token_with_expiry(
+    user_id: UUID,
+    delegation_claims: dict | None = None,
+) -> IssuedUserToken:
+    """Mint an access token and retain the issuer's real expiry.
+
+    SuperTokens reports session expiry as epoch milliseconds. Callers that keep
+    a token for deferred work must use this value rather than a local cache TTL.
+    """
+
+    await _assert_local_user_can_authenticate(user_id)
+    user = await get_user(str(user_id))
+    if user is None:
+        raise ValueError(f"User {user_id} not found")
+
+    payload: dict = {"isImpersonation": True}
+    if delegation_claims:
+        payload.update(validate_delegation_claims_payload(delegation_claims))
+        payload.setdefault(CLAIM_DELEGATION_VERSION, DELEGATION_VERSION)
+
+    session = await create_new_session_without_request_response(
+        "public",
+        user.login_methods[0].recipe_user_id,
+        payload,
+    )
+    expires_at_ms = await session.get_expiry()
+    return IssuedUserToken(
+        value=session.access_token,
+        expires_at=datetime.fromtimestamp(expires_at_ms / 1000, tz=timezone.utc),
+    )
 
 
 async def create_cli_session_tokens(

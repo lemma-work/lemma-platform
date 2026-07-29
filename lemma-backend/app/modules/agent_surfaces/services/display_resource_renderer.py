@@ -288,9 +288,7 @@ def build_display_resource_url(
         )
     if request.type is DisplayResourceType.SCHEDULE:
         return _append_conversation(
-            f"{pod_base}/schedules?{urlencode({'target': request.name})}"
-            if request.name
-            else f"{pod_base}/schedules",
+            f"{pod_base}/schedules",
             conversation_id,
         )
     return _conversation_url(pod_base, conversation_id, tool_call_id)

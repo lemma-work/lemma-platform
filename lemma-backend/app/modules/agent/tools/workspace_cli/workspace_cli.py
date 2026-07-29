@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
@@ -50,10 +51,15 @@ class WorkspaceRuntimeContext:
 
 def workspace_runtime_context(ctx: BaseAgentContext) -> WorkspaceRuntimeContext:
     conversation_key = ctx.conversation_id.hex
+    initial_cwd = ctx.get_workspace_cwd()
+    cwd_key = uuid5(NAMESPACE_URL, initial_cwd).hex[:12]
     return WorkspaceRuntimeContext(
         default_shell_session_id=f"shell-{conversation_key}",
-        default_python_session_id=f"python-{conversation_key}",
-        initial_cwd=ctx.get_workspace_cwd(),
+        # A stateful interpreter is created with a fixed cwd. Include the
+        # conversation's resolved cwd in its identity so moving the conversation
+        # cannot silently reuse a kernel rooted in the previous directory.
+        default_python_session_id=f"python-{conversation_key}-{cwd_key}",
+        initial_cwd=initial_cwd,
         scope_key=ctx.get_workspace_scope_key(),
     )
 
@@ -234,9 +240,13 @@ async def write_stdin_internal(
             error=result.get("error"),
         )
     except Exception as exc:
+        # Session setup failed before write_stdin established whether the
+        # process is terminal. Preserve the routing binding so a later poll or
+        # retry still reaches the original shell session.
         return _workspace_tool_failure(
             exc,
             operation="write_stdin",
+            completed=False,
             process_id=request.process_id,
         )
 

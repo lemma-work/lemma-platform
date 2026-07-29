@@ -17,12 +17,8 @@ import zipfile
 
 import httpx
 
-from .runtime_models import (
-    RunClaim,
-    TerminalReport,
-)
+from .runtime_models import TerminalReport
 from .trace_context import inject_trace_context
-from .types import JsonObject
 
 
 _CACHE_ROOT = Path(
@@ -33,6 +29,7 @@ _CACHE_ROOT = Path(
 )
 _MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 _MAX_LOG_BYTES = 4 * 1024 * 1024
+_CALLBACK_GRACE_SECONDS = 60
 
 
 class GatewayClient:
@@ -54,57 +51,51 @@ class GatewayClient:
             ),
         )
 
-    async def claim(
+    async def artifact(
         self,
         function_token: str,
         *,
-        run_id: UUID,
+        function_id: UUID,
         revision_hash: str,
-        input_data: JsonObject,
-    ) -> RunClaim:
-        response = await self._client.post(
+    ) -> bytes:
+        response = await self._client.get(
             urljoin(
                 self._base_url,
-                f"internal/function-runtime/runs/{run_id}:claim",
+                (
+                    "internal/function-runtime/functions/"
+                    f"{function_id}/artifacts/{revision_hash}"
+                ),
             ),
             headers=self._headers(f"Bearer {function_token}"),
-            json={
-                "revision_hash": revision_hash,
-                "input_data": input_data,
-            },
-        )
-        response.raise_for_status()
-        return RunClaim.model_validate(response.json())
-
-    async def artifact(self, claim: RunClaim) -> bytes:
-        response = await self._client.get(
-            urljoin(self._base_url, claim.artifact_url.lstrip("/")),
-            headers=self._headers(f"Bearer {claim.callback_token}"),
         )
         response.raise_for_status()
         if len(response.content) > _MAX_ARTIFACT_BYTES:
             raise ValueError("function artifact exceeds the runtime limit")
         return response.content
 
-    async def terminal(self, claim: RunClaim, report: TerminalReport) -> None:
-        await self._post_event(claim, "terminal", report.model_dump(mode="json"))
-
-    async def _post_event(
-        self, claim: RunClaim, event: str, payload: JsonObject
+    async def terminal(
+        self,
+        function_token: str,
+        *,
+        run_id: UUID,
+        deadline_at: datetime,
+        report: TerminalReport,
     ) -> None:
         url = urljoin(
             self._base_url,
-            f"internal/function-runtime/runs/{claim.run_id}:{event}",
+            f"internal/function-runtime/runs/{run_id}:terminal",
         )
-        headers = self._headers(f"Bearer {claim.callback_token}")
-        retry_deadline = min(
-            datetime.now(timezone.utc) + timedelta(seconds=5),
-            claim.deadline_at.astimezone(timezone.utc) + timedelta(seconds=5),
+        headers = self._headers(f"Bearer {function_token}")
+        retry_deadline = deadline_at.astimezone(timezone.utc) + timedelta(
+            seconds=_CALLBACK_GRACE_SECONDS
         )
         delay_seconds = 0.1
+        payload = report.model_dump(mode="json")
         while True:
             remaining = (retry_deadline - datetime.now(timezone.utc)).total_seconds()
-            request_timeout = max(0.1, min(2.0, remaining))
+            if remaining <= 0:
+                raise TimeoutError("terminal callback retry deadline elapsed")
+            request_timeout = min(2.0, remaining)
             retry_after_seconds: float | None = None
             try:
                 response = await self._client.post(
@@ -127,7 +118,7 @@ class GatewayClient:
             sleep_seconds = retry_after_seconds or delay_seconds
             remaining = (retry_deadline - datetime.now(timezone.utc)).total_seconds()
             if remaining <= 0:
-                raise TimeoutError(f"{event} callback retry deadline elapsed")
+                raise TimeoutError("terminal callback retry deadline elapsed")
             await asyncio.sleep(min(sleep_seconds, remaining))
             delay_seconds = min(delay_seconds * 2, 1.0)
 
@@ -240,24 +231,32 @@ def _artifact_root(data: bytes, digest: str) -> Path:
 
 async def _resolve_artifact_root(
     gateway: GatewayClient,
-    claim: RunClaim,
+    function_token: str,
+    *,
+    function_id: UUID,
+    revision_hash: str,
+    deadline_at: datetime,
 ) -> Path:
     """Resolve an immutable revision without re-fetching a warm artifact."""
 
-    digest = claim.revision_hash.removeprefix("sha256:")
+    digest = revision_hash.removeprefix("sha256:")
     cached = _cached_artifact_root(digest)
     if cached is not None:
         return cached
-    async with _artifact_cache_lock(digest, deadline_at=claim.deadline_at):
+    async with _artifact_cache_lock(digest, deadline_at=deadline_at):
         # Another invocation may have populated the cache while this process
         # waited for the revision lock.
         cached = _cached_artifact_root(digest)
         if cached is not None:
             return cached
-        artifact = await gateway.artifact(claim)
+        artifact = await gateway.artifact(
+            function_token,
+            function_id=function_id,
+            revision_hash=revision_hash,
+        )
         return _artifact_root(
             artifact,
-            _verify_artifact(artifact, claim.revision_hash),
+            _verify_artifact(artifact, revision_hash),
         )
 
 

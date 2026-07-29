@@ -104,11 +104,13 @@ provider_create_calls(allocation_token) <= 1
 
 - Same operation ID and request hash returns the same process.
 - Same operation ID with any different non-secret field is `OPERATION_CONFLICT`.
-- Environment/stdin values are absent from durable rows and logs.
-- Lost start acknowledgment becomes `UNKNOWN_DISPATCH` and is resolved by the same
-  provider tag/process; no second start occurs.
+- Environment/stdin values and the process record itself are absent from durable
+  rows and logs.
+- Lost start acknowledgment becomes non-retryable `UNKNOWN_DISPATCH`; no second
+  start occurs.
 - Stale-epoch input/resize/terminate is rejected.
-- Output reconnect resumes from sequence and reports truncation gaps.
+- Same-manager output reconnect resumes from sequence and reports truncation gaps;
+  manager restart explicitly loses the handle.
 
 ### 3.4 Deadlines and errors
 
@@ -187,11 +189,13 @@ case IDs become mandatory for Kubernetes before that adapter is enabled.
 - Release terminates sessions/processes and revokes port grants.
 - Resume preserves `/workspace` but callers recreate nonportable session state.
 - Repeated release/resume does not create duplicate resources.
-- Profile replacement preserves files while changing allocation epoch.
-- E2B profile replacement verifies a streamed file manifest before the atomic bind;
-  an injected copy failure leaves the old sandbox current.
-- Seven-day retention activity resumes the workspace.
-- Retention expiry permanently removes compute and storage.
+- Docker-volume profile replacement preserves files while changing allocation epoch.
+- E2B-native profile replacement fences and removes the old exact sandbox, then
+  publishes a fresh storage generation.
+- Activity before the configured total-inactivity deadline resumes the exact paused
+  workspace.
+- Retention expiry removes compute and storage but the next operation recreates
+  the logical workspace with a fresh disk.
 - Explicit delete prevents a late event/inventory item from resurrecting state.
 
 ### 4.5 Port access
@@ -246,9 +250,10 @@ selected in production configuration.
 
 - Workspace template static services are ready immediately after create without
   post-create runtime bootstrap.
-- Full-memory pause plus auto-resume restores native command/filesystem access.
+- Explicit resume of the same sandbox ID restores native filesystem access under a
+  new allocation epoch.
 - AgentBox quiescence removed contexts/processes/dynamic credentials before pause.
-- File operations and commands auto-resume without a preceding list/status call.
+- File operations and commands cannot silently auto-resume a paused sandbox.
 - Command, PID/tag reconnect, stdin, list, kill, PTY, and code contexts satisfy the
   portable suite.
 - Secured app grant works and raw traffic token does not escape AgentBox.
@@ -256,8 +261,8 @@ selected in production configuration.
 - Duplicate lifecycle deliveries are idempotent.
 - Function template exposes no unauthenticated public traffic. Its resident
   function HTTP service is reachable only through E2B's secured TLS gateway and an
-  AgentBox signed port grant.
-- Function sandbox is killed, not paused, after five idle minutes.
+  allocation-fenced AgentBox lease; the manager key never reaches user code.
+- Function sandbox is killed, not paused, after its protected lease/idle horizon.
 - Long JOB sets one timeout past deadline and completes without heartbeat.
 - Provider 429 honors retry-after and does not cause adapter-local create retries.
 - Cleanup exact-kills every billable test sandbox, including paused workspaces.
@@ -289,8 +294,8 @@ It becomes a Kubernetes gate only when that deferred adapter is enabled.
 - API returns terminal result synchronously within deadline.
 - JOB returns pending and completes through callback/outbox.
 - API commits its run and dispatches directly; it never enters the worker queue.
-- JOB uses the durable backend queue. Both modes use the same run claim, runtime
-  endpoint, and per-pod sandbox.
+- JOB uses the durable backend queue. Both modes use the same atomic backend run
+  start, protocol-v2 runtime endpoint, and per-pod sandbox.
 - Five API invocations overlap through isolated warm revision workers without a
   four-slot or execution-unit admission model. Higher worker counts are exercised
   by runtime stress tests rather than treated as a public admission promise.
@@ -299,30 +304,36 @@ It becomes a Kubernetes gate only when that deferred adapter is enabled.
 - Under JOB saturation, API dispatch begins without waiting for the backend JOB
   worker because the paths are independent.
 - Queue time counts against run deadline.
-- A backend restart before JOB claim permits queue redelivery. After claim, neither
-  API nor JOB is automatically invoked again; callback or deadline reconciliation
-  finishes the same durable run.
+- A backend restart before JOB start permits queue redelivery. After start, a
+  redelivery observes `RUNNING`; the same attempt is not re-created. An ambiguous
+  HTTP response is not replayed because user code may already have started. A
+  secured provider-gateway `401/403/404/410` is safe to retry only because the
+  runtime rejected it before user code began.
 
 ### 6.3 Identity and permissions
 
 - One delegated function-session bearer is cached for five minutes by
   user/pod/function/revision/workload/scope inputs and used for both invocation
-  authentication and the SDK context. Grants remain live backend authorization data.
-- The bearer alone cannot create arbitrary work: it must match a backend-created
-  run and its authoritative user/pod/function/revision/input.
-- The post-claim callback/artifact capability is derived for exactly one run and
-  cannot authorize another run. Artifact reads require an active, unexpired run;
-  terminal callback replay can only acknowledge the already-durable terminal state.
+  authentication, exact-revision artifact download, the SDK context, and JOB
+  terminal reporting. Grants remain live backend authorization data.
+- The bearer is function and revision scoped. It cannot select another function,
+  another revision, or a workspace path; the backend alone constructs and starts
+  durable runs before invoking the exact pod sandbox.
+- API terminal data returns on the invocation response. JOB terminal callback
+  replay can only acknowledge the already-durable terminal state.
 - Sandbox argv/env/files contain no user/provider/cloud/object-store credential.
-- Runtime capability is limited to exact run, pod, revision, principal, and grants.
+- The delegated function session is limited to pod, function, revision, principal,
+  scope, and live grants. Exact run identity is carried separately in the
+  backend-constructed envelope and callback path.
 - Function-principal grants and invoking-user audit/RLS attribution remain correct.
-- Replayed/stolen/expired/revoked capabilities fail closed.
+- Replayed/stolen/expired/revoked delegated sessions fail closed at backend
+  artifact, SDK, and callback boundaries.
 - Cross-pod artifact/input/result/callback access is denied.
 
 ### 6.4 Results and events
 
 - Input/output schemas validate exact active revision.
-- Duplicate started/log/terminal callbacks are idempotent.
+- Duplicate JOB terminal callbacks are idempotent.
 - A late callback cannot update an already-terminal run.
 - Terminal transaction emits one completion outbox event.
 - Missing outbox event is repaired without repeating execution.
@@ -332,7 +343,7 @@ It becomes a Kubernetes gate only when that deferred adapter is enabled.
 
 - API 120-second and JOB 600-second defaults flow as absolute deadlines.
 - Runtime kills child and grandchildren at timeout.
-- Cancel before run claim makes the run terminal and starts no code.
+- Cancel before backend run start makes the run terminal and starts no code.
 - Cancel after start targets the exact run's revision-worker process group.
 - Failed termination reports `termination_confirmed=false` and remains reconciled.
 - Late success after cancel/timeout cannot alter public terminal state.
@@ -343,8 +354,7 @@ Fault inject at every boundary:
 
 - provider create accepted, response lost;
 - invocation accepted, response lost;
-- operation claimed, started callback lost;
-- external side effect completed, terminal callback lost;
+- external side effect completed, JOB terminal callback lost;
 - sandbox disappears during artifact download or execution;
 - backend/gateway database connection fails during callback.
 
@@ -352,9 +362,10 @@ Assertions:
 
 - one provider create per allocation token and at most one user-code execution per
   `function_run_id`;
-- neither AgentBox nor the backend automatically replays a claimed or possibly
-  claimed run;
-- callback or deadline reconciliation makes the same run terminal;
+- the only automatic invocation retry is one exact-grant retry after an ambiguous
+  HTTP outcome, deduplicated by the runtime's `function_run_id` registry;
+- direct API response, JOB callback, or deadline reconciliation makes the same run
+  terminal;
 - a client retry creates a new run and may repeat external side effects, just as a
   retry after an ordinary mid-function failure can;
 - zero duplicate side effects caused by platform replay of one run.
@@ -375,7 +386,7 @@ Execute malicious workspace/function fixtures that attempt:
 - terminal ANSI/OSC/control-sequence injection;
 - native-wheel and import-time malicious code;
 - runtime-control API access from user code;
-- delegated-session misuse, operation/callback capability replay, and callback
+- delegated-session misuse, cross-function/revision replay, and JOB callback
   forgery.
 
 Launch requires:
@@ -398,11 +409,11 @@ provider readiness
 resident invocation acknowledgment
 Python context creation/execution
 first output
-run claim
+backend run start
 artifact fetch/verify/cache
 revision worker acquisition
 user duration
-terminal callback persistence
+terminal persistence (direct API response or JOB callback)
 end-to-end API/JOB completion
 ```
 
@@ -451,7 +462,8 @@ views:
 
 Required alerts:
 
-- unknown create/process older than reconciliation SLO;
+- unknown create older than reconciliation SLO or a sudden rate of ambiguous
+  runtime dispatches;
 - provider scope blocked beyond retry-after tolerance;
 - capacity counter mismatch;
 - function API queue age or warm overhead above gate;
@@ -461,9 +473,10 @@ Required alerts:
 - late callback mutation or suspected duplicate invocation;
 - credential/network security test regression.
 
-Operator tools must inspect logical sandbox, physical allocations, process intents,
-function run/queue state, and provider event history by public correlation ID
-without revealing secrets.
+Operator tools must inspect logical sandboxes, physical allocations, create
+attempts, function run/queue state, and provider event history by public
+correlation ID without revealing secrets. Process/session handles are live-manager
+diagnostics, not database records.
 
 ## 10. Breaking migration
 

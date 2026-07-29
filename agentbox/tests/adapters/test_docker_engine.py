@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
+from agentbox.adapters.docker import DockerSandboxAdapter
 from agentbox.adapters.docker_engine import (
     DockerContainerCreateRequest,
     DockerContainerInspect,
@@ -14,6 +15,7 @@ from agentbox.adapters.docker_engine import (
     DockerNetworkCreateRequest,
     DockerRequestAmbiguous,
 )
+from agentbox.ports import ProviderAllocationFailed
 
 
 pytestmark = pytest.mark.asyncio
@@ -67,7 +69,11 @@ async def test_container_inspect_parses_private_network_attachment():
         {
             "Id": "container-123",
             "State": {"Status": "running", "Running": True, "ExitCode": 0},
-            "Config": {"Image": "workspace:dev", "Labels": {}},
+            "Config": {
+                "Image": "workspace:dev",
+                "Labels": {"workspace-storage-id": "volume-123"},
+            },
+            "HostConfig": {"Binds": ["volume-123:/workspace"]},
             "NetworkSettings": {
                 "Ports": {},
                 "Networks": {
@@ -80,6 +86,14 @@ async def test_container_inspect_parses_private_network_attachment():
     assert (
         inspected.network_settings.networks["lemma-private"].ip_address == "172.28.0.7"
     )
+    assert inspected.host_config.binds == ("volume-123:/workspace",)
+    DockerSandboxAdapter._validate_workspace_mount(inspected)
+
+    mismatched = inspected.model_copy(
+        update={"host_config": DockerHostConfig(binds=("volume-other:/workspace",))}
+    )
+    with pytest.raises(ProviderAllocationFailed):
+        DockerSandboxAdapter._validate_workspace_mount(mismatched)
 
 
 async def test_network_create_and_delete_use_typed_engine_requests():

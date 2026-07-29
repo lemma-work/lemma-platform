@@ -69,6 +69,7 @@ from app.modules.agent.infrastructure.repository_status import (
     conversation_status_values_for_db as _conversation_status_values_for_db,
     run_status_values_for_db as _run_status_values_for_db,
 )
+from app.modules.agent.infrastructure.run_projections import StaleAgentRunRef
 from app.modules.connectors.contracts import SecretEncryptionPort
 
 
@@ -839,17 +840,15 @@ class ConversationRepository:
         *,
         cutoff_seconds: int,
         limit: int = 200,
-    ) -> list[AgentRunEntity]:
-        """List non-terminal agent runs whose ``started_at`` predates the cutoff.
+    ) -> list[StaleAgentRunRef]:
+        """List identities of active runs older than the post-timeout cutoff.
 
-        These are runs whose worker task died (crash/OOM/forced shutdown) without
-        finalizing them — they would otherwise sit in RUNNING forever. The cutoff
-        must exceed the streaq task timeout so legitimately long-running agents
-        are never swept up.
+        Only IDs are selected: reconciliation does not execute the run, and stale
+        legacy runtime JSON must not block a safe terminal status transition.
         """
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=cutoff_seconds)
         result = await self.session.execute(
-            select(AgentRunModel)
+            select(AgentRunModel.id, AgentRunModel.conversation_id)
             .where(
                 AgentRunModel.status.in_(_ACTIVE_AGENT_RUN_STATUS_VALUES),
                 AgentRunModel.started_at < cutoff,
@@ -857,7 +856,7 @@ class ConversationRepository:
             .order_by(AgentRunModel.started_at.asc())
             .limit(limit)
         )
-        return [model.to_entity() for model in result.scalars().all()]
+        return [StaleAgentRunRef(*row) for row in result.all()]
 
     async def lock_conversation(self, conversation_id: UUID) -> None:
         await self.session.execute(

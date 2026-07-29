@@ -68,7 +68,8 @@ const authSurfaceStyle = `
   text-align: left;
 }
 
-[data-supertokens~="headerSubtitle"] [data-supertokens~="secondaryText"] {
+[data-supertokens~="headerSubtitle"][data-supertokens~="secondaryText"] {
+  color: var(--text-secondary);
   text-align: left;
 }
 

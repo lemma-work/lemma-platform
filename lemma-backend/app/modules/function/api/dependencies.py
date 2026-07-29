@@ -18,9 +18,6 @@ from app.core.authorization.permissions import Permissions
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.jobs.streaq_job_queue import get_streaq_job_queue
 from app.composition.icons import create_icon_service
-from app.composition.function_workspace import (
-    get_function_workspace_runtime,
-)
 from app.modules.function.infrastructure.repositories import (
     FunctionRepository,
     FunctionRunRepository,
@@ -31,15 +28,12 @@ from app.modules.function.application.function_definition_compiler import (
 from app.modules.function.application.function_use_cases import FunctionUseCases
 from app.modules.function.services.function_file_manager import FunctionFileManager
 from app.modules.function.services.function_service import FunctionService
-from app.core.config import reveal_secret, settings
+from app.core.config import settings
 from app.core.object_storage import build_object_store, local_file_storage_path
 from app.core.request_context import correlation_headers
 from app.composition.workspace_identity import (
-    mint_workspace_token,
+    mint_function_session_token,
     resolve_workspace_organization_id,
-)
-from app.modules.function.application.function_callback_credentials import (
-    FunctionCallbackCredentialSigner,
 )
 from app.modules.function.application.function_runtime_gateway import (
     FunctionRuntimeGateway,
@@ -51,6 +45,9 @@ from app.modules.function.application.function_session_token_cache import (
     FunctionSessionTokenCache,
 )
 from app.modules.function.application.function_dispatcher import FunctionDispatcher
+from app.modules.function.application.function_schema_dispatcher import (
+    FunctionSchemaDispatcher,
+)
 from app.modules.function.application.function_runtime_http_client import (
     FunctionRuntimeHttpClientPool,
 )
@@ -92,22 +89,12 @@ def get_function_storage_factory():
     return build
 
 
-def build_function_callback_credential_signer() -> FunctionCallbackCredentialSigner:
-    secret = reveal_secret(settings.function_runtime_secret)
-    if not secret:
-        raise RuntimeError("FUNCTION_RUNTIME_SECRET must be configured")
-    return FunctionCallbackCredentialSigner(secret)
-
-
 def get_function_runtime_gateway(
     uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
 ) -> FunctionRuntimeGateway:
     return FunctionRuntimeGateway(
         uow_factory=uow_factory,
         storage_factory=get_function_storage_factory(),
-        credential_signer=build_function_callback_credential_signer(),
-        organization_resolver=resolve_workspace_organization_id,
-        lemma_base_url=settings.function_runtime_gateway_url or settings.api_url,
         delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
     )
 
@@ -133,33 +120,46 @@ def get_function_service(uow: UoWDep) -> FunctionService:
     return build_function_service(uow)
 
 
-def build_function_definition_compiler() -> FunctionDefinitionCompiler:
+def build_function_definition_compiler(
+    schema_executor: FunctionSchemaDispatcher,
+) -> FunctionDefinitionCompiler:
     """Construct the DB-free function definition build collaborator."""
     return FunctionDefinitionCompiler(
-        workspace_service=get_function_workspace_runtime(),
+        schema_executor=schema_executor,
         storage_factory=get_function_storage_factory(),
     )
 
 
-def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
+def _function_agentbox_client() -> AgentBoxClient:
     api_url = settings.agentbox_api_url
     api_key = settings.agentbox_api_key
     if not api_url or not api_key:
         raise RuntimeError("AGENTBOX_API_URL and AGENTBOX_API_KEY are required")
+    return AgentBoxClient(
+        base_url=api_url,
+        api_key=api_key,
+        timeout_seconds=120,
+        context_headers_provider=correlation_headers,
+    )
 
-    def client_factory() -> AgentBoxClient:
-        return AgentBoxClient(
-            base_url=api_url,
-            api_key=api_key,
-            timeout_seconds=120,
-            context_headers_provider=correlation_headers,
-        )
 
+def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatcher:
     return FunctionDispatcher(
         uow_factory=uow_factory,
-        credential_signer=build_function_callback_credential_signer(),
-        agentbox_client_factory=client_factory,
-        token_minter=mint_workspace_token,
+        agentbox_client_factory=_function_agentbox_client,
+        token_minter=mint_function_session_token,
+        token_cache=_function_session_token_cache,
+        endpoint_cache=_function_runtime_endpoint_cache,
+        runtime_http_client_factory=_function_runtime_http_clients.get,
+        organization_resolver=resolve_workspace_organization_id,
+        delegated_tokens_enabled=settings.authz_delegated_tokens_enabled,
+    )
+
+
+def build_function_schema_dispatcher() -> FunctionSchemaDispatcher:
+    return FunctionSchemaDispatcher(
+        agentbox_client_factory=_function_agentbox_client,
+        token_minter=mint_function_session_token,
         token_cache=_function_session_token_cache,
         endpoint_cache=_function_runtime_endpoint_cache,
         runtime_http_client_factory=_function_runtime_http_clients.get,
@@ -170,11 +170,12 @@ def build_function_dispatcher(uow_factory: UnitOfWorkFactory) -> FunctionDispatc
 def build_function_use_cases(uow_factory: UnitOfWorkFactory) -> FunctionUseCases:
     """Construct the function use-case layer. The API and the worker build the
     same object so they share one saga implementation."""
+    dispatcher = build_function_dispatcher(uow_factory)
     return FunctionUseCases(
         uow_factory,
         build_function_service,
-        build_function_definition_compiler(),
-        build_function_dispatcher(uow_factory),
+        build_function_definition_compiler(build_function_schema_dispatcher()),
+        dispatcher,
         StreaqFunctionRunQueue(get_streaq_job_queue()),
     )
 

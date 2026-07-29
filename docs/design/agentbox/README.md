@@ -9,6 +9,7 @@
 **Canonical design set:**
 
 - [Sandbox protocol](sandbox-protocol.md)
+- [Lifecycle state model](lifecycle-state-model.md)
 - [Provider adapters](provider-adapters.md)
 - [Function execution](function-execution.md)
 - [Testing strategy](testing-strategy.md)
@@ -27,9 +28,12 @@ immutable artifacts, durable runs, API/JOB scheduling, deadlines, callbacks,
 cancellation policy, results, and domain events. A function
 sandbox contains one profile-owned resident runtime on a fixed private port.
 AgentBox starts and health-checks that opaque profile runtime and exposes it only
-through a short-lived, allocation-bound port grant. AgentBox does not interpret its
-invocation protocol. No durable queue or public result registry runs inside a
-sandbox.
+through an allocation-fenced direct runtime lease. The backend authenticates the
+control-plane lease request with the AgentBox manager key, then calls the returned
+Docker or E2B endpoint directly with opaque provider headers plus the delegated
+function bearer. AgentBox is not in the per-invocation data path and does not
+interpret the invocation protocol. No durable queue or public result registry runs
+inside a sandbox.
 
 The design intentionally uses different lifecycle policies for the two workloads:
 
@@ -77,6 +81,8 @@ memory pause supports activity-driven auto-resume. A filesystem-only pause cold
 boots and cannot use auto-resume. Paused sandboxes do not expire automatically.
 See [E2B sandbox persistence](https://e2b.dev/docs/sandbox/persistence) and
 [auto-resume](https://e2b.dev/docs/sandbox/auto-resume).
+AgentBox deliberately disables automatic resume: pause/resume is an explicit,
+generation-fenced lifecycle event.
 
 AgentBox removes the compensating machinery instead of making it more complex.
 Provider adapters use the provider's strongest native data plane. The public
@@ -91,7 +97,7 @@ explicit.
   plane operation.
 - Preserve user files across workspace release on every supported provider.
 - Keep stateful Python, foreground commands, background processes, stdin, PTY,
-  reconnect, files, and application ports coherent across providers.
+  manager-local reconnect, files, and application ports coherent across providers.
 - Give API functions a bounded low-latency path and JOB functions a durable queued
   path without using a user workspace.
 - Ensure one persisted allocation token causes at most one provider create request.
@@ -283,8 +289,10 @@ stateDiagram-v2
     Active --> Draining: profile replacement
     Draining --> Provisioning: old allocation destroyed
     Active --> Destroying: permanent delete
-    Suspended --> Destroying: retention or permanent delete
-    Destroying --> Absent: compute and storage absent
+    Suspended --> Destroying: retention expiry or permanent delete
+    Destroying --> Expired: retention cleanup
+    Expired --> Provisioning: next operation, fresh disk
+    Destroying --> Absent: permanent delete
 ```
 
 - Running idle timeout: five minutes.
@@ -293,8 +301,11 @@ stateDiagram-v2
   the provider release primitive.
 - `/workspace` files survive release.
 - Session and process continuity is not portable across release.
-- Suspended retention is seven days; activity during that period resumes the
-  logical workspace.
+- Suspended retention is configurable (currently seven days by default) and is
+  measured from the last accepted activity; activity before that deadline resumes
+  the exact physical sandbox and disk.
+- Retention expiry removes compute and storage but keeps the logical workspace
+  recreatable. Its next operation receives a fresh storage generation.
 - Permanent delete removes every exact physical allocation and the durable storage.
 
 ### 7.2 Function lifecycle
@@ -307,15 +318,16 @@ stateDiagram-v2
     Warm --> Busy: invocation admitted
     Busy --> Busy: concurrent invocation admitted
     Busy --> Warm: final invocation completed
-    Warm --> Destroying: idle for five minutes
+    Warm --> Destroying: endpoint lease and idle horizon expire
     Busy --> Draining: profile replacement requested
     Draining --> Destroying: all invocations terminal
     Destroying --> Absent
 ```
 
 Function allocations are never suspended. They may cache verified artifacts while
-warm, but no correctness path depends on the cache. After five idle minutes the
-allocation is destroyed on every provider.
+warm, but no correctness path depends on the cache. A direct endpoint lease protects
+the current allocation for its bounded cache horizon; after that protection and the
+idle threshold expire, the allocation is destroyed on every provider.
 
 ## 8. Reliability principles
 
@@ -335,8 +347,9 @@ allocation is destroyed on every provider.
    retry permission.
 7. **No heartbeat protocol.** Active AgentBox operations and provider timeouts cover
    liveness. Long operations set their timeout once from the absolute deadline.
-8. **No function polling in healthy execution.** Runtime callbacks complete durable
-   runs. Inspection exists for reconciliation and cancellation only.
+8. **No function polling in healthy execution.** API responses and JOB callbacks
+   complete durable runs. Inspection exists for reconciliation and cancellation
+   only.
 
 ## 9. Security invariants
 
@@ -350,10 +363,11 @@ allocation is destroyed on every provider.
 - Function invocation and the Lemma SDK use one delegated function-session bearer,
   cached for up to five minutes by `(user, pod, function, revision hash)`. Grants
   remain live backend data and are checked when the token is used rather than
-  embedded in the token or revision identity. The bearer is the only credential
-  that authorizes execution. Exact `function_run_id` and the atomic run claim
-  provide per-call deduplication. A separate run-scoped callback capability is
-  returned only after claim and is not exposed to function code.
+  embedded in the token or revision identity. The bearer authorizes invocation,
+  exact-revision artifact download, the Lemma SDK, and JOB terminal reporting.
+  The backend atomically starts each run before invocation; the exact
+  `function_run_id` and runtime registry provide per-call deduplication. No
+  separate callback or compilation capability exists.
 - Function public ingress is disabled.
 - Private, link-local, metadata, cluster-control, Docker socket, and provider-control
   networks are unavailable to user/function code.
@@ -361,8 +375,9 @@ allocation is destroyed on every provider.
 - Docker is development/conformance only for untrusted multi-tenant execution.
 - Kubernetes production uses an approved sandbox `RuntimeClass`, initially gVisor
   or Kata.
-- Every callback and terminal transition is authenticated for the exact
-  `function_run_id` and conditional on its current durable state.
+- Every JOB callback and terminal transition is authenticated for the exact
+  function principal and `function_run_id`, then conditioned on its current
+  durable state.
 
 ## 10. Source-of-truth rule
 
@@ -390,5 +405,5 @@ invariants, and the acceptance gates together.
 | Destroy | Permanently remove a physical allocation; for workspace delete, storage too |
 | Function run ID | Durable identity and idempotency key for one requested execution |
 | Unknown allocation outcome | Provider allocation creation may have succeeded but cannot yet be conclusively observed |
-| Runtime gateway | Trusted backend API for function-session validation, run claim, artifact access, callbacks, and SDK operations |
+| Runtime gateway | Trusted backend API for exact-revision artifact access, JOB terminal callbacks, and SDK operations authenticated by the delegated function session |
 | Egress gateway | Trusted proxy for the explicitly allowed function network path |

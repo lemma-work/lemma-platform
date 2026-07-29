@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -10,169 +8,77 @@ import pytest
 from app.modules.function.application.function_definition_compiler import (
     FunctionDefinitionCompiler,
 )
+from app.modules.function.domain.entities import (
+    FunctionArtifact,
+    FunctionEntity,
+    FunctionSchemaSet,
+    FunctionStatus,
+    FunctionType,
+)
 from app.modules.function.domain.errors import FunctionValidationError
 
 
 pytestmark = pytest.mark.asyncio
 
 
-class _Session:
-    def __init__(self, response) -> None:
-        self._response = response
-        self.entered = False
-        self.exited = False
-        self.program: str | None = None
-        self.timeout: int | None = None
-
-    async def __aenter__(self):
-        self.entered = True
-        return self
-
-    async def __aexit__(self, *_args):
-        self.exited = True
-
-    async def execute_code(self, program: str, timeout: int):
-        self.program = program
-        self.timeout = timeout
-        marker_start = program.index("__LEMMA_FUNCTION_SCHEMAS__")
-        marker_end = program.index(":", marker_start) + 1
-        marker = program[marker_start:marker_end]
-        response = self._response
-        if response.stdout == "AUTO":
-            response.stdout = marker + json.dumps(
-                {
-                    "input": {"type": "object"},
-                    "output": {"type": "object"},
-                    "config": None,
-                }
-            )
-        return response
+def _function(**overrides) -> FunctionEntity:
+    payload = {
+        "id": uuid4(),
+        "pod_id": uuid4(),
+        "user_id": uuid4(),
+        "name": "inspect-me",
+        "type": FunctionType.API,
+        "status": FunctionStatus.DRAFT,
+    }
+    payload.update(overrides)
+    return FunctionEntity(**payload)
 
 
-async def test_schema_extraction_uses_isolated_rooted_session() -> None:
-    workspace = AsyncMock()
-    session = _Session(
-        SimpleNamespace(
-            success=True,
-            stdout="AUTO",
-            stderr="",
-            error_in_exec=None,
-        )
+async def test_schema_extraction_uses_stateless_function_executor() -> None:
+    schema_executor = AsyncMock()
+    schemas = FunctionSchemaSet(
+        input={"type": "object"},
+        output={"type": "object"},
+        config=None,
     )
-    workspace.get_session.return_value = session
+    schema_executor.extract_schemas.return_value = schemas
     compiler = FunctionDefinitionCompiler(
-        workspace_service=workspace,
+        schema_executor=schema_executor,
         storage_factory=lambda _function_id: AsyncMock(),
     )
-    user_id = uuid4()
-    pod_id = uuid4()
-    function_id = uuid4()
-    code = (
-        "#input_type_name: Input\n"
-        "#output_type_name: Output\n"
-        "#function_name: execute\n"
-        "class Input: pass\n"
-        "class Output: pass\n"
-    )
+    function = _function()
+    artifact = FunctionArtifact(revision_hash=f"sha256:{'a' * 64}")
+    acting_user_id = uuid4()
 
     result = await compiler.extract_schemas(
-        user_id,
-        code,
-        "functions/execute.py",
-        pod_id,
-        function_id,
+        function,
+        artifact,
+        user_id=acting_user_id,
     )
 
-    assert result == ({"type": "object"}, {"type": "object"}, None)
-    call = workspace.get_session.await_args.kwargs
-    assert call["initial_cwd"] == "/workspace"
-    assert call["close_on_exit"] is True
-    assert call["session_id"].startswith("schema-")
-    assert call["session_id"] != str(function_id)
-    assert session.entered and session.exited
-    assert "compile(" in (session.program or "")
-    assert "'functions/execute.py'" in (session.program or "")
-    assert session.timeout == 60
-
-
-async def test_schema_program_resolves_python_314_deferred_typing_names(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    marker = "__LEMMA_FUNCTION_SCHEMAS__test:"
-    code = """from typing import Optional
-from pydantic import BaseModel
-
-class Input(BaseModel):
-    value: str
-
-class Output(BaseModel):
-    note: Optional[str] = None
-"""
-    program = FunctionDefinitionCompiler._schema_program(
-        code=code,
-        code_path="functions/deferred_annotations.py",
-        marker=marker,
-        input_model="Input",
-        output_model="Output",
-        config_model=None,
+    assert result == schemas
+    schema_executor.extract_schemas.assert_awaited_once_with(
+        function_id=function.id,
+        pod_id=function.pod_id,
+        user_id=acting_user_id,
+        function_name=function.name,
+        artifact=artifact,
     )
 
-    exec(program, {})
 
-    output = capsys.readouterr().out.strip()
-    assert output.startswith(marker)
-    schemas = json.loads(output.removeprefix(marker))
-    assert schemas["input"]["properties"]["value"]["type"] == "string"
-    assert schemas["output"]["properties"]["note"]["anyOf"] == [
-        {"type": "string"},
-        {"type": "null"},
-    ]
-
-
-async def test_schema_extraction_rejects_expression_headers_before_sandbox() -> None:
-    workspace = AsyncMock()
+async def test_schema_extraction_rejects_unpersisted_function() -> None:
+    schema_executor = AsyncMock()
     compiler = FunctionDefinitionCompiler(
-        workspace_service=workspace,
+        schema_executor=schema_executor,
         storage_factory=lambda _function_id: AsyncMock(),
     )
-    code = (
-        "#input_type_name: __import__('os').system('id')\n"
-        "#output_type_name: Output\n"
-        "#function_name: execute\n"
-    )
+    function = _function(id=None)
 
-    with pytest.raises(FunctionValidationError, match="identifiers"):
+    with pytest.raises(FunctionValidationError, match="persisted"):
         await compiler.extract_schemas(
-            uuid4(), code, "function.py", uuid4(), uuid4()
+            function,
+            FunctionArtifact(revision_hash=f"sha256:{'b' * 64}"),
+            user_id=uuid4(),
         )
 
-    workspace.get_session.assert_not_awaited()
-
-
-async def test_schema_session_is_cleaned_when_execution_fails() -> None:
-    workspace = AsyncMock()
-    session = _Session(
-        SimpleNamespace(
-            success=False,
-            stdout="",
-            stderr="bad schema",
-            error_in_exec={"ename": "SyntaxError", "evalue": "bad schema"},
-        )
-    )
-    workspace.get_session.return_value = session
-    compiler = FunctionDefinitionCompiler(
-        workspace_service=workspace,
-        storage_factory=lambda _function_id: AsyncMock(),
-    )
-    code = (
-        "#input_type_name: Input\n"
-        "#output_type_name: Output\n"
-        "#function_name: execute\n"
-    )
-
-    with pytest.raises(FunctionValidationError, match="SyntaxError"):
-        await compiler.extract_schemas(
-            uuid4(), code, "function.py", uuid4(), uuid4()
-        )
-
-    assert session.exited is True
+    schema_executor.extract_schemas.assert_not_awaited()

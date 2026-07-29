@@ -19,7 +19,10 @@ from opentelemetry.trace import (
 )
 
 from app.core.observability import telemetry
-from app.core.observability.span_sanitizer import SanitizingSpanExporter
+from app.core.observability.span_sanitizer import (
+    SanitizingSpanExporter,
+    sanitize_http_route,
+)
 
 
 class _CaptureExporter(SpanExporter):
@@ -101,7 +104,12 @@ def test_signal_endpoint_resolution_obeys_otlp_protocol_rules(monkeypatch) -> No
     assert telemetry._otlp_signal_endpoint("traces") == ("https://traces.test/custom")
 
 
-def _adversarial_span() -> ReadableSpan:
+def _adversarial_span(
+    *,
+    http_route: str = "/pods/{pod_id}",
+    kind: SpanKind = SpanKind.SERVER,
+    scope_name: str = "opentelemetry.instrumentation.fastapi",
+) -> ReadableSpan:
     context = SpanContext(
         trace_id=1,
         span_id=2,
@@ -121,7 +129,7 @@ def _adversarial_span() -> ReadableSpan:
         ),
         attributes={
             "http.request.method": "GET",
-            "http.route": "/pods/{pod_id}",
+            "http.route": http_route,
             "url.full": "https://example.test/private?token=CANARY",
             "db.statement": "SELECT 'CANARY'",
             "db.system": "postgresql",
@@ -142,10 +150,8 @@ def _adversarial_span() -> ReadableSpan:
             ),
         ),
         links=(Link(context, {"url.full": "https://CANARY", "error.type": "Error"}),),
-        kind=SpanKind.SERVER,
-        instrumentation_scope=InstrumentationScope(
-            "opentelemetry.instrumentation.fastapi"
-        ),
+        kind=kind,
+        instrumentation_scope=InstrumentationScope(scope_name),
         status=Status(StatusCode.ERROR, "CANARY status"),
         start_time=1,
         end_time=2,
@@ -170,6 +176,105 @@ def test_export_boundary_span_sanitizer_drops_adversarial_content() -> None:
     assert safe.events[0].attributes == {"exception.type": "RuntimeError"}
     assert safe.links[0].attributes == {"error.type": "Error"}
     assert "CANARY" not in str(safe.to_json())
+
+
+@pytest.mark.parametrize(
+    ("route", "expected"),
+    [
+        ("/pods/{pod_id}/datastore/tables/{table_id}/records", True),
+        ("/port-access/{token}/{path:path}", True),
+        ("/health/ready", True),
+        ("/openapi.json", True),
+        ("/pods/019f99c1-5a45-739e-ba96-717bc9fccad7/functions", False),
+        ("/users/12345", False),
+        ("/runs/01K0YZH3VX8FB2M7G5WC6NQ9TR", False),
+        ("/files/5383eddca8db622d42865ea7a9e672e15d058018", False),
+        ("/reset/AbCdEf0123456789", False),
+        ("/users/alice@example.test", False),
+        ("https://example.test/health", False),
+    ],
+)
+def test_http_route_export_boundary_rejects_concrete_identifiers(
+    route: str,
+    expected: bool,
+) -> None:
+    assert (sanitize_http_route(route) is not None) is expected
+    capture = _CaptureExporter()
+    exporter = SanitizingSpanExporter(capture)
+    assert (
+        exporter.export([_adversarial_span(http_route=route)])
+        is SpanExportResult.SUCCESS
+    )
+    assert len(capture.spans) == 1
+    assert ("http.route" in capture.spans[0].attributes) is expected
+
+
+def test_fastapi_route_patch_filters_labels_before_span_and_metric_collection(
+    monkeypatch,
+) -> None:
+    from opentelemetry.instrumentation import fastapi as otel_fastapi
+
+    monkeypatch.setattr(telemetry, "_fastapi_route_details_patched", False)
+    monkeypatch.setattr(
+        otel_fastapi,
+        "_get_route_details",
+        lambda scope: scope["route"],
+    )
+    telemetry._patch_fastapi_route_details()
+
+    assert otel_fastapi._get_route_details({"route": "/pods/{pod_id}"}) == (
+        "/pods/{pod_id}"
+    )
+    assert (
+        otel_fastapi._get_route_details(
+            {"route": "/pods/019f99c1-5a45-739e-ba96-717bc9fccad7"}
+        )
+        is None
+    )
+
+
+def test_exporter_drops_only_fastapi_asgi_internal_spans() -> None:
+    capture = _CaptureExporter()
+    exporter = SanitizingSpanExporter(capture)
+    assert (
+        exporter.export(
+            [
+                _adversarial_span(
+                    kind=SpanKind.INTERNAL,
+                    scope_name="opentelemetry.instrumentation.fastapi",
+                ),
+                _adversarial_span(
+                    kind=SpanKind.INTERNAL,
+                    scope_name="opentelemetry.instrumentation.asgi",
+                ),
+                _adversarial_span(kind=SpanKind.SERVER),
+                _adversarial_span(
+                    kind=SpanKind.CLIENT,
+                    scope_name="opentelemetry.instrumentation.httpx",
+                ),
+                _adversarial_span(
+                    kind=SpanKind.INTERNAL,
+                    scope_name="app.core.background_jobs",
+                ),
+                _adversarial_span(
+                    kind=SpanKind.INTERNAL,
+                    scope_name="app.fastapi_adapter",
+                ),
+                _adversarial_span(
+                    kind=SpanKind.INTERNAL,
+                    scope_name="custom.asgi.pipeline",
+                ),
+            ]
+        )
+        is SpanExportResult.SUCCESS
+    )
+    assert [span.kind for span in capture.spans] == [
+        SpanKind.SERVER,
+        SpanKind.CLIENT,
+        SpanKind.INTERNAL,
+        SpanKind.INTERNAL,
+        SpanKind.INTERNAL,
+    ]
 
 
 def test_llm_pipeline_disables_content_and_uses_dedicated_provider(

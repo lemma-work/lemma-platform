@@ -32,6 +32,8 @@ from .contracts import (
     ErrorResponse,
     FileListResponse,
     FileStatResponse,
+    FunctionRuntimeLeaseRequest,
+    FunctionRuntimeLeaseResponse,
     MoveFileRequest,
     ExecutePythonModel,
     PythonResultResponse,
@@ -64,6 +66,7 @@ async def ensure_sandbox(
     workload_kind: WorkloadKind,
     logical_id: UUID,
     request: EnsureSandboxRequest,
+    verify_ready: bool = Query(default=False),
     service: SandboxLifecycleService = Depends(sandbox_lifecycle),
 ) -> Response | SandboxHandleResponse:
     handle = await service.ensure(
@@ -71,6 +74,7 @@ async def ensure_sandbox(
         request.profile.to_domain(),
         admission_class=request.admission_class,
         deadline_at=request.deadline_at,
+        verify_ready=verify_ready,
     )
     response = SandboxHandleResponse.from_domain(handle)
     if handle.ready:
@@ -152,6 +156,25 @@ async def create_port_access(
         expires_at=request.expires_at,
     )
     return PortAccessResponse.from_domain(grant)
+
+
+@router.post(
+    "/sandboxes/function/{logical_id}/runtime:lease",
+    response_model=FunctionRuntimeLeaseResponse,
+)
+async def lease_function_runtime(
+    logical_id: UUID,
+    request: FunctionRuntimeLeaseRequest,
+    response: Response,
+    service: PortAccessService = Depends(port_access),
+) -> FunctionRuntimeLeaseResponse:
+    lease = await service.lease_function_runtime(
+        logical_id,
+        deadline_at=request.deadline_at,
+        required_valid_until=request.required_valid_until,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return FunctionRuntimeLeaseResponse.from_domain(lease)
 
 
 def agentbox_error_response(error: AgentBoxError) -> JSONResponse:

@@ -29,6 +29,7 @@ export function AuthProtectionNotice() {
 
   const enabled = progress.enabled ?? configured;
   if (enabled !== true) return null;
+  if (progress.phase === "idle") return null;
 
   const isWorking = progress.phase === "checking" || progress.phase === "solving";
   const isError = progress.phase === "error";
@@ -41,7 +42,7 @@ export function AuthProtectionNotice() {
           ? "Private security check complete."
           : isError
             ? "Security check unavailable. Try submitting again."
-            : "Protected by private proof-of-work—no tracking CAPTCHA.";
+            : null;
   const Icon = isWorking ? Loader2 : isError ? AlertCircle : ShieldCheck;
 
   return (

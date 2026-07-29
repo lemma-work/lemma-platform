@@ -9,8 +9,9 @@ import pytest_asyncio
 
 from agentbox.domain import (
     AdmissionClass,
+    AgentBoxError,
     AllocationState,
-    ProcessState,
+    ErrorCode,
     SandboxDesiredState,
     SandboxKey,
     SandboxProfileRef,
@@ -133,7 +134,7 @@ async def _ensure(
     )
 
 
-async def test_workspace_release_then_retention_delete_is_provider_exact(
+async def test_workspace_release_then_hard_expiry_recreates_fresh(
     database: StateDatabase,
 ) -> None:
     provider = Provider(database)
@@ -177,10 +178,84 @@ async def test_workspace_release_then_retention_delete_is_provider_exact(
 
     assert second == 1
     assert deleted is not None
-    assert deleted.desired_state == SandboxDesiredState.DELETED
+    assert deleted.desired_state == SandboxDesiredState.RELEASED
+    assert deleted.current_allocation_id is None
     assert storage is not None and storage.provider_storage_id is None
     assert len(provider.destroy_calls) == 1
     assert len(provider.destroyed_storage) == 1
+
+    await _ensure(lifecycle, key)
+    async with database.uow() as uow:
+        recreated = await uow.repository.get_logical(key)
+        fresh_storage = await uow.repository.get_workspace_storage(key)
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
+
+    assert recreated is not None
+    assert recreated.desired_state == SandboxDesiredState.PRESENT
+    assert recreated.current_allocation_id is not None
+    assert fresh_storage is not None
+    assert fresh_storage.provider_storage_id is not None
+    assert fresh_storage.content_generation == 1
+    assert len(allocations) == 2
+    assert allocations[0].state == AllocationState.DESTROYED
+    assert allocations[1].state == AllocationState.ACTIVE
+
+
+async def test_workspace_hard_expiry_is_measured_from_last_activity(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    lifecycle = SandboxLifecycleService(
+        database,
+        provider,
+        workspace_retention_seconds=48 * 60 * 60,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    await _ensure(lifecycle, key)
+    async with database.uow() as uow:
+        before_release = await uow.repository.get_logical(key)
+        await uow.commit()
+    assert before_release is not None
+    paused_at = before_release.last_used_at + timedelta(minutes=5)
+
+    async with database.uow() as uow:
+        _claim, released, _allocation = await uow.repository.begin_release(
+            key,
+            claimed_until=paused_at + timedelta(seconds=30),
+            retention_seconds=48 * 60 * 60,
+            now=paused_at,
+        )
+        await uow.commit()
+
+    assert released.delete_after == before_release.last_used_at + timedelta(hours=48)
+
+
+async def test_activity_cannot_start_after_maintenance_claim(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    lifecycle = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    await _ensure(lifecycle, key)
+    now = datetime.now(timezone.utc)
+
+    async with database.uow() as uow:
+        await uow.repository.begin_release(
+            key,
+            claimed_until=now + timedelta(seconds=30),
+            retention_seconds=48 * 60 * 60,
+            now=now,
+        )
+        with pytest.raises(AgentBoxError) as raised:
+            await uow.repository.protect_activity(
+                key,
+                until=now + timedelta(seconds=20),
+                now=now,
+            )
+        await uow.rollback()
+
+    assert raised.value.code == ErrorCode.SANDBOX_QUIESCING
 
 
 async def test_idle_function_compute_is_destroyed_and_can_be_recreated(
@@ -221,7 +296,7 @@ async def test_idle_function_compute_is_destroyed_and_can_be_recreated(
     assert recreated.current_allocation_id is not None
 
 
-async def test_running_process_blocks_idle_function_cleanup(
+async def test_active_runtime_lease_blocks_idle_function_cleanup(
     database: StateDatabase,
 ) -> None:
     provider = Provider(database)
@@ -234,24 +309,15 @@ async def test_running_process_blocks_idle_function_cleanup(
     )
     key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
     await _ensure(lifecycle, key)
+    lease_deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
     async with database.uow() as uow:
-        process, _ = await uow.repository.reserve_process(
-            key,
-            operation_id=uuid4(),
-            request_hash="1" * 64,
-            env_keys=(),
-            cwd="/tmp",
-            tty=False,
-            output_limit_bytes=1024,
-            deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
-        )
+        await uow.repository.protect_activity(key, until=lease_deadline)
         await uow.commit()
 
     completed = await worker.run_once(
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30)
     )
 
-    assert process.state == ProcessState.RESERVED
     assert completed == 0
     assert provider.destroy_calls == []
 

@@ -78,8 +78,23 @@ _FOREIGN_LOGGER_PREFIXES = frozenset(
     }
 )
 _INFO_NOISE_LOGGER_PREFIXES = (
+    # These libraries narrate every successful request/message at INFO. Their
+    # warnings and errors remain visible; timing belongs in OTel spans instead
+    # of duplicate console records.
+    "faststream",
+    "httpcore",
+    "httpx",
     "sqlalchemy.engine",
-    "sqlalchemy.orm.mapper",
+    # SQLAlchemy's mapper configuration narrates every relationship, column
+    # property, and loader strategy through class-specific descendants such as
+    # ``sqlalchemy.orm.relationships.RelationshipProperty`` and
+    # ``sqlalchemy.orm.strategies.LazyLoader``. Keep the ORM at its documented
+    # WARNING default during normal INFO operation; warnings/errors still
+    # propagate through the redacted JSON pipeline.
+    "sqlalchemy.orm",
+    "sqlalchemy.pool",
+    "streaq",
+    "uvicorn.access",
 )
 _PROHIBITED_FIELDS = {
     "authorization",
@@ -552,6 +567,10 @@ def get_dependency_logger(name: str, *, level: int | None = None) -> logging.Log
         _install_safe_exception_filter(handler)
     dependency_logger.propagate = True
     requested_level = _configured_log_level if level is None else level
+    if _configured_log_level == logging.INFO and name.startswith(
+        _INFO_NOISE_LOGGER_PREFIXES
+    ):
+        requested_level = max(requested_level, logging.WARNING)
     dependency_logger.setLevel(
         max(
             _configured_log_level,

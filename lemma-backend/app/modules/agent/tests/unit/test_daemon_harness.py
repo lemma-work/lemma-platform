@@ -232,7 +232,14 @@ async def test_daemon_harness_forwards_run_start_and_yields_events(
         "provider process cwd is daemon scratch space"
         in start_payload["prompt"]["system_prompt"]
     )
-    assert "USER:\nhello" == start_payload["prompt"]["user_prompt"]
+    user_prompt = start_payload["prompt"]["user_prompt"]
+    assert user_prompt.startswith("USER:\nhello\n\n<notes>\n")
+    assert "Current date and time:" in user_prompt
+    assert user_prompt.endswith("</notes>")
+    # Runtime metadata is added only to the outbound copy, never the stored
+    # user-authored message.
+    assert message.text == "hello"
+    assert "<notes>" not in message.text
     assert "session_id" not in start_payload["prompt"]
     assert "text" not in start_payload["prompt"]
     assert "messages" not in start_payload
@@ -425,7 +432,12 @@ def test_daemon_harness_attaches_cached_session_and_recovery_prompt():
     recovery_prompt = payload["prompt"]["recovery_system_prompt"]
     assert "Stay concise." in recovery_prompt
     assert "You are running through a Lemma user daemon." in recovery_prompt
-    assert payload["prompt"]["user_prompt"] == "USER:\ncontinue"
+    user_prompt = payload["prompt"]["user_prompt"]
+    assert user_prompt.startswith("USER:\ncontinue\n\n<notes>\n")
+    assert "Current date and time:" in user_prompt
+    assert user_prompt.endswith("</notes>")
+    assert message.text == "continue"
+    assert "<notes>" not in message.text
 
 
 def test_daemon_harness_default_reconnect_grace_is_two_minutes():

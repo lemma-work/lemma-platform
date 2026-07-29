@@ -16,7 +16,12 @@ from app.modules.workspace.services.workspace_sandbox_service import (
 )
 
 
-def _sandbox_info(user_id: UUID) -> SandboxInfo:
+def _sandbox_info(
+    user_id: UUID,
+    *,
+    allocation_id: UUID | None = None,
+    allocation_epoch: int = 1,
+) -> SandboxInfo:
     return SandboxInfo(
         sandbox_id=str(user_id),
         name=str(user_id),
@@ -24,6 +29,8 @@ def _sandbox_info(user_id: UUID) -> SandboxInfo:
         status="RUNNING",
         image="",
         endpoint=f"agentbox://{user_id}",
+        allocation_id=str(allocation_id or uuid4()),
+        allocation_epoch=allocation_epoch,
     )
 
 
@@ -57,6 +64,9 @@ class _FakeStateStore:
 
     async def mark_creating(self, **_kwargs: Any) -> None:
         self.states.append("CREATING")
+
+    async def get_state(self, **_kwargs: Any):
+        return None
 
     async def mark_running(self, **_kwargs: Any) -> None:
         self.states.append("RUNNING")
@@ -136,7 +146,7 @@ def test_service_uses_one_agentbox_runtime() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_returns_typed_sandbox_and_delegates_concurrency() -> None:
+async def test_ensure_returns_typed_sandbox_and_coalesces_concurrency() -> None:
     user_id = uuid4()
     sandbox = _FakeSandbox()
     state = _FakeStateStore()
@@ -151,10 +161,82 @@ async def test_ensure_returns_typed_sandbox_and_delegates_concurrency() -> None:
     assert isinstance(first, SandboxInfo)
     assert first == second
     assert first.sandbox_id == str(user_id)
-    assert len(sandbox.ensure_calls) == 2
-    assert state.states.count("CREATING") == 2
-    assert state.states.count("RUNNING") == 2
-    assert len(activity.marked) == 2
+    assert len(sandbox.ensure_calls) == 1
+    assert state.states.count("CREATING") == 1
+    assert state.states.count("RUNNING") == 1
+    assert len(activity.marked) == 1
+
+
+@pytest.mark.asyncio
+async def test_sequential_ensure_inspects_ready_sandbox_before_put() -> None:
+    user_id = uuid4()
+    sandbox = _FakeSandbox()
+    service = _service(sandbox)
+
+    await service.get_or_create_sandbox(user_id)
+    await service.get_or_create_sandbox(user_id)
+
+    assert len(sandbox.ensure_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_inflight_ensure_before_suspend() -> None:
+    user_id = uuid4()
+    ensure_started = asyncio.Event()
+    allow_ensure = asyncio.Event()
+
+    class _SlowSandbox(_FakeSandbox):
+        async def ensure_sandbox(
+            self, user_id: UUID, *, env: dict[str, str] | None = None
+        ) -> SandboxInfo:
+            ensure_started.set()
+            await allow_ensure.wait()
+            return await super().ensure_sandbox(user_id, env=env)
+
+    sandbox = _SlowSandbox()
+    service = _service(sandbox)
+    ensure = asyncio.create_task(service.get_or_create_sandbox(user_id))
+    await ensure_started.wait()
+    stop = asyncio.create_task(service.stop_sandbox(user_id))
+    await asyncio.sleep(0)
+    assert sandbox.suspended == []
+
+    allow_ensure.set()
+    await asyncio.gather(ensure, stop)
+
+    assert sandbox.suspended == [user_id]
+
+
+@pytest.mark.asyncio
+async def test_ensure_requested_during_stop_waits_then_recreates() -> None:
+    user_id = uuid4()
+    stop_started = asyncio.Event()
+    allow_stop = asyncio.Event()
+
+    class _SlowStopSandbox(_FakeSandbox):
+        async def suspend_sandbox(self, received_user_id: UUID) -> None:
+            stop_started.set()
+            await allow_stop.wait()
+            self.infos.pop(received_user_id, None)
+            await super().suspend_sandbox(received_user_id)
+
+    sandbox = _SlowStopSandbox()
+    sandbox.infos[user_id] = _sandbox_info(user_id)
+    service = _service(sandbox)
+    stop = asyncio.create_task(service.stop_sandbox(user_id))
+    await stop_started.wait()
+    ensure = asyncio.create_task(service.get_or_create_sandbox(user_id))
+    await asyncio.sleep(0)
+
+    assert not ensure.done()
+    assert sandbox.ensure_calls == []
+
+    allow_stop.set()
+    recreated, _ = await asyncio.gather(ensure, stop)
+
+    assert recreated.status == "RUNNING"
+    assert len(sandbox.ensure_calls) == 1
+    assert sandbox.suspended == [user_id]
 
 
 @pytest.mark.asyncio
@@ -233,6 +315,52 @@ async def test_get_session_uses_canonical_logical_workspace_id(
     assert session.client is manager_client
     assert session.env_vars == {"LEMMA_TOKEN": "dynamic"}
     assert manager_client.directories == [(user_id, "/workspace")]
+
+
+@pytest.mark.asyncio
+async def test_get_session_coalesces_concurrent_directory_checks_but_revalidates_later(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = uuid4()
+    first_allocation_id = uuid4()
+    sandbox = _FakeSandbox()
+    sandbox.infos[user_id] = _sandbox_info(
+        user_id,
+        allocation_id=first_allocation_id,
+        allocation_epoch=1,
+    )
+    service = _service(sandbox)
+    manager_client = _FakeManagerClient()
+
+    async def environment(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+        return {"LEMMA_TOKEN": "dynamic"}
+
+    monkeypatch.setattr(service, "get_env_vars", environment)
+    monkeypatch.setattr(service, "_get_manager_client", lambda: manager_client)
+
+    await asyncio.gather(
+        service.get_session(user_id=user_id, pod_id=None, session_id="first"),
+        service.get_session(user_id=user_id, pod_id=None, session_id="second"),
+    )
+    await service.get_session(user_id=user_id, pod_id=None, session_id="third")
+
+    assert manager_client.directories == [
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+    ]
+
+    sandbox.infos[user_id] = _sandbox_info(
+        user_id,
+        allocation_id=uuid4(),
+        allocation_epoch=2,
+    )
+    await service.get_session(user_id=user_id, pod_id=None, session_id="fourth")
+
+    assert manager_client.directories == [
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+        (user_id, "/workspace"),
+    ]
 
 
 @pytest.mark.asyncio

@@ -36,9 +36,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
             }
         ),
     ),
-    "http.request.rate_limited": EventSpec(
-        "warning", frozenset({"duration_ms", "method", "route", "status_code"})
-    ),
     "http.request.completed": EventSpec(
         "debug", frozenset({"duration_ms", "method", "route", "status_code"})
     ),
@@ -53,6 +50,10 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     "agentbox.reconcile.failed": EventSpec(
         "warning",
         frozenset({"error_type"}),
+    ),
+    "agentbox.admission.invariant_repaired": EventSpec(
+        "warning",
+        frozenset({"allocation_count", "provider_scope"}),
     ),
     "port.proxy.upstream_failed": EventSpec(
         "error",

@@ -54,7 +54,11 @@ def canonical_workspace_cwd(value: str) -> str:
 
 
 def _agentbox_command_failure(
-    *, error: str, retryable: bool, process_id: str | None = None
+    *,
+    error: str,
+    retryable: bool,
+    process_id: str | None = None,
+    completed: bool | None = None,
 ) -> dict[str, Any]:
     hint = " Retry the same operation if it is still needed." if retryable else ""
     return {
@@ -62,7 +66,7 @@ def _agentbox_command_failure(
         "stdout": "",
         "stderr": "",
         "exit_code": None,
-        "completed": not retryable,
+        "completed": not retryable if completed is None else completed,
         "process_id": process_id,
         "error": f"{error}{hint}",
     }
@@ -118,7 +122,7 @@ class AgentBoxWorkspaceSession:
                 operation_id=uuid4(),
                 code=code,
                 environment=self._environment,
-                output_limit_bytes=4 * 1024 * 1024,
+                output_limit_bytes=1024 * 1024,
                 deadline_at=deadline,
             )
         except (AgentBoxApiError, httpx.HTTPError, OSError) as exc:
@@ -176,7 +180,7 @@ class AgentBoxWorkspaceSession:
         operation_id = uuid4()
         deadline = self._deadline(timeout or 300)
         output_limit = min(
-            64 * 1024 * 1024,
+            2 * 1024 * 1024,
             max(1024, (max_output_tokens or 1_000_000) * 4),
         )
         try:
@@ -224,6 +228,7 @@ class AgentBoxWorkspaceSession:
         await self._touch_activity()
         operation_id = UUID(process_id)
         deadline = self._deadline(35)
+        input_accepted = False
         try:
             if chars:
                 await self.client.send_process_input(
@@ -233,16 +238,58 @@ class AgentBoxWorkspaceSession:
                     chars.encode(),
                     deadline_at=deadline,
                 )
+                input_accepted = True
             return await self._collect_process(
                 operation_id,
                 deadline_at=deadline,
                 yield_time_ms=yield_time_ms if yield_time_ms is not None else 5000,
             )
-        except (AgentBoxApiError, httpx.HTTPError, OSError, ValueError) as exc:
+        except AgentBoxApiError as exc:
+            if input_accepted:
+                return _agentbox_command_failure(
+                    error=(
+                        "AgentBox accepted the input, but subsequent process "
+                        f"status collection failed ({exc.code}: {exc}). Poll "
+                        "again without resending the input."
+                    ),
+                    retryable=False,
+                    process_id=process_id,
+                    completed=False,
+                )
             return _agentbox_command_failure(
-                error=f"AgentBox process interaction failed: {type(exc).__name__}: {exc}",
-                retryable=True,
+                error=f"AgentBox {exc.code}: {exc}",
+                retryable=exc.retry.value != "do_not_retry",
                 process_id=process_id,
+            )
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            if not chars:
+                return _agentbox_command_failure(
+                    error=(
+                        "AgentBox process status polling failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    retryable=True,
+                    process_id=process_id,
+                    completed=False,
+                )
+            # stdin is not idempotent. A lost response may mean the bytes were
+            # accepted, so transport ambiguity must never encourage replay.
+            return _agentbox_command_failure(
+                error=(
+                    (
+                        "AgentBox accepted the input, but subsequent process "
+                        "status collection failed; poll again without resending "
+                        "the input: "
+                    )
+                    if input_accepted
+                    else "AgentBox process input outcome is unknown: "
+                )
+                + (
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                retryable=False,
+                process_id=process_id,
+                completed=False,
             )
 
     async def terminate_process(self, process_id: str) -> dict[str, Any]:

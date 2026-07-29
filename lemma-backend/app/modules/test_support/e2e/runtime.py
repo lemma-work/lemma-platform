@@ -13,6 +13,7 @@ import sys
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Generator
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -158,6 +159,64 @@ asyncio.run(main())
     if process.returncode != 0:
         diagnostic = (stderr or stdout).decode(errors="replace")[-4000:]
         raise RuntimeError("Exact E2B test-scope cleanup failed: " + diagnostic)
+
+
+async def _cleanup_docker_scope(
+    *,
+    socket_path: str,
+    provider_scope: str,
+) -> None:
+    """Destroy containers and attached workspace volumes in one test scope."""
+
+    from agentbox.adapters.docker_engine import DockerEngineClient
+
+    engine = DockerEngineClient(socket_path=socket_path)
+    labels = {
+        "managed-by": "agentbox",
+        "provider-scope": provider_scope,
+    }
+    storage_ids: set[str] = set()
+    try:
+        for _ in range(3):
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+            containers = await engine.list_containers(
+                labels=labels,
+                deadline_at=deadline,
+            )
+            if not containers:
+                break
+            storage_ids.update(
+                storage_id
+                for container in containers
+                if (storage_id := container.labels.get("workspace-storage-id"))
+            )
+            await asyncio.gather(
+                *(
+                    engine.delete_container(
+                        container.container_id,
+                        deadline_at=deadline,
+                        force=True,
+                    )
+                    for container in containers
+                )
+            )
+        else:
+            containers = await engine.list_containers(
+                labels=labels,
+                deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            )
+            if containers:
+                raise RuntimeError(
+                    f"{len(containers)} container(s) remain in the exact test scope"
+                )
+
+        for storage_id in storage_ids:
+            await engine.delete_volume(
+                storage_id,
+                deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+            )
+    finally:
+        await engine.close()
 
 
 @asynccontextmanager
@@ -584,6 +643,7 @@ async def local_agentbox_server(
     api_key = e2e_settings.agentbox_api_key
     provider_name = e2e_settings.e2e_sandbox_mode
     e2b_scope = f"e2b:agent-e2e:{uuid.uuid4()}"
+    docker_scope = f"docker:agent-e2e:{uuid.uuid4()}"
 
     if provider_name == "docker":
         workspace_image = request.getfixturevalue("workspace_image")
@@ -629,6 +689,8 @@ async def local_agentbox_server(
         "AGENTBOX_CLEANUP_INTERVAL_SECONDS": "30",
         **e2b_values,
     }
+    if provider_name == "docker":
+        env_updates["AGENTBOX_DOCKER_SCOPE"] = docker_scope
     if provider_name == "e2b":
         env_updates.update(
             {
@@ -675,6 +737,7 @@ async def local_agentbox_server(
         ),
         "agentbox_workspace_image": agentbox_config.settings.agentbox_workspace_image,
         "agentbox_function_image": agentbox_config.settings.agentbox_function_image,
+        "agentbox_docker_scope": agentbox_config.settings.agentbox_docker_scope,
         "agentbox_state_db_path": agentbox_config.settings.agentbox_state_db_path,
         "agentbox_auto_create_schema": (
             agentbox_config.settings.agentbox_auto_create_schema
@@ -717,6 +780,8 @@ async def local_agentbox_server(
     )
     agentbox_config.settings.agentbox_workspace_image = workspace_image
     agentbox_config.settings.agentbox_function_image = function_image
+    if provider_name == "docker":
+        agentbox_config.settings.agentbox_docker_scope = docker_scope
     agentbox_config.settings.agentbox_state_db_path = str(state_path)
     agentbox_config.settings.agentbox_auto_create_schema = True
     agentbox_config.settings.agentbox_add_host_gateway = True
@@ -796,13 +861,20 @@ async def local_agentbox_server(
             server_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await server_task
-        for key, value in original_agentbox_settings.items():
-            setattr(agentbox_config.settings, key, value)
-        for key, value in original_env.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+        finally:
+            try:
+                await _cleanup_docker_scope(
+                    socket_path=agentbox_config.settings.agentbox_docker_socket_path,
+                    provider_scope=docker_scope,
+                )
+            finally:
+                for key, value in original_agentbox_settings.items():
+                    setattr(agentbox_config.settings, key, value)
+                for key, value in original_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
 
 
 @pytest_asyncio.fixture

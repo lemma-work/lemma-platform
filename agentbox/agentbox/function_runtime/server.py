@@ -4,16 +4,14 @@ import asyncio
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import hashlib
-import hmac
 import json
 import os
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import UUID
 
-import httpx
-from pydantic import BaseModel, ConfigDict
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
@@ -21,16 +19,20 @@ from starlette.routing import Route
 
 from agentbox.observability import create_inherited_task
 
-from .runner import GatewayClient, _resolve_artifact_root
+from .runner import (
+    GatewayClient,
+    _cached_artifact_root,
+    _resolve_artifact_root,
+)
 from .runtime_models import (
     FunctionArtifactManifest,
     RunAccepted,
-    RunClaim,
     RuntimeFailure,
+    RuntimeInvocation,
+    SchemaInspection,
     TerminalReport,
     WorkerRequest,
 )
-from .types import JsonObject
 from .trace_context import bind_trace_context
 from .worker_pool import RevisionWorkerRegistry, RuntimeOverloaded
 
@@ -39,24 +41,15 @@ _MAX_INPUT_BYTES = 1024 * 1024
 _MAX_RUN_RECORDS = 4096
 
 
-class InvocationBody(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    input: JsonObject
-
-
 @dataclass(slots=True)
 class _Run:
+    function_id: UUID
     signature: str
-    invocation_token_digest: bytes
-    run_token_digest: bytes
     task: asyncio.Task[TerminalReport]
-    accepted: asyncio.Event
-    acceptance_error: BaseException | None = None
 
 
 class FunctionRuntimeService:
-    """Resident runtime that executes each run ID at most once."""
+    """Resident, cache-backed runtime with no durable execution state."""
 
     def __init__(self, *, max_workers: int, max_cached_revisions: int) -> None:
         self._workers = RevisionWorkerRegistry(
@@ -74,18 +67,17 @@ class FunctionRuntimeService:
         function_id: UUID,
         revision_hash: str,
         run_id: UUID,
-        run_token: str,
         gateway_url: str,
-        input_data: JsonObject,
+        invocation: RuntimeInvocation,
     ) -> TerminalReport:
         run = await self._start(
             function_token=function_token,
             function_id=function_id,
             revision_hash=revision_hash,
             run_id=run_id,
-            run_token=run_token,
             gateway_url=gateway_url,
-            input_data=input_data,
+            invocation=invocation,
+            report_terminal=False,
         )
         return await asyncio.shield(run.task)
 
@@ -96,23 +88,54 @@ class FunctionRuntimeService:
         function_id: UUID,
         revision_hash: str,
         run_id: UUID,
-        run_token: str,
         gateway_url: str,
-        input_data: JsonObject,
+        invocation: RuntimeInvocation,
     ) -> RunAccepted:
-        run = await self._start(
+        await self._start(
             function_token=function_token,
             function_id=function_id,
             revision_hash=revision_hash,
             run_id=run_id,
-            run_token=run_token,
             gateway_url=gateway_url,
-            input_data=input_data,
+            invocation=invocation,
+            report_terminal=True,
         )
-        await run.accepted.wait()
-        if run.acceptance_error is not None:
-            raise run.acceptance_error
         return RunAccepted(run_id=run_id)
+
+    async def inspect_schemas(
+        self,
+        *,
+        function_token: str,
+        function_id: UUID,
+        revision_hash: str,
+        gateway_url: str,
+    ) -> SchemaInspection:
+        """Load one immutable revision and retain its serving worker."""
+
+        deadline_at = datetime.now(timezone.utc) + timedelta(seconds=60)
+        gateway = await self._gateway(gateway_url)
+        try:
+            root = await self._artifact_root(
+                gateway,
+                function_token=function_token,
+                function_id=function_id,
+                revision_hash=revision_hash,
+                deadline_at=deadline_at,
+            )
+            schemas = await self._workers.inspect_schemas(
+                function_id=function_id,
+                revision_hash=revision_hash,
+                artifact_root=root,
+                deadline_at=deadline_at,
+            )
+            return SchemaInspection(ok=True, schemas=schemas)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return SchemaInspection(
+                ok=False,
+                error=RuntimeFailure(name=type(exc).__name__, message=str(exc)),
+            )
 
     async def _start(
         self,
@@ -121,40 +144,33 @@ class FunctionRuntimeService:
         function_id: UUID,
         revision_hash: str,
         run_id: UUID,
-        run_token: str,
         gateway_url: str,
-        input_data: JsonObject,
+        invocation: RuntimeInvocation,
+        report_terminal: bool,
     ) -> _Run:
+        if invocation.identity.function_id != function_id:
+            raise ValueError("invocation identity does not match function path")
         signature = self._signature(
             function_id=function_id,
             revision_hash=revision_hash,
             run_id=run_id,
             gateway_url=gateway_url,
-            input_data=input_data,
+            invocation=invocation,
+            report_terminal=report_terminal,
         )
-        token_digest = hashlib.sha256(function_token.encode()).digest()
-        run_token_digest = hashlib.sha256(run_token.encode()).digest()
         async with self._lock:
             existing = self._runs.get(run_id)
             if existing is not None:
                 if (
-                    existing.signature != signature
-                    or not hmac.compare_digest(
-                        existing.invocation_token_digest, token_digest
-                    )
-                    or not hmac.compare_digest(
-                        existing.run_token_digest, run_token_digest
-                    )
+                    existing.function_id != function_id
+                    or existing.signature != signature
                 ):
                     raise ValueError(
-                        "run ID was reused for a different invocation or session"
+                        "run ID was reused for a different invocation"
                     )
-                if existing.acceptance_error is None:
-                    self._runs.move_to_end(run_id)
-                    return existing
-                # The previous task failed before its durable backend claim was
-                # accepted. An exact duplicate may safely retry the same run
-                # identity; accepted or active runs remain deduplicated above.
+                self._runs.move_to_end(run_id)
+                return existing
+
             task = create_inherited_task(
                 self._execute(
                     function_token=function_token,
@@ -162,28 +178,24 @@ class FunctionRuntimeService:
                     revision_hash=revision_hash,
                     run_id=run_id,
                     gateway_url=gateway_url,
-                    input_data=input_data,
+                    invocation=invocation,
+                    report_terminal=report_terminal,
                 )
             )
             task.add_done_callback(self._consume_task_result)
             run = _Run(
+                function_id=function_id,
                 signature=signature,
-                invocation_token_digest=token_digest,
-                run_token_digest=run_token_digest,
                 task=task,
-                accepted=asyncio.Event(),
             )
             self._runs[run_id] = run
             self._evict_completed()
-        return run
+            return run
 
-    async def cancel(self, run_id: UUID, callback_token: str) -> bool:
+    async def cancel(self, function_id: UUID, run_id: UUID) -> bool:
         async with self._lock:
             run = self._runs.get(run_id)
-            if run is None or not hmac.compare_digest(
-                run.run_token_digest,
-                hashlib.sha256(callback_token.encode()).digest(),
-            ):
+            if run is None or run.function_id != function_id:
                 return False
             task = run.task
         await self._workers.cancel(run_id)
@@ -224,93 +236,84 @@ class FunctionRuntimeService:
         revision_hash: str,
         run_id: UUID,
         gateway_url: str,
-        input_data: JsonObject,
+        invocation: RuntimeInvocation,
+        report_terminal: bool,
     ) -> TerminalReport:
         gateway = await self._gateway(gateway_url)
-        claim = None
-        accepted = False
         try:
-            try:
-                claim = await gateway.claim(
-                    function_token,
-                    run_id=run_id,
-                    revision_hash=revision_hash,
-                    input_data=input_data,
-                )
-                self._validate_claim(
-                    claim=claim,
-                    function_id=function_id,
-                    revision_hash=revision_hash,
-                    run_id=run_id,
-                    input_data=input_data,
-                )
-                await self._mark_accepted(run_id, claim.callback_token)
-                accepted = True
-                root = await _resolve_artifact_root(gateway, claim)
-                worker = WorkerRequest(
-                    artifact_root=str(root),
-                    manifest=self._manifest(root),
-                    run_id=run_id,
-                    input_data=input_data,
-                    config=claim.config,
-                    identity=claim.identity,
-                    lemma_token=claim.lemma_token,
-                    lemma_base_url=claim.lemma_base_url,
-                )
-                response = await self._workers.execute(
-                    function_id=function_id,
-                    revision_hash=revision_hash,
-                    artifact_root=root,
-                    run_id=run_id,
-                    request=worker,
-                    deadline_at=claim.deadline_at,
-                )
-                report = TerminalReport(
-                    status="completed" if response.ok else "failed",
-                    output_data=response.output_data,
-                    error=response.error,
-                    stdout=response.stdout,
-                    stderr=response.stderr,
-                    output_truncated=response.output_truncated,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if not accepted:
-                    await self._mark_rejected(run_id, exc)
-                    raise
-                report = TerminalReport(
-                    status="failed",
-                    error=RuntimeFailure(name=type(exc).__name__, message=str(exc)),
-                    stdout="",
-                    stderr="",
-                )
-            await gateway.terminal(claim, report)
-            return report
-        except asyncio.CancelledError as exc:
-            if not accepted:
-                await self._mark_rejected(run_id, exc)
+            root = await self._artifact_root(
+                gateway,
+                function_token=function_token,
+                function_id=function_id,
+                revision_hash=revision_hash,
+                deadline_at=invocation.deadline_at,
+            )
+            worker = WorkerRequest(
+                artifact_root=str(root),
+                manifest=self._manifest(root),
+                run_id=run_id,
+                input_data=invocation.input,
+                config=invocation.config,
+                identity=invocation.identity,
+                lemma_token=function_token,
+                lemma_base_url=invocation.lemma_base_url,
+            )
+            response = await self._workers.execute(
+                function_id=function_id,
+                revision_hash=revision_hash,
+                artifact_root=root,
+                run_id=run_id,
+                request=worker,
+                deadline_at=invocation.deadline_at,
+            )
+            report = TerminalReport(
+                status="completed" if response.ok else "failed",
+                output_data=response.output_data,
+                error=response.error,
+                stdout=response.stdout,
+                stderr=response.stderr,
+                output_truncated=response.output_truncated,
+            )
+        except asyncio.CancelledError:
             raise
+        except Exception as exc:
+            report = TerminalReport(
+                status="failed",
+                error=RuntimeFailure(name=type(exc).__name__, message=str(exc)),
+                stdout="",
+                stderr="",
+            )
 
-    async def _mark_accepted(self, run_id: UUID, callback_token: str) -> None:
-        async with self._lock:
-            run = self._runs.get(run_id)
-            if run is None:
-                return
-            if not hmac.compare_digest(
-                run.run_token_digest,
-                hashlib.sha256(callback_token.encode()).digest(),
-            ):
-                raise ValueError("runtime gateway returned a different run token")
-            run.accepted.set()
+        if report_terminal:
+            await gateway.terminal(
+                function_token,
+                run_id=run_id,
+                deadline_at=invocation.deadline_at,
+                report=report,
+            )
+        return report
 
-    async def _mark_rejected(self, run_id: UUID, error: BaseException) -> None:
-        async with self._lock:
-            run = self._runs.get(run_id)
-            if run is None or run.accepted.is_set():
-                return
-            run.acceptance_error = error
-            run.accepted.set()
+    @staticmethod
+    async def _artifact_root(
+        gateway: GatewayClient,
+        *,
+        function_token: str,
+        function_id: UUID,
+        revision_hash: str,
+        deadline_at: datetime,
+    ) -> Path:
+        # Fast path avoids even constructing an artifact HTTP request.
+        digest = revision_hash.removeprefix("sha256:")
+        cached = _cached_artifact_root(digest)
+        if cached is not None:
+            return cached
+        return await _resolve_artifact_root(
+            gateway,
+            function_token,
+            function_id=function_id,
+            revision_hash=revision_hash,
+            deadline_at=deadline_at,
+        )
 
     @staticmethod
     def _consume_task_result(task: asyncio.Task[TerminalReport]) -> None:
@@ -324,31 +327,14 @@ class FunctionRuntimeService:
         )
 
     @staticmethod
-    def _validate_claim(
-        *,
-        claim: RunClaim,
-        function_id: UUID,
-        revision_hash: str,
-        run_id: UUID,
-        input_data: JsonObject,
-    ) -> None:
-        if claim.identity.function_id != function_id:
-            raise ValueError("function ID does not match the authorized run")
-        if claim.revision_hash != revision_hash:
-            raise ValueError("revision hash does not match the authorized run")
-        if claim.run_id != run_id:
-            raise ValueError("run ID does not match the authorized run")
-        if claim.input_data != input_data:
-            raise ValueError("input does not match the persisted function run")
-
-    @staticmethod
     def _signature(
         *,
         function_id: UUID,
         revision_hash: str,
         run_id: UUID,
         gateway_url: str,
-        input_data: JsonObject,
+        invocation: RuntimeInvocation,
+        report_terminal: bool,
     ) -> str:
         payload = json.dumps(
             {
@@ -356,7 +342,8 @@ class FunctionRuntimeService:
                 "revision_hash": revision_hash,
                 "run_id": str(run_id),
                 "gateway_url": gateway_url,
-                "input": input_data,
+                "invocation": invocation.model_dump(mode="json"),
+                "report_terminal": report_terminal,
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -409,18 +396,12 @@ def _gateway_url(request: Request) -> str:
     return value
 
 
-def _run_token(request: Request) -> str:
-    value = request.headers.get("x-lemma-run-token", "").strip()
-    if len(value) < 32:
-        raise ValueError("X-Lemma-Run-Token is required")
-    return value
-
-
 async def health(_request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "ready": True,
             "runtime_abi": "lemma-function-python-3.14-linux-x86_64-1",
+            "protocol_version": 2,
         }
     )
 
@@ -441,57 +422,70 @@ async def _invoke(request: Request) -> JSONResponse:
         body_bytes = await request.body()
         if len(body_bytes) > _MAX_INPUT_BYTES:
             raise ValueError("invocation body is too large")
-        body = InvocationBody.model_validate_json(body_bytes)
+        invocation = RuntimeInvocation.model_validate_json(body_bytes)
         function_id = UUID(request.path_params["function_id"])
         run_id = UUID(request.path_params["run_id"])
         service: FunctionRuntimeService = request.app.state.runtime
-        function_token = _bearer(request)
-        revision_hash = _quoted_digest(request)
-        gateway_url = _gateway_url(request)
-        run_token = _run_token(request)
+        parameters = {
+            "function_token": _bearer(request),
+            "function_id": function_id,
+            "revision_hash": _quoted_digest(request),
+            "run_id": run_id,
+            "gateway_url": _gateway_url(request),
+            "invocation": invocation,
+        }
         if request.headers.get("prefer", "").strip().lower() == "respond-async":
-            accepted = await service.accept(
-                function_token=function_token,
-                function_id=function_id,
-                revision_hash=revision_hash,
-                run_id=run_id,
-                run_token=run_token,
-                gateway_url=gateway_url,
-                input_data=body.input,
-            )
+            accepted = await service.accept(**parameters)
             return JSONResponse(
                 accepted.model_dump(mode="json"),
                 status_code=202,
                 headers={"Preference-Applied": "respond-async"},
             )
-        report = await service.invoke(
-            function_token=function_token,
-            function_id=function_id,
-            revision_hash=revision_hash,
-            run_id=run_id,
-            run_token=run_token,
-            gateway_url=gateway_url,
-            input_data=body.input,
-        )
+        report = await service.invoke(**parameters)
         return JSONResponse(report.model_dump(mode="json"))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
     except RuntimeOverloaded as exc:
         return JSONResponse({"error": str(exc)}, status_code=503)
-    except httpx.HTTPStatusError as exc:
-        status = 401 if exc.response.status_code in {401, 403} else 502
-        return JSONResponse(
-            {"error": "runtime gateway rejected invocation"}, status_code=status
-        )
     except Exception:
         return JSONResponse({"error": "function runtime failed"}, status_code=500)
 
 
+async def inspect_schemas(request: Request) -> JSONResponse:
+    with bind_trace_context(request.headers):
+        try:
+            function_id = UUID(request.path_params["function_id"])
+            service: FunctionRuntimeService = request.app.state.runtime
+            result = await service.inspect_schemas(
+                function_token=_bearer(request),
+                function_id=function_id,
+                revision_hash=_quoted_digest(request),
+                gateway_url=_gateway_url(request),
+            )
+            return JSONResponse(
+                result.model_dump(mode="json"),
+                status_code=200 if result.ok else 422,
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        except TimeoutError:
+            return JSONResponse(
+                {"error": "function schema inspection timed out"},
+                status_code=504,
+            )
+        except Exception:
+            return JSONResponse(
+                {"error": "function schema inspection failed"},
+                status_code=500,
+            )
+
+
 async def cancel(request: Request) -> JSONResponse:
     try:
+        function_id = UUID(request.path_params["function_id"])
         run_id = UUID(request.path_params["run_id"])
         service: FunctionRuntimeService = request.app.state.runtime
-        accepted = await service.cancel(run_id, _bearer(request))
+        accepted = await service.cancel(function_id, run_id)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=422)
     return JSONResponse({"accepted": accepted}, status_code=202 if accepted else 404)
@@ -529,7 +523,12 @@ def create_app(
                 methods=["POST"],
             ),
             Route(
-                "/runs/{run_id}:cancel",
+                "/functions/{function_id}/schemas",
+                inspect_schemas,
+                methods=["POST"],
+            ),
+            Route(
+                "/functions/{function_id}/runs/{run_id}:cancel",
                 cancel,
                 methods=["POST"],
             ),

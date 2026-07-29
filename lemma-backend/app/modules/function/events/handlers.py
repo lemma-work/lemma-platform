@@ -27,6 +27,9 @@ from app.modules.function.domain.errors import (
 from app.modules.function.infrastructure.function_run_queue import (
     StreaqFunctionRunQueue,
 )
+from app.modules.function.application.runtime_policy import (
+    FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
+)
 from app.modules.function.infrastructure.repositories import FunctionRunRepository
 from app.modules.function.infrastructure.execution_repository import (
     FunctionExecutionRepository,
@@ -49,15 +52,8 @@ async def _fail_run_after_worker_error(
 ) -> None:
     """Persist the fallback terminal state without replaying the invocation."""
 
-    from app.modules.function.api.dependencies import (
-        build_function_callback_credential_signer,
-    )
-
     async with worker_ctx.uow() as uow:
-        await FunctionExecutionRepository(
-            uow,
-            build_function_callback_credential_signer(),
-        ).fail_unfinished(
+        await FunctionExecutionRepository(uow).fail_unfinished(
             run_id,
             error=f"Function execution failed ({type(error).__name__})",
         )
@@ -143,7 +139,10 @@ async def reconcile_function_runs() -> None:
             now=now,
         )
         async with uow_factory() as uow:
-            await FunctionRunRepository(uow).fail_expired(now=now)
+            await FunctionRunRepository(uow).fail_expired(
+                now=now,
+                job_callback_grace_seconds=FUNCTION_JOB_CALLBACK_GRACE_SECONDS,
+            )
     except Exception:
         logger.error(
             "function.handlers.reconcile_function_runs.failed",
