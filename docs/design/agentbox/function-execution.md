@@ -7,7 +7,8 @@
 One public `function_run_id` represents one user-requested execution. The
 backend owns authorization, the durable run, immutable artifacts, deadlines,
 cancellation and terminal events. AgentBox owns the provider-neutral sandbox,
-allocation lifecycle and signed access to its private runtime port.
+allocation lifecycle and the API-key-authenticated proxy to its private runtime
+port.
 
 Each pod has at most one active `FUNCTION` sandbox. It runs a resident
 `lemma-function-runtime` service that caches immutable artifacts and imported
@@ -19,7 +20,7 @@ The executor is deliberately mostly stateless:
 - API execution returns its terminal report directly;
 - JOB execution reports its terminal result with the same function token;
 - cold artifact and schema access use that same function token;
-- cancellation is admitted by the AgentBox pod/allocation grant;
+- cancellation is admitted by the trusted AgentBox manager route;
 - there is no separate callback or compilation capability.
 
 Functions inside one pod mutually trust one another. Different pods never share
@@ -37,7 +38,7 @@ boundary.
 | Backend dispatcher | run start, runtime invocation and direct API completion |
 | Durable worker | asynchronous JOB dispatch until runtime acceptance |
 | Runtime gateway | authenticated artifact reads and JOB terminal reports |
-| AgentBox | allocation, lifecycle, signed port access and provider reconciliation |
+| AgentBox | allocation, lifecycle, trusted runtime proxy and provider reconciliation |
 | Resident runtime | run deduplication, artifact cache and revision-worker pools |
 | Revision worker | one imported revision and isolated per-call SDK context |
 
@@ -119,11 +120,15 @@ workspace and never passes the delegated token into user import code.
 
 ## 5. Invocation protocol v2
 
-AgentBox grants short-lived authenticated access to the exact pod allocation,
-allocation epoch, port `8090` and HTTP protocol. The backend invokes:
+The backend calls a stable AgentBox route for the pod using the existing manager
+API key. AgentBox resolves the current active allocation, extends its activity
+lease and proxies to private port `8090`. The manager key is stripped before the
+request enters the sandbox. The backend invokes:
 
 ```http
-POST /functions/{function_id}/runs/{function_run_id}
+POST /trusted/function-runtimes/{pod_id}/functions/{function_id}/runs/{function_run_id}
+X-API-Key: <AgentBox manager key>
+X-AgentBox-Activity-Until: <execution deadline plus JOB callback grace>
 Authorization: Bearer <delegated function token>
 If-Match: "sha256:<revision_hash>"
 X-Lemma-Gateway-Url: <allow-listed backend URL>
@@ -153,9 +158,12 @@ Prefer: respond-async
 ```
 
 The backend has already authorized and persisted the run before this request.
-The AgentBox grant admits the external caller. The runtime treats the bearer as
-the function's delegated SDK credential and uses it for cold artifact retrieval
-or JOB completion; it does not claim or introspect the run before warm execution.
+The manager key authenticates only the trusted backend-to-AgentBox hop. The
+activity horizon prevents idle cleanup during a long JOB and is accepted only
+on that authenticated route. AgentBox strips both private headers before the
+sandbox. The runtime treats the bearer as the function's delegated SDK
+credential and uses it for cold artifact retrieval or JOB completion; it does
+not claim or introspect the run before warm execution.
 
 The gateway URL is routing metadata, not an execution credential. Its host is
 allow-listed so local ngrok/E2B development can use the same runtime source as
@@ -176,8 +184,9 @@ production.
 There is no Redis hop, runtime claim, runtime terminal callback or final database
 reread on the synchronous API path.
 
-If the invocation response is ambiguous, the backend retries the identical POST
-once through the same AgentBox allocation grant. Runtime run-ID deduplication
+If AgentBox reports that no active allocation can be resolved before forwarding
+the request, the backend reruns readiness once and safely retries. Runtime run-ID
+deduplication
 joins the active task or returns its cached report. The backend never resolves a
 different allocation after an ambiguous response. A second unconfirmed API
 response is best-effort cancelled and marked failed.
@@ -276,12 +285,12 @@ The backend first conditionally marks the public run `CANCELLED`, then calls:
 POST /functions/{function_id}/runs/{function_run_id}:cancel
 ```
 
-The call carries no bearer or fixed key. External admission is the AgentBox
-allocation-bound port grant; localhost access follows same-pod trust. The runtime
-matches both function and run IDs, cancels the task and kills/discards its worker
-process group.
+The call carries the AgentBox manager key but no delegated function bearer.
+AgentBox strips the manager key before proxying. The trusted route resolves the
+current allocation; the runtime matches both function and run IDs, cancels the
+task and kills/discards its worker process group.
 
-Cancellation obtains port access to an existing logical allocation without
+Cancellation addresses the stable route for an existing logical allocation without
 calling `ensure_sandbox`, so it never creates a sandbox. If the allocation is
 gone, its work is already gone. A late callback is acknowledged as a terminal
 duplicate and cannot overwrite `CANCELLED`.

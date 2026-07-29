@@ -833,13 +833,13 @@ class Settings(BaseSettings):
         le=100_000,
     )
     function_runtime_endpoint_cache_ttl_seconds: int = Field(
-        default=30,
-        ge=5,
-        le=120,
+        default=4 * 60 * 60,
+        ge=5 * 60,
+        le=24 * 60 * 60,
         description=(
-            "Seconds to reuse a ready function runtime endpoint before an "
-            "AgentBox ensure/access refresh. Must remain below function sandbox "
-            "idle retention."
+            "Seconds to reuse function-runtime readiness for the stable AgentBox "
+            "manager route. Missing or replaced allocations invalidate the entry "
+            "and trigger readiness immediately."
         ),
     )
     function_runtime_endpoint_cache_max_entries: int = Field(

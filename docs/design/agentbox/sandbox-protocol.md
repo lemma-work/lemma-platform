@@ -453,12 +453,23 @@ disconnects close the upstream stream and incomplete upload temporaries are remo
 
 ```text
 POST .../ports/{port}:access
+ANY  /trusted/function-runtimes/{logical_id}/{path}
 ```
 
-The request contains protocol, audience, and TTL. Workspace ports are constrained
-by the workspace profile. Function workloads accept only the profile's private
-resident-runtime port and backend audience; every other function port returns
-`UNSUPPORTED_CAPABILITY`.
+The signed-access request contains protocol and TTL. Workspace ports are
+constrained by the workspace profile. Function workloads reject signed port
+grants with `UNSUPPORTED_CAPABILITY`; their private runtime is reachable only
+through the trusted manager route.
+
+The trusted function-runtime route is the service-to-service data plane. It
+requires the fixed AgentBox manager `X-API-Key`, resolves the current function
+allocation, and refreshes its activity lease through the bounded
+`X-AgentBox-Activity-Until` horizon supplied by the backend. Both private
+headers are stripped before proxying to port `8090`. The delegated function
+bearer remains in
+`Authorization` and is validated by the runtime/backend. Signed port grants
+remain available for callers that cannot hold the manager key, including
+user-facing workspace routes.
 
 ## 6. Durable persistence model
 

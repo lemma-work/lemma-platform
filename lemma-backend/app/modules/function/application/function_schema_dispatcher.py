@@ -30,6 +30,10 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
     FunctionRuntimeEndpointCache,
     FunctionRuntimeEndpointKey,
 )
+from app.modules.function.application.function_runtime_route_resolver import (
+    trusted_function_runtime_endpoint,
+    trusted_function_runtime_headers,
+)
 from app.modules.function.contracts.runtime import RuntimeSchemaInspection
 from app.modules.function.domain.entities import (
     FunctionArtifact,
@@ -37,8 +41,6 @@ from app.modules.function.domain.entities import (
 )
 from app.modules.function.domain.errors import FunctionValidationError
 
-
-_FUNCTION_RUNTIME_PORT = 8090
 
 AgentBoxClientFactory = Callable[[], AgentBoxClient]
 RuntimeHttpClientFactory = Callable[[], httpx.AsyncClient]
@@ -107,6 +109,7 @@ class FunctionSchemaDispatcher:
                 response = await runtime.post(
                     urljoin(endpoint.url, f"functions/{function_id}/schemas"),
                     headers={
+                        **trusted_function_runtime_headers(activity_until=deadline_at),
                         "Authorization": f"Bearer {function_token.value}",
                         "If-Match": f'"{artifact.revision_hash}"',
                         "X-Lemma-Gateway-Url": self._runtime_gateway_url(),
@@ -138,7 +141,6 @@ class FunctionSchemaDispatcher:
     ) -> FunctionRuntimeEndpoint:
         return await self._endpoint_cache.get(
             self._endpoint_key(pod_id),
-            required_valid_until=self._port_access_expiry(deadline_at),
             wait_until=deadline_at,
             loader=lambda: self._load_runtime_endpoint(
                 pod_id,
@@ -159,16 +161,7 @@ class FunctionSchemaDispatcher:
                 pod_id=pod_id,
                 deadline_at=deadline_at,
             )
-            grant = await client.create_port_access(
-                WorkloadKind.FUNCTION,
-                pod_id,
-                _FUNCTION_RUNTIME_PORT,
-                expires_at=self._port_access_expiry(deadline_at),
-            )
-            return FunctionRuntimeEndpoint(
-                url=grant.url,
-                expires_at=grant.expires_at,
-            )
+            return trusted_function_runtime_endpoint(pod_id)
         finally:
             await client.close()
 
@@ -272,13 +265,6 @@ class FunctionSchemaDispatcher:
     def _runtime_gateway_url() -> str:
         configured = settings.function_runtime_gateway_url or settings.api_url
         return configured.rstrip("/")
-
-    @staticmethod
-    def _port_access_expiry(deadline_at: datetime) -> datetime:
-        return min(
-            deadline_at + timedelta(seconds=10),
-            FunctionSchemaDispatcher._now() + timedelta(hours=23, minutes=55),
-        )
 
     @staticmethod
     def _now() -> datetime:

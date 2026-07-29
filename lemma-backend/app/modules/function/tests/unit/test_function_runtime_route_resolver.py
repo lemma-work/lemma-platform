@@ -20,6 +20,7 @@ from app.modules.function.application.function_runtime_endpoint_cache import (
 )
 from app.modules.function.application.function_runtime_route_resolver import (
     FunctionRuntimeRouteResolver,
+    trusted_function_runtime_headers,
 )
 from app.modules.function.domain.entities import (
     FunctionDispatchMode,
@@ -46,17 +47,24 @@ def _dispatch(
 
 
 @pytest.mark.asyncio
-async def test_execution_endpoint_ensures_once_and_caches_exact_grant() -> None:
-    dispatch = _dispatch()
-    grant = SimpleNamespace(
-        url="https://agentbox.test/exact/",
-        expires_at=dispatch.deadline_at + timedelta(minutes=2),
+async def test_execution_endpoint_ensures_once_and_caches_trusted_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.modules.function.application.function_runtime_route_resolver.settings."
+        "agentbox_api_url",
+        "https://agentbox.test",
     )
+    monkeypatch.setattr(
+        "app.modules.function.application.function_runtime_route_resolver.settings."
+        "agentbox_api_key",
+        "manager-secret",
+    )
+    dispatch = _dispatch()
     client = SimpleNamespace(
         ensure_sandbox=AsyncMock(
             return_value=SimpleNamespace(ready=True, retry_after_ms=None)
         ),
-        create_port_access=AsyncMock(return_value=grant),
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
@@ -68,41 +76,40 @@ async def test_execution_endpoint_ensures_once_and_caches_exact_grant() -> None:
     second = await resolver.endpoint(dispatch)
 
     assert first == second
+    assert first.url == (
+        f"https://agentbox.test/trusted/function-runtimes/{dispatch.pod_id}/"
+    )
+    assert trusted_function_runtime_headers() == {"X-API-Key": "manager-secret"}
     client.ensure_sandbox.assert_awaited_once()
     ensure = client.ensure_sandbox.await_args
     assert ensure.args[:2] == (WorkloadKind.FUNCTION, dispatch.pod_id)
     assert ensure.kwargs["admission_class"] == AdmissionClass.LATENCY
     assert ensure.kwargs["verify_ready"] is True
-    client.create_port_access.assert_awaited_once()
     client.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_control_endpoint_never_creates_or_ensures_a_sandbox() -> None:
-    dispatch = _dispatch(FunctionDispatchMode.ASYNCHRONOUS)
-    client = SimpleNamespace(
-        ensure_sandbox=AsyncMock(
-            side_effect=AssertionError("control path must not ensure a sandbox")
-        ),
-        create_port_access=AsyncMock(
-            return_value=SimpleNamespace(
-                url="https://agentbox.test/control/",
-                expires_at=dispatch.deadline_at,
-            )
-        ),
-        close=AsyncMock(),
+async def test_control_endpoint_never_creates_or_ensures_a_sandbox(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "app.modules.function.application.function_runtime_route_resolver.settings."
+        "agentbox_api_url",
+        "https://agentbox.test",
     )
+    dispatch = _dispatch(FunctionDispatchMode.ASYNCHRONOUS)
     resolver = FunctionRuntimeRouteResolver(
-        agentbox_client_factory=lambda: client,
+        agentbox_client_factory=lambda: pytest.fail(
+            "control path must not construct an AgentBox client"
+        ),
         endpoint_cache=FunctionRuntimeEndpointCache(),
     )
 
     endpoint = await resolver.control_endpoint(dispatch)
 
-    assert endpoint.url == "https://agentbox.test/control/"
-    client.ensure_sandbox.assert_not_awaited()
-    client.create_port_access.assert_awaited_once()
-    client.close.assert_awaited_once()
+    assert endpoint.url == (
+        f"https://agentbox.test/trusted/function-runtimes/{dispatch.pod_id}/"
+    )
 
 
 @pytest.mark.asyncio
