@@ -4,7 +4,8 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.core.api.dependencies import UoWDep
+from app.core.api.dependencies import UoWDep, get_uow_factory
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.composition.surface_agent import ConversationServiceDep
 from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
@@ -35,6 +36,9 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 )
 from app.modules.agent_surfaces.services.user_surfaces_service import (
     UserSurfacesService,
+)
+from app.modules.agent_surfaces.services.telegram_manager_service import (
+    TelegramManagerService,
 )
 from app.composition.surface_identity import create_surface_user_repository
 from app.composition.surface_connectors import get_connector_service
@@ -97,6 +101,12 @@ def get_user_surfaces_service(uow: UoWDep) -> UserSurfacesService:
     )
 
 
+def get_telegram_manager_service(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> TelegramManagerService:
+    return TelegramManagerService(uow_factory=uow_factory)
+
+
 SurfaceServiceDep = Annotated[AgentSurfaceService, Depends(get_surface_service)]
 UserSurfacesServiceDep = Annotated[
     UserSurfacesService, Depends(get_user_surfaces_service)
@@ -106,4 +116,7 @@ SurfaceEventHandlerDep = Annotated[
 ]
 SurfaceWebhookSecurityServiceDep = Annotated[
     SurfaceWebhookSecurityService, Depends(get_surface_webhook_security_service)
+]
+TelegramManagerServiceDep = Annotated[
+    TelegramManagerService, Depends(get_telegram_manager_service)
 ]

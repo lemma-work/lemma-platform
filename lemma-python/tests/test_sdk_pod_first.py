@@ -254,6 +254,32 @@ def test_pod_surfaces_use_generated_models():
         "slack",
     )
 
+    pod.surfaces.start_telegram_bot_setup(
+        {
+            "name": "telegram-support",
+            "default_agent_name": "triage",
+        }
+    )
+    assert transport.calls[3]["endpoint"].endswith(
+        "agent_surface_telegram_managed_start"
+    )
+    assert transport.calls[3]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+    )
+    assert (
+        transport.calls[3]["body_model"]
+        == "TelegramManagedBotSetupRequest"
+    )
+
+    pod.surfaces.get_telegram_bot_setup("setup-123")
+    assert transport.calls[4]["endpoint"].endswith(
+        "agent_surface_telegram_managed_get"
+    )
+    assert transport.calls[4]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        "setup-123",
+    )
+
 
 def test_user_update_profile_uses_generated_model():
     transport = StubTransport()

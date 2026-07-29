@@ -442,8 +442,9 @@ Every full-stack case is mandatory with `FUNCTION/pod_id` on both Docker and E2B
   identity/token/config are supplied only through the invocation `ContextVar`.
 - argv, environment, writable files, provider inspection, and diagnostics contain
   no reusable human/provider/object-store credential.
-- Function allocation is destroyed after five idle minutes; the next cold run
-  succeeds with no required state from the old allocation.
+- Function allocation is destroyed after endpoint-lease protection and the idle
+  threshold expire; the next cold run succeeds with no required state from the old
+  allocation.
 
 ## 9. Fault, restart, and ambiguity matrix
 
@@ -458,7 +459,7 @@ Mandatory cases on Docker and E2B:
 | --- | --- | --- |
 | `CH-CREATE-001` | Create accepted, response lost | One provider create; allocation `UNKNOWN` then exact reconciliation |
 | `CH-CREATE-002` | Provider 429/retry-after | Distributed scope waits; no adapter-local retry storm |
-| `CH-INVOKE-001` | Invocation accepted, HTTP response lost | Backend retries once through the exact same AgentBox grant; runtime deduplication permits at most one execution |
+| `CH-INVOKE-001` | Invocation accepted, HTTP response lost | Backend does not replay an ambiguous response; runtime deduplication still permits at most one execution if an explicit same-run retry is introduced |
 | `CH-CALLBACK-001` | Terminal callback duplicated | One terminal transition and one outbox event |
 | `CH-CALLBACK-002` | Terminal callback lost | Deadline reconciliation marks the same unfinished run failed without replay |
 | `CH-RESTART-001` | AgentBox exits after allocation intent commit | Restart reconciles the same allocation token and never blindly creates |

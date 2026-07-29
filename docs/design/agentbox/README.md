@@ -28,9 +28,12 @@ immutable artifacts, durable runs, API/JOB scheduling, deadlines, callbacks,
 cancellation policy, results, and domain events. A function
 sandbox contains one profile-owned resident runtime on a fixed private port.
 AgentBox starts and health-checks that opaque profile runtime and exposes it only
-through a short-lived, allocation-bound port grant. AgentBox does not interpret its
-invocation protocol. No durable queue or public result registry runs inside a
-sandbox.
+through an allocation-fenced direct runtime lease. The backend authenticates the
+control-plane lease request with the AgentBox manager key, then calls the returned
+Docker or E2B endpoint directly with opaque provider headers plus the delegated
+function bearer. AgentBox is not in the per-invocation data path and does not
+interpret the invocation protocol. No durable queue or public result registry runs
+inside a sandbox.
 
 The design intentionally uses different lifecycle policies for the two workloads:
 
@@ -315,15 +318,16 @@ stateDiagram-v2
     Warm --> Busy: invocation admitted
     Busy --> Busy: concurrent invocation admitted
     Busy --> Warm: final invocation completed
-    Warm --> Destroying: idle for five minutes
+    Warm --> Destroying: endpoint lease and idle horizon expire
     Busy --> Draining: profile replacement requested
     Draining --> Destroying: all invocations terminal
     Destroying --> Absent
 ```
 
 Function allocations are never suspended. They may cache verified artifacts while
-warm, but no correctness path depends on the cache. After five idle minutes the
-allocation is destroyed on every provider.
+warm, but no correctness path depends on the cache. A direct endpoint lease protects
+the current allocation for its bounded cache horizon; after that protection and the
+idle threshold expire, the allocation is destroyed on every provider.
 
 ## 8. Reliability principles
 

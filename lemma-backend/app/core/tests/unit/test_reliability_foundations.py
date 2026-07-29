@@ -707,6 +707,7 @@ def test_canary_secrets_are_redacted_recursively_and_in_text() -> None:
         ("sk-proj", "-1234567890abcdefghijklmnop"),
         ("sk", "_live_1234567890abcdefghijklmnop"),
         ("xoxb", "-1234567890-abcdefghijklmnop"),
+        ("123456789", ":AA1234567890abcdefghijklmnop"),
     ],
 )
 def test_known_bare_credential_patterns_are_redacted(

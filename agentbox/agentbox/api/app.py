@@ -474,14 +474,13 @@ async def lifespan(app: FastAPI):
         provider,
         PortAccessSigner(_runtime_key()),
         public_base_url=(settings.agentbox_public_url or settings.agentbox_api_url),
+        trusted_function_activity_seconds=settings.agentbox_function_idle_seconds,
     )
     app.state.port_proxy_http_client = create_port_proxy_http_client()
     reconciler = AgentBoxReconciler(
         database,
         provider,
-        reserved_create_stale_seconds=(
-            settings.agentbox_reserved_create_stale_seconds
-        ),
+        reserved_create_stale_seconds=(settings.agentbox_reserved_create_stale_seconds),
         dispatched_create_stale_seconds=(
             settings.agentbox_dispatched_create_stale_seconds
         ),

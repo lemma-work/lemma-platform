@@ -20,6 +20,7 @@ from agentbox.domain import (
     PythonResult,
     PythonSessionRef,
     PythonSessionState,
+    RetryDisposition,
     SandboxKey,
     SandboxProfileRef,
     StorageKind,
@@ -33,6 +34,8 @@ from agentbox.ports import (
     ProviderCreateResult,
     ProviderPythonExecutionAmbiguous,
     ProviderPythonExecutionRejected,
+    ProviderPythonSessionCreateAmbiguous,
+    ProviderPythonSessionCreateRejected,
     ProviderPythonSessionCreateResult,
     ProviderReadyResult,
     ProviderStorageResult,
@@ -64,6 +67,9 @@ class Provider:
         self.python_create_calls = 0
         self.delete_calls = 0
         self.ambiguous_execution = False
+        self.ambiguous_create_once = False
+        self.ambiguous_restart_once = False
+        self.reject_create_once = False
         self.reject_execution_once = False
         self.reject_delete = False
 
@@ -118,6 +124,12 @@ class Provider:
         del allocation
         self._outside_transaction()
         self.python_create_calls += 1
+        if self.ambiguous_create_once:
+            self.ambiguous_create_once = False
+            raise ProviderPythonSessionCreateAmbiguous("create response lost")
+        if self.reject_create_once:
+            self.reject_create_once = False
+            raise ProviderPythonSessionCreateRejected("context service unavailable")
         return ProviderPythonSessionCreateResult(
             provider_context_id=str(request.session_id)
         )
@@ -156,6 +168,9 @@ class Provider:
     ) -> ProviderPythonSessionCreateResult:
         del allocation, deadline_at
         self._outside_transaction()
+        if self.ambiguous_restart_once:
+            self.ambiguous_restart_once = False
+            raise ProviderPythonSessionCreateAmbiguous("restart response lost")
         return ProviderPythonSessionCreateResult(
             provider_context_id=str(session.session_id)
         )
@@ -329,6 +344,47 @@ async def test_unknown_execution_is_never_replayed(database: StateDatabase) -> N
     assert provider.python_create_calls == 2
 
 
+@pytest.mark.parametrize("ambiguous", [False, True])
+async def test_python_create_failure_replaces_unhealthy_allocation(
+    database: StateDatabase,
+    *,
+    ambiguous: bool,
+) -> None:
+    provider = Provider(database)
+    key, service, session_request = await provision(database, provider)
+    original = await service.inspect(key, session_request.session_id)
+    replacement_request = replace(session_request, session_id=uuid4())
+    if ambiguous:
+        provider.ambiguous_create_once = True
+    else:
+        provider.reject_create_once = True
+
+    with pytest.raises(AgentBoxError) as failed:
+        await service.create(key, replacement_request)
+
+    assert failed.value.retry == RetryDisposition.DO_NOT_RETRY
+    assert failed.value.code == (
+        ErrorCode.UNKNOWN_DISPATCH if ambiguous else ErrorCode.ALLOCATION_CHANGED
+    )
+    async with database.uow() as uow:
+        failed_allocation = await uow.repository.current_allocation(key)
+        await uow.commit()
+    assert failed_allocation is not None
+    assert failed_allocation.state.value == "error"
+
+    recovered = await SandboxLifecycleService(database, provider).ensure(
+        key,
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=session_request.deadline_at,
+    )
+    recreated, created = await service.create(key, replacement_request)
+
+    assert recovered.allocation_id != original.allocation_id
+    assert recreated.allocation_id == recovered.allocation_id
+    assert created is True
+
+
 async def test_failed_unknown_execution_cleanup_is_fenced_until_allocation_changes(
     database: StateDatabase,
 ) -> None:
@@ -349,23 +405,18 @@ async def test_failed_unknown_execution_cleanup_is_fenced_until_allocation_chang
                 deadline_at=session_request.deadline_at,
             ),
         )
-    with pytest.raises(AgentBoxError) as fenced:
-        await service.create(key, session_request)
-    with pytest.raises(AgentBoxError) as allocation_fenced:
-        await service.create(
-            key,
-            replace(session_request, session_id=uuid4()),
-        )
-
     assert lost.value.code == ErrorCode.UNKNOWN_DISPATCH
-    assert fenced.value.code == ErrorCode.UNKNOWN_DISPATCH
-    assert allocation_fenced.value.code == ErrorCode.UNKNOWN_DISPATCH
+    async with database.uow() as uow:
+        failed_allocation = await uow.repository.current_allocation(key)
+        await uow.commit()
+    assert failed_allocation is not None
+    assert failed_allocation.state.value == "error"
 
     provider.ambiguous_execution = False
     provider.reject_delete = False
-    await SandboxLifecycleService(database, provider).ensure(
+    replacement = await SandboxLifecycleService(database, provider).ensure(
         key,
-        SandboxProfileRef("workspace-python-v2", f"sha256:{'b' * 64}"),
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'a' * 64}"),
         admission_class=AdmissionClass.INTERACTIVE,
         deadline_at=session_request.deadline_at,
     )
@@ -373,6 +424,37 @@ async def test_failed_unknown_execution_cleanup_is_fenced_until_allocation_chang
 
     assert created is True
     assert recreated.session_id == session_request.session_id
+    assert recreated.allocation_id == replacement.allocation_id
+
+
+async def test_ambiguous_python_restart_replaces_unhealthy_allocation(
+    database: StateDatabase,
+) -> None:
+    provider = Provider(database)
+    key, service, session_request = await provision(database, provider)
+    original = await service.inspect(key, session_request.session_id)
+    provider.ambiguous_restart_once = True
+
+    with pytest.raises(AgentBoxError) as failed:
+        await service.restart(
+            key,
+            session_request.session_id,
+            deadline_at=session_request.deadline_at,
+        )
+
+    assert failed.value.code == ErrorCode.UNKNOWN_DISPATCH
+    assert failed.value.retry == RetryDisposition.DO_NOT_RETRY
+    recovered = await SandboxLifecycleService(database, provider).ensure(
+        key,
+        SandboxProfileRef("workspace-python-v1", f"sha256:{'a' * 64}"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=session_request.deadline_at,
+    )
+    recreated, created = await service.create(key, session_request)
+
+    assert recovered.allocation_id != original.allocation_id
+    assert recreated.allocation_id == recovered.allocation_id
+    assert created is True
 
 
 async def test_conflicting_inflight_python_request_does_not_coalesce(

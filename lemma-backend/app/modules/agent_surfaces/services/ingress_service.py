@@ -82,6 +82,9 @@ from app.modules.agent_surfaces.services.fallback_reply_service import (
 from app.modules.agent_surfaces.services.identity_resolution_service import (
     SurfaceIdentityResolutionService,
 )
+from app.modules.agent_surfaces.services.telegram_command_service import (
+    handle_telegram_command,
+)
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
     SurfaceFileIngestService,
@@ -91,8 +94,14 @@ from app.modules.agent_surfaces.services.display_resource_renderer import (
     build_ask_user_render_plan,
     build_display_resource_render_plan,
     merge_other_answers,
-    parse_callback_id,
     render_questions_as_text,
+)
+from app.modules.agent_surfaces.services.interaction_helpers import (
+    interaction_sender_matches,
+    parse_interaction_target,
+    resolve_current_interaction_delivery,
+    resolve_interaction_delivery,
+    retry_interaction_conversation,
 )
 from app.composition.surface_connectors import ConnectorService
 from app.core.log.log import get_logger
@@ -396,6 +405,16 @@ class AgentSurfaceIngressService:
             return
 
         credentials = await self._resolve_credentials_from_context(context)
+        if await handle_telegram_command(
+            context=context,
+            adapter=adapter,
+            credentials=credentials,
+            uow_factory=self._uow_factory,
+            conversation_service_factory=self._conversation_service_factory,
+            uow=self.uow,
+            conversation_service=self.conversation_service,
+        ):
+            return
         try:
             await adapter.add_processing_indicator(
                 credentials=credentials,
@@ -458,23 +477,38 @@ class AgentSurfaceIngressService:
         # The only DB writes happen here, AFTER all the external I/O above — so
         # in worker (factory) mode a pooled connection is held just for this
         # short tail, not across the platform/file/transcription calls.
-        await self._commit_inbound_message(context, message_text, metadata)
+        run_result = await self._commit_inbound_message(
+            context, message_text, metadata
+        )
+        if run_result is not None and not run_result.started_new_run:
+            await adapter.send_message(
+                credentials=credentials,
+                event=context.event,
+                message=(
+                    "Got it — I added that while I’m working. "
+                    "I’ll carry it into the next turn."
+                ),
+            )
 
     async def _commit_inbound_message(
         self,
         context: SurfaceChatContext,
         message_text: str,
         metadata: dict[str, Any],
-    ) -> None:
+    ):
         """Persist the inbound message / resume the paused run in a short UoW."""
         if self._uow_factory is not None:
+            if self._conversation_service_factory is None:
+                raise RuntimeError("Conversation service factory is unavailable")
             async with self._uow_factory() as uow:
                 conversation_service = self._conversation_service_factory(uow)
-                await self._write_inbound_message(
+                return await self._write_inbound_message(
                     context, message_text, metadata, uow, conversation_service
                 )
         else:
-            await self._write_inbound_message(
+            if self.uow is None or self.conversation_service is None:
+                raise RuntimeError("Conversation service is unavailable")
+            return await self._write_inbound_message(
                 context, message_text, metadata, self.uow, self.conversation_service
             )
 
@@ -485,7 +519,9 @@ class AgentSurfaceIngressService:
         metadata: dict[str, Any],
         uow,
         conversation_service: ConversationService,
-    ) -> None:
+    ):
+        if context.pod_id is None:
+            raise ValueError("Surface chat context requires a pod")
         auth_ctx = await create_authorization_data_service(uow).build_user_context(
             user_id=context.user_id,
             pod_id=context.pod_id,
@@ -499,7 +535,7 @@ class AgentSurfaceIngressService:
             if not await self._maybe_resume_pending_interaction(
                 context, message_text, conversation_service=conversation_service
             ):
-                await conversation_service.add_user_message_and_start_run(
+                return await conversation_service.add_user_message_and_start_run(
                     conversation_id=context.conversation_id,
                     user_id=context.user_id,
                     content=message_text,
@@ -507,6 +543,7 @@ class AgentSurfaceIngressService:
                     agent_name=context.agent_name,
                     message_metadata=metadata,
                 )
+            return None
         finally:
             reset_current_context(token)
 
@@ -1196,6 +1233,7 @@ class AgentSurfaceIngressService:
         intentionally dropped); False when it is not an interaction and the
         caller should fall through to the normal message path.
         """
+        surface = None
         if isinstance(request, SurfaceDirectWebhookIngress):
             surface = await self.surface_repository.get(request.surface_id)
             if surface is None:
@@ -1211,6 +1249,22 @@ class AgentSurfaceIngressService:
         )
         if parsed is None:
             return False
+        if parsed.interaction_state == "expired":
+            if surface is None and isinstance(request, SurfacePlatformWebhookIngress):
+                for surface_id in request.receiver_surface_ids or []:
+                    surface = await self.surface_repository.get(surface_id)
+                    if surface is not None:
+                        break
+            if surface is not None:
+                credentials = await self._resolve_credentials(surface)
+                await adapter.acknowledge_interaction(
+                    credentials=credentials,
+                    interaction=parsed,
+                    text="This action expired. Please ask again.",
+                    show_alert=True,
+                    clear_actions=True,
+                )
+            return True
         await self.handle_interaction(parsed)
         return True
 
@@ -1223,39 +1277,32 @@ class AgentSurfaceIngressService:
         agent receives a proper structured answer, not a plain message. Best
         effort; never raises to the caller.
         """
+        adapter = None
+        credentials = None
         try:
-            parsed_callback = parse_callback_id(parsed.callback_id)
-            if parsed_callback is None:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_unparseable_callback.diagnostic',
-                    callback_id=parsed.callback_id,
+            if parsed.action == "retry":
+                tool_call_id = ""
+                delivery = await resolve_current_interaction_delivery(self, parsed)
+            else:
+                target = parse_interaction_target(parsed)
+                if target is None:
+                    return
+                conversation_id, tool_call_id = target
+                delivery = await resolve_interaction_delivery(
+                    self,
+                    parsed,
+                    conversation_id,
                 )
+            if delivery is None:
                 return
-            conversation_id_raw, tool_call_id = parsed_callback
-            try:
-                conversation_id = UUID(conversation_id_raw)
-            except ValueError:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_invalid_conversation.diagnostic',
-                    callback_id=parsed.callback_id,
-                )
-                return
+            link, surface, adapter, credentials = delivery
+            conversation_id = link.conversation_id
 
-            link = await self.conversation_link_repository.get_by_conversation_id(
-                conversation_id
-            )
-            if link is None or link.platform != parsed.platform.value:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_no_matching.diagnostic',
-                    conversation_id=conversation_id,
-                )
-                return
-            surface = await self.surface_repository.get(link.surface_id)
-            if surface is None or not surface.is_active:
-                logger.debug(
-                    'agent_surfaces.ingress_service.surface_interaction_dropped_surface_missing.diagnostic',
-                    conversation_id=conversation_id,
-                    surface_id=link.surface_id,
+            if parsed.interaction_state == "other":
+                await adapter.acknowledge_interaction(
+                    credentials=credentials,
+                    interaction=parsed,
+                    text="Reply with your own answer.",
                 )
                 return
 
@@ -1278,11 +1325,7 @@ class AgentSurfaceIngressService:
 
             # Authz: only the surface user who owns the conversation may submit
             # the answer that was shown to them.
-            if (
-                link.external_user_id
-                and parsed.external_user_id
-                and link.external_user_id != parsed.external_user_id
-            ):
+            if not interaction_sender_matches(link, parsed):
                 logger.debug(
                     'agent_surfaces.ingress_service.surface_answer_submission_rejected_submitter.diagnostic',
                     external_user_id=parsed.external_user_id,
@@ -1297,6 +1340,37 @@ class AgentSurfaceIngressService:
                 logger.debug(
                     'agent_surfaces.ingress_service.surface_interaction_dropped_conversation_not.diagnostic',
                     conversation_id=conversation_id,
+                )
+                return
+
+            if parsed.action == "retry":
+                refreshed = await self._refresh_interaction_conversation(
+                    link=link,
+                    surface=surface,
+                    conversation=conversation,
+                )
+                if refreshed is None:
+                    return
+                link, conversation, restarted = refreshed
+                if restarted:
+                    await adapter.acknowledge_interaction(
+                        credentials=credentials,
+                        interaction=parsed,
+                        text="This chat started a new conversation. Send your message again.",
+                        show_alert=True,
+                        clear_actions=True,
+                    )
+                    return
+                await retry_interaction_conversation(
+                    conversation_service=self.conversation_service,
+                    uow=self.uow,
+                    conversation=conversation,
+                )
+                await adapter.acknowledge_interaction(
+                    credentials=credentials,
+                    interaction=parsed,
+                    text="Retrying…",
+                    clear_actions=True,
                 )
                 return
 
@@ -1327,10 +1401,60 @@ class AgentSurfaceIngressService:
                 )
             finally:
                 reset_current_context(token)
+            await adapter.acknowledge_interaction(
+                credentials=credentials,
+                interaction=parsed,
+                text="Done",
+                clear_actions=True,
+            )
         except Exception:
             logger.debug(
                 'agent_surfaces.ingress_service.surface_interaction_handling_s.diagnostic'
             )
+            if adapter is not None and credentials is not None:
+                await adapter.acknowledge_interaction(
+                    credentials=credentials,
+                    interaction=parsed,
+                    text="I couldn’t complete that action.",
+                    show_alert=True,
+                )
+
+    async def _refresh_interaction_conversation(
+        self,
+        *,
+        link: AgentSurfaceConversationLink,
+        surface: AgentSurfaceEntity,
+        conversation,
+    ) -> tuple[AgentSurfaceConversationLink, Any, bool] | None:
+        """Apply the normal DM agent/TTL reset policy before an action runs."""
+
+        try:
+            last_event = ParsedInboundSurfaceEvent.model_validate(link.last_event)
+        except (TypeError, ValueError):
+            return link, conversation, False
+        route = await self._resolve_route(surface=surface, parsed=last_event)
+        if route is None:
+            return link, conversation, False
+        refreshed_link = await self._get_or_create_conversation_link(
+            surface=surface,
+            parsed=last_event,
+            resolved_user=ResolvedSurfaceUser(
+                internal_user_id=conversation.user_id,
+                external_user_id=link.external_user_id,
+            ),
+            route=route,
+            current_conversation_agent_id=conversation.agent_id,
+        )
+        if refreshed_link.conversation_id == link.conversation_id:
+            return refreshed_link, conversation, False
+        refreshed_conversation = (
+            await self.conversation_service.conversation_repository.get_conversation(
+                refreshed_link.conversation_id
+            )
+        )
+        if refreshed_conversation is None:
+            return None
+        return refreshed_link, refreshed_conversation, True
 
     async def send_processing_indicator_for_conversation(
         self,
@@ -1798,6 +1922,7 @@ class AgentSurfaceIngressService:
             conversation_id=link.conversation_id,
             user_id=resolved_user.internal_user_id,
             surface_id=surface.id,
+            surface_name=surface.name,
             surface_account_id=surface.account_id,
             surface_config=surface.config,
             agent_display_name=route.agent_display_name,
@@ -1936,6 +2061,7 @@ class AgentSurfaceIngressService:
         parsed: ParsedInboundSurfaceEvent,
         resolved_user: ResolvedSurfaceUser,
         route: ResolvedSurfaceRoute,
+        current_conversation_agent_id: UUID | None = None,
     ) -> AgentSurfaceConversationLink:
         external_user_id = resolved_user.external_user_id
         link = await self.conversation_link_repository.get_by_external_thread(
@@ -1947,7 +2073,12 @@ class AgentSurfaceIngressService:
         )
         event_payload = parsed.model_dump(mode="json")
         if link is not None:
-            if self._should_reset_dm_conversation(surface=surface, link=link):
+            if self._should_reset_dm_conversation(
+                surface=surface,
+                link=link,
+                route=route,
+                current_conversation_agent_id=current_conversation_agent_id,
+            ):
                 conversation = await self._create_surface_conversation(
                     surface=surface,
                     parsed=parsed,
@@ -2009,9 +2140,19 @@ class AgentSurfaceIngressService:
         *,
         surface: AgentSurfaceEntity,
         link: AgentSurfaceConversationLink,
+        route: ResolvedSurfaceRoute | None = None,
+        current_conversation_agent_id: UUID | None = None,
     ) -> bool:
         if surface.mode is not SurfaceMode.DM:
             return False
+        if (
+            route is not None
+            and current_conversation_agent_id is not None
+            and current_conversation_agent_id != route.agent_id
+        ):
+            return True
+        if route is not None and link.routed_agent_id != route.agent_id:
+            return True
         reset_hours = surface.config.dm_conversation_reset_after_hours
         if reset_hours <= 0:
             return False

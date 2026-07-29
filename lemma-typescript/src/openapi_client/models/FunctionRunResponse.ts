@@ -3,23 +3,23 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { FunctionRunStatus } from './FunctionRunStatus.js';
+import type { JsonObject } from './JsonObject.js';
 /**
  * Function run response.
  */
 export type FunctionRunResponse = {
-    completed_at: any;
-    created_at: any;
+    completed_at: (string | null);
+    created_at: (string | null);
     error?: (string | null);
     function_id: string;
     id: string;
-    input_data?: (Record<string, any> | null);
+    input_data?: (JsonObject | null);
     job_id?: (string | null);
     logs?: (string | null);
-    output_data?: (Record<string, any> | null);
-    started_at: any;
+    output_data?: (JsonObject | null);
+    revision_hash?: (string | null);
+    started_at: (string | null);
     status: FunctionRunStatus;
     user_email?: (string | null);
     user_id: string;
-    workspace_process_id?: (string | null);
-    workspace_session_id?: (string | null);
 };

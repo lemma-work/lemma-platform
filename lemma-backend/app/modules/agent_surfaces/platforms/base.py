@@ -112,6 +112,17 @@ class BaseSurfaceAdapter:
         del payload, headers
         return None
 
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        del credentials, interaction, text, show_alert, clear_actions
+
     async def fetch_thread_context(
         self,
         *,

@@ -68,6 +68,7 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.services.run_observer_delivery import notify_run_failed
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
     UsageReservation,
@@ -175,6 +176,13 @@ class AgentRunObserver(Protocol):
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None: ...
+
+    async def on_run_failed(
+        self,
+        conversation: Conversation,
+        error: Exception,
+    ) -> None:
+        raise NotImplementedError
 
 
 class AgentRunnerService:
@@ -496,6 +504,7 @@ class AgentRunnerService:
                     ),
                     agent_run_id=agent_run_id,
                 )
+                await notify_run_failed(observer, conversation, exc, agent_run_id)
 
     async def _resolve_agent_runtime(
         self,

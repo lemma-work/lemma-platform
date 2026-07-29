@@ -121,7 +121,7 @@ def test_normalize_schedule_payload_strips_runtime_fields():
     }
 
 
-def test_normalize_surface_payload_channels_identity_and_status():
+def test_normalize_surface_payload_channels_identity_telegram_and_status():
     surface = {
         "platform": "slack",
         "status": "INACTIVE",
@@ -134,6 +134,7 @@ def test_normalize_surface_payload_channels_identity_and_status():
                 "junk",
             ],
             "identity": {"allowed_domains": ["example.com"], "other": 1},
+            "telegram": {"app_name": "support-desk", "other": 1},
         },
     }
     payload = _normalize_surface_payload(surface)
@@ -144,6 +145,7 @@ def test_normalize_surface_payload_channels_identity_and_status():
     assert payload["config"] == {
         "channels": [{"channel_id": "C1", "channel_name": "general"}],
         "identity": {"allowed_domains": ["example.com"]},
+        "telegram": {"app_name": "support-desk"},
     }
 
 

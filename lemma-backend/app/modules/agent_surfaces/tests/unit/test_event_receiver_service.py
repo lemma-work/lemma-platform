@@ -17,6 +17,7 @@ from app.modules.agent_surfaces.services.event_receiver_service import (
     NativeReceiverCandidate,
     NativeSurfaceReceiverCoordinator,
     TelegramPollingReceiverRunner,
+    _assemble_telegram_updates,
     _candidate_from_surface,
     _publish_native_receiver_event,
     _receiver_key,
@@ -54,6 +55,65 @@ def test_slack_candidate_uses_app_token_and_account_scoped_key():
     assert candidate.platform is SurfacePlatform.SLACK
     assert candidate.credential_label == str(account_id)
     assert candidate.key.startswith(f"slack:{account_id}:")
+
+
+def test_telegram_update_assembly_coalesces_same_sender_burst():
+    updates = [
+        {
+            "update_id": 10,
+            "message": {
+                "message_id": 1,
+                "date": 100,
+                "chat": {"id": 20},
+                "from": {"id": 30},
+                "text": "first",
+            },
+        },
+        {
+            "update_id": 11,
+            "message": {
+                "message_id": 2,
+                "date": 101,
+                "chat": {"id": 20},
+                "from": {"id": 30},
+                "text": "second",
+            },
+        },
+    ]
+
+    assembled = _assemble_telegram_updates(updates)
+
+    assert len(assembled) == 1
+    assert assembled[0]["update_id"] == 11
+    assert [message["text"] for message in assembled[0]["_lemma_batch_messages"]] == [
+        "first",
+        "second",
+    ]
+
+
+def test_telegram_update_assembly_keeps_different_chats_separate():
+    updates = [
+        {
+            "update_id": 10,
+            "message": {
+                "message_id": 1,
+                "date": 100,
+                "chat": {"id": 20},
+                "from": {"id": 30},
+            },
+        },
+        {
+            "update_id": 11,
+            "message": {
+                "message_id": 2,
+                "date": 100,
+                "chat": {"id": 21},
+                "from": {"id": 30},
+            },
+        },
+    ]
+
+    assert len(_assemble_telegram_updates(updates)) == 2
 
 
 @pytest.mark.asyncio

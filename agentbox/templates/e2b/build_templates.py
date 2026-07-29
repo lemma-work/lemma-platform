@@ -128,6 +128,12 @@ def workspace_template():
             "uv sync --project /build/agentbox/templates/workspace-python "
             "--python 3.14 "
             "--locked --no-dev --no-editable && "
+            "printf '%s\\n' "
+            "'import sys; "
+            'p="/workspace/.python/lib/python3.14/site-packages"; '
+            "sys.path.insert(0, p) if p not in sys.path else None' "
+            "> /opt/agentbox-python/lib/python3.14/site-packages/"
+            "agentbox-workspace-overlay.pth && "
             "test -x /opt/agentbox-python/bin/python && "
             'test "$(/opt/agentbox-python/bin/python -c '
             "'import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")'"
@@ -191,6 +197,11 @@ def workspace_template():
             mode=0o644,
         )
         .copy(
+            "agentbox/templates/workspace-python/agentbox-profile.sh",
+            "/etc/profile.d/agentbox-python.sh",
+            mode=0o644,
+        )
+        .copy(
             "agentbox/scripts/start-browser.sh",
             "/usr/local/bin/start-browser",
             mode=0o755,
@@ -234,9 +245,14 @@ def workspace_template():
                 "AGENTBOX_NODE_BINARY": "/opt/node24/bin/node",
                 "NODE_PATH": "/opt/agentbox-node/node_modules",
                 "PNPM_HOME": "/home/user/.local/share/pnpm",
-                "PYTHONPATH": ("/opt/agentbox-python/lib/python3.14/site-packages"),
+                "PIP_PREFIX": "/workspace/.python",
+                "PYTHONPATH": (
+                    "/workspace/.python/lib/python3.14/site-packages:"
+                    "/opt/agentbox-python/lib/python3.14/site-packages"
+                ),
                 "PATH": (
-                    "/opt/agentbox-python/bin:/opt/node24/bin:"
+                    "/workspace/.python/bin:/opt/agentbox-python/bin:"
+                    "/opt/node24/bin:"
                     "/usr/local/bin:/usr/bin:/bin"
                 ),
                 "MPLBACKEND": "Agg",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import hmac
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
@@ -12,6 +13,7 @@ from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.redaction import redact_value
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceWebhookSecurityServiceDep,
+    TelegramManagerServiceDep,
     get_surface_service,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
@@ -22,6 +24,9 @@ from app.modules.identity.services.whatsapp_mobile_verification import (
 )
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
+)
+from app.modules.agent_surfaces.services.telegram_manager_service import (
+    TelegramManagedBotProvisioningInProgressError,
 )
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
@@ -120,6 +125,38 @@ def _normalize_resend_inbound(payload: dict) -> dict:
         "in_reply_to": data.get("in_reply_to") or header_map.get("in-reply-to"),
         "references": references,
     }
+
+
+@router.post(
+    "/webhooks/telegram-manager",
+    operation_id="surface.webhook.handle_telegram_manager",
+    summary="Handle Telegram manager-bot webhook",
+)
+async def handle_telegram_manager_webhook(
+    request: Request,
+    service: TelegramManagerServiceDep,
+):
+    expected = str(surface_settings.telegram_manager_webhook_secret or "").strip()
+    provided = str(
+        request.headers.get("x-telegram-bot-api-secret-token") or ""
+    ).strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram manager webhook is not configured",
+        )
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
+    payload = _decode_webhook_payload(await request.body(), dict(request.headers))
+    try:
+        await service.handle_update(payload)
+    except TelegramManagedBotProvisioningInProgressError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram managed-bot setup is still provisioning",
+            headers={"Retry-After": "1"},
+        ) from exc
+    return {"message": "Webhook received"}
 
 
 @router.post(

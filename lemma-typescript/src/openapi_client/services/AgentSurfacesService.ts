@@ -12,6 +12,8 @@ import type { SurfaceSendRequest } from '../models/SurfaceSendRequest.js';
 import type { SurfaceSendResponse } from '../models/SurfaceSendResponse.js';
 import type { SurfaceSetupResponse } from '../models/SurfaceSetupResponse.js';
 import type { SurfaceUpdateRequest } from '../models/SurfaceUpdateRequest.js';
+import type { TelegramManagedBotSetupRequest } from '../models/TelegramManagedBotSetupRequest.js';
+import type { TelegramManagedBotSetupResponse } from '../models/TelegramManagedBotSetupResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -282,6 +284,53 @@ export class AgentSurfacesService {
             path: {
                 'pod_id': podId,
                 'surface_name': surfaceName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Start Telegram Managed Bot Setup
+     * @param podId
+     * @param requestBody
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceTelegramManagedStart(
+        podId: string,
+        requestBody: TelegramManagedBotSetupRequest,
+    ): CancelablePromise<TelegramManagedBotSetupResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/telegram-bot-setups',
+            path: {
+                'pod_id': podId,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Get Telegram Managed Bot Setup
+     * @param podId
+     * @param setupId
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentSurfaceTelegramManagedGet(
+        podId: string,
+        setupId: string,
+    ): CancelablePromise<TelegramManagedBotSetupResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/telegram-bot-setups/{setup_id}',
+            path: {
+                'pod_id': podId,
+                'setup_id': setupId,
             },
             errors: {
                 422: `Validation Error`,

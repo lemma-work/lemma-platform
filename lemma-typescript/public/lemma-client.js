@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.6.4",
+    VERSION: "0.6.7",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -12279,7 +12279,9 @@ var LemmaClient = (() => {
       });
       __publicField(this, "runs", {
         create: (name, options = {}) => this.client.request(() => {
-          const payload = { input_data: options.input };
+          const payload = {
+            input_data: options.input
+          };
           return FunctionsService.functionRun(this.podId(), name, payload);
         }),
         list: (name, params = {}) => this.client.request(() => {
@@ -14360,6 +14362,47 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Start Telegram Managed Bot Setup
+     * @param podId
+     * @param requestBody
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceTelegramManagedStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-bot-setups",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Telegram Managed Bot Setup
+     * @param podId
+     * @param setupId
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceTelegramManagedGet(podId, setupId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/telegram-bot-setups/{setup_id}",
+        path: {
+          "pod_id": podId,
+          "setup_id": setupId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/pod-surfaces.ts
@@ -14384,6 +14427,16 @@ var LemmaClient = (() => {
     create(podId, payload) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceCreate(podId, payload)
+      );
+    }
+    startTelegramBotSetup(podId, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceTelegramManagedStart(podId, payload)
+      );
+    }
+    getTelegramBotSetup(podId, setupId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceTelegramManagedGet(podId, setupId)
       );
     }
     update(podId, surfaceName, payload) {

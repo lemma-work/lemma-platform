@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -42,6 +42,12 @@ from app.modules.agent_surfaces.services.ingress_service import (
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
+)
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    TelegramMiniApp,
+)
+from app.modules.agent_surfaces.services.telegram_command_service import (
+    handle_telegram_command,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -655,6 +661,7 @@ async def test_prepare_webhook_reuses_existing_conversation_link():
         external_channel_id="D123",
         external_thread_id="D123",
         external_user_id="U123",
+        routed_agent_id=surface.agent_id,
         last_event={},
     )
     event = _slack_event()
@@ -683,6 +690,54 @@ async def test_prepare_webhook_reuses_existing_conversation_link():
     assert context.conversation_id == conversation_id
     service.conversation_service.create_conversation.assert_not_called()
     service.conversation_link_repository.update_last_event.assert_awaited_once()
+
+
+async def test_prepare_webhook_resets_dm_conversation_when_surface_agent_changes():
+    old_agent_id = uuid4()
+    new_agent_id = uuid4()
+    surface = _slack_surface(agent_id=new_agent_id)
+    user_id = uuid4()
+    old_conversation_id = uuid4()
+    new_conversation = _conversation(surface, user_id)
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=old_conversation_id,
+        platform="SLACK",
+        external_channel_id="D123",
+        external_thread_id="D123",
+        external_user_id="U123",
+        routed_agent_id=old_agent_id,
+        last_event={},
+    )
+    event = _slack_event()
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    adapter.fetch_sender_profile.return_value = SurfaceSenderProfile(
+        external_user_id="U123",
+        display_name="Sender",
+    )
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id,
+            external_user_id="U123",
+            display_name="Sender",
+        ),
+        conversation=new_conversation,
+        existing_link=link,
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="slack", payload={}, headers={})
+    )
+
+    assert isinstance(context, SurfaceChatContext)
+    assert context.conversation_id == new_conversation.id
+    update = service.conversation_link_repository.update_conversation.await_args.kwargs
+    assert update["routed_agent_id"] == new_agent_id
+    service.conversation_service.create_conversation.assert_awaited_once()
+    service.conversation_link_repository.update_last_event.assert_not_called()
 
 
 async def test_prepare_webhook_routes_slack_channel_from_surface_config():
@@ -1080,6 +1135,133 @@ async def test_execute_chat_starts_agent_run_with_surface_metadata():
     assert kwargs["agent_name"] is None
     assert kwargs["message_metadata"]["surface_platform"] == "SLACK"
     assert kwargs["message_metadata"]["external_message_id"] == "1700000000.000100"
+
+
+@pytest.mark.parametrize("command", ["/start", "/help"])
+async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatch):
+    surface = _telegram_surface()
+    event = _telegram_event(chat_id="42", message_id="7")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    app_id = uuid4()
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_command_service."
+        "_telegram_mini_app_for_context",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=app_id,
+                name="field-log",
+                url="https://field-log.apps.example.test",
+            )
+        ),
+    )
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Logger",
+        message_text=command,
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=event,
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
+    )
+
+    assert handled is True
+    sent = adapter.send_message.await_args.kwargs
+    assert "Open Field Log from the app button beside the message field" in sent[
+        "message"
+    ]
+    assert "metadata" not in sent
+
+
+async def test_telegram_help_does_not_claim_unavailable_local_app_button(monkeypatch):
+    surface = _telegram_surface()
+    event = _telegram_event(chat_id="42", message_id="7")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_command_service."
+        "_telegram_mini_app_for_context",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=uuid4(),
+                name="field-log",
+                url=None,
+            )
+        ),
+    )
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Logger",
+        message_text="/help",
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=event,
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
+    )
+
+    assert handled is True
+    sent = adapter.send_message.await_args.kwargs
+    assert "app button beside the message field" not in sent["message"]
+
+
+async def test_telegram_app_command_is_not_a_special_command():
+    surface = _telegram_surface()
+    event = _telegram_event(chat_id="42", message_id="7")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        message_text="/app",
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=event,
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
+    )
+
+    assert handled is False
+    adapter.send_message.assert_not_awaited()
 
 
 async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch):
@@ -1560,6 +1742,120 @@ async def test_handle_interaction_routes_approval_decision(decision_value, expec
     assert kwargs["decision"] == expected
     # An approval button carries a decision, not an answer payload.
     assert kwargs["response"] == {}
+
+
+async def test_handle_retry_resolves_conversation_from_current_thread_link():
+    surface = _telegram_surface()
+    user_id = uuid4()
+    conversation = _conversation(surface, user_id)
+    event = _telegram_event(chat_id="123", message_id="5")
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        routed_agent_id=surface.agent_id,
+        last_event=event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        existing_link=link,
+    )
+    service.conversation_link_repository.find_surface_id_for_external_thread.return_value = (
+        surface.id
+    )
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=conversation)
+    )
+    service._refresh_interaction_conversation = AsyncMock(
+        return_value=(link, conversation, False)
+    )
+    interaction = ParsedSurfaceInteraction(
+        platform=SurfacePlatform.TELEGRAM,
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        action="retry",
+        dedup_id="cbq-retry",
+    )
+
+    with patch(
+        "app.modules.agent_surfaces.services.ingress_service."
+        "retry_interaction_conversation",
+        new=AsyncMock(),
+    ) as retry:
+        await service.handle_interaction(interaction)
+
+    service.conversation_link_repository.get_by_conversation_id.assert_not_awaited()
+    service.conversation_link_repository.get_by_external_thread.assert_awaited_once_with(
+        surface_id=surface.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+    )
+    retry.assert_awaited_once()
+    assert retry.await_args.kwargs["conversation"] is conversation
+    adapter.acknowledge_interaction.assert_awaited_once_with(
+        credentials={},
+        interaction=interaction,
+        text="Retrying…",
+        clear_actions=True,
+    )
+
+
+async def test_refresh_retry_uses_normal_agent_change_reset_policy():
+    old_agent_id = uuid4()
+    new_agent_id = uuid4()
+    surface = _telegram_surface(agent_id=new_agent_id)
+    user_id = uuid4()
+    old_conversation = _conversation(surface, user_id).model_copy(
+        update={"agent_id": old_agent_id}
+    )
+    new_conversation = _conversation(surface, user_id)
+    event = _telegram_event(chat_id="123", message_id="5")
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=old_conversation.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        # Even if denormalized route metadata was already updated, the actual
+        # conversation's agent remains authoritative for deciding to reset.
+        routed_agent_id=new_agent_id,
+        last_event=event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        conversation=new_conversation,
+        existing_link=link,
+    )
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=new_conversation)
+    )
+
+    refreshed = await service._refresh_interaction_conversation(
+        link=link,
+        surface=surface,
+        conversation=old_conversation,
+    )
+
+    assert refreshed is not None
+    refreshed_link, refreshed_conversation, restarted = refreshed
+    assert restarted is True
+    assert refreshed_link.conversation_id == new_conversation.id
+    assert refreshed_conversation is new_conversation
+    service.conversation_service.create_conversation.assert_awaited_once()
+    update = service.conversation_link_repository.update_conversation.await_args.kwargs
+    assert update["conversation_id"] == new_conversation.id
+    assert update["routed_agent_id"] == new_agent_id
 
 
 _REQUEST_APPROVAL_TOOL_ARGS = {

@@ -4,11 +4,10 @@ AgentBox uses two immutable E2B template builds:
 
 - `lemma-agentbox-workspace` extends E2B Code Interpreter with a locked authoring
   environment (including the Lemma SDK), Node 24, pnpm, uv, LiteParse, and
-  headful Chrome. E2B currently owns the Code Interpreter kernel ABI (Python
-  3.13); the template installs its locked environment for that interpreter and
-  exposes it through a system `.pth` file. Do not attempt to replace E2B's
-  managed kernel through the Jupyter kernel spec: `run_code` does not use that
-  file.
+  headful Chrome. The shell, `python`, `python3`, `pip`, `pip3`, and E2B code
+  contexts all use the locked Python 3.14 environment. Packages installed with
+  plain `pip install` go into `/workspace/.python`, so shell commands and
+  persistent Python contexts see the same workspace-backed package set.
 - `lemma-agentbox-function` contains only the function runner and Lemma SDK.
 
 Builds are created from the monorepo source. Both profiles default to 1 vCPU and
