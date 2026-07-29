@@ -1187,6 +1187,51 @@ async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatc
     assert "metadata" not in sent
 
 
+async def test_telegram_help_does_not_claim_unavailable_local_app_button(monkeypatch):
+    surface = _telegram_surface()
+    event = _telegram_event(chat_id="42", message_id="7")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_command_service."
+        "_telegram_mini_app_for_context",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=uuid4(),
+                name="field-log",
+                url=None,
+            )
+        ),
+    )
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Logger",
+        message_text="/help",
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=event,
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
+    )
+
+    assert handled is True
+    sent = adapter.send_message.await_args.kwargs
+    assert "app button beside the message field" not in sent["message"]
+
+
 async def test_telegram_app_command_is_not_a_special_command():
     surface = _telegram_surface()
     event = _telegram_event(chat_id="42", message_id="7")

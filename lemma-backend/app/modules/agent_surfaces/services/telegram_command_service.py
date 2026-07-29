@@ -46,7 +46,7 @@ async def handle_telegram_command(
         )
         app_help = (
             f"Open {mini_app.label} from the app button beside the message field"
-            if mini_app
+            if mini_app and mini_app.url
             else "A pod owner can connect a Mini App from this bot’s surface settings"
         )
         await adapter.send_message(

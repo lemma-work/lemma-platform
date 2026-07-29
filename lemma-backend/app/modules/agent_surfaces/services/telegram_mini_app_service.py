@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import quote, urlparse
 from uuid import UUID
 
 from app.core.config import settings
@@ -31,18 +30,15 @@ class TelegramMiniApp:
 
 
 def telegram_mini_app_url(*, public_slug: str) -> str | None:
-    """Return the HTTPS URL Telegram may open for a selected Lemma app.
+    """Return the canonical HTTPS app origin Telegram may open.
 
-    Cloud apps keep their isolated app origin. Local public development uses a
-    path on the ephemeral HTTPS API tunnel because a quick tunnel cannot mint a
-    wildcard subdomain for every local app.
+    Local app hosts are not publicly reachable HTTPS origins. Publishing those
+    origins for Telegram is a daemon/tunnel concern, not an alternate app
+    serving path in the backend.
     """
 
-    api_url = settings.api_url.rstrip("/")
     if settings.is_local_mode():
-        if urlparse(api_url).scheme != "https":
-            return None
-        return f"{api_url}/public/telegram-mini-apps/{quote(public_slug, safe='')}"
+        return None
 
     app_domain = str(settings.app_base_domain or "").strip()
     if not app_domain:
