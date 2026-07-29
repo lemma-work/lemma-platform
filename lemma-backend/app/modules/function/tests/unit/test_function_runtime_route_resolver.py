@@ -8,7 +8,14 @@ from uuid import uuid4
 import pytest
 
 import httpx
-from agentbox_client import AdmissionClass, AgentBoxApiError, WorkloadKind
+from agentbox_client import (
+    AdmissionClass,
+    AgentBoxApiError,
+    FunctionRuntimeLease,
+    ProfileRef,
+    RuntimeRequestHeader,
+    WorkloadKind,
+)
 from agentbox_client.models import (
     AgentBoxErrorBody,
     AgentBoxErrorResponse,
@@ -45,18 +52,34 @@ def _dispatch(
     )
 
 
-@pytest.mark.asyncio
-async def test_execution_endpoint_ensures_once_and_caches_exact_grant() -> None:
-    dispatch = _dispatch()
-    grant = SimpleNamespace(
-        url="https://agentbox.test/exact/",
-        expires_at=dispatch.deadline_at + timedelta(minutes=2),
+def _lease(pod_id, *, hours: int = 5) -> FunctionRuntimeLease:
+    return FunctionRuntimeLease(
+        logical_id=pod_id,
+        allocation_id=uuid4(),
+        allocation_epoch=3,
+        profile=ProfileRef(
+            name="function-python-v1",
+            digest=f"sha256:{'2' * 64}",
+        ),
+        url="https://direct-runtime.e2b.example/",
+        request_headers=(
+            RuntimeRequestHeader(
+                name="E2B-Traffic-Access-Token",
+                value="provider-secret",
+            ),
+        ),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=hours),
     )
+
+
+@pytest.mark.asyncio
+async def test_execution_endpoint_ensures_leases_and_caches_direct_route() -> None:
+    dispatch = _dispatch()
     client = SimpleNamespace(
         ensure_sandbox=AsyncMock(
             return_value=SimpleNamespace(ready=True, retry_after_ms=None)
         ),
-        create_port_access=AsyncMock(return_value=grant),
+        lease_function_runtime=AsyncMock(return_value=_lease(dispatch.pod_id)),
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
@@ -68,28 +91,23 @@ async def test_execution_endpoint_ensures_once_and_caches_exact_grant() -> None:
     second = await resolver.endpoint(dispatch)
 
     assert first == second
+    assert first.url == "https://direct-runtime.e2b.example/"
+    assert first.headers() == {"E2B-Traffic-Access-Token": "provider-secret"}
     client.ensure_sandbox.assert_awaited_once()
+    client.lease_function_runtime.assert_awaited_once()
     ensure = client.ensure_sandbox.await_args
     assert ensure.args[:2] == (WorkloadKind.FUNCTION, dispatch.pod_id)
     assert ensure.kwargs["admission_class"] == AdmissionClass.LATENCY
     assert ensure.kwargs["verify_ready"] is True
-    client.create_port_access.assert_awaited_once()
     client.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_control_endpoint_never_creates_or_ensures_a_sandbox() -> None:
+async def test_control_endpoint_leases_existing_allocation_without_ensure() -> None:
     dispatch = _dispatch(FunctionDispatchMode.ASYNCHRONOUS)
     client = SimpleNamespace(
-        ensure_sandbox=AsyncMock(
-            side_effect=AssertionError("control path must not ensure a sandbox")
-        ),
-        create_port_access=AsyncMock(
-            return_value=SimpleNamespace(
-                url="https://agentbox.test/control/",
-                expires_at=dispatch.deadline_at,
-            )
-        ),
+        ensure_sandbox=AsyncMock(),
+        lease_function_runtime=AsyncMock(return_value=_lease(dispatch.pod_id)),
         close=AsyncMock(),
     )
     resolver = FunctionRuntimeRouteResolver(
@@ -99,9 +117,9 @@ async def test_control_endpoint_never_creates_or_ensures_a_sandbox() -> None:
 
     endpoint = await resolver.control_endpoint(dispatch)
 
-    assert endpoint.url == "https://agentbox.test/control/"
+    assert endpoint.url == "https://direct-runtime.e2b.example/"
     client.ensure_sandbox.assert_not_awaited()
-    client.create_port_access.assert_awaited_once()
+    client.lease_function_runtime.assert_awaited_once()
     client.close.assert_awaited_once()
 
 
@@ -131,7 +149,8 @@ async def test_capacity_exhaustion_survives_ensure_deadline() -> None:
     with pytest.raises(AgentBoxApiError) as raised:
         await resolver._ensure_sandbox(
             client,
-            dispatch,
+            dispatch.pod_id,
+            admission_class=AdmissionClass.BATCH,
             deadline_at=datetime.now(timezone.utc) + timedelta(milliseconds=5),
         )
 

@@ -166,6 +166,7 @@ class PythonSessionService:
                 async with self._state_lock:
                     self._creating_sessions.discard(cache_key)
                     self._tombstone_session_locked(cache_key, allocation)
+                await self._mark_allocation_unhealthy(allocation)
                 raise AgentBoxError(
                     ErrorCode.UNKNOWN_DISPATCH,
                     (
@@ -178,11 +179,15 @@ class PythonSessionService:
             except ProviderPythonSessionCreateRejected as exc:
                 async with self._state_lock:
                     self._creating_sessions.discard(cache_key)
+                await self._mark_allocation_unhealthy(allocation)
                 raise AgentBoxError(
-                    ErrorCode.PROVIDER_UNAVAILABLE,
-                    "provider rejected Python session creation",
-                    retry=RetryDisposition.SAFE_SAME_OPERATION,
-                    status_code=503,
+                    ErrorCode.ALLOCATION_CHANGED,
+                    (
+                        "provider rejected Python session creation; "
+                        "retry after allocation replacement"
+                    ),
+                    retry=RetryDisposition.DO_NOT_RETRY,
+                    status_code=409,
                 ) from exc
             except asyncio.CancelledError:
                 async with self._state_lock:
@@ -342,6 +347,8 @@ class PythonSessionService:
                         self._ambiguous_sessions.pop(session_key, None)
                     else:
                         self._tombstone_session_locked(session_key, allocation)
+                if not cleanup_succeeded:
+                    await self._mark_allocation_unhealthy(allocation)
                 raise self._execution_outcome_unknown() from exc
             except ProviderPythonExecutionRejected as exc:
                 raise AgentBoxError(
@@ -418,6 +425,7 @@ class PythonSessionService:
                     self._sessions.pop(session_key, None)
                     self._session_last_used.pop(session_key, None)
                     self._tombstone_session_locked(session_key, allocation)
+                await self._mark_allocation_unhealthy(allocation)
                 raise AgentBoxError(
                     ErrorCode.UNKNOWN_DISPATCH,
                     "Python session restart outcome was lost; open a new session",
@@ -467,6 +475,19 @@ class PythonSessionService:
                     self._session_last_used.pop(session_key, None)
                     self._ambiguous_sessions.pop(session_key, None)
             return True
+
+    async def _mark_allocation_unhealthy(
+        self,
+        allocation: PhysicalAllocation,
+    ) -> None:
+        """Fence a runtime whose Python control plane cannot be trusted."""
+        async with self._database.uow() as uow:
+            await uow.repository.mark_create_failed(
+                allocation.allocation_token,
+                error_code=ErrorCode.PROVIDER_UNAVAILABLE.value,
+                expected_resource_generation=allocation.resource_generation,
+            )
+            await uow.commit()
 
     def _session_lock(self, key: tuple[str, UUID, UUID]) -> asyncio.Lock:
         return self._session_locks[hash(key) % len(self._session_locks)]

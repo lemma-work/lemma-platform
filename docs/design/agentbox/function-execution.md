@@ -7,7 +7,7 @@
 One public `function_run_id` represents one user-requested execution. The
 backend owns authorization, the durable run, immutable artifacts, deadlines,
 cancellation and terminal events. AgentBox owns the provider-neutral sandbox,
-allocation lifecycle and signed access to its private runtime port.
+allocation lifecycle and allocation-fenced leases for its runtime endpoint.
 
 Each pod has at most one active `FUNCTION` sandbox. It runs a resident
 `lemma-function-runtime` service that caches immutable artifacts and imported
@@ -19,7 +19,7 @@ The executor is deliberately mostly stateless:
 - API execution returns its terminal report directly;
 - JOB execution reports its terminal result with the same function token;
 - cold artifact and schema access use that same function token;
-- cancellation is admitted by the AgentBox pod/allocation grant;
+- cancellation is admitted by the current allocation's direct provider endpoint;
 - there is no separate callback or compilation capability.
 
 Functions inside one pod mutually trust one another. Different pods never share
@@ -37,7 +37,7 @@ boundary.
 | Backend dispatcher | run start, runtime invocation and direct API completion |
 | Durable worker | asynchronous JOB dispatch until runtime acceptance |
 | Runtime gateway | authenticated artifact reads and JOB terminal reports |
-| AgentBox | allocation, lifecycle, signed port access and provider reconciliation |
+| AgentBox | allocation, lifecycle, direct endpoint leases and provider reconciliation |
 | Resident runtime | run deduplication, artifact cache and revision-worker pools |
 | Revision worker | one imported revision and isolated per-call SDK context |
 
@@ -119,11 +119,32 @@ workspace and never passes the delegated token into user import code.
 
 ## 5. Invocation protocol v2
 
-AgentBox grants short-lived authenticated access to the exact pod allocation,
-allocation epoch, port `8090` and HTTP protocol. The backend invokes:
+The backend first uses the AgentBox manager API key on the control plane:
 
 ```http
-POST /functions/{function_id}/runs/{function_run_id}
+POST /sandboxes/function/{pod_id}/runtime:lease
+X-API-Key: <AgentBox manager key>
+Content-Type: application/json
+
+{
+  "required_valid_until": "<cache horizon or execution deadline>",
+  "deadline_at": "<control-plane deadline>"
+}
+```
+
+AgentBox verifies the active allocation and immutable profile, protects its
+activity through the lease, and returns its direct base URL, allocation ID/epoch,
+profile, absolute expiry, and opaque provider request headers. Provider credentials
+are never stored in Git or the AgentBox database and are redacted from model
+representations.
+
+The backend caches this lease by `(pod_id, runtime_profile_digest)` for at most four
+hours and never beyond its absolute provider expiry. It then invokes the runtime
+directly:
+
+```http
+POST <leased-runtime-url>/functions/{function_id}/runs/{function_run_id}
+E2B-Traffic-Access-Token: <opaque provider header, E2B only>
 Authorization: Bearer <delegated function token>
 If-Match: "sha256:<revision_hash>"
 X-Lemma-Gateway-Url: <allow-listed backend URL>
@@ -153,9 +174,12 @@ Prefer: respond-async
 ```
 
 The backend has already authorized and persisted the run before this request.
-The AgentBox grant admits the external caller. The runtime treats the bearer as
-the function's delegated SDK credential and uses it for cold artifact retrieval
-or JOB completion; it does not claim or introspect the run before warm execution.
+The manager key authenticates only the lease request and never enters the
+invocation data path or sandbox. Docker leases normally have no provider header;
+E2B leases carry its secured-traffic header. The runtime treats the bearer as the
+function's delegated SDK
+credential and uses it for cold artifact retrieval or JOB completion; it does
+not claim or introspect the run before warm execution.
 
 The gateway URL is routing metadata, not an execution credential. Its host is
 allow-listed so local ngrok/E2B development can use the same runtime source as
@@ -176,11 +200,11 @@ production.
 There is no Redis hop, runtime claim, runtime terminal callback or final database
 reread on the synchronous API path.
 
-If the invocation response is ambiguous, the backend retries the identical POST
-once through the same AgentBox allocation grant. Runtime run-ID deduplication
-joins the active task or returns its cached report. The backend never resolves a
-different allocation after an ambiguous response. A second unconfirmed API
-response is best-effort cancelled and marked failed.
+Provider-gateway `401`, `403`, `404`, or `410` responses happen before user code
+starts, so the backend invalidates the lease, reruns readiness, and retries once.
+A transport error or runtime `5xx` is ambiguous and is never replayed because user
+code may already have started. Runtime run-ID deduplication still joins an active
+task or returns its cached report if the same run is explicitly presented again.
 
 ## 7. JOB execution
 
@@ -276,15 +300,15 @@ The backend first conditionally marks the public run `CANCELLED`, then calls:
 POST /functions/{function_id}/runs/{function_run_id}:cancel
 ```
 
-The call carries no bearer or fixed key. External admission is the AgentBox
-allocation-bound port grant; localhost access follows same-pod trust. The runtime
-matches both function and run IDs, cancels the task and kills/discards its worker
-process group.
+The call carries the lease's opaque provider headers but no delegated function
+bearer. The runtime matches both function and run IDs, cancels the task and
+kills/discards its worker process group.
 
-Cancellation obtains port access to an existing logical allocation without
-calling `ensure_sandbox`, so it never creates a sandbox. If the allocation is
-gone, its work is already gone. A late callback is acknowledged as a terminal
-duplicate and cannot overwrite `CANCELLED`.
+Cancellation uses the cached lease when available. Otherwise it asks AgentBox to
+lease only an existing allocation without calling `ensure_sandbox`, so it never
+creates a sandbox. If the allocation is gone, its work is already gone. A late
+callback is acknowledged as a terminal duplicate and cannot overwrite
+`CANCELLED`.
 
 Every run snapshots `deadline_at`. The reconciler:
 

@@ -453,12 +453,20 @@ disconnects close the upstream stream and incomplete upload temporaries are remo
 
 ```text
 POST .../ports/{port}:access
+POST .../sandboxes/function/{logical_id}/runtime:lease
 ```
 
-The request contains protocol, audience, and TTL. Workspace ports are constrained
-by the workspace profile. Function workloads accept only the profile's private
-resident-runtime port and backend audience; every other function port returns
-`UNSUPPORTED_CAPABILITY`.
+The signed-access request contains protocol and TTL and remains the user-facing
+port mechanism. Function runtime execution instead uses the manager-key-protected
+lease endpoint. It resolves only the current active allocation at immutable port
+`8090`, binds the response to allocation ID/epoch and profile, protects activity
+through the requested bounded horizon, and returns the provider URL plus opaque
+request headers and absolute expiry. It never forwards an invocation.
+
+The trusted backend caches a lease only by logical pod plus immutable profile and
+never beyond its expiry. The manager key is used only to obtain or refresh the
+lease. The delegated function bearer remains in `Authorization` on the subsequent
+direct runtime request and is validated by the runtime/backend.
 
 ## 6. Durable persistence model
 

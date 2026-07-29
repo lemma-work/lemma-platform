@@ -1,6 +1,6 @@
 """Reusable full-path API/JOB function execution benchmark.
 
-The benchmark provisions four isolated pod tables and four immutable functions,
+The benchmark provisions four isolated pod tables and seven immutable functions,
 warms the per-pod sandbox once, then drives each function with bounded client
 concurrency. It intentionally uses only public Lemma HTTP APIs so the measured
 path includes authorization, durable runs, AgentBox allocation, resident runtime
@@ -46,6 +46,50 @@ class BenchmarkPhase(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class BenchmarkCase:
+    name: str
+    function_kind: FunctionKind
+    operation: OperationKind
+    rows_per_invocation: int
+
+    @property
+    def sdk_calls_per_invocation(self) -> int:
+        return 0 if self.operation == OperationKind.NOOP else 1
+
+
+def benchmark_cases(batch_rows: int) -> tuple[BenchmarkCase, ...]:
+    return (
+        BenchmarkCase("api_noop", FunctionKind.API, OperationKind.NOOP, 0),
+        BenchmarkCase("api_read_single", FunctionKind.API, OperationKind.READ, 1),
+        BenchmarkCase("api_write_single", FunctionKind.API, OperationKind.WRITE, 1),
+        BenchmarkCase(
+            "api_read_batch",
+            FunctionKind.API,
+            OperationKind.READ,
+            batch_rows,
+        ),
+        BenchmarkCase(
+            "api_write_batch",
+            FunctionKind.API,
+            OperationKind.WRITE,
+            batch_rows,
+        ),
+        BenchmarkCase(
+            "job_read_batch",
+            FunctionKind.JOB,
+            OperationKind.READ,
+            batch_rows,
+        ),
+        BenchmarkCase(
+            "job_write_batch",
+            FunctionKind.JOB,
+            OperationKind.WRITE,
+            batch_rows,
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class LatencyBudget:
     case: str
     terminal_p95_seconds: float | None = None
@@ -73,8 +117,7 @@ class BenchmarkConfig:
     provider: str
     concurrency: int = 5
     invocations: int = 5
-    source_rows_per_table: int = 1_000
-    rows_per_write: int = 1_000
+    batch_rows: int = 1_000
     # JOB completion is observed out of band. Poll slowly enough that the
     # observer does not become the workload under test, especially at higher
     # invocation concurrency.
@@ -89,10 +132,8 @@ class BenchmarkConfig:
             raise ValueError("provider is required")
         if self.concurrency < 1 or self.invocations < 1:
             raise ValueError("concurrency and invocations must be positive")
-        if self.source_rows_per_table < 1 or self.source_rows_per_table > 1_000:
-            raise ValueError("source rows per table must be in 1..1000")
-        if self.rows_per_write < 2 or self.rows_per_write > 1_000:
-            raise ValueError("rows per write must be in 2..1000")
+        if self.batch_rows < 2 or self.batch_rows > 1_000:
+            raise ValueError("batch rows must be in 2..1000")
         if self.poll_interval_seconds <= 0 or self.terminal_timeout_seconds <= 0:
             raise ValueError("poll interval and terminal timeout must be positive")
         if self.pool_fill_hold_ms < 0 or self.pool_fill_hold_ms > 10_000:
@@ -140,6 +181,8 @@ class CaseSummary:
     case: str
     function_kind: str
     operation: str
+    rows_per_invocation: int
+    sdk_calls_per_invocation: int
     concurrency: int
     completed: int
     failed: int
@@ -203,32 +246,37 @@ def _timings(values: list[float | None]) -> TimingSummary:
 
 
 def summarize_case(
-    case: str,
-    function_kind: FunctionKind,
-    operation: OperationKind,
+    case: BenchmarkCase,
     samples: list[InvocationSample],
     *,
     concurrency: int,
     wall_seconds: float,
 ) -> CaseSummary:
-    completed = sum(sample.status == "COMPLETED" for sample in samples)
+    successful_samples = [
+        sample for sample in samples if sample.status == "COMPLETED"
+    ]
+    completed = len(successful_samples)
     return CaseSummary(
-        case=case,
-        function_kind=function_kind.value,
-        operation=operation.value,
+        case=case.name,
+        function_kind=case.function_kind.value,
+        operation=case.operation.value,
+        rows_per_invocation=case.rows_per_invocation,
+        sdk_calls_per_invocation=case.sdk_calls_per_invocation,
         concurrency=concurrency,
         completed=completed,
         failed=len(samples) - completed,
         success_rate=completed / len(samples) if samples else 0.0,
         wall_seconds=wall_seconds,
         invocations_per_second=(completed / wall_seconds if wall_seconds else 0.0),
-        submit=_timings([sample.submit_seconds for sample in samples]),
-        terminal=_timings([sample.terminal_seconds for sample in samples]),
-        queue=_timings([sample.queue_seconds for sample in samples]),
-        execution=_timings([sample.execution_seconds for sample in samples]),
-        function_call=_timings([sample.function_call_seconds for sample in samples]),
+        submit=_timings([sample.submit_seconds for sample in successful_samples]),
+        terminal=_timings([sample.terminal_seconds for sample in successful_samples]),
+        queue=_timings([sample.queue_seconds for sample in successful_samples]),
+        execution=_timings([sample.execution_seconds for sample in successful_samples]),
+        function_call=_timings(
+            [sample.function_call_seconds for sample in successful_samples]
+        ),
         platform_overhead=_timings(
-            [sample.platform_overhead_seconds for sample in samples]
+            [sample.platform_overhead_seconds for sample in successful_samples]
         ),
     )
 
@@ -297,7 +345,7 @@ def write_report(report: BenchmarkReport, path: Path) -> None:
     path.write_text(json.dumps(report.to_dict(), indent=2) + "\n", encoding="utf-8")
 
 
-def _read_function_source(name: str, first_table: str, second_table: str) -> str:
+def _read_function_source(name: str, table: str) -> str:
     return f'''#input_type_name: ReadInput
 #output_type_name: ReadResult
 #function_name: {name}
@@ -315,35 +363,27 @@ class ReadInput(BaseModel):
 class ReadResult(BaseModel):
     rows_read: int
     checksum: int
-    first_total: int
-    second_total: int
-    first_call_ms: float
-    second_call_ms: float
+    table_total: int
+    call_ms: float
 
 async def {name}(ctx: FunctionContext, data: ReadInput) -> ReadResult:
     if data.hold_ms:
         await asyncio.sleep(data.hold_ms / 1000)
     pod = Pod.from_env()
-    first_started = time.perf_counter()
-    first = pod.table("{first_table}").list(limit=data.limit)
-    first_call_ms = (time.perf_counter() - first_started) * 1000
-    second_started = time.perf_counter()
-    second = pod.table("{second_table}").list(limit=data.limit)
-    second_call_ms = (time.perf_counter() - second_started) * 1000
-    first_rows = list(first.items)
-    second_rows = list(second.items)
+    started = time.perf_counter()
+    result = pod.table("{table}").list(limit=data.limit)
+    call_ms = (time.perf_counter() - started) * 1000
+    rows = list(result.items)
     return ReadResult(
-        rows_read=len(first_rows) + len(second_rows),
-        checksum=sum(int(row["ordinal"]) for row in first_rows + second_rows),
-        first_total=int(first.total),
-        second_total=int(second.total),
-        first_call_ms=first_call_ms,
-        second_call_ms=second_call_ms,
+        rows_read=len(rows),
+        checksum=sum(int(row["ordinal"]) for row in rows),
+        table_total=int(result.total),
+        call_ms=call_ms,
     )
 '''
 
 
-def _write_function_source(name: str, first_table: str, second_table: str) -> str:
+def _write_function_source(name: str, table: str) -> str:
     return f'''#input_type_name: WriteInput
 #output_type_name: WriteResult
 #function_name: {name}
@@ -356,42 +396,31 @@ from lemma_sdk import FunctionContext, Pod
 
 class WriteInput(BaseModel):
     run_key: str
-    rows: int = Field(ge=2, le=1000)
+    rows: int = Field(ge=1, le=1000)
     hold_ms: int = Field(default=0, ge=0, le=10000)
 
 class WriteResult(BaseModel):
     rows_written: int
-    first_count: int
-    second_count: int
-    first_call_ms: float
-    second_call_ms: float
+    call_ms: float
 
 async def {name}(ctx: FunctionContext, data: WriteInput) -> WriteResult:
     if data.hold_ms:
         await asyncio.sleep(data.hold_ms / 1000)
     pod = Pod.from_env()
-    first_size = data.rows // 2
-    second_size = data.rows - first_size
-    first = [
+    records = [
         {{"run_key": data.run_key, "ordinal": index, "payload": "a" * 64}}
-        for index in range(first_size)
+        for index in range(data.rows)
     ]
-    second = [
-        {{"run_key": data.run_key, "ordinal": index, "payload": "b" * 64}}
-        for index in range(second_size)
-    ]
-    first_started = time.perf_counter()
-    first_count = pod.records.bulk_create("{first_table}", first)
-    first_call_ms = (time.perf_counter() - first_started) * 1000
-    second_started = time.perf_counter()
-    second_count = pod.records.bulk_create("{second_table}", second)
-    second_call_ms = (time.perf_counter() - second_started) * 1000
+    started = time.perf_counter()
+    if data.rows == 1:
+        pod.records.create("{table}", records[0])
+        count = 1
+    else:
+        count = pod.records.bulk_create("{table}", records)
+    call_ms = (time.perf_counter() - started) * 1000
     return WriteResult(
-        rows_written=first_count + second_count,
-        first_count=first_count,
-        second_count=second_count,
-        first_call_ms=first_call_ms,
-        second_call_ms=second_call_ms,
+        rows_written=count,
+        call_ms=call_ms,
     )
 '''
 
@@ -445,35 +474,26 @@ class FunctionExecutionBenchmark:
         resources: BenchmarkResources | None = None
         try:
             resources = await self.provision()
-            cases = (
-                ("api_noop", FunctionKind.API, OperationKind.NOOP),
-                ("api_read", FunctionKind.API, OperationKind.READ),
-                ("api_write", FunctionKind.API, OperationKind.WRITE),
-                ("job_read", FunctionKind.JOB, OperationKind.READ),
-                ("job_write", FunctionKind.JOB, OperationKind.WRITE),
-            )
-            for case, function_kind, operation in cases:
+            cases = benchmark_cases(self._config.batch_rows)
+            for case in cases:
                 cold.append(
                     await self._invoke(
                         case,
-                        resources.functions[case],
+                        resources.functions[case.name],
                         0,
-                        operation,
                         phase=BenchmarkPhase.COLD,
                     )
                 )
                 fill_samples, _fill_wall = await self._run_case(
                     case,
-                    resources.functions[case],
-                    operation,
+                    resources.functions[case.name],
                     phase=BenchmarkPhase.POOL_FILL,
                     invocations=self._config.concurrency,
                 )
                 pool_fill.extend(fill_samples)
                 case_samples, wall_seconds = await self._run_case(
                     case,
-                    resources.functions[case],
-                    operation,
+                    resources.functions[case.name],
                     phase=BenchmarkPhase.STEADY,
                     invocations=self._config.invocations,
                 )
@@ -481,8 +501,6 @@ class FunctionExecutionBenchmark:
                 summaries.append(
                     summarize_case(
                         case,
-                        function_kind,
-                        operation,
                         case_samples,
                         concurrency=self._config.concurrency,
                         wall_seconds=wall_seconds,
@@ -490,16 +508,19 @@ class FunctionExecutionBenchmark:
                 )
 
             verified_sink_rows = await self._verify_sink_rows(resources)
-            expected_total = (
-                self._config.invocations * self._config.rows_per_write * 2
-                + self._config.concurrency * 4
-                + 4
+            executions_per_case = (
+                1 + self._config.concurrency + self._config.invocations
             )
-            actual_total = sum(verified_sink_rows.values())
-            if actual_total != expected_total:
+            expected_sink_rows = {
+                resources.sink_tables[0]: executions_per_case
+                * (1 + self._config.batch_rows),
+                resources.sink_tables[1]: executions_per_case
+                * self._config.batch_rows,
+            }
+            if verified_sink_rows != expected_sink_rows:
                 errors.append(
-                    f"sink row verification failed: expected {expected_total}, "
-                    f"found {actual_total}"
+                    "sink row verification failed: "
+                    f"expected {expected_sink_rows}, found {verified_sink_rows}"
                 )
             for sample in (*cold, *pool_fill, *samples):
                 if sample.status != "COMPLETED":
@@ -523,7 +544,7 @@ class FunctionExecutionBenchmark:
             raise RuntimeError("benchmark provisioning completed without resources")
 
         return BenchmarkReport(
-            schema_version=2,
+            schema_version=3,
             provider=self._config.provider,
             started_at=started.isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
@@ -539,16 +560,13 @@ class FunctionExecutionBenchmark:
 
     async def provision(self) -> BenchmarkResources:
         suffix = uuid4().hex[:10]
+        cases = benchmark_cases(self._config.batch_rows)
         resources = BenchmarkResources(
             suffix=suffix,
             source_tables=(f"fn_bench_src_a_{suffix}", f"fn_bench_src_b_{suffix}"),
             sink_tables=(f"fn_bench_sink_a_{suffix}", f"fn_bench_sink_b_{suffix}"),
             functions={
-                "api_noop": f"fn_bench_api_noop_{suffix}",
-                "api_read": f"fn_bench_api_read_{suffix}",
-                "api_write": f"fn_bench_api_write_{suffix}",
-                "job_read": f"fn_bench_job_read_{suffix}",
-                "job_write": f"fn_bench_job_write_{suffix}",
+                case.name: f"fn_bench_{case.name}_{suffix}" for case in cases
             },
         )
         self._resources = resources
@@ -573,7 +591,7 @@ class FunctionExecutionBenchmark:
             )
         seed = [
             {"run_key": "seed", "ordinal": index, "payload": "s" * 64}
-            for index in range(self._config.source_rows_per_table)
+            for index in range(self._config.batch_rows)
         ]
         for table in resources.source_tables:
             result = await self._request(
@@ -581,68 +599,32 @@ class FunctionExecutionBenchmark:
                 f"/pods/{self._pod_id}/datastore/tables/{table}/records/bulk/create",
                 json={"records": seed},
             )
-            if int(result["count"]) != self._config.source_rows_per_table:
+            if int(result["count"]) != self._config.batch_rows:
                 raise AssertionError(f"source seed count mismatch for {table}")
 
-        definitions = (
-            (
-                "api_noop",
-                FunctionKind.API,
-                _noop_function_source(resources.functions["api_noop"]),
-            ),
-            (
-                "api_read",
-                FunctionKind.API,
-                _read_function_source(
-                    resources.functions["api_read"], *resources.source_tables
-                ),
-            ),
-            (
-                "api_write",
-                FunctionKind.API,
-                _write_function_source(
-                    resources.functions["api_write"], *resources.sink_tables
-                ),
-            ),
-            (
-                "job_read",
-                FunctionKind.JOB,
-                _read_function_source(
-                    resources.functions["job_read"], *resources.source_tables
-                ),
-            ),
-            (
-                "job_write",
-                FunctionKind.JOB,
-                _write_function_source(
-                    resources.functions["job_write"], *resources.sink_tables
-                ),
-            ),
-        )
-        for case, function_kind, source in definitions:
-            name = resources.functions[case]
+        for case in cases:
+            name = resources.functions[case.name]
+            table = self._table_for_case(case, resources)
+            if case.operation == OperationKind.NOOP:
+                source = _noop_function_source(name)
+            elif case.operation == OperationKind.READ:
+                source = _read_function_source(name, table)
+            else:
+                source = _write_function_source(name, table)
             await self._request(
                 "POST",
                 f"/pods/{self._pod_id}/functions",
                 json={
                     "name": name,
-                    "description": f"Function execution benchmark: {case}",
-                    "type": function_kind.value,
+                    "description": f"Function execution benchmark: {case.name}",
+                    "type": case.function_kind.value,
                     "code": source,
                 },
                 expected=201,
             )
-            tables = (
-                ()
-                if case.endswith("noop")
-                else (
-                    resources.source_tables
-                    if case.endswith("read")
-                    else resources.sink_tables
-                )
-            )
+            tables = () if case.operation == OperationKind.NOOP else (table,)
             permission_ids = ["datastore.table.read", "datastore.record.read"]
-            if case.endswith("write"):
+            if case.operation == OperationKind.WRITE:
                 permission_ids.append("datastore.record.write")
             await self._request(
                 "PUT",
@@ -660,6 +642,18 @@ class FunctionExecutionBenchmark:
             )
         return resources
 
+    @staticmethod
+    def _table_for_case(
+        case: BenchmarkCase,
+        resources: BenchmarkResources,
+    ) -> str:
+        index = 0 if case.function_kind == FunctionKind.API else 1
+        if case.operation == OperationKind.READ:
+            return resources.source_tables[index]
+        if case.operation == OperationKind.WRITE:
+            return resources.sink_tables[index]
+        return ""
+
     async def cleanup(self, resources: BenchmarkResources) -> None:
         for function in resources.functions.values():
             await self._best_effort_delete(f"/pods/{self._pod_id}/functions/{function}")
@@ -670,9 +664,8 @@ class FunctionExecutionBenchmark:
 
     async def _run_case(
         self,
-        case: str,
+        case: BenchmarkCase,
         function_name: str,
-        operation: OperationKind,
         *,
         phase: BenchmarkPhase,
         invocations: int,
@@ -685,7 +678,6 @@ class FunctionExecutionBenchmark:
                     case,
                     function_name,
                     index,
-                    operation,
                     phase=phase,
                 )
 
@@ -697,10 +689,9 @@ class FunctionExecutionBenchmark:
 
     async def _invoke(
         self,
-        case: str,
+        case: BenchmarkCase,
         function_name: str,
         index: int,
-        operation: OperationKind,
         *,
         phase: BenchmarkPhase,
     ) -> InvocationSample:
@@ -709,24 +700,20 @@ class FunctionExecutionBenchmark:
             if phase == BenchmarkPhase.POOL_FILL
             else 0
         )
-        if operation == OperationKind.NOOP:
+        if case.operation == OperationKind.NOOP:
             input_data = {"value": index, "hold_ms": hold_ms}
-        elif operation == OperationKind.READ:
+        elif case.operation == OperationKind.READ:
             input_data = {
-                "limit": self._config.source_rows_per_table,
+                "limit": case.rows_per_invocation,
                 "hold_ms": hold_ms,
             }
         else:
             input_data = {
                 "run_key": (
-                    f"{self._config.provider}-{case}-"
+                    f"{self._config.provider}-{case.name}-"
                     f"{phase.value}-{index}-{uuid4().hex[:8]}"
                 ),
-                "rows": (
-                    2
-                    if phase != BenchmarkPhase.STEADY
-                    else self._config.rows_per_write
-                ),
+                "rows": case.rows_per_invocation,
                 "hold_ms": hold_ms,
             }
         started = time.perf_counter()
@@ -749,18 +736,21 @@ class FunctionExecutionBenchmark:
             error = run.get("error")
             status = str(run.get("status"))
             if status == "COMPLETED":
-                self._validate_output(operation, output, phase=phase)
+                self._validate_output(case, output)
             queue_seconds, execution_seconds = self._server_timings(run)
-            function_call_seconds = self._function_call_seconds(operation, output)
+            function_call_seconds = self._function_call_seconds(
+                case.operation,
+                output,
+            )
             platform_overhead_seconds = self._platform_overhead_seconds(
-                case=case,
+                case=case.name,
                 terminal_seconds=terminal_seconds,
                 queue_seconds=queue_seconds,
                 execution_seconds=execution_seconds,
                 function_call_seconds=function_call_seconds,
             )
             return InvocationSample(
-                case=case,
+                case=case.name,
                 phase=phase.value,
                 index=index,
                 run_id=run_id,
@@ -776,7 +766,7 @@ class FunctionExecutionBenchmark:
             )
         except Exception as exc:
             return InvocationSample(
-                case=case,
+                case=case.name,
                 phase=phase.value,
                 index=index,
                 run_id=run_id,
@@ -837,32 +827,21 @@ class FunctionExecutionBenchmark:
 
     def _validate_output(
         self,
-        operation: OperationKind,
+        case: BenchmarkCase,
         output: dict[str, Any] | None,
-        *,
-        phase: BenchmarkPhase,
     ) -> None:
         if output is None:
             raise AssertionError("completed run has no output")
-        if operation == OperationKind.NOOP:
+        if case.operation == OperationKind.NOOP:
             if "value" not in output:
                 raise AssertionError("no-op function returned the wrong output")
-        elif operation == OperationKind.READ:
-            expected_rows = self._config.source_rows_per_table * 2
-            expected_checksum = self._config.source_rows_per_table * (
-                self._config.source_rows_per_table - 1
-            )
-            if int(output.get("rows_read", -1)) != expected_rows:
+        elif case.operation == OperationKind.READ:
+            if int(output.get("rows_read", -1)) != case.rows_per_invocation:
                 raise AssertionError("read function returned the wrong row count")
-            if int(output.get("checksum", -1)) != expected_checksum:
-                raise AssertionError("read function returned the wrong checksum")
+            if int(output.get("table_total", -1)) != self._config.batch_rows:
+                raise AssertionError("read function returned the wrong table total")
         else:
-            expected_rows = (
-                self._config.rows_per_write
-                if phase == BenchmarkPhase.STEADY
-                else 2
-            )
-            if int(output.get("rows_written", -1)) != expected_rows:
+            if int(output.get("rows_written", -1)) != case.rows_per_invocation:
                 raise AssertionError("write function returned the wrong row count")
 
     async def _verify_sink_rows(self, resources: BenchmarkResources) -> dict[str, int]:
@@ -912,9 +891,7 @@ class FunctionExecutionBenchmark:
         if operation == OperationKind.NOOP:
             return 0.0
         try:
-            milliseconds = float(output["first_call_ms"]) + float(
-                output["second_call_ms"]
-            )
+            milliseconds = float(output["call_ms"])
         except KeyError, TypeError, ValueError:
             return None
         return max(0.0, milliseconds / 1000)

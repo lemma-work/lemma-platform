@@ -261,8 +261,8 @@ selected in production configuration.
 - Duplicate lifecycle deliveries are idempotent.
 - Function template exposes no unauthenticated public traffic. Its resident
   function HTTP service is reachable only through E2B's secured TLS gateway and an
-  AgentBox signed port grant.
-- Function sandbox is killed, not paused, after five idle minutes.
+  allocation-fenced AgentBox lease; the manager key never reaches user code.
+- Function sandbox is killed, not paused, after its protected lease/idle horizon.
 - Long JOB sets one timeout past deadline and completes without heartbeat.
 - Provider 429 honors retry-after and does not cause adapter-local create retries.
 - Cleanup exact-kills every billable test sandbox, including paused workspaces.
@@ -305,9 +305,10 @@ It becomes a Kubernetes gate only when that deferred adapter is enabled.
   worker because the paths are independent.
 - Queue time counts against run deadline.
 - A backend restart before JOB start permits queue redelivery. After start, a
-  redelivery observes `RUNNING`; the same attempt is not re-created. A single
-  ambiguous HTTP response may be retried through the exact same AgentBox grant and
-  is deduplicated by `function_run_id`.
+  redelivery observes `RUNNING`; the same attempt is not re-created. An ambiguous
+  HTTP response is not replayed because user code may already have started. A
+  secured provider-gateway `401/403/404/410` is safe to retry only because the
+  runtime rejected it before user code began.
 
 ### 6.3 Identity and permissions
 
