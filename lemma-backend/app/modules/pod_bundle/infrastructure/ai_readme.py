@@ -59,17 +59,13 @@ def _preserves_required_invariants(original: str, polished: str) -> bool:
     for line in original.splitlines():
         stripped = line.strip()
         if (
-            "img.shields.io" in stripped
-            and ("<img" in stripped or "<a " in stripped)
-            or "social-card.png" in stripped
+            stripped.startswith(("<a ", "<img", "!["))
             or stripped == '<div align="center">'
             or stripped.startswith("| ") and " **" in stripped
         ):
             required_exact_lines.append(stripped)
     required_markers = [
-        marker
-        for marker in ("## 🚀 Install", "/import/github/")
-        if marker in original
+        marker for marker in ("## 🚀 Install",) if marker in original
     ]
     preserves_lines = all(line in polished for line in required_exact_lines)
     preserves_markers = all(marker in polished for marker in required_markers)
