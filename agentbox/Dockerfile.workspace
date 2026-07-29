@@ -47,13 +47,17 @@ RUN uv sync \
         --locked \
         --no-dev \
         --no-editable \
+    && printf '%s\n' \
+        'import sys; p="/workspace/.python/lib/python3.14/site-packages"; sys.path.insert(0, p) if p not in sys.path else None' \
+        > /opt/agentbox-python/lib/python3.14/site-packages/agentbox-workspace-overlay.pth \
     && uv cache clean
 
 FROM ${PYTHON_IMAGE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app:/opt/agentbox-python/lib/python3.14/site-packages \
+    PIP_PREFIX=/workspace/.python \
+    PYTHONPATH=/app:/workspace/.python/lib/python3.14/site-packages:/opt/agentbox-python/lib/python3.14/site-packages \
     HOME=/home/appuser \
     DISPLAY=:99 \
     XDG_RUNTIME_DIR=/tmp/agentbox-browser/runtime \
@@ -69,7 +73,7 @@ ENV PYTHONUNBUFFERED=1 \
     AGENTBOX_SANDBOX_PROCESS_NAMESPACE=isolated \
     NODE_PATH=/opt/agentbox-node/node_modules \
     PNPM_HOME=/home/appuser/.local/share/pnpm \
-    PATH=/opt/agentbox-python/bin:/opt/agentbox-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/workspace/.python/bin:/opt/agentbox-python/bin:/opt/agentbox-node/node_modules/.bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     MPLBACKEND=Agg
 
 RUN apt-get update \
@@ -138,6 +142,7 @@ COPY lemma-pod-bundle /sdk/lemma-pod-bundle
 COPY lemma-cli /sdk/lemma-cli
 COPY lemma-typescript /sdk/lemma-typescript
 COPY lemma-skills /sdk/lemma-skills
+COPY agentbox/templates/workspace-python/agentbox-profile.sh /etc/profile.d/agentbox-python.sh
 RUN chmod -R a+rX /sdk
 
 COPY --chown=10001:10001 agentbox/agentbox/__init__.py /app/agentbox/__init__.py

@@ -17,6 +17,7 @@ from .models import (
     EnvironmentVariable,
     FileList,
     FileStat,
+    FunctionRuntimeLease,
     ProcessOutputChannel,
     ProcessOutputChunk,
     ProcessOutputSnapshot,
@@ -160,6 +161,23 @@ class AgentBoxClient:
             json_body={
                 "protocol": protocol.value,
                 "expires_at": expires_at.isoformat(),
+            },
+        )
+
+    async def lease_function_runtime(
+        self,
+        logical_id: UUID,
+        *,
+        required_valid_until: datetime,
+        deadline_at: datetime,
+    ) -> FunctionRuntimeLease:
+        return await self._model_request(
+            "POST",
+            f"/sandboxes/function/{logical_id}/runtime:lease",
+            FunctionRuntimeLease,
+            json_body={
+                "required_valid_until": required_valid_until.isoformat(),
+                "deadline_at": deadline_at.isoformat(),
             },
         )
 

@@ -7,13 +7,17 @@ import httpx
 import pytest
 
 from agentbox_client.models import (
+    AgentBoxErrorBody,
+    AgentBoxErrorResponse,
     ProcessOutputChannel,
     ProcessOutputChunk,
     ProcessOutputSnapshot,
     ProcessState,
     PythonExecutionState,
     PythonResult,
+    RetryDisposition,
 )
+from agentbox_client import AgentBoxApiError
 from app.modules.workspace.agentbox_session import AgentBoxWorkspaceSession
 
 
@@ -99,6 +103,31 @@ class _TransportFailureClient(_CanonicalClient):
         raise httpx.ReadTimeout("lost response", request=request)
 
 
+class _PythonAllocationFailureClient(_CanonicalClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.python_create_calls = 0
+
+    async def create_python_session(self, *_args: Any, **_kwargs: Any) -> None:
+        self.python_create_calls += 1
+        response = httpx.Response(
+            409,
+            request=httpx.Request(
+                "PUT", "https://agentbox.test/python-sessions/session"
+            ),
+        )
+        raise AgentBoxApiError(
+            response,
+            AgentBoxErrorResponse(
+                error=AgentBoxErrorBody(
+                    code="ALLOCATION_CHANGED",
+                    message="retry after allocation replacement",
+                    retry=RetryDisposition.DO_NOT_RETRY,
+                )
+            ),
+        )
+
+
 def _session(client: _CanonicalClient) -> AgentBoxWorkspaceSession:
     return AgentBoxWorkspaceSession(
         client=client,  # type: ignore[arg-type]
@@ -165,6 +194,19 @@ async def test_python_session_declares_keys_but_sends_values_per_execution() -> 
     }
     assert client.deleted_python is True
     assert client.closed is True
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_python_allocation_fails_once_without_retry_storm() -> None:
+    client = _PythonAllocationFailureClient()
+    session = _session(client)
+
+    result = await session.execute_code("40 + 2")
+
+    assert result.success is False
+    assert result.error_in_exec is not None
+    assert result.error_in_exec["ename"] == "AgentBoxApiError"
+    assert client.python_create_calls == 1
 
 
 @pytest.mark.asyncio
