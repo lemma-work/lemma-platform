@@ -8,22 +8,20 @@ import os
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import httpx
 from dotenv import load_dotenv
-from pydantic import HttpUrl
+from pydantic import HttpUrl, SecretStr
 
 from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
-    AgentHostRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
     OpenAICompatibleRuntimeConfig,
@@ -40,18 +38,18 @@ from app.modules.agent.domain.value_objects import (
     HarnessKind,
     JsonObject,
 )
-from app.modules.agent.domain.agent_host import (
-    FOLLOW_ADAPTER_DEFAULT,
-    AgentHostIntegrationHealth,
-    AgentHostStatus,
-    effective_agent_host_status,
-    validate_agent_host_selections,
+from app.modules.agent.infrastructure.agent_host_management_repository import (
+    AgentHostRepository,
 )
-from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
 )
+from app.modules.agent.services.agent_host_profile_service import (
+    create_agent_host_profile,
+    selected_agent_host_model,
+)
+from app.modules.agent.services.resolved_runtime import ResolvedAgentRuntime
 
 logger = get_logger(__name__)
 
@@ -61,28 +59,14 @@ DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
 
 @dataclass(frozen=True, slots=True)
 class DiscoveredModel:
-    """A model returned by a provider's ``/models`` endpoint.
-
-    ``supports_vision`` is best-effort: it is ``True`` only when the provider
-    advertises image input for the model (OpenRouter-style
-    ``architecture.input_modalities``). Most OpenAI-compatible ``/models``
-    payloads carry no modality data, so this stays ``False`` and vision must be
-    declared via configuration instead.
-    """
+    """Provider-discovered model with best-effort image capability."""
 
     name: str
     supports_vision: bool = False
 
 
 def _openai_compat_vision_model_names() -> set[str]:
-    """Model names the operator declared as image-capable for the system
-    OpenAI-compatible profile (``LEMMA_OPENAI_VISION_MODEL_NAMES``).
-
-    The standard OpenAI ``/models`` endpoint does not report modalities, so the
-    image-returning tools (``view_image``) can only be enabled safely when the
-    operator opts a model in here. A text-only model that receives image content
-    breaks the conversation, so the default is empty (no vision).
-    """
+    """Operator-declared image-capable system OpenAI model names."""
     raw = os.getenv("LEMMA_OPENAI_VISION_MODEL_NAMES")
     if raw is None:
         raw = settings.lemma_openai_vision_model_names
@@ -180,41 +164,6 @@ USER_DAEMON_PROFILE_PROTOCOLS = {
     HarnessKind.CURSOR: RuntimeProfileProtocol.CURSOR,
     HarnessKind.ANTIGRAVITY: RuntimeProfileProtocol.ANTIGRAVITY,
 }
-
-
-@dataclass(slots=True)
-class ResolvedAgentRuntime:
-    profile: AgentRuntimeProfile
-    harness_kind: HarnessKind
-    model: RuntimeModelCatalogEntry | None
-    provider_model_name: str | None
-    credentials: dict[str, object] | None
-
-    @property
-    def model_name_for_harness(self) -> str:
-        if self.model is None:
-            return "default"
-        return self.provider_model_name or self.model.name
-
-    def public_snapshot(self) -> dict[str, object | None]:
-        return {
-            "profile_id": self.profile.id,
-            "profile_name": self.profile.name,
-            "user_id": str(self.profile.user_id) if self.profile.user_id else None,
-            "daemon_id": str(self.profile.daemon_id)
-            if self.profile.daemon_id
-            else None,
-            "host_integration_id": (
-                str(self.profile.host_integration_id)
-                if self.profile.host_integration_id
-                else None
-            ),
-            "scope": self.profile.scope.value,
-            "protocol": self.profile.protocol.value,
-            "model_name": self.model.name if self.model else None,
-            "provider_model_name": self.provider_model_name,
-            "config": _config_dict(self.profile.config),
-        }
 
 
 class AgentRuntimeProfileService:
@@ -337,94 +286,19 @@ class AgentRuntimeProfileService:
         host_wait_timeout_seconds: int = 300,
         fallback_profile_id: str | None = None,
     ) -> AgentRuntimeProfile:
-        if self.repository is None or self.host_repository is None:
-            raise RuntimeError("Agent Host and runtime profile repositories are required")
-        if scope not in {
-            RuntimeProfileScope.ORGANIZATION,
-            RuntimeProfileScope.PERSONAL,
-        }:
-            raise ValueError(
-                "Agent Host profile scope must be ORGANIZATION or PERSONAL"
-            )
-        integration = await self.host_repository.get_integration(
-            integration_id=host_integration_id
-        )
-        if integration is None:
-            raise ValueError("Agent Host integration is not available")
-        host = await self.host_repository.get_for_user(
-            host_id=integration.host_id,
-            user_id=user_id,
-        )
-        if host is None or host.revoked_at is not None:
-            raise ValueError("Agent Host integration is not owned by the current user")
-        if host.organization_id not in {None, organization_id}:
-            raise ValueError("Agent Host is paired to a different organization")
-        if (
-            effective_agent_host_status(host.status, host.last_seen_at)
-            is not AgentHostStatus.ONLINE
-        ):
-            raise ValueError("Agent Host is offline or not accepting new runs")
-        if integration.health != AgentHostIntegrationHealth.READY.value:
-            raise ValueError(
-                f"Agent Host integration is not ready: {integration.health}"
-            )
-        if integration.stale_after <= datetime.now(timezone.utc):
-            raise ValueError("Agent Host integration snapshot is stale; refresh it")
-        if integration.config_revision != integration_snapshot_revision:
-            raise ValueError(
-                "Agent Host integration changed; refresh configuration before saving"
-            )
-        if fallback_profile_id is not None:
-            fallback = await self.get_profile(
-                profile_id=fallback_profile_id,
-                organization_id=organization_id,
-                user_id=user_id,
-            )
-            if fallback is None:
-                raise ValueError("Fallback runtime profile is not available")
-            if fallback.status is not RuntimeProfileStatus.ACTIVE:
-                raise ValueError("Fallback runtime profile is not active")
-            if fallback.protocol is RuntimeProfileProtocol.AGENT_HOST_V2:
-                raise ValueError(
-                    "Fallback runtime profile cannot use Agent Host; "
-                    "fallback chains are intentionally unsupported"
-                )
-        normalized_selections = validate_agent_host_selections(
-            config_options=integration.config_options or [],
-            selections=config_selections,
-        )
-        normalized_name = _normalize_profile_name(name)
-        selected_model = normalized_selections.get("model")
-        profile = AgentRuntimeProfile(
-            id=str(uuid4()),
+        return await create_agent_host_profile(
+            self,
             organization_id=organization_id,
             user_id=user_id,
             host_integration_id=host_integration_id,
             scope=scope,
-            kind=RuntimeProfileKind.EXTERNAL_AGENT,
-            protocol=RuntimeProfileProtocol.AGENT_HOST_V2,
-            name=normalized_name,
-            description=description.strip() if description else None,
-            default_model_name=(
-                selected_model
-                if isinstance(selected_model, str)
-                and selected_model != FOLLOW_ADAPTER_DEFAULT
-                else FOLLOW_ADAPTER_DEFAULT
-            ),
-            model_catalog=[],
-            config=AgentHostRuntimeConfig(
-                integration_snapshot_revision=integration.config_revision,
-                config_selections=normalized_selections,
-                host_wait_timeout_seconds=host_wait_timeout_seconds,
-                fallback_profile_id=fallback_profile_id,
-            ),
-            status=RuntimeProfileStatus.ACTIVE,
-            metadata={
-                "source": "AGENT_HOST",
-                "integration_key": integration.integration_key,
-            },
+            name=name,
+            integration_snapshot_revision=integration_snapshot_revision,
+            config_selections=config_selections,
+            description=description,
+            host_wait_timeout_seconds=host_wait_timeout_seconds,
+            fallback_profile_id=fallback_profile_id,
         )
-        return await self.repository.create(profile)
 
     async def create_openai_compatible_profile(
         self,
@@ -471,12 +345,12 @@ class AgentRuntimeProfileService:
             default_model_name=selected_default_model,
             model_catalog=catalog,
             config=OpenAICompatibleRuntimeConfig(
-                base_url=base_url,
+                base_url=HttpUrl(str(base_url)),
                 headers=normalized_headers,
                 model_settings=model_settings or {},
             ),
             credentials=(
-                ApiKeyRuntimeCredentials(api_key=api_key.strip())
+                ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip()))
                 if api_key and api_key.strip()
                 else None
             ),
@@ -532,11 +406,11 @@ class AgentRuntimeProfileService:
             default_model_name=selected_default_model,
             model_catalog=catalog,
             config=AnthropicCompatibleRuntimeConfig(
-                base_url=base_url,
+                base_url=HttpUrl(str(base_url)) if base_url is not None else None,
                 headers=normalized_headers,
                 model_settings=model_settings or {},
             ),
-            credentials=ApiKeyRuntimeCredentials(api_key=api_key.strip()),
+            credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key.strip())),
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
                 "source": "anthropic_compatible",
@@ -635,10 +509,11 @@ def _system_lemma_openai_profile() -> AgentRuntimeProfile | None:
         default_model_name=default_model_name or model_catalog[0].name,
         model_catalog=model_catalog,
         config=OpenAICompatibleRuntimeConfig(
-            base_url=os.getenv("LEMMA_OPENAI_BASE_URL")
-            or settings.lemma_openai_base_url,
+            base_url=HttpUrl(
+                os.getenv("LEMMA_OPENAI_BASE_URL") or settings.lemma_openai_base_url
+            ),
         ),
-        credentials=ApiKeyRuntimeCredentials(api_key=api_key),
+        credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )
 
 
@@ -681,10 +556,12 @@ def _system_lemma_anthropic_profile() -> AgentRuntimeProfile | None:
             for model_name in model_names
         ],
         config=AnthropicCompatibleRuntimeConfig(
-            base_url=os.getenv("LEMMA_ANTHROPIC_BASE_URL")
-            or settings.lemma_anthropic_base_url,
+            base_url=HttpUrl(
+                os.getenv("LEMMA_ANTHROPIC_BASE_URL")
+                or settings.lemma_anthropic_base_url
+            ),
         ),
-        credentials=ApiKeyRuntimeCredentials(api_key=api_key),
+        credentials=ApiKeyRuntimeCredentials(api_key=SecretStr(api_key)),
     )
 
 
@@ -694,7 +571,7 @@ def _system_profile_by_id(profile_id: str) -> AgentRuntimeProfile | None:
     return None
 
 
-def _env_or_setting(env_name: str, setting_value: object | None) -> str | None:
+def _env_or_setting(env_name: str, setting_value: SecretStr | str | None) -> str | None:
     value = os.getenv(env_name) or reveal_secret(setting_value)
     if value is None:
         return None
@@ -981,7 +858,7 @@ async def _validate_public_base_url(url: str) -> None:
             infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
         except OSError as exc:
             raise ValueError(_PUBLIC_URL_ERROR) from exc
-        candidates.extend(info[4][0] for info in infos)
+        candidates.extend(cast(str, info[4][0]) for info in infos)
     if not candidates:
         raise ValueError(_PUBLIC_URL_ERROR)
     for addr in candidates:
@@ -1049,11 +926,7 @@ def _parse_openai_compatible_models(payload: object) -> list[DiscoveredModel]:
 
 
 def _payload_advertises_image_input(item: dict) -> bool:
-    """Best-effort image-input detection from an OpenAI-compatible ``/models``
-    entry. Honors OpenRouter-style ``architecture.input_modalities`` /
-    ``architecture.modality``; absent that metadata (the standard OpenAI schema),
-    returns ``False`` so vision falls back to explicit configuration.
-    """
+    """Best-effort image-input detection from compatible model metadata."""
     architecture = item.get("architecture")
     if not isinstance(architecture, dict):
         return False
@@ -1083,28 +956,7 @@ def _selected_model(
     requested_model_name: str | None,
 ) -> RuntimeModelCatalogEntry | None:
     if profile.kind is RuntimeProfileKind.EXTERNAL_AGENT:
-        config = _config_dict(profile.config)
-        selections = config.get("config_selections")
-        configured_model = (
-            selections.get("model") if isinstance(selections, dict) else None
-        )
-        model_name = requested_model_name or configured_model or FOLLOW_ADAPTER_DEFAULT
-        if not isinstance(model_name, str) or not model_name.strip():
-            return None
-        return RuntimeModelCatalogEntry(
-            name=model_name,
-            display_name=(
-                "Adapter default"
-                if model_name == FOLLOW_ADAPTER_DEFAULT
-                else model_name
-            ),
-            provider_model_name=model_name,
-            capabilities=[
-                RuntimeModelCapability.TEXT,
-                RuntimeModelCapability.TOOLS,
-            ],
-            metadata={"dynamic_agent_host_selection": True},
-        )
+        return selected_agent_host_model(profile, requested_model_name)
     model_name = requested_model_name or profile.default_model_name
     if not model_name:
         return None
@@ -1116,7 +968,9 @@ def _selected_model(
     # the profile's own default — and then the first catalog entry — rather than
     # hard-failing every run that relies on this profile.
     if requested_model_name:
-        logger.debug('agent.runtime_profile_service.requested_model_r_not_runtime.diagnostic')
+        logger.debug(
+            "agent.runtime_profile_service.requested_model_r_not_runtime.diagnostic"
+        )
         if profile.default_model_name:
             for model in profile.model_catalog:
                 if profile.default_model_name == model.name:
@@ -1131,7 +985,7 @@ def _config_dict(config: object | None) -> dict[str, object]:
         return {}
     model_dump = getattr(config, "model_dump", None)
     if callable(model_dump):
-        return model_dump(mode="json")
+        return _config_dict(model_dump(mode="json"))
     if isinstance(config, dict):
         return config
     return {}

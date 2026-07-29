@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timedelta, timezone
-from typing import AsyncIterator, Awaitable, Callable, Protocol
+from functools import partial
+from typing import Awaitable, Callable
 from uuid import UUID
 
 import anyio
@@ -67,6 +68,12 @@ from app.modules.agent.services.realtime import (
     token_payload,
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
+from app.modules.agent.services.agent_host_fallback import (
+    RuntimeExecutionState,
+    profile_model_settings,
+    run_agent_host_fallback,
+)
+from app.modules.agent.services.agent_run_observer import AgentRunObserver
 from app.modules.agent.services.run_message_writer import RunMessageWriter
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
@@ -117,9 +124,16 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
     try:
         await coro
     except asyncio.CancelledError:
-        logger.debug('agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic', agent_run_id=agent_run_id)
+        logger.debug(
+            "agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic",
+            agent_run_id=agent_run_id,
+        )
     except Exception:
-        logger.error("agent.agent_runner_service.agent_run_finalization_run_s.failed", agent_run_id=agent_run_id, exc_info=True)
+        logger.error(
+            "agent.agent_runner_service.agent_run_finalization_run_s.failed",
+            agent_run_id=agent_run_id,
+            exc_info=True,
+        )
 
 
 def _rejected_run_error_message(data: object) -> str:
@@ -139,42 +153,6 @@ def _rejected_run_error_message(data: object) -> str:
                 "Try again in a moment."
             )
     return "Daemon rejected this run (at capacity). Try again in a moment."
-
-
-def _profile_model_settings(
-    runtime_profile_snapshot: dict[str, object | None] | None,
-) -> JsonObject | None:
-    """Pull the model_settings dict out of a resolved runtime profile snapshot."""
-    if not isinstance(runtime_profile_snapshot, dict):
-        return None
-    config = runtime_profile_snapshot.get("config")
-    if not isinstance(config, dict):
-        return None
-    model_settings = config.get("model_settings")
-    return (
-        model_settings if isinstance(model_settings, dict) and model_settings else None
-    )
-
-
-class AgentRunObserver(Protocol):
-    async def on_run_started(
-        self,
-        conversation: Conversation,
-        ctx: ConversationContext,
-    ) -> None: ...
-
-    async def on_event(
-        self,
-        event: AgentEvent,
-        conversation: Conversation,
-        ctx: ConversationContext,
-    ) -> None: ...
-
-    async def on_run_finished(
-        self,
-        conversation: Conversation,
-        ctx: ConversationContext,
-    ) -> None: ...
 
 
 class AgentRunnerService:
@@ -223,8 +201,7 @@ class AgentRunnerService:
                 error=agent_run.error,
             )
             return
-        usage_reservation: UsageReservation | None = None
-        runtime_profile_snapshot: dict[str, object | None] | None = None
+        runtime_state = RuntimeExecutionState()
         try:
             resolved_runtime = await self._resolve_agent_runtime(
                 agent_run.agent_runtime,
@@ -237,7 +214,7 @@ class AgentRunnerService:
             final_error: str | None = None
             usage_data: AgentRunUsage | None = None
             surface_context = self._surface_context_from_conversation(conversation)
-            runtime_profile_snapshot = resolved_runtime.public_snapshot()
+            runtime_state.profile = resolved_runtime.public_snapshot()
             runtime_credentials = resolved_runtime.credentials or {}
             workspace_location = resolve_workspace_location(conversation)
             pod_cwd = resolve_pod_cwd(conversation)
@@ -254,7 +231,7 @@ class AgentRunnerService:
                     agent=agent,
                     user_id=user_id,
                 ),
-                runtime_profile=runtime_profile_snapshot,
+                runtime_profile=runtime_state.profile,
                 runtime_credentials=runtime_credentials,
                 workspace_id=workspace_location.workspace_id,
                 workspace_cwd=workspace_location.cwd,
@@ -279,7 +256,9 @@ class AgentRunnerService:
                     pod_id=conversation.pod_id,
                 )
             except Exception:
-                logger.debug('agent.agent_runner_service.build_agent_context_brief_s.diagnostic')
+                logger.debug(
+                    "agent.agent_runner_service.build_agent_context_brief_s.diagnostic"
+                )
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
                 conversation=conversation,
@@ -301,9 +280,7 @@ class AgentRunnerService:
             harness_capabilities: list[object] = []
             harness_model_settings: JsonObject | None = None
             if resolved_runtime.harness_kind == HarnessKind.LEMMA:
-                harness_model_settings = _profile_model_settings(
-                    runtime_profile_snapshot
-                )
+                harness_model_settings = profile_model_settings(runtime_state.profile)
                 # The in-process harness realizes every tool surface as a
                 # capability, so its toolset list is empty.
                 harness_capabilities = await build_lemma_harness_tooling(
@@ -320,135 +297,26 @@ class AgentRunnerService:
                     ),
                 )
                 harness_toolsets = []
-            usage_reservation = await self.usage_recorder.reserve(
+            runtime_state.reservation = await self.usage_recorder.reserve(
                 organization_id=conversation.organization_id,
                 user_id=user_id,
-                runtime_profile=runtime_profile_snapshot,
+                runtime_profile=runtime_state.profile,
             )
             enforced_usage_limits = self.fixed_usage_limits
 
-            async def _run_explicit_fallback(
-                fallback_profile_id: str,
-            ) -> AsyncIterator[AgentEvent]:
-                """Run the one configured fallback after an unaccepted timeout.
-
-                This callback is invoked only by ``AgentHostHarness`` and only
-                before the host has durably accepted the turn. Once ACCEPTED is
-                observed, retrying elsewhere would risk duplicate provider work
-                and is forbidden by the lease protocol.
-                """
-
-                nonlocal runtime_profile_snapshot, usage_reservation
-                fallback_runtime = await self._resolve_agent_runtime(
-                    AgentRuntimeConfig(profile_id=fallback_profile_id),
+            fallback_run = partial(
+                run_agent_host_fallback,
+                service=self,
+                state=runtime_state,
                     user_id=user_id,
-                    organization_id=conversation.organization_id,
-                )
-                if fallback_runtime.harness_kind is HarnessKind.AGENT_HOST:
-                    raise RuntimeError(
-                        "Agent Host fallback chains are not supported"
-                    )
-
-                primary_profile_id = runtime_profile_snapshot.get("profile_id")
-                fallback_snapshot = fallback_runtime.public_snapshot()
-                fallback_snapshot["fallback_from_profile_id"] = primary_profile_id
-                fallback_credentials = fallback_runtime.credentials or {}
-                fallback_ctx = ctx.model_copy(
-                    update={
-                        "runtime_profile": fallback_snapshot,
-                        "runtime_credentials": fallback_credentials,
-                        "supports_pause_signal": (
-                            fallback_runtime.harness_kind is HarnessKind.LEMMA
-                        ),
-                    }
-                )
-
-                fallback_toolsets = list(full_toolsets)
-                fallback_supports_vision = (
-                    fallback_runtime.model is not None
-                    and RuntimeModelCapability.VISION
-                    in fallback_runtime.model.capabilities
-                )
-                if (
-                    fallback_supports_vision
-                    and view_image_toolset not in fallback_toolsets
-                ):
-                    fallback_toolsets.append(view_image_toolset)
-
-                fallback_capabilities: list[object] = []
-                fallback_model_settings: JsonObject | None = None
-                if fallback_runtime.harness_kind is HarnessKind.LEMMA:
-                    fallback_model_settings = _profile_model_settings(
-                        fallback_snapshot
-                    )
-                    fallback_capabilities = await build_lemma_harness_tooling(
-                        uow_factory=self.uow_factory,
+                conversation=conversation,
+                ctx=ctx,
+                full_toolsets=full_toolsets,
                         agent=agent,
-                        ctx=fallback_ctx,
-                        full_toolsets=fallback_toolsets,
                         agent_run_id=agent_run_id,
-                        model_name=fallback_runtime.model_name_for_harness,
-                        enable_prompt_caching=(
-                            fallback_runtime.profile.protocol
-                            is RuntimeProfileProtocol.OPENAI_COMPATIBLE
-                            and settings.lemma_llm_caching_enabled
-                        ),
-                    )
-                    fallback_toolsets = []
-
-                await self.usage_recorder.release(usage_reservation)
-                usage_reservation = None
-                usage_reservation = await self.usage_recorder.reserve(
-                    organization_id=conversation.organization_id,
-                    user_id=user_id,
-                    runtime_profile=fallback_snapshot,
-                )
-                runtime_profile_snapshot = fallback_snapshot
-                fallback_options = HarnessOptions(
-                    model_name=fallback_runtime.model_name_for_harness,
-                    toolsets=fallback_toolsets,
-                    capabilities=fallback_capabilities,
-                    model_settings=fallback_model_settings,
+                messages=messages,
                     usage_limits=enforced_usage_limits,
-                    output_type=self._resolve_output_type(agent, conversation),
-                    should_stop=self._make_stop_checker(agent_run_id),
-                    extra={
-                        "runtime_profile": fallback_snapshot,
-                        "runtime_credentials": fallback_credentials,
-                    },
                 )
-                logger.warning(
-                    "agent.agent_runner_service.agent_host_fallback_started",
-                    agent_run_id=agent_run_id,
-                    primary_profile_id=primary_profile_id,
-                    fallback_profile_id=fallback_profile_id,
-                    fallback_harness=fallback_runtime.harness_kind.value,
-                )
-                yield AgentEvent(
-                    type=AgentEventType.STATUS,
-                    data={
-                        "status": "agent_host.fallback.started",
-                        "fallback_profile_id": fallback_profile_id,
-                    },
-                    agent_run_id=agent_run_id,
-                )
-                fallback_harness = self.harness_registry.get(
-                    fallback_runtime.harness_kind
-                )
-                fallback_agent = self._agent_with_resolved_runtime_metadata(
-                    agent,
-                    resolved_runtime=fallback_runtime,
-                )
-                async for fallback_event in fallback_harness.run(
-                    agent=fallback_agent,
-                    conversation=conversation,
-                    messages=messages,
-                    ctx=fallback_ctx,
-                    options=fallback_options,
-                    agent_run_id=agent_run_id,
-                ):
-                    yield fallback_event
-
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
@@ -458,12 +326,12 @@ class AgentRunnerService:
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=self._make_stop_checker(agent_run_id),
                 fallback_run=(
-                    _run_explicit_fallback
+                    fallback_run
                     if resolved_runtime.harness_kind is HarnessKind.AGENT_HOST
                     else None
                 ),
                 extra={
-                    "runtime_profile": runtime_profile_snapshot,
+                    "runtime_profile": runtime_state.profile,
                     "runtime_credentials": runtime_credentials,
                 },
             )
@@ -502,7 +370,10 @@ class AgentRunnerService:
                             await observer.on_run_started(conversation, ctx)
                             observer_started = True
                         except Exception:
-                            logger.debug('agent.agent_runner_service.agent_run_observer_start_run.diagnostic', agent_run_id=agent_run_id)
+                            logger.debug(
+                                "agent.agent_runner_service.agent_run_observer_start_run.diagnostic",
+                                agent_run_id=agent_run_id,
+                            )
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -526,7 +397,10 @@ class AgentRunnerService:
                                             event, conversation, ctx
                                         )
                                     except Exception:
-                                        logger.debug('agent.agent_runner_service.agent_run_observer_run_s.diagnostic', agent_run_id=agent_run_id)
+                                        logger.debug(
+                                            "agent.agent_runner_service.agent_run_observer_run_s.diagnostic",
+                                            agent_run_id=agent_run_id,
+                                        )
                                 if event.type == AgentEventType.USAGE:
                                     if isinstance(event.data, AgentRunUsage):
                                         usage_data = event.data
@@ -548,8 +422,8 @@ class AgentRunnerService:
                                     user_id=user_id,
                                     agent_id=conversation.agent_id,
                                     started_at=agent_run.started_at,
-                                    runtime_profile=runtime_profile_snapshot,
-                                    usage_reservation=usage_reservation,
+                                    runtime_profile=runtime_state.profile,
+                                    usage_reservation=runtime_state.reservation,
                                 )
                                 if event.type == AgentEventType.MESSAGE:
                                     saved_output = (
@@ -575,7 +449,10 @@ class AgentRunnerService:
                             try:
                                 await observer.on_run_finished(conversation, ctx)
                             except Exception:
-                                logger.debug('agent.agent_runner_service.agent_run_observer_finish_run.diagnostic', agent_run_id=agent_run_id)
+                                logger.debug(
+                                    "agent.agent_runner_service.agent_run_observer_finish_run.diagnostic",
+                                    agent_run_id=agent_run_id,
+                                )
         except BaseException as exc:
             if isinstance(exc, Exception):
                 logger.error(
@@ -619,8 +496,8 @@ class AgentRunnerService:
                         user_id=user_id,
                         agent_id=conversation.agent_id,
                         started_at=agent_run.started_at,
-                        runtime_profile=runtime_profile_snapshot,
-                        usage_reservation=usage_reservation,
+                        runtime_profile=runtime_state.profile,
+                        usage_reservation=runtime_state.reservation,
                     ),
                     agent_run_id=agent_run_id,
                 )
@@ -1007,7 +884,7 @@ class AgentRunnerService:
             )
         except Exception:
             logger.debug(
-                'agent.agent_runner_service.finalize_agent_run_run_s.propagated',
+                "agent.agent_runner_service.finalize_agent_run_run_s.propagated",
                 agent_run_id=agent_run_id,
                 exc_info=True,
             )
@@ -1015,7 +892,7 @@ class AgentRunnerService:
                 await self.usage_recorder.release(usage_reservation)
             except Exception:
                 logger.debug(
-                    'agent.agent_runner_service.release_usage_reservation_run_s.diagnostic',
+                    "agent.agent_runner_service.release_usage_reservation_run_s.diagnostic",
                     agent_run_id=agent_run_id,
                 )
             raise

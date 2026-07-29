@@ -17,6 +17,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_finalization_run_s.failed': EventSpec('error', frozenset({'agent_run_id'})),
+    'agent.agent_runner_service.agent_host_fallback_started': EventSpec('warning', frozenset({'agent_run_id', 'primary_profile_id', 'fallback_profile_id', 'fallback_harness'})),
     'agent.agent_runner_service.agent_run_observer_finish_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_observer_run_s.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.agent_runner_service.agent_run_observer_start_run.diagnostic': EventSpec('debug', frozenset({'agent_run_id'})),

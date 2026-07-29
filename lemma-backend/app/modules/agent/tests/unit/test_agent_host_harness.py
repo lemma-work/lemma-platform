@@ -8,8 +8,8 @@ from app.modules.agent.domain.value_objects import (
     MessageDraft,
     MessageKind,
 )
-from app.modules.agent.infrastructure.harnesses.agent_host import (
-    _AgentHostEventNormalizer,
+from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+    AgentHostEventNormalizer,
 )
 from app.modules.usage.contracts import AgentRunUsage
 
@@ -33,7 +33,7 @@ def _row(
 
 def test_normalizer_streams_and_persists_one_final_message() -> None:
     run_id = uuid4()
-    normalizer = _AgentHostEventNormalizer(
+    normalizer = AgentHostEventNormalizer(
         agent_run_id=run_id,
         model_name="gpt-test",
     )
@@ -66,7 +66,9 @@ def test_normalizer_streams_and_persists_one_final_message() -> None:
     assert first[0].type is AgentEventType.TOKEN
     assert first[0].data == {"kind": "text", "data": "hello "}
     assert second[0].data == {"kind": "text", "data": "world"}
-    message_events = [event for event in terminal if event.type is AgentEventType.MESSAGE]
+    message_events = [
+        event for event in terminal if event.type is AgentEventType.MESSAGE
+    ]
     assert len(message_events) == 1
     assert isinstance(message_events[0].data, MessageDraft)
     assert message_events[0].data.text == "hello world"
@@ -74,7 +76,7 @@ def test_normalizer_streams_and_persists_one_final_message() -> None:
 
 
 def test_normalizer_closes_unfinished_tool_call_before_failure() -> None:
-    normalizer = _AgentHostEventNormalizer(
+    normalizer = AgentHostEventNormalizer(
         agent_run_id=uuid4(),
         model_name="gpt-test",
     )
@@ -104,7 +106,7 @@ def test_normalizer_closes_unfinished_tool_call_before_failure() -> None:
 
 
 def test_normalizer_maps_usage_totals() -> None:
-    normalizer = _AgentHostEventNormalizer(
+    normalizer = AgentHostEventNormalizer(
         agent_run_id=uuid4(),
         model_name="fallback-model",
     )

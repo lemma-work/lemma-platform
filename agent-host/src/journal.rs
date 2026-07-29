@@ -559,18 +559,20 @@ impl Journal {
         if !exists {
             return Err(JournalError::AckMismatch);
         }
+        // The backend acknowledgment is the durable handoff boundary. Keeping
+        // a second acknowledged copy locally grows the SQLite journal forever
+        // without contributing to replay or recovery.
         connection.execute(
             r#"
-            UPDATE event_outbox SET acknowledged_at=?5
+            DELETE FROM event_outbox
              WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
-                   AND sequence<=?4 AND acknowledged_at IS NULL
+                   AND sequence<=?4
             "#,
             params![
                 target_id.to_string(),
                 ack.run_id.to_string(),
                 i64::from(ack.lease_epoch),
-                i64::try_from(ack.acked_through).unwrap_or(i64::MAX),
-                Utc::now().to_rfc3339()
+                i64::try_from(ack.acked_through).unwrap_or(i64::MAX)
             ],
         )?;
         Ok(())
@@ -937,6 +939,16 @@ mod tests {
             journal.pending_events(target, 256).unwrap()[0].events[0].sequence,
             3
         );
+        let retained: i64 = journal
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM event_outbox WHERE target_id=?1",
+                params![target.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retained, 1);
     }
 
     #[test]

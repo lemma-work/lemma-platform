@@ -39,7 +39,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.models import AgentRuntimeDaemonModel
+from app.modules.agent.infrastructure.runtime_models import AgentRuntimeDaemonModel
 from app.modules.agent.infrastructure.models import AgentRuntimeProfileModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
@@ -145,7 +145,9 @@ async def _seed_paused_interaction(
     return pod_id, conversation_id, agent, paused_run, approval_id
 
 
-async def _resume_run_and_tool_return(conversation_id: UUID, paused_run_id, approval_id):
+async def _resume_run_and_tool_return(
+    conversation_id: UUID, paused_run_id, approval_id
+):
     """Return (resume_run, tool_return_message) created by resolving the pause."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
         repo = ConversationRepository(uow)
@@ -558,7 +560,10 @@ async def _wait_for_daemon_harness(
         assert response.status_code == 200, response.text
         last_payload = response.json()
         for item in last_payload["items"]:
-            if item["harness_kind"] == harness_kind and item["daemon_status"] == "ONLINE":
+            if (
+                item["harness_kind"] == harness_kind
+                and item["daemon_status"] == "ONLINE"
+            ):
                 return item
         await asyncio.sleep(0.25)
     raise AssertionError(
@@ -643,9 +648,9 @@ class TestPodAgentLifecycle:
         assert default_alias_conversations.status_code == 200, (
             default_alias_conversations.text
         )
-        assert [
-            item["id"] for item in default_alias_conversations.json()["items"]
-        ] == [default_id]
+        assert [item["id"] for item in default_alias_conversations.json()["items"]] == [
+            default_id
+        ]
 
         empty_agent_name = await authenticated_client.get(
             f"/pods/{pod_id}/conversations",
@@ -920,8 +925,13 @@ class TestPodAgentLifecycle:
         which are recorded as the tool's synthesized return and a fresh run is
         started to resume the agent. The pending list clears and re-deciding the
         same call conflicts."""
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="ask_user",
@@ -935,7 +945,6 @@ class TestPodAgentLifecycle:
                     ]
                 },
             )
-        )
 
         approvals = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
@@ -946,7 +955,10 @@ class TestPodAgentLifecycle:
         decision = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
             f"/approvals/{approval_id}/decision",
-            json={"decision": "APPROVE_ONCE", "response": {"answers": {"Auth": "OAuth"}}},
+            json={
+                "decision": "APPROVE_ONCE",
+                "response": {"answers": {"Auth": "OAuth"}},
+            },
         )
         assert decision.status_code == 200, decision.text
 
@@ -990,8 +1002,13 @@ class TestPodAgentLifecycle:
         fixed_test_org,
     ):
         """A denied request_approval resumes with a denial return and runs nothing."""
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="request_approval",
@@ -1002,7 +1019,6 @@ class TestPodAgentLifecycle:
                     "reason": "Confirm destructive cleanup.",
                 },
             )
-        )
 
         decision = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
@@ -1021,7 +1037,9 @@ class TestPodAgentLifecycle:
         assert tool_return is not None
         assert tool_return.tool_result["success"] is False
         assert tool_return.tool_result["executed"] is False
-        assert tool_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        assert (
+            tool_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        )
 
         approvals_after = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
@@ -1053,8 +1071,13 @@ class TestPodAgentLifecycle:
         report ``reconciled`` — instead of raising "Approval is not pending or no
         longer live" forever.
         """
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="ask_user",
@@ -1068,7 +1091,6 @@ class TestPodAgentLifecycle:
                     ]
                 },
             )
-        )
 
         # Simulate the wedge: decision committed, resume never finished.
         async with create_uow_from_session_maker(async_session_maker) as uow:
@@ -1095,7 +1117,10 @@ class TestPodAgentLifecycle:
         healed = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
             f"/approvals/{approval_id}/decision",
-            json={"decision": "APPROVE_ONCE", "response": {"answers": {"Auth": "OAuth"}}},
+            json={
+                "decision": "APPROVE_ONCE",
+                "response": {"answers": {"Auth": "OAuth"}},
+            },
         )
         assert healed.status_code == 200, healed.text
         assert healed.json()["status"] == "reconciled"
@@ -1116,8 +1141,13 @@ class TestPodAgentLifecycle:
         fixed_test_org,
     ):
         """An approval id with no paused call and no decision is a 404, not a 409."""
-        pod_id, conversation_id, _agent, _paused_run, _approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            _paused_run,
+            _approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="ask_user",
@@ -1131,7 +1161,6 @@ class TestPodAgentLifecycle:
                     ]
                 },
             )
-        )
         missing = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
             f"/approvals/does-not-exist/decision",
@@ -1164,8 +1193,13 @@ class TestPodAgentLifecycle:
             fake_execute_as_user,
         )
 
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="request_approval",
@@ -1176,7 +1210,6 @@ class TestPodAgentLifecycle:
                     "reason": "Cleaning up a duplicate order.",
                 },
             )
-        )
 
         decision = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
@@ -1192,7 +1225,10 @@ class TestPodAgentLifecycle:
         assert tool_return is not None
         assert tool_return.tool_result["success"] is True
         assert tool_return.tool_result["executed"] is True
-        assert tool_return.tool_result["result"] == {"stdout": "deleted", "success": True}
+        assert tool_return.tool_result["result"] == {
+            "stdout": "deleted",
+            "success": True,
+        }
         assert captured["tool_name"] == "exec_command"
         assert captured["args"] == {"cmd": "lemma records delete orders --id 42"}
         assert captured["calls"] == 1
@@ -1216,8 +1252,13 @@ class TestPodAgentLifecycle:
         """Two pausing tools in one turn: resolving the first must NOT resume (the
         sibling would be orphaned); only resolving the last starts one resume run
         whose history has a tool_return for both calls."""
-        pod_id, conversation_id, _agent, paused_run, approval_ids = (
-            await _seed_paused_interactions(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_ids,
+        ) = await _seed_paused_interactions(
                 authenticated_client,
                 fixed_test_org,
                 interactions=[
@@ -1244,13 +1285,14 @@ class TestPodAgentLifecycle:
                     ),
                 ],
             )
-        )
         approval_request, approval_ask = approval_ids
 
         approvals = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
         )
-        assert {i["tool_call_id"] for i in approvals.json()["items"]} == set(approval_ids)
+        assert {i["tool_call_id"] for i in approvals.json()["items"]} == set(
+            approval_ids
+        )
 
         # Resolve the FIRST (deny) — the sibling is still pending, so NO resume run
         # and the conversation stays WAITING.
@@ -1266,7 +1308,9 @@ class TestPodAgentLifecycle:
         )
         assert resume_run is None
         assert first_return is not None
-        assert first_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        assert (
+            first_return.tool_result["decision"] == AgentRunApprovalDecision.DENY.value
+        )
         conversation = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}"
         )
@@ -1274,13 +1318,18 @@ class TestPodAgentLifecycle:
         approvals_mid = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
         )
-        assert [i["tool_call_id"] for i in approvals_mid.json()["items"]] == [approval_ask]
+        assert [i["tool_call_id"] for i in approvals_mid.json()["items"]] == [
+            approval_ask
+        ]
 
         # Resolve the SECOND (last) — now one resume run starts with BOTH returns.
         second = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
             f"/approvals/{approval_ask}/decision",
-            json={"decision": "APPROVE_ONCE", "response": {"answers": {"Auth": "OAuth"}}},
+            json={
+                "decision": "APPROVE_ONCE",
+                "response": {"answers": {"Auth": "OAuth"}},
+            },
         )
         assert second.status_code == 200, second.text
 
@@ -1322,8 +1371,13 @@ class TestPodAgentLifecycle:
         before the new run starts."""
         _ = worker
         mock_safe_runtime = await _create_mock_safe_runtime(db_session, fixed_test_org)
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="ask_user",
@@ -1338,7 +1392,6 @@ class TestPodAgentLifecycle:
                 },
                 agent_runtime=mock_safe_runtime,
             )
-        )
 
         events = await _post_sse(
             authenticated_client,
@@ -1408,7 +1461,9 @@ class TestPodAgentLifecycle:
         _ = worker
         executed: list[str] = []
 
-        async def fail_if_executed(self, *, conversation, user_id, agent_run_id, tool_name, args):
+        async def fail_if_executed(
+            self, *, conversation, user_id, agent_run_id, tool_name, args
+        ):
             del self, conversation, user_id, agent_run_id, args
             executed.append(tool_name)
             return {"ok": True, "value": {"stdout": "deleted", "success": True}}
@@ -1420,8 +1475,13 @@ class TestPodAgentLifecycle:
         )
 
         mock_safe_runtime = await _create_mock_safe_runtime(db_session, fixed_test_org)
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="request_approval",
@@ -1433,7 +1493,6 @@ class TestPodAgentLifecycle:
                 },
                 agent_runtime=mock_safe_runtime,
             )
-        )
 
         events = await _post_sse(
             authenticated_client,
@@ -1459,7 +1518,10 @@ class TestPodAgentLifecycle:
         assert tool_return["agent_run_id"] == str(paused_run.id)
         assert tool_return["tool_result"]["success"] is False
         assert tool_return["tool_result"]["executed"] is False
-        assert tool_return["tool_result"]["decision"] == AgentRunApprovalDecision.DENY.value
+        assert (
+            tool_return["tool_result"]["decision"]
+            == AgentRunApprovalDecision.DENY.value
+        )
 
         approvals_after = await authenticated_client.get(
             f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
@@ -1488,14 +1550,17 @@ class TestPodAgentLifecycle:
             executed_calls.append({"tool_name": tool_name, "args": args})
             return {"stdout": "ok", "success": True}
 
-        monkeypatch.setattr(
-            ApprovalExecutor, "execute_as_user", fake_execute_as_user
-        )
+        monkeypatch.setattr(ApprovalExecutor, "execute_as_user", fake_execute_as_user)
 
         approved_args = {"cmd": "echo hi"}
         mock_safe_runtime = await _create_mock_safe_runtime(db_session, fixed_test_org)
-        pod_id, conversation_id, _agent, paused_run, approval_id = (
-            await _seed_paused_interaction(
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_id,
+        ) = await _seed_paused_interaction(
                 authenticated_client,
                 fixed_test_org,
                 tool_name="request_approval",
@@ -1507,7 +1572,6 @@ class TestPodAgentLifecycle:
                 },
                 agent_runtime=mock_safe_runtime,
             )
-        )
 
         decision = await authenticated_client.post(
             f"/pods/{pod_id}/conversations/{conversation_id}"
@@ -1830,7 +1894,9 @@ class TestPodAgentLifecycle:
             },
         )
         assert listed_waiting.status_code == 200, listed_waiting.text
-        assert conversation_id in [item["id"] for item in listed_waiting.json()["items"]]
+        assert conversation_id in [
+            item["id"] for item in listed_waiting.json()["items"]
+        ]
 
         completed_events = await _post_sse(
             authenticated_client,
@@ -2553,16 +2619,16 @@ class TestAgentRuntimeConfigApis:
         assert org_response["has_credentials"] is True
         assert "credentials" not in org_response
         system_profile = next(
-            item
-            for item in profile_payload["items"]
-            if item["id"] == "system:lemma"
+            item for item in profile_payload["items"] if item["id"] == "system:lemma"
         )
         assert system_profile["scope"] == "SYSTEM"
         assert system_profile["kind"] == "MODEL_PROVIDER"
         assert system_profile["protocol"] == "OPENAI_COMPATIBLE"
         assert system_profile["name"] == "Lemma"
         assert system_profile["default_model_name"] == system_lemma_default_model()
-        assert [item["name"] for item in system_profile["model_catalog"]] == system_lemma_model_names()
+        assert [
+            item["name"] for item in system_profile["model_catalog"]
+        ] == system_lemma_model_names()
         assert system_profile["derived_harness_kind"] == "LEMMA"
 
         pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
@@ -2667,7 +2733,9 @@ class TestAgentRuntimeConfigApis:
             for item in harnesses.json()["items"]
             if item.get("daemon_id") == daemon_id
         ]
-        assert {(item["harness_kind"], tuple(item["models"])) for item in daemon_items} == {
+        assert {
+            (item["harness_kind"], tuple(item["models"])) for item in daemon_items
+        } == {
             ("CODEX", ("gpt-5.5",)),
             ("CLAUDE_CODE", ("sonnet",)),
             ("OPENCODE", ("opencode/deepseek-v4-flash-free",)),
@@ -3056,7 +3124,10 @@ class TestAgentRuntimeConfigApis:
             run_start["payload"]["prompt"]["user_prompt"]
             == "USER:\nSay hello from the daemon."
         )
-        assert "Reply through the daemon runtime." in run_start["payload"]["prompt"]["system_prompt"]
+        assert (
+            "Reply through the daemon runtime."
+            in run_start["payload"]["prompt"]["system_prompt"]
+        )
         assert "session_id" not in run_start["payload"]["prompt"]
         assert "text" not in run_start["payload"]["prompt"]
         assert "messages" not in run_start["payload"]
@@ -3156,21 +3227,23 @@ class TestAgentRuntimeConfigApis:
         )
         followup_run_id = followup_start["agent_run_id"]
         assert followup_start["payload"]["conversation_id"] == conversation_id
-        assert (
-            followup_start["payload"]["mcp"]["conversation_id"]
-            == conversation_id
-        )
+        assert followup_start["payload"]["mcp"]["conversation_id"] == conversation_id
         assert (
             followup_start["payload"]["prompt"]["user_prompt"]
             == "USER:\nWhat did I ask first?"
         )
-        assert followup_start["payload"]["prompt"]["session_id"] == first_local_session_id
+        assert (
+            followup_start["payload"]["prompt"]["session_id"] == first_local_session_id
+        )
         assert "system_prompt" not in followup_start["payload"]["prompt"]
         assert (
             "Reply through the daemon runtime."
             in followup_start["payload"]["prompt"]["recovery_system_prompt"]
         )
-        assert "Say hello from the daemon." not in followup_start["payload"]["prompt"]["user_prompt"]
+        assert (
+            "Say hello from the daemon."
+            not in followup_start["payload"]["prompt"]["user_prompt"]
+        )
         assert (
             f"hello from redis daemon {harness_kind}"
             not in followup_start["payload"]["prompt"]["user_prompt"]
@@ -3316,7 +3389,9 @@ class TestAgentRuntimeConfigApis:
         await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
         await communicator.wait(timeout=5)
 
-    @pytest.mark.skipif(shutil.which("codex") is None, reason="codex CLI is not installed")
+    @pytest.mark.skipif(
+        shutil.which("codex") is None, reason="codex CLI is not installed"
+    )
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
     async def test_cli_daemon_process_discovers_models_and_runs_real_harnesses(
         self,
@@ -3375,7 +3450,9 @@ class TestAgentRuntimeConfigApis:
                 timeout=30,
             )
             daemon_id = harness["daemon_id"]
-            catalog_response = await authenticated_client.get("/agent-runtime/harnesses")
+            catalog_response = await authenticated_client.get(
+                "/agent-runtime/harnesses"
+            )
             assert catalog_response.status_code == 200, catalog_response.text
             daemon_items = [
                 item
@@ -3395,7 +3472,9 @@ class TestAgentRuntimeConfigApis:
                 if harness.strip()
             }
             daemon_items = [
-                item for item in daemon_items if item["harness_kind"] in runnable_harnesses
+                item
+                for item in daemon_items
+                if item["harness_kind"] in runnable_harnesses
             ]
             assert daemon_items
             preferred_models = {
@@ -3471,8 +3550,7 @@ class TestAgentRuntimeConfigApis:
                     if message["role"] == MessageRole.ASSISTANT.value
                 ]
                 assert any(
-                    marker in (message["text"] or "")
-                    for message in assistant_messages
+                    marker in (message["text"] or "") for message in assistant_messages
                 )
         finally:
             if process.poll() is None:
@@ -3714,9 +3792,9 @@ class TestAgentOpenApi:
         ]
         assert "model_name" not in schemas["SendMessageRequest"]["properties"]
         assert "model_name" in schemas["AgentRuntimeConfig"]["properties"]
-        assert "default_runtime" not in schemas["AgentHarnessListResponse"][
-            "properties"
-        ]
+        assert (
+            "default_runtime" not in schemas["AgentHarnessListResponse"]["properties"]
+        )
         assert schemas["AgentHarnessListResponse"]["required"] == ["items"]
         assert "metadata" in schemas["SendMessageRequest"]["properties"]
         assert "instructions" in schemas["CreateConversationRequest"]["properties"]
@@ -3753,18 +3831,21 @@ class TestAgentOpenApi:
             ]
             == "agent.runtime.profiles.create"
         )
-        create_profile_schema = paths[
-            "/organizations/{org_id}/agent-runtime/profiles"
-        ]["post"]["requestBody"]["content"]["application/json"]["schema"]
+        create_profile_schema = paths["/organizations/{org_id}/agent-runtime/profiles"][
+            "post"
+        ]["requestBody"]["content"]["application/json"]["schema"]
         assert create_profile_schema["discriminator"]["propertyName"] == "source"
         assert set(create_profile_schema["discriminator"]["mapping"]) == {
             "USER_DAEMON",
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
         }
-        assert schemas["CreateOpenAICompatibleRuntimeProfileRequest"]["properties"][
+        assert (
+            schemas["CreateOpenAICompatibleRuntimeProfileRequest"]["properties"][
             "base_url"
-        ]["format"] == "uri"
+            ]["format"]
+            == "uri"
+        )
         assert (
             paths["/tools/report-feedback"]["post"]["operationId"]
             == "agent.tool.report_feedback"

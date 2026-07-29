@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::config::HostPaths;
 
+#[cfg(target_os = "macos")]
 const SERVICE_LABEL: &str = "ai.lemma.agent-host";
 
 #[derive(Clone, Debug, Serialize)]
@@ -117,6 +118,7 @@ fn run_checked(command: &mut Command, action: &str) -> anyhow::Result<Output> {
     )
 }
 
+#[cfg(unix)]
 fn write_atomic(path: &Path, contents: &str) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

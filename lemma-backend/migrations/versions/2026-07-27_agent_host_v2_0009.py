@@ -93,12 +93,16 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "user_id",
+            "organization_id",
             "installation_id",
-            name="uq_agent_host_user_installation",
+            name="uq_agent_host_user_org_installation",
+            postgresql_nulls_not_distinct=True,
         ),
         sa.UniqueConstraint(
+            "organization_id",
             "public_key_fingerprint",
-            name="uq_agent_host_public_key_fingerprint",
+            name="uq_agent_host_org_public_key_fingerprint",
+            postgresql_nulls_not_distinct=True,
         ),
     )
     op.create_index("ix_agent_hosts_user_id", "agent_hosts", ["user_id"])
@@ -106,9 +110,7 @@ def upgrade() -> None:
         "ix_agent_hosts_organization_id", "agent_hosts", ["organization_id"]
     )
     op.create_index("ix_agent_hosts_status", "agent_hosts", ["status"])
-    op.create_index(
-        "ix_agent_host_user_status", "agent_hosts", ["user_id", "status"]
-    )
+    op.create_index("ix_agent_host_user_status", "agent_hosts", ["user_id", "status"])
 
     op.create_table(
         "agent_host_integrations",
@@ -128,9 +130,7 @@ def upgrade() -> None:
         sa.Column("stale_after", sa.DateTime(timezone=True), nullable=False),
         sa.Column("stale_reason", sa.Text(), nullable=True),
         sa.Column("integration_metadata", JSONB, nullable=False),
-        sa.ForeignKeyConstraint(
-            ["host_id"], ["agent_hosts.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "host_id",
@@ -164,7 +164,7 @@ def upgrade() -> None:
         "agent_host_integrations",
         ["host_integration_id"],
         ["id"],
-        ondelete="SET NULL",
+        ondelete="CASCADE",
     )
     op.create_index(
         "ix_agent_runtime_profiles_host_integration_id",
@@ -185,23 +185,15 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("delivered_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("acknowledged_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["host_id"], ["agent_hosts.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["agent_runs.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
         "ix_agent_host_commands_host_id", "agent_host_commands", ["host_id"]
     )
-    op.create_index(
-        "ix_agent_host_commands_run_id", "agent_host_commands", ["run_id"]
-    )
-    op.create_index(
-        "ix_agent_host_commands_state", "agent_host_commands", ["state"]
-    )
+    op.create_index("ix_agent_host_commands_run_id", "agent_host_commands", ["run_id"])
+    op.create_index("ix_agent_host_commands_state", "agent_host_commands", ["state"])
     op.create_index(
         "ix_agent_host_command_poll",
         "agent_host_commands",
@@ -218,7 +210,7 @@ def upgrade() -> None:
         sa.Column("run_id", UUID, nullable=False),
         sa.Column("host_id", UUID, nullable=False),
         sa.Column("integration_id", UUID, nullable=False),
-        sa.Column("runtime_profile_id", UUID, nullable=False),
+        sa.Column("runtime_profile_id", UUID, nullable=True),
         sa.Column("lease_epoch", sa.BigInteger(), nullable=False),
         sa.Column("state", sa.String(length=32), nullable=False),
         sa.Column("checkpoint", sa.String(length=32), nullable=True),
@@ -234,19 +226,15 @@ def upgrade() -> None:
         sa.Column("terminal_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["agent_runs.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["host_id"], ["agent_hosts.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["integration_id"], ["agent_host_integrations.id"], ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(
             ["runtime_profile_id"],
             ["agent_runtime_profiles.id"],
-            ondelete="RESTRICT",
+            ondelete="SET NULL",
         ),
         sa.PrimaryKeyConstraint("run_id"),
     )
@@ -289,9 +277,7 @@ def upgrade() -> None:
         sa.Column("payload_digest", sa.String(length=64), nullable=False),
         sa.Column("integration_key", sa.String(length=128), nullable=False),
         sa.Column("adapter_version", sa.String(length=128), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["agent_runs.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "run_id",
@@ -301,9 +287,7 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("event_id", name="uq_agent_host_event_id"),
     )
-    op.create_index(
-        "ix_agent_host_events_run_id", "agent_host_events", ["run_id"]
-    )
+    op.create_index("ix_agent_host_events_run_id", "agent_host_events", ["run_id"])
     op.create_index(
         "ix_agent_host_event_consume",
         "agent_host_events",
@@ -316,13 +300,9 @@ def upgrade() -> None:
         sa.Column("host_id", UUID, nullable=False),
         sa.Column("nonce_hash", sa.String(length=64), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["host_id"], ["agent_hosts.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "host_id", "nonce_hash", name="uq_agent_host_auth_nonce"
-        ),
+        sa.UniqueConstraint("host_id", "nonce_hash", name="uq_agent_host_auth_nonce"),
     )
     op.create_index(
         "ix_agent_host_auth_nonces_host_id",
@@ -345,12 +325,8 @@ def upgrade() -> None:
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_resolved_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["host_id"], ["agent_hosts.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["run_id"], ["agent_runs.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("run_id", name="uq_agent_host_mcp_route_run"),
     )

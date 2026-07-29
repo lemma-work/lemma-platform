@@ -35,10 +35,19 @@ impl AcpCallbacks for CapturingCallbacks {
 }
 
 fn python() -> PathBuf {
+    let executable_names = if cfg!(windows) {
+        &["python.exe", "python3.exe"][..]
+    } else {
+        &["python3", "python"][..]
+    };
     std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .map(|path| path.join("python3"))
-        .find(|path| path.is_file())
-        .expect("python3 is required for the ACP process integration test")
+        .find_map(|path| {
+            executable_names
+                .iter()
+                .map(|name| path.join(name))
+                .find(|candidate| candidate.is_file())
+        })
+        .expect("Python is required for the ACP process integration test")
 }
 
 fn fake_adapter(directory: &TempDir) -> (ResolvedAdapter, PathBuf) {

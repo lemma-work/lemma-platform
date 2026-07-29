@@ -1,6 +1,6 @@
 //! Pinned ACP adapter manifest and local integration discovery.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -169,13 +169,18 @@ impl ResolvedAdapter {
     #[must_use]
     pub fn environment(&self) -> BTreeMap<String, String> {
         let mut environment = BTreeMap::new();
-        if let Some(parent) = self.upstream_command.parent() {
-            let inherited = env::var_os("PATH").unwrap_or_default();
-            let mut paths = vec![parent.to_path_buf()];
-            paths.extend(env::split_paths(&inherited));
-            if let Ok(joined) = env::join_paths(paths) {
-                environment.insert("PATH".to_owned(), joined.to_string_lossy().into_owned());
+        let mut paths = Vec::new();
+        let mut seen = HashSet::new();
+        for executable in [&self.command, &self.upstream_command] {
+            if let Some(parent) = executable.parent() {
+                push_unique(&mut paths, &mut seen, parent.to_path_buf());
             }
+        }
+        for path in executable_search_paths() {
+            push_unique(&mut paths, &mut seen, path);
+        }
+        if let Ok(joined) = env::join_paths(paths) {
+            environment.insert("PATH".to_owned(), joined.to_string_lossy().into_owned());
         }
         environment
     }
@@ -303,8 +308,14 @@ fn resolve_executable(command: &str) -> Option<PathBuf> {
     if candidate.components().count() > 1 {
         return candidate.is_file().then(|| candidate.to_path_buf());
     }
-    let path = env::var_os("PATH")?;
-    for directory in env::split_paths(&path) {
+    resolve_executable_in(command, executable_search_paths())
+}
+
+fn resolve_executable_in(
+    command: &str,
+    search_paths: impl IntoIterator<Item = PathBuf>,
+) -> Option<PathBuf> {
+    for directory in search_paths {
         let candidate = directory.join(command);
         if candidate.is_file() {
             return Some(candidate);
@@ -318,6 +329,74 @@ fn resolve_executable(command: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn executable_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    for variable in ["LEMMA_AGENT_HOST_PATH", "PATH"] {
+        if let Some(value) = env::var_os(variable) {
+            for path in env::split_paths(&value) {
+                push_unique(&mut paths, &mut seen, path);
+            }
+        }
+    }
+
+    let home = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    if let Some(home) = home.as_ref() {
+        for relative in [
+            ".local/bin",
+            ".cargo/bin",
+            ".volta/bin",
+            ".asdf/shims",
+            ".local/share/mise/shims",
+            ".local/share/pnpm",
+            ".bun/bin",
+            ".npm-global/bin",
+        ] {
+            push_unique(&mut paths, &mut seen, home.join(relative));
+        }
+        #[cfg(target_os = "macos")]
+        push_unique(&mut paths, &mut seen, home.join("Library/pnpm"));
+        for path in nvm_node_bins(home) {
+            push_unique(&mut paths, &mut seen, path);
+        }
+        #[cfg(windows)]
+        push_unique(&mut paths, &mut seen, home.join("AppData/Roaming/npm"));
+    }
+
+    #[cfg(unix)]
+    for path in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+        push_unique(&mut paths, &mut seen, PathBuf::from(path));
+    }
+    paths
+}
+
+fn nvm_node_bins(home: &Path) -> Vec<PathBuf> {
+    let root = home.join(".nvm/versions/node");
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut versions = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let version = entry.file_name();
+            let version = version.to_str()?.trim_start_matches('v');
+            semver::Version::parse(version)
+                .ok()
+                .map(|version| (version, entry.path().join("bin")))
+        })
+        .collect::<Vec<_>>();
+    versions.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+    versions.into_iter().map(|(_, path)| path).collect()
+}
+
+fn push_unique(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: PathBuf) {
+    if seen.insert(path.clone()) {
+        paths.push(path);
+    }
 }
 
 #[cfg(test)]
@@ -350,5 +429,28 @@ mod tests {
         assert!(version_is_at_least("2026.07.09-a3815c0", "2026.3.11"));
         assert!(!version_is_at_least("opencode 1.16.9", "1.17.0"));
         assert!(!version_is_at_least("development build", "1.0.0"));
+    }
+
+    #[test]
+    fn executable_resolution_uses_explicit_search_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("codex");
+        std::fs::write(&executable, b"fixture").unwrap();
+        assert_eq!(
+            resolve_executable_in("codex", [root.path().to_path_buf()]),
+            Some(executable)
+        );
+    }
+
+    #[test]
+    fn nvm_search_prefers_the_newest_installed_node() {
+        let root = tempfile::tempdir().unwrap();
+        for version in ["v18.20.1", "v22.14.0", "not-a-version"] {
+            std::fs::create_dir_all(root.path().join(".nvm/versions/node").join(version)).unwrap();
+        }
+        let paths = nvm_node_bins(root.path());
+        assert!(paths[0].ends_with("v22.14.0/bin"));
+        assert!(paths[1].ends_with("v18.20.1/bin"));
+        assert_eq!(paths.len(), 2);
     }
 }

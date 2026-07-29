@@ -49,6 +49,11 @@ gate. Local upstream versions are probed and minimum supported versions are
 enforced. Models and other session configuration are discovered from ACP at
 runtime, so a newly available model does not require a Lemma backend release.
 
+Headless services also search the standard Homebrew, local-bin, Volta, asdf,
+mise, pnpm, Bun, Cargo, and installed NVM Node locations. Set
+`LEMMA_AGENT_HOST_PATH` to an OS path list when an agent or adapter is installed
+somewhere else.
+
 ## Security properties
 
 - A distinct Ed25519 device identity is generated for every Lemma target and

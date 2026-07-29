@@ -26,8 +26,10 @@ from app.modules.agent.infrastructure.harnesses.daemon import (
     DEFAULT_RECONNECT_GRACE_SECONDS,
     DaemonHarness,
     _mcp_payload,
-    _missing_tool_return_events,
     _run_start_payload,
+)
+from app.modules.agent.infrastructure.harnesses.tool_returns import (
+    missing_tool_return_events,
 )
 
 
@@ -64,7 +66,10 @@ def test_daemon_harness_default_event_timeout_is_two_hours():
     [
         (AgentEventType.COMPLETED, "Daemon run completed without a tool return."),
         (AgentEventType.ERROR, "Daemon run failed before the tool returned a result."),
-        (AgentEventType.STOPPED, "Daemon run stopped before the tool returned a result."),
+        (
+            AgentEventType.STOPPED,
+            "Daemon run stopped before the tool returned a result.",
+        ),
     ],
 )
 def test_missing_tool_returns_are_closed_for_every_terminal_status(
@@ -73,7 +78,7 @@ def test_missing_tool_returns_are_closed_for_every_terminal_status(
     run_id = uuid4()
     outstanding = {"call-1": "display_resource"}
 
-    events = _missing_tool_return_events(
+    events = missing_tool_return_events(
         outstanding_tool_calls=outstanding,
         terminal_event=AgentEvent(
             type=terminal_type,
@@ -115,9 +120,7 @@ async def test_daemon_harness_forwards_run_start_and_yields_events(
     async def _noop_publish(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(
-        agent_runtime_daemon_hub, "_publish_run_event", _noop_publish
-    )
+    monkeypatch.setattr(agent_runtime_daemon_hub, "_publish_run_event", _noop_publish)
 
     async def daemon_tool(ctx: RunContext[AgentContext]) -> dict[str, str]:
         return {"agent_name": ctx.deps.agent_name or ""}
@@ -215,7 +218,10 @@ async def test_daemon_harness_forwards_run_start_and_yields_events(
         "cwd": f"/workspace/conversations/{conversation.id}",
     }
     assert start_payload["mcp"]["token"] == "workspace-token"
-    assert start_payload["mcp"]["authorization"] == f"Bearer {start_payload['mcp']['token']}"
+    assert (
+        start_payload["mcp"]["authorization"]
+        == f"Bearer {start_payload['mcp']['token']}"
+    )
     assert start_payload["mcp"]["tool_names"] == ["lemma_daemon_tool"]
     assert "provider_configs" not in start_payload["mcp"]
     assert start_payload["prompt"]["structured"] is False
@@ -330,9 +336,7 @@ async def test_daemon_mcp_payload_points_to_conversation_fastmcp_server(
     async def _noop_publish(*_args, **_kwargs):
         return None
 
-    monkeypatch.setattr(
-        agent_runtime_daemon_hub, "_publish_run_event", _noop_publish
-    )
+    monkeypatch.setattr(agent_runtime_daemon_hub, "_publish_run_event", _noop_publish)
 
     async def daemon_tool(ctx: RunContext[AgentContext]) -> dict[str, str]:
         return {"agent_name": ctx.deps.agent_name or ""}
@@ -363,7 +367,9 @@ async def test_daemon_mcp_payload_points_to_conversation_fastmcp_server(
     assert payload["server_name"] == "lemma_tools"
     assert payload["run_id"] == str(agent_run_id)
     assert payload["conversation_id"] == str(conversation_id)
-    assert payload["url"].endswith(f"/agent-runtime/conversations/{conversation_id}/mcp")
+    assert payload["url"].endswith(
+        f"/agent-runtime/conversations/{conversation_id}/mcp"
+    )
     assert payload["token"] == "workspace-token"
     assert payload["authorization"] == f"Bearer {payload['token']}"
     assert payload["tool_names"] == ["lemma_daemon_tool"]
@@ -687,7 +693,9 @@ async def test_hub_register_supersedes_connection_orphans_old_runs():
     old_websocket = _FakeWebSocket()
     new_websocket = _FakeWebSocket()
 
-    await hub.register(daemon_id=daemon_id, user_id=daemon_user_id, websocket=old_websocket)  # type: ignore[arg-type]
+    await hub.register(
+        daemon_id=daemon_id, user_id=daemon_user_id, websocket=old_websocket
+    )  # type: ignore[arg-type]
     queue = await hub.start_run(
         daemon_id=daemon_id,
         user_id=daemon_user_id,
@@ -699,7 +707,9 @@ async def test_hub_register_supersedes_connection_orphans_old_runs():
     # daemon reconnected before the backend noticed the old socket was dead) --
     # the old connection's runs must be orphaned exactly like a clean
     # unregister() would, not silently dropped.
-    await hub.register(daemon_id=daemon_id, user_id=daemon_user_id, websocket=new_websocket)  # type: ignore[arg-type]
+    await hub.register(
+        daemon_id=daemon_id, user_id=daemon_user_id, websocket=new_websocket
+    )  # type: ignore[arg-type]
 
     event = queue.get_nowait()
     assert event.type == AgentEventType.RECONNECTING
@@ -753,7 +763,9 @@ async def test_hub_reattach_runs_relinks_orphaned_queue_to_new_connection():
     old_websocket = _FakeWebSocket()
     new_websocket = _FakeWebSocket()
 
-    await hub.register(daemon_id=daemon_id, user_id=daemon_user_id, websocket=old_websocket)  # type: ignore[arg-type]
+    await hub.register(
+        daemon_id=daemon_id, user_id=daemon_user_id, websocket=old_websocket
+    )  # type: ignore[arg-type]
     queue = await hub.start_run(
         daemon_id=daemon_id,
         user_id=daemon_user_id,
@@ -763,7 +775,9 @@ async def test_hub_reattach_runs_relinks_orphaned_queue_to_new_connection():
     await hub.unregister(daemon_id=daemon_id, user_id=daemon_user_id)
     assert agent_run_id in hub._orphaned_run_queues
 
-    await hub.register(daemon_id=daemon_id, user_id=daemon_user_id, websocket=new_websocket)  # type: ignore[arg-type]
+    await hub.register(
+        daemon_id=daemon_id, user_id=daemon_user_id, websocket=new_websocket
+    )  # type: ignore[arg-type]
     await hub.reattach_runs(
         daemon_id=daemon_id, user_id=daemon_user_id, agent_run_ids=[agent_run_id]
     )
@@ -789,7 +803,9 @@ async def test_hub_reattach_runs_is_noop_for_unknown_run_id():
 
     # No matching orphaned queue exists -- must not raise, must not create a
     # spurious run_queues entry.
-    await hub.reattach_runs(daemon_id=daemon_id, user_id=daemon_user_id, agent_run_ids=[uuid4()])
+    await hub.reattach_runs(
+        daemon_id=daemon_id, user_id=daemon_user_id, agent_run_ids=[uuid4()]
+    )
 
     connection = hub._connections[daemon_id]
     assert connection.run_queues == {}
@@ -802,9 +818,7 @@ async def test_hub_reattach_runs_is_noop_when_daemon_not_connected():
     hub = AgentRuntimeDaemonHub()
     # No register() call at all -- reattach_runs must handle a daemon that
     # isn't (or is no longer) connected without raising.
-    await hub.reattach_runs(
-        daemon_id=uuid4(), user_id=uuid4(), agent_run_ids=[uuid4()]
-    )
+    await hub.reattach_runs(daemon_id=uuid4(), user_id=uuid4(), agent_run_ids=[uuid4()])
 
 
 @pytest.mark.asyncio
@@ -817,12 +831,18 @@ async def test_start_run_for_already_active_run_returns_existing_queue_without_r
 
     await hub.register(daemon_id=daemon_id, user_id=daemon_user_id, websocket=websocket)  # type: ignore[arg-type]
     first_queue = await hub.start_run(
-        daemon_id=daemon_id, user_id=daemon_user_id, agent_run_id=agent_run_id, payload={}
+        daemon_id=daemon_id,
+        user_id=daemon_user_id,
+        agent_run_id=agent_run_id,
+        payload={},
     )
     assert len(websocket.sent) == 1
 
     second_queue = await hub.start_run(
-        daemon_id=daemon_id, user_id=daemon_user_id, agent_run_id=agent_run_id, payload={}
+        daemon_id=daemon_id,
+        user_id=daemon_user_id,
+        agent_run_id=agent_run_id,
+        payload={},
     )
 
     assert second_queue is first_queue
@@ -850,7 +870,10 @@ async def test_start_run_raises_when_daemon_at_capacity(monkeypatch):
 
     with pytest.raises(RuntimeError, match=r"at capacity \(4/4"):
         await hub.start_run(
-            daemon_id=daemon_id, user_id=daemon_user_id, agent_run_id=uuid4(), payload={}
+            daemon_id=daemon_id,
+            user_id=daemon_user_id,
+            agent_run_id=uuid4(),
+            payload={},
         )
 
     # The capacity check short-circuits before any dispatch attempt.

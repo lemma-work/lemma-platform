@@ -22,13 +22,19 @@ from app.modules.agent.domain.agent_host import (
     AgentHostEventBatch,
     AgentHostEventType,
     AgentHostRunSpec,
+    AgentHostRunState,
     HostHello,
 )
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostDispatchRepository,
+)
+from app.modules.agent.infrastructure.agent_host_management_repository import (
     AgentHostRepository,
 )
-from app.modules.agent.infrastructure.models import (
+from app.modules.agent.infrastructure.agent_host_repository_common import (
+    AgentHostProtocolViolation,
+)
+from app.modules.agent.infrastructure.runtime_models import (
     AgentHostMcpRouteModel,
     AgentHostRunLeaseModel,
 )
@@ -230,6 +236,54 @@ async def _create_run(
     return run.id, conversation_id
 
 
+async def _enqueue_timeout_run(
+    *,
+    authenticated_client,
+    fixed_test_org,
+    db_session,
+    profile_id: str,
+    host_id: UUID,
+    integration_id: UUID,
+    now: datetime,
+) -> tuple[AgentHostDispatchRepository, UUID]:
+    run_id, conversation_id = await _create_run(
+        authenticated_client=authenticated_client,
+        fixed_test_org=fixed_test_org,
+        db_session=db_session,
+        profile_id=profile_id,
+    )
+    encrypted_mcp = await get_secret_cipher().encrypt_json_async(
+        {
+            "url": "https://lemma.test/mcp",
+            "authorization": "Bearer timeout-test",
+        }
+    )
+    assert encrypted_mcp is not None
+    dispatch = AgentHostDispatchRepository(SqlAlchemyUnitOfWork(db_session))
+    await dispatch.enqueue_run(
+        host_id=host_id,
+        integration_id=integration_id,
+        runtime_profile_id=UUID(profile_id),
+        run_spec=AgentHostRunSpec(
+            agent_run_id=run_id,
+            conversation_id=conversation_id,
+            integration_id=integration_id,
+            profile_revision="codex-config-revision-2",
+            config_selections={"model": "gpt-test"},
+            system_prompt="Timeout test",
+            prompt=[{"type": "text", "text": "Do not duplicate"}],
+            context={},
+            mcp_route_id=str(uuid4()),
+            run_deadline=now + timedelta(minutes=10),
+        ),
+        encrypted_mcp_payload=encrypted_mcp,
+        now=now,
+        command_ttl_seconds=1,
+    )
+    await db_session.commit()
+    return dispatch, run_id
+
+
 async def test_agent_host_v2_is_durable_fenced_and_idempotent(
     authenticated_client,
     fixed_test_user,
@@ -339,9 +393,7 @@ async def test_agent_host_v2_is_durable_fenced_and_idempotent(
                         }
                     ],
                     "fetched_at": refreshed_at.isoformat(),
-                    "stale_after": (
-                        refreshed_at + timedelta(hours=1)
-                    ).isoformat(),
+                    "stale_after": (refreshed_at + timedelta(hours=1)).isoformat(),
                 }
             ]
         },
@@ -430,9 +482,7 @@ async def test_agent_host_v2_is_durable_fenced_and_idempotent(
     assert "secret-workspace-capability" not in str(command["payload"])
     stored_route = (
         await db_session.execute(
-            select(AgentHostMcpRouteModel).where(
-                AgentHostMcpRouteModel.id == route_id
-            )
+            select(AgentHostMcpRouteModel).where(AgentHostMcpRouteModel.id == route_id)
         )
     ).scalar_one()
     assert "secret-workspace-capability" not in str(stored_route.encrypted_payload)
@@ -538,9 +588,7 @@ async def test_agent_host_v2_is_durable_fenced_and_idempotent(
     assert duplicate.status_code == 200, duplicate.text
     assert duplicate.json()["acked_through"] == 1
 
-    gap_event = first_event.model_copy(
-        update={"sequence": 3, "event_id": uuid4()}
-    )
+    gap_event = first_event.model_copy(update={"sequence": 3, "event_id": uuid4()})
     gap = await authenticated_client.post(
         "/agent-host/v2/events:append",
         headers=device_headers,
@@ -548,6 +596,25 @@ async def test_agent_host_v2_is_durable_fenced_and_idempotent(
     )
     assert gap.status_code == 409, gap.text
     assert "event sequence gap" in gap.text
+
+    mixed_run_event = first_event.model_copy(
+        update={
+            "run_id": uuid4(),
+            "sequence": 2,
+            "event_id": uuid4(),
+        }
+    )
+    with pytest.raises(AgentHostProtocolViolation, match="multiple run leases"):
+        await dispatch.append_events(
+            host_id=host_id,
+            batch=AgentHostEventBatch.model_construct(
+                events=[
+                    first_event.model_copy(update={"sequence": 2, "event_id": uuid4()}),
+                    mixed_run_event,
+                ]
+            ),
+        )
+    await db_session.rollback()
 
     terminal_event = first_event.model_copy(
         update={
@@ -588,6 +655,23 @@ async def test_agent_host_v2_is_durable_fenced_and_idempotent(
     )
     assert terminal_checkpoint.status_code == 200, terminal_checkpoint.text
 
+    terminal_replay = await authenticated_client.post(
+        "/agent-host/v2/events:append",
+        headers=device_headers,
+        json=AgentHostEventBatch(events=[terminal_event]).model_dump(mode="json"),
+    )
+    assert terminal_replay.status_code == 200, terminal_replay.text
+    assert terminal_replay.json()["acked_through"] == 2
+
+    after_terminal = first_event.model_copy(update={"sequence": 3, "event_id": uuid4()})
+    after_terminal_append = await authenticated_client.post(
+        "/agent-host/v2/events:append",
+        headers=device_headers,
+        json=AgentHostEventBatch(events=[after_terminal]).model_dump(mode="json"),
+    )
+    assert after_terminal_append.status_code == 409, after_terminal_append.text
+    assert "terminal run cannot accept events" in after_terminal_append.text
+
     stale_event = first_event.model_copy(
         update={
             "lease_epoch": 2,
@@ -617,6 +701,49 @@ async def test_agent_host_v2_is_durable_fenced_and_idempotent(
         (2, "terminal"),
     ]
     assert fixed_test_user["id"] == profile_response.json()["user_id"]
+
+    queued_dispatch, queued_run_id = await _enqueue_timeout_run(
+        authenticated_client=authenticated_client,
+        fixed_test_org=fixed_test_org,
+        db_session=db_session,
+        profile_id=profile_id,
+        host_id=host_id,
+        integration_id=integration_id,
+        now=now,
+    )
+    queued_timeout = await queued_dispatch.expire_unaccepted_run(
+        run_id=queued_run_id,
+        now=now + timedelta(seconds=2),
+    )
+    assert queued_timeout is AgentHostRunState.FAILED
+    await db_session.commit()
+
+    delivered_dispatch, delivered_run_id = await _enqueue_timeout_run(
+        authenticated_client=authenticated_client,
+        fixed_test_org=fixed_test_org,
+        db_session=db_session,
+        profile_id=profile_id,
+        host_id=host_id,
+        integration_id=integration_id,
+        now=now,
+    )
+    delivered_commands = await delivered_dispatch.poll_commands(
+        host_id=host_id,
+        limit=16,
+        acknowledged_command_ids=[],
+        checkpoints=[],
+        available_run_slots=1,
+        now=now,
+        lease_seconds=1,
+    )
+    assert len(delivered_commands) == 1
+    await db_session.commit()
+    delivered_timeout = await delivered_dispatch.expire_unaccepted_run(
+        run_id=delivered_run_id,
+        now=now + timedelta(seconds=2),
+    )
+    assert delivered_timeout is AgentHostRunState.DISPATCH_UNKNOWN
+    await db_session.commit()
 
     revoked = await authenticated_client.post(
         "/agent-host/v2/revoke",

@@ -23,6 +23,7 @@ POSTGRES_USER = "test"
 POSTGRES_PASSWORD = "test"
 POSTGRES_DB = "test"
 DOCKER_LABEL = "lemma.e2e=true"
+POSTGRES_NETWORK_ALIAS = "lemma-e2e-postgres"
 
 
 @dataclass
@@ -232,7 +233,9 @@ def get_postgres_container(
         .with_env("POSTGRES_DB", POSTGRES_DB)
     )
     if network:
-        container.with_network(network)
+        container.with_network(network).with_run_args(
+            "--network-alias", POSTGRES_NETWORK_ALIAS
+        )
 
     with container as postgres:
         _wait_for_postgres(postgres)
@@ -252,11 +255,18 @@ def get_redis_container() -> Generator[LemmaDockerContainer, None, None]:
 
 
 @contextmanager
-def get_supertokens_container() -> Generator[LemmaDockerContainer, None, None]:
-    """
-    Starts a SuperTokens container with in-memory SQLite (default).
-    """
-    container = LemmaDockerContainer(SUPERTOKENS_IMAGE, 3567)
+def get_supertokens_container(
+    network: LemmaDockerNetwork,
+) -> Generator[LemmaDockerContainer, None, None]:
+    """Start SuperTokens against the shared E2E PostgreSQL container."""
+    container = (
+        LemmaDockerContainer(SUPERTOKENS_IMAGE, 3567)
+        .with_network(network)
+        .with_env(
+            "POSTGRESQL_CONNECTION_URI",
+            "postgresql://test:test@lemma-e2e-postgres:5432/supertokens",
+        )
+    )
 
     with container as st:
         # Wait for SuperTokens to be ready by polling the health endpoint

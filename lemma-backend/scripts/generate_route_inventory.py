@@ -37,6 +37,7 @@ TAG_MODULES = {
     "Workspace Apps": "workspace",
     "agent-tools": "agent",
     "agent_conversations": "agent",
+    "agent_host": "agent",
     "agent_runtime": "agent",
     "agents": "agent",
     "files": "datastore",
@@ -110,7 +111,10 @@ def main() -> int:
     args = parser.parse_args()
     content = render(json.loads(args.spec.read_text(encoding="utf-8")))
     if args.check:
-        if not args.output.exists() or args.output.read_text(encoding="utf-8") != content:
+        if (
+            not args.output.exists()
+            or args.output.read_text(encoding="utf-8") != content
+        ):
             print(f"Route inventory is stale: {args.output}")
             return 1
         print(f"Route inventory is current: {args.output}")

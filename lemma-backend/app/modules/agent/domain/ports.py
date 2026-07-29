@@ -30,7 +30,7 @@ class Harness(Protocol):
 
     kind: HarnessKind
 
-    async def run(
+    def run(
         self,
         *,
         agent: Agent,

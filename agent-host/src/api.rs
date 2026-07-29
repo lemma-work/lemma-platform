@@ -55,6 +55,19 @@ pub enum ApiError {
     Protocol(u16),
 }
 
+impl ApiError {
+    #[must_use]
+    pub fn is_unauthorized(&self) -> bool {
+        matches!(
+            self,
+            Self::Status {
+                status: StatusCode::UNAUTHORIZED,
+                ..
+            }
+        )
+    }
+}
+
 impl TargetClient {
     pub fn new(
         target: TargetConfig,

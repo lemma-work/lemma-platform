@@ -10,12 +10,12 @@ use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio};
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
-use crate::adapters::AdapterManifest;
+use crate::adapters::{AdapterManifest, ResolvedAdapter};
 use crate::api::{PublishedIntegration, TargetClient};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::crypto::SecretVault;
@@ -283,7 +283,7 @@ impl TargetWorker {
                         anyhow::bail!("target requires a newer Agent Host protocol");
                     }
                     for command in response.commands {
-                        if let Err(error) = self.handle_command(command).await {
+                        if let Err(error) = self.handle_command(&command) {
                             tracing::error!(
                                 target = %self.target.name,
                                 %error,
@@ -297,6 +297,12 @@ impl TargetWorker {
                     }
                 }
                 Err(error) => {
+                    if error.is_unauthorized() {
+                        self.cancel_all(
+                            "Lemma rejected this Agent Host; the target may have been revoked",
+                        )?;
+                        return Err(error.into());
+                    }
                     self.note_offline(&error.to_string())?;
                     self.wait_retry(retry).await;
                     retry = (retry * 2).min(RETRY_MAX);
@@ -323,44 +329,44 @@ impl TargetWorker {
         Ok(())
     }
 
-    async fn handle_command(&mut self, command: Command) -> anyhow::Result<()> {
+    fn handle_command(&mut self, command: &Command) -> anyhow::Result<()> {
         anyhow::ensure!(command.expires_at >= Utc::now(), "command is expired");
         command.verify_payload()?;
         match command.kind {
-            CommandKind::StartRun => self.handle_start(command).await,
-            CommandKind::CancelRun => self.handle_cancel(&command),
+            CommandKind::StartRun => self.handle_start(command),
+            CommandKind::CancelRun => self.handle_cancel(command),
             CommandKind::Drain => {
                 self.journal
-                    .record_simple_command(self.target.target_id, &command)?;
+                    .record_simple_command(self.target.target_id, command)?;
                 self.draining = true;
                 Ok(())
             }
             CommandKind::Resume => {
                 self.journal
-                    .record_simple_command(self.target.target_id, &command)?;
+                    .record_simple_command(self.target.target_id, command)?;
                 self.draining = false;
                 Ok(())
             }
             CommandKind::RefreshIntegration => {
                 self.journal
-                    .record_simple_command(self.target.target_id, &command)?;
+                    .record_simple_command(self.target.target_id, command)?;
                 self.refresh_due = std::time::Instant::now();
                 Ok(())
             }
             CommandKind::CloseSession => {
                 self.journal
-                    .record_simple_command(self.target.target_id, &command)?;
+                    .record_simple_command(self.target.target_id, command)?;
                 Ok(())
             }
             CommandKind::RotateDeviceKey => {
                 self.journal
-                    .record_simple_command(self.target.target_id, &command)?;
+                    .record_simple_command(self.target.target_id, command)?;
                 anyhow::bail!("device-key rotation requires a new user-authorized pairing")
             }
         }
     }
 
-    async fn handle_start(&mut self, command: Command) -> anyhow::Result<()> {
+    fn handle_start(&mut self, command: &Command) -> anyhow::Result<()> {
         anyhow::ensure!(!self.draining, "Agent Host is draining");
         let spec: RunSpec = serde_json::from_value(command.payload.clone())?;
         let published = self
@@ -372,9 +378,31 @@ impl TargetWorker {
             published.config_revision == spec.profile_revision,
             "integration configuration revision changed"
         );
+        if self.active_runs.contains_key(&spec.agent_run_id) {
+            let outcome = self.journal.accept_start(
+                self.target.target_id,
+                command,
+                &spec,
+                &published.integration_key,
+                &published.adapter_version,
+            )?;
+            anyhow::ensure!(
+                outcome == AcceptOutcome::Duplicate,
+                "active run did not have a durable command receipt"
+            );
+            return Ok(());
+        }
+        // Resolve the adapter and reserve real process capacity before writing
+        // ACCEPTED. Once ACCEPTED is durable, Lemma must not start a cloud
+        // fallback, so waiting on the semaphore after that point can duplicate
+        // provider work.
+        let adapter = self.manifest.resolve(&published.integration_key)?;
+        let permit = Arc::clone(&self.global_capacity)
+            .try_acquire_owned()
+            .map_err(|_| anyhow::anyhow!("Agent Host capacity changed; command will be retried"))?;
         let outcome = self.journal.accept_start(
             self.target.target_id,
-            &command,
+            command,
             &spec,
             &published.integration_key,
             &published.adapter_version,
@@ -382,16 +410,11 @@ impl TargetWorker {
         if outcome == AcceptOutcome::Duplicate {
             return Ok(());
         }
-        self.spawn_run(spec, published).await
+        self.spawn_run(spec, adapter, permit);
+        Ok(())
     }
 
-    async fn spawn_run(
-        &mut self,
-        spec: RunSpec,
-        published: PublishedIntegration,
-    ) -> anyhow::Result<()> {
-        let adapter = self.manifest.resolve(&published.integration_key)?;
-        let permit = Arc::clone(&self.global_capacity).acquire_owned().await?;
+    fn spawn_run(&mut self, spec: RunSpec, adapter: ResolvedAdapter, permit: OwnedSemaphorePermit) {
         let target_id = self.target.target_id;
         let client = self.client.clone();
         let journal = self.journal.clone();
@@ -518,7 +541,6 @@ impl TargetWorker {
             Ok(())
         });
         self.active_runs.insert(run_id, handle);
-        Ok(())
     }
 
     fn handle_cancel(&mut self, command: &Command) -> anyhow::Result<()> {

@@ -7,7 +7,7 @@ safe across API and host restarts.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -24,361 +24,36 @@ from app.modules.agent.domain.agent_host import (
     AgentHostEventAck,
     AgentHostEventBatch,
     AgentHostIntegrationHealth,
-    AgentHostIntegrationSnapshot,
     AgentHostRunCheckpoint,
     AgentHostRunSpec,
     AgentHostRunState,
-    AgentHostStatus,
-    HostHello,
     canonical_json_sha256,
     checkpoint_advances,
     validate_agent_host_selections,
 )
-from app.modules.agent.infrastructure.models import (
-    AgentHostAuthNonceModel,
+from app.modules.agent.infrastructure.agent_host_management_repository import (
+    AgentHostRepository,
+)
+from app.modules.agent.infrastructure.agent_host_recovery_repository import (
+    AgentHostRecoveryRepositoryMixin,
+)
+from app.modules.agent.infrastructure.agent_host_repository_common import (
+    DEFAULT_COMMAND_TTL_SECONDS,
+    DEFAULT_RUN_LEASE_SECONDS,
+    AgentHostNotFound,
+    AgentHostProtocolViolation,
+    AgentHostRunConflict,
+    utcnow,
+)
+from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostEventModel,
-    AgentHostIntegrationModel,
     AgentHostMcpRouteModel,
-    AgentHostModel,
-    AgentHostPairingModel,
     AgentHostRunLeaseModel,
 )
 
 
-DEFAULT_PAIRING_TTL_SECONDS = 600
-DEFAULT_COMMAND_TTL_SECONDS = 300
-DEFAULT_RUN_LEASE_SECONDS = 90
-
-
-class AgentHostRepositoryError(RuntimeError):
-    """Base typed failure for the Agent Host persistence contract."""
-
-
-class AgentHostNotFound(AgentHostRepositoryError):
-    pass
-
-
-class AgentHostPairingRejected(AgentHostRepositoryError):
-    pass
-
-
-class AgentHostProtocolViolation(AgentHostRepositoryError):
-    pass
-
-
-class AgentHostRunConflict(AgentHostRepositoryError):
-    pass
-
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-class AgentHostRepository:
-    def __init__(self, uow: SqlAlchemyUnitOfWork):
-        self.uow = uow
-        self.session = uow.session
-
-    async def create_pairing(
-        self,
-        *,
-        pairing_id: UUID,
-        user_id: UUID,
-        organization_id: UUID | None,
-        code_hash: str,
-        display_name: str,
-        now: datetime | None = None,
-        ttl_seconds: int = DEFAULT_PAIRING_TTL_SECONDS,
-    ) -> AgentHostPairingModel:
-        timestamp = now or utcnow()
-        pairing = AgentHostPairingModel(
-            id=pairing_id,
-            user_id=user_id,
-            organization_id=organization_id,
-            code_hash=code_hash,
-            display_name=display_name.strip(),
-            expires_at=timestamp + timedelta(seconds=ttl_seconds),
-        )
-        self.session.add(pairing)
-        await self.session.flush()
-        return pairing
-
-    async def consume_pairing(
-        self,
-        *,
-        code_hash: str,
-        public_key: str,
-        public_key_fingerprint: str,
-        display_name: str,
-        hello: HostHello,
-        now: datetime | None = None,
-    ) -> AgentHostModel:
-        timestamp = now or utcnow()
-        pairing = (
-            await self.session.execute(
-                select(AgentHostPairingModel)
-                .where(AgentHostPairingModel.code_hash == code_hash)
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if (
-            pairing is None
-            or pairing.consumed_at is not None
-            or pairing.expires_at < timestamp
-        ):
-            raise AgentHostPairingRejected("pairing code is invalid, used, or expired")
-
-        selected_protocol: int | None
-        status: AgentHostStatus
-        try:
-            selected_protocol = hello.negotiate()
-            status = AgentHostStatus.OFFLINE
-        except ValueError:
-            selected_protocol = None
-            status = AgentHostStatus.UPGRADE_REQUIRED
-
-        host = (
-            await self.session.execute(
-                select(AgentHostModel)
-                .where(
-                    AgentHostModel.user_id == pairing.user_id,
-                    AgentHostModel.installation_id == hello.installation_id,
-                )
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if host is None:
-            host = AgentHostModel(
-                user_id=pairing.user_id,
-                organization_id=pairing.organization_id,
-                installation_id=hello.installation_id,
-                public_key=public_key,
-                public_key_fingerprint=public_key_fingerprint,
-                display_name=display_name.strip() or pairing.display_name,
-                status=status.value,
-                protocol_min=hello.protocol_min,
-                protocol_max=hello.protocol_max,
-                protocol_version=selected_protocol,
-                host_release=hello.host_release,
-                adapter_manifest_id=hello.adapter_manifest_id,
-                instance_id=hello.instance_id,
-                capacity={},
-                last_seen_at=None,
-                revoked_at=None,
-            )
-            self.session.add(host)
-        else:
-            host.organization_id = pairing.organization_id
-            host.public_key = public_key
-            host.public_key_fingerprint = public_key_fingerprint
-            host.display_name = display_name.strip() or pairing.display_name
-            host.status = status.value
-            host.protocol_min = hello.protocol_min
-            host.protocol_max = hello.protocol_max
-            host.protocol_version = selected_protocol
-            host.host_release = hello.host_release
-            host.adapter_manifest_id = hello.adapter_manifest_id
-            host.instance_id = hello.instance_id
-            host.revoked_at = None
-
-        pairing.consumed_at = timestamp
-        try:
-            await self.session.flush()
-        except IntegrityError as exc:
-            raise AgentHostPairingRejected(
-                "public key is already paired to another Agent Host"
-            ) from exc
-        return host
-
-    async def get(self, host_id: UUID, *, for_update: bool = False) -> AgentHostModel | None:
-        stmt = select(AgentHostModel).where(AgentHostModel.id == host_id)
-        if for_update:
-            stmt = stmt.with_for_update()
-        return (await self.session.execute(stmt)).scalar_one_or_none()
-
-    async def require(self, host_id: UUID, *, for_update: bool = False) -> AgentHostModel:
-        host = await self.get(host_id, for_update=for_update)
-        if host is None:
-            raise AgentHostNotFound("Agent Host was not found")
-        return host
-
-    async def get_for_user(
-        self,
-        *,
-        host_id: UUID,
-        user_id: UUID,
-    ) -> AgentHostModel | None:
-        return (
-            await self.session.execute(
-                select(AgentHostModel).where(
-                    AgentHostModel.id == host_id,
-                    AgentHostModel.user_id == user_id,
-                )
-            )
-        ).scalar_one_or_none()
-
-    async def list_for_user(self, *, user_id: UUID) -> list[AgentHostModel]:
-        result = await self.session.execute(
-            select(AgentHostModel)
-            .where(AgentHostModel.user_id == user_id)
-            .order_by(
-                AgentHostModel.revoked_at.asc().nullsfirst(),
-                AgentHostModel.last_seen_at.desc().nullslast(),
-                AgentHostModel.created_at.desc(),
-            )
-        )
-        return list(result.scalars())
-
-    async def record_nonce(
-        self,
-        *,
-        host_id: UUID,
-        nonce_hash: str,
-        expires_at: datetime,
-    ) -> None:
-        self.session.add(
-            AgentHostAuthNonceModel(
-                host_id=host_id,
-                nonce_hash=nonce_hash,
-                expires_at=expires_at,
-            )
-        )
-        try:
-            await self.session.flush()
-        except IntegrityError as exc:
-            raise AgentHostProtocolViolation("host nonce was already used") from exc
-
-    async def mark_seen(
-        self,
-        *,
-        host_id: UUID,
-        hello: HostHello,
-        capacity: dict,
-        now: datetime | None = None,
-    ) -> AgentHostModel:
-        timestamp = now or utcnow()
-        host = await self.require(host_id, for_update=True)
-        if host.revoked_at is not None:
-            host.status = AgentHostStatus.REVOKED.value
-            raise AgentHostProtocolViolation("Agent Host is revoked")
-        if host.installation_id != hello.installation_id:
-            raise AgentHostProtocolViolation("installation identity changed")
-        host.protocol_min = hello.protocol_min
-        host.protocol_max = hello.protocol_max
-        host.host_release = hello.host_release
-        host.adapter_manifest_id = hello.adapter_manifest_id
-        host.instance_id = hello.instance_id
-        host.capacity = capacity
-        host.last_seen_at = timestamp
-        try:
-            host.protocol_version = hello.negotiate()
-            explicitly_draining = (
-                capacity.get("available_runs") == 0
-                and capacity.get("active_runs", 0) < capacity.get("max_runs", 0)
-            )
-            if explicitly_draining:
-                host.status = AgentHostStatus.DRAINING.value
-            elif host.status != AgentHostStatus.DEGRADED.value:
-                host.status = AgentHostStatus.ONLINE.value
-        except ValueError:
-            host.protocol_version = None
-            host.status = AgentHostStatus.UPGRADE_REQUIRED.value
-        await self.session.flush()
-        return host
-
-    async def revoke(
-        self,
-        *,
-        host_id: UUID,
-        user_id: UUID,
-        now: datetime | None = None,
-    ) -> AgentHostModel:
-        host = await self.get_for_user(host_id=host_id, user_id=user_id)
-        if host is None:
-            raise AgentHostNotFound("Agent Host was not found")
-        host.revoked_at = now or utcnow()
-        host.status = AgentHostStatus.REVOKED.value
-        await self.session.flush()
-        return host
-
-    async def publish_integration(
-        self,
-        *,
-        host_id: UUID,
-        snapshot: AgentHostIntegrationSnapshot,
-    ) -> AgentHostIntegrationModel:
-        host = await self.require(host_id)
-        if host.revoked_at is not None:
-            raise AgentHostProtocolViolation("Agent Host is revoked")
-        integration = (
-            await self.session.execute(
-                select(AgentHostIntegrationModel)
-                .where(
-                    AgentHostIntegrationModel.host_id == host_id,
-                    AgentHostIntegrationModel.integration_key
-                    == snapshot.integration_key,
-                )
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        values = {
-            "display_name": snapshot.display_name,
-            "adapter_protocol": snapshot.adapter_protocol.value,
-            "adapter_version": snapshot.adapter_version,
-            "upstream_version": snapshot.upstream_version,
-            "auth_state": snapshot.auth_state,
-            "health": snapshot.health.value,
-            "capabilities": snapshot.capabilities.model_dump(mode="json"),
-            "config_revision": snapshot.config_revision,
-            "config_options": [
-                option.model_dump(mode="json") for option in snapshot.config_options
-            ],
-            "fetched_at": snapshot.fetched_at,
-            "stale_after": snapshot.stale_after,
-            "stale_reason": snapshot.stale_reason,
-            "integration_metadata": snapshot.metadata,
-        }
-        if integration is None:
-            integration = AgentHostIntegrationModel(
-                host_id=host_id,
-                integration_key=snapshot.integration_key,
-                **values,
-            )
-            self.session.add(integration)
-        else:
-            for key, value in values.items():
-                setattr(integration, key, value)
-        await self.session.flush()
-        return integration
-
-    async def get_integration(
-        self,
-        *,
-        integration_id: UUID,
-        for_update: bool = False,
-    ) -> AgentHostIntegrationModel | None:
-        stmt = select(AgentHostIntegrationModel).where(
-            AgentHostIntegrationModel.id == integration_id
-        )
-        if for_update:
-            stmt = stmt.with_for_update()
-        return (await self.session.execute(stmt)).scalar_one_or_none()
-
-    async def list_integrations(
-        self,
-        *,
-        host_id: UUID,
-    ) -> list[AgentHostIntegrationModel]:
-        result = await self.session.execute(
-            select(AgentHostIntegrationModel)
-            .where(AgentHostIntegrationModel.host_id == host_id)
-            .order_by(AgentHostIntegrationModel.display_name.asc())
-        )
-        return list(result.scalars())
-
-
-class AgentHostDispatchRepository:
+class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
     def __init__(self, uow: SqlAlchemyUnitOfWork):
         self.uow = uow
         self.session = uow.session
@@ -408,8 +83,7 @@ class AgentHostDispatchRepository:
                         AgentHostCommandModel.run_id == run_spec.agent_run_id,
                         AgentHostCommandModel.kind
                         == AgentHostCommandKind.START_RUN.value,
-                        AgentHostCommandModel.lease_epoch
-                        == existing_lease.lease_epoch,
+                        AgentHostCommandModel.lease_epoch == existing_lease.lease_epoch,
                     )
                     .order_by(AgentHostCommandModel.created_at.desc())
                     .limit(1)
@@ -426,7 +100,11 @@ class AgentHostDispatchRepository:
                 )
             return existing
 
-        integration = await AgentHostRepository(self.uow).get_integration(
+        host_repository = AgentHostRepository(self.uow)
+        host = await host_repository.require(host_id, for_update=True)
+        if host.revoked_at is not None:
+            raise AgentHostRunConflict("Agent Host is revoked")
+        integration = await host_repository.get_integration(
             integration_id=integration_id
         )
         if integration is None or integration.host_id != host_id:
@@ -588,6 +266,9 @@ class AgentHostDispatchRepository:
                 if lease is None or lease.lease_epoch != command.lease_epoch:
                     command.state = AgentHostCommandState.CANCELLED.value
                     continue
+                if AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES:
+                    command.state = AgentHostCommandState.CANCELLED.value
+                    continue
                 if lease.state == AgentHostRunState.QUEUED_FOR_HOST.value:
                     lease.state = AgentHostRunState.LEASED.value
                 lease.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
@@ -648,7 +329,9 @@ class AgentHostDispatchRepository:
         if lease.lease_epoch != checkpoint.lease_epoch:
             raise AgentHostProtocolViolation("stale run lease epoch")
         previous = (
-            AgentHostCheckpoint(lease.checkpoint) if lease.checkpoint is not None else None
+            AgentHostCheckpoint(lease.checkpoint)
+            if lease.checkpoint is not None
+            else None
         )
         if not checkpoint_advances(previous, checkpoint.checkpoint):
             raise AgentHostProtocolViolation("run checkpoint regressed")
@@ -684,8 +367,13 @@ class AgentHostDispatchRepository:
             raise AgentHostNotFound("run lease does not belong to this host")
         if lease.lease_epoch != first.lease_epoch:
             raise AgentHostProtocolViolation("stale run lease epoch")
-
+        if any(
+            event.run_id != first.run_id or event.lease_epoch != first.lease_epoch
+            for event in batch.events
+        ):
+            raise AgentHostProtocolViolation("event batch spans multiple run leases")
         expected = lease.acked_event_sequence + 1
+        terminal = AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
         for event in batch.events:
             if event.sequence < expected:
                 existing = (
@@ -704,6 +392,8 @@ class AgentHostDispatchRepository:
                         "replayed event sequence has a different digest"
                     )
                 continue
+            if terminal:
+                raise AgentHostProtocolViolation("terminal run cannot accept events")
             if event.sequence != expected:
                 raise AgentHostProtocolViolation(
                     f"event sequence gap: expected {expected}, got {event.sequence}"
@@ -755,86 +445,6 @@ class AgentHostDispatchRepository:
     ) -> AgentHostRunLeaseModel | None:
         return await self.session.get(AgentHostRunLeaseModel, run_id)
 
-    async def expire_unaccepted_run(
-        self,
-        *,
-        run_id: UUID,
-        now: datetime | None = None,
-    ) -> bool:
-        timestamp = now or utcnow()
-        lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            run_id,
-            with_for_update=True,
-        )
-        if lease is None or lease.checkpoint is not None:
-            return False
-        if AgentHostRunState(lease.state) not in {
-            AgentHostRunState.QUEUED_FOR_HOST,
-            AgentHostRunState.LEASED,
-        }:
-            return False
-        lease.state = AgentHostRunState.FAILED.value
-        lease.error_code = "HOST_WAIT_TIMEOUT"
-        lease.error_detail = "No Agent Host accepted the run before its wait deadline"
-        lease.terminal_at = timestamp
-        lease.updated_at = timestamp
-        await self.session.flush()
-        return True
-
-    async def reconcile_expired_run(
-        self,
-        *,
-        run_id: UUID,
-        now: datetime | None = None,
-        recovery_grace_seconds: int = 120,
-    ) -> AgentHostRunLeaseModel | None:
-        """Advance an expired, accepted lease without risking duplicate work.
-
-        A provider prompt may already have crossed the process boundary after
-        ACCEPTED. We therefore never retry an accepted turn automatically.
-        The first observed expiry enters a bounded recovery window; a second
-        expiry terminates as DISPATCH_UNKNOWN. A reconnecting host can move
-        RECOVERING back to its durable RUNNING checkpoint.
-        """
-
-        timestamp = now or utcnow()
-        lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            run_id,
-            with_for_update=True,
-        )
-        if (
-            lease is None
-            or lease.lease_expires_at >= timestamp
-            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-            or lease.checkpoint is None
-        ):
-            return lease
-
-        if AgentHostRunState(lease.state) is AgentHostRunState.RECOVERING:
-            lease.state = AgentHostRunState.DISPATCH_UNKNOWN.value
-            lease.checkpoint = AgentHostCheckpoint.TERMINAL.value
-            lease.error_code = "HOST_LEASE_EXPIRED"
-            lease.error_detail = (
-                "The Agent Host disconnected after accepting the run; "
-                "Lemma did not repeat the turn because provider dispatch "
-                "could not be ruled out"
-            )
-            lease.terminal_at = timestamp
-            lease.lease_expires_at = timestamp
-        else:
-            lease.state = AgentHostRunState.RECOVERING.value
-            lease.checkpoint = AgentHostCheckpoint.RECOVERING.value
-            lease.error_code = "HOST_RECOVERING"
-            lease.error_detail = "Waiting for the Agent Host to reconnect"
-            lease.lease_expires_at = timestamp + timedelta(
-                seconds=recovery_grace_seconds
-            )
-        lease.updated_at = timestamp
-        await self.session.flush()
-        return lease
-
     async def enqueue_cancel(
         self,
         *,
@@ -847,7 +457,10 @@ class AgentHostDispatchRepository:
             run_id,
             with_for_update=True,
         )
-        if lease is None or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES:
+        if (
+            lease is None
+            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
+        ):
             return None
         payload = {"agent_run_id": str(run_id)}
         command = AgentHostCommandModel(

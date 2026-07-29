@@ -278,8 +278,15 @@ def postgres_container(test_network):
 
 
 @pytest.fixture(scope="session")
-def supertokens_container():
-    yield _shared_context_resource("supertokens", get_supertokens_container)
+def supertokens_container(test_network, postgres_container):
+    if not getattr(postgres_container, "_lemma_supertokens_database_created", False):
+        create_postgres_database(postgres_container, "supertokens")
+        setattr(postgres_container, "_lemma_supertokens_database_created", True)
+
+    def _factory():
+        return get_supertokens_container(test_network)
+
+    yield _shared_context_resource("supertokens", _factory)
 
 
 @pytest.fixture(scope="session")

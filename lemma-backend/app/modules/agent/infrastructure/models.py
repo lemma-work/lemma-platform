@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import (
@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.infrastructure.db.base import Base, UUIDAuditBase, UUIDCreatedBase
+from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
 from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
     AgentRun as AgentRunEntity,
@@ -46,6 +46,13 @@ from app.modules.agent.infrastructure.model_converters import (
     coerce_toolsets,
     default_agent_runtime,
 )
+from app.modules.agent.infrastructure import runtime_models as _runtime_models  # noqa: F401
+
+if TYPE_CHECKING:
+    from app.modules.agent.infrastructure.runtime_models import (
+        AgentHostIntegrationModel,
+        AgentRuntimeDaemonModel,
+    )
 
 
 class AgentModel(UUIDAuditBase):
@@ -153,7 +160,7 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         index=True,
     )
     host_integration_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_host_integrations.id", ondelete="SET NULL"),
+        ForeignKey("agent_host_integrations.id", ondelete="CASCADE"),
         nullable=True,
         index=True,
     )
@@ -209,346 +216,6 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         )
 
 
-class AgentRuntimeDaemonModel(UUIDAuditBase):
-    """User-owned host daemon connection/catalog state."""
-
-    __tablename__ = "agent_runtime_daemons"
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "device_key",
-            name="uq_agent_runtime_daemon_user_device",
-        ),
-        Index("ix_agent_runtime_daemons_user_status", "user_id", "status"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    device_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default="OFFLINE",
-        index=True,
-    )
-    device_info: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    harness_catalog: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    connected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    disconnected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-
-
-class AgentHostPairingModel(UUIDCreatedBase):
-    """Single-use user-authorized Agent Host pairing code."""
-
-    __tablename__ = "agent_host_pairings"
-    __table_args__ = (
-        UniqueConstraint("code_hash", name="uq_agent_host_pairing_code_hash"),
-        Index("ix_agent_host_pairing_user_expires", "user_id", "expires_at"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    organization_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        index=True,
-        nullable=True,
-    )
-    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    consumed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AgentHostModel(UUIDAuditBase):
-    """One authenticated Agent Host connection to this Lemma target."""
-
-    __tablename__ = "agent_hosts"
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "installation_id",
-            name="uq_agent_host_user_installation",
-        ),
-        UniqueConstraint(
-            "public_key_fingerprint",
-            name="uq_agent_host_public_key_fingerprint",
-        ),
-        Index("ix_agent_host_user_status", "user_id", "status"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    organization_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        index=True,
-        nullable=True,
-    )
-    installation_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    public_key: Mapped[str] = mapped_column(Text, nullable=False)
-    public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="OFFLINE", index=True
-    )
-    protocol_min: Mapped[int] = mapped_column(nullable=False)
-    protocol_max: Mapped[int] = mapped_column(nullable=False)
-    protocol_version: Mapped[int | None] = mapped_column(nullable=True)
-    host_release: Mapped[str] = mapped_column(String(128), nullable=False)
-    adapter_manifest_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    instance_id: Mapped[UUID | None] = mapped_column(nullable=True)
-    capacity: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-    organization: Mapped[Any] = relationship(
-        "Organization", foreign_keys=[organization_id]
-    )
-
-
-class AgentHostIntegrationModel(UUIDAuditBase):
-    """Revisioned capability/configuration snapshot for one local integration."""
-
-    __tablename__ = "agent_host_integrations"
-    __table_args__ = (
-        UniqueConstraint(
-            "host_id",
-            "integration_key",
-            name="uq_agent_host_integration_key",
-        ),
-        Index("ix_agent_host_integration_host_health", "host_id", "health"),
-    )
-
-    host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    integration_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    adapter_protocol: Mapped[str] = mapped_column(String(32), nullable=False)
-    adapter_version: Mapped[str] = mapped_column(String(128), nullable=False)
-    upstream_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    auth_state: Mapped[str] = mapped_column(String(64), nullable=False)
-    health: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    capabilities: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    config_revision: Mapped[str] = mapped_column(String(255), nullable=False)
-    config_options: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    stale_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    stale_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    integration_metadata: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, default=dict
-    )
-
-    host: Mapped[AgentHostModel] = relationship(
-        "AgentHostModel", foreign_keys=[host_id]
-    )
-
-
-class AgentHostCommandModel(UUIDCreatedBase):
-    """Durable at-least-once command for an Agent Host."""
-
-    __tablename__ = "agent_host_commands"
-    __table_args__ = (
-        Index("ix_agent_host_command_poll", "host_id", "state", "created_at"),
-        Index("ix_agent_host_command_run", "run_id", "lease_epoch"),
-    )
-
-    host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    run_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        index=True,
-        nullable=True,
-    )
-    kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    lease_epoch: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    delivered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    acknowledged_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AgentHostRunLeaseModel(Base):
-    """Fenced durable dispatch state for one Lemma agent run."""
-
-    __tablename__ = "agent_host_run_leases"
-    __table_args__ = (
-        Index("ix_agent_host_run_lease_host_state", "host_id", "state"),
-        Index(
-            "ix_agent_host_run_lease_expiry",
-            "lease_expires_at",
-            postgresql_where=text(
-                "state NOT IN ('WAITING_INPUT','SUCCEEDED','FAILED',"
-                "'CANCELLED','DISPATCH_UNKNOWN')"
-            ),
-        ),
-    )
-
-    run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    integration_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_host_integrations.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    runtime_profile_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runtime_profiles.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
-    lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    checkpoint: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    lease_expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    acked_event_sequence: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, default=0
-    )
-    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    terminal_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
-        nullable=False,
-    )
-
-
-class AgentHostEventModel(UUIDCreatedBase):
-    """Idempotently appended canonical external-agent event."""
-
-    __tablename__ = "agent_host_events"
-    __table_args__ = (
-        UniqueConstraint(
-            "run_id",
-            "lease_epoch",
-            "sequence",
-            name="uq_agent_host_event_sequence",
-        ),
-        UniqueConstraint("event_id", name="uq_agent_host_event_id"),
-        Index("ix_agent_host_event_consume", "run_id", "sequence"),
-    )
-
-    run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    event_id: Mapped[UUID] = mapped_column(nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    type: Mapped[str] = mapped_column(String(64), nullable=False)
-    object_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    integration_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    adapter_version: Mapped[str] = mapped_column(String(128), nullable=False)
-
-
-class AgentHostMcpRouteModel(UUIDCreatedBase):
-    """Encrypted, lease-fenced MCP credentials resolved by the paired host."""
-
-    __tablename__ = "agent_host_mcp_routes"
-    __table_args__ = (
-        UniqueConstraint("run_id", name="uq_agent_host_mcp_route_run"),
-        Index("ix_agent_host_mcp_route_host_expiry", "host_id", "expires_at"),
-    )
-
-    host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    encrypted_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    last_resolved_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AgentHostAuthNonceModel(UUIDCreatedBase):
-    """Replay-prevention record for a signed host token exchange."""
-
-    __tablename__ = "agent_host_auth_nonces"
-    __table_args__ = (
-        UniqueConstraint("host_id", "nonce_hash", name="uq_agent_host_auth_nonce"),
-        Index("ix_agent_host_auth_nonce_expires", "expires_at"),
-    )
-
-    host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    nonce_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
 class ConversationModel(UUIDAuditBase):
     """Conversation shared by the pod assistant and pod agents."""
 
@@ -565,10 +232,7 @@ class ConversationModel(UUIDAuditBase):
             "ix_agent_conv_user_pod_agent_roots",
             "user_id",
             "pod_id",
-            text(
-                "COALESCE(agent_id, "
-                "'00000000-0000-0000-0000-000000000001'::uuid)"
-            ),
+            text("COALESCE(agent_id, '00000000-0000-0000-0000-000000000001'::uuid)"),
             "id",
             postgresql_where=text("parent_id IS NULL"),
         ),

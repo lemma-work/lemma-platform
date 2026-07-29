@@ -751,6 +751,11 @@ function AddAgentHostProfileForm({
                     </Field>
                 ) : null}
             </div>
+            {scope === RuntimeProfileScope.ORGANIZATION ? (
+                <p className="text-xs text-[var(--text-tertiary)]">
+                    Workspace members can send runs to this computer while provider credentials remain local.
+                </p>
+            ) : null}
             <div className="flex flex-wrap items-end justify-between gap-3">
                 <ScopeChooser value={scope} onChange={setScope} />
                 <div className="flex items-center gap-2">

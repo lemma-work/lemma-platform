@@ -40,13 +40,17 @@ from app.modules.agent.domain.agent_host import (
 )
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostDispatchRepository,
+)
+from app.modules.agent.infrastructure.agent_host_management_repository import (
+    AgentHostRepository,
+)
+from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostNotFound,
     AgentHostPairingRejected,
     AgentHostProtocolViolation,
-    AgentHostRepository,
     AgentHostRepositoryError,
 )
-from app.modules.agent.infrastructure.models import (
+from app.modules.agent.infrastructure.runtime_models import (
     AgentHostIntegrationModel,
     AgentHostModel,
 )
@@ -66,8 +70,9 @@ from app.modules.agent.services.agent_host_auth import (
 router = APIRouter(tags=["agent_host"])
 _uow_factory = SessionUnitOfWorkFactory(async_session_maker)
 _LONG_POLL_SECONDS = 25.0
-_LONG_POLL_INTERVAL_SECONDS = 0.25
+_LONG_POLL_INTERVAL_SECONDS = 1.0
 _MAX_COMMANDS_PER_POLL = 16
+_CONTROL_UPDATE_BACKOFF_MS = 1_000
 
 
 def _bearer_token(authorization: str | None) -> str:
@@ -324,14 +329,20 @@ async def poll_agent_host_commands(
     )
     deadline = asyncio.get_running_loop().time() + _LONG_POLL_SECONDS
     first = True
+    negotiated_protocol = AGENT_HOST_PROTOCOL_VERSION
+    host_status = AgentHostStatus.ONLINE
     while True:
         async with _uow_factory() as uow:
-            host_repo = AgentHostRepository(uow)
-            host = await host_repo.mark_seen(
+            if first:
+                host = await AgentHostRepository(uow).mark_seen(
                 host_id=claims.host_id,
                 hello=request.hello,
                 capacity=request.capacity.model_dump(mode="json"),
             )
+                negotiated_protocol = (
+                    host.protocol_version or AGENT_HOST_PROTOCOL_VERSION
+                )
+                host_status = AgentHostStatus(host.status)
             commands = await AgentHostDispatchRepository(uow).poll_commands(
                 host_id=claims.host_id,
                 limit=_MAX_COMMANDS_PER_POLL,
@@ -348,23 +359,24 @@ async def poll_agent_host_commands(
             if (
                 commands
                 or control_update_applied
-                or host.status == AgentHostStatus.UPGRADE_REQUIRED.value
+                or host_status is AgentHostStatus.UPGRADE_REQUIRED
             ):
                 return AgentHostPollResponse(
-                    protocol_version=(
-                        host.protocol_version or AGENT_HOST_PROTOCOL_VERSION
-                    ),
+                    protocol_version=negotiated_protocol,
                     policy_revision="agent-host-policy-v1",
-                    host_status=AgentHostStatus(host.status),
+                    host_status=host_status,
                     commands=commands,
+                    poll_after_ms=(
+                        _CONTROL_UPDATE_BACKOFF_MS if control_update_applied else 0
+                    ),
                 )
         first = False
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             return AgentHostPollResponse(
-                protocol_version=AGENT_HOST_PROTOCOL_VERSION,
+                protocol_version=negotiated_protocol,
                 policy_revision="agent-host-policy-v1",
-                host_status=AgentHostStatus.ONLINE,
+                host_status=host_status,
                 commands=[],
             )
         await asyncio.sleep(min(_LONG_POLL_INTERVAL_SECONDS, remaining))
@@ -414,9 +426,7 @@ async def resolve_agent_host_mcp_route(
             route_id=route_id,
             host_id=claims.host_id,
         )
-        payload = await get_secret_cipher().decrypt_json_async(
-            route.encrypted_payload
-        )
+        payload = await get_secret_cipher().decrypt_json_async(route.encrypted_payload)
         if payload is None:
             raise AgentHostProtocolViolation("MCP route payload is unavailable")
         await uow.commit()

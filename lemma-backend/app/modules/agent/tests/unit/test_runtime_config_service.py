@@ -312,6 +312,47 @@ async def test_agent_host_profile_rejects_removed_model_selection() -> None:
         )
 
 
+@pytest.mark.asyncio
+async def test_shared_agent_host_profile_requires_organization_pairing() -> None:
+    now = datetime.now(timezone.utc)
+    org_id = uuid4()
+    user_id = uuid4()
+    host_id = uuid4()
+    integration_id = uuid4()
+    host = SimpleNamespace(
+        id=host_id,
+        user_id=user_id,
+        organization_id=None,
+        revoked_at=None,
+        status="ONLINE",
+        last_seen_at=now,
+    )
+    integration = SimpleNamespace(
+        id=integration_id,
+        host_id=host_id,
+        health="READY",
+        stale_after=now + timedelta(hours=1),
+        config_revision="revision-42",
+        integration_key="codex",
+        config_options=[],
+    )
+    service = AgentRuntimeProfileService(
+        _ProfileRepository([]),
+        host_repository=_HostRepository(host=host, integration=integration),
+    )
+
+    with pytest.raises(ValueError, match="organization pairing"):
+        await service.create_agent_host_profile(
+            organization_id=org_id,
+            user_id=user_id,
+            host_integration_id=integration_id,
+            scope=RuntimeProfileScope.ORGANIZATION,
+            name="Shared personal host",
+            integration_snapshot_revision="revision-42",
+            config_selections={},
+        )
+
+
 def test_runtime_credentials_are_redacted_in_repr_but_revealable():
     """API keys are SecretStr, so they never appear in repr()/logs/tracebacks
     (the leak that exposed a key in pytest's --showlocals dump), yet
@@ -380,7 +421,9 @@ def test_credentials_survive_persist_load_round_trip():
         scope=RuntimeProfileScope.ORGANIZATION,
         organization_id=uuid4(),
         name="org-default",
-    ).model_copy(update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")})
+    ).model_copy(
+        update={"credentials": ApiKeyRuntimeCredentials(api_key="persist-key")}
+    )
 
     # Persist side: what the repository hands to encrypt_json.
     stored = reveal_credentials(profile.credentials)
@@ -528,8 +571,7 @@ def test_system_runtime_profiles_only_include_configured_system_lemma(monkeypatc
     assert lemma_profile.credentials is not None
     # The system profile uses model names verbatim — public name == provider name.
     system_catalog = [
-        (model.name, model.provider_model_name)
-        for model in lemma_profile.model_catalog
+        (model.name, model.provider_model_name) for model in lemma_profile.model_catalog
     ]
     assert system_catalog == [
         ("model-fast", "model-fast"),

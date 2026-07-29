@@ -32,6 +32,9 @@ from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
     exported_tool_name,
 )
+from app.modules.agent.infrastructure.harnesses.tool_returns import (
+    missing_tool_return_events,
+)
 from app.composition.agent_workspace import (
     WorkspaceSandboxService,
 )
@@ -41,11 +44,7 @@ from pydantic_ai.usage import RunUsage
 
 
 DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS = 7200.0
-# Bounded and orthogonal to DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS above: that one
-# tolerates a *live* connection's long silent gap between events (a slow tool
-# call); this one bounds how long a disconnected run waits for its daemon to
-# reconnect before giving up. Kept far shorter on purpose -- see run()'s
-# RECONNECTING handling below.
+# Bounds disconnected-run recovery independently from the live event timeout.
 DEFAULT_RECONNECT_GRACE_SECONDS = 120.0
 
 
@@ -108,9 +107,7 @@ class DaemonHarness:
 
         stop_sent = False
         outstanding_tool_calls: dict[str, str] = {}
-        # Set the moment a RECONNECTING sentinel is first seen; cleared once a
-        # real event arrives again. Bounds how long this run waits out a dead
-        # connection, independent of (and much shorter than) event_timeout_seconds.
+        # Track when reconnect grace starts; clear it on the next real event.
         reconnecting_since: float | None = None
         try:
             while True:
@@ -139,7 +136,7 @@ class DaemonHarness:
                                     data="User daemon did not reconnect within the grace period",
                                     agent_run_id=agent_run_id,
                                 )
-                                for missing_return in _missing_tool_return_events(
+                                for missing_return in missing_tool_return_events(
                                     outstanding_tool_calls=outstanding_tool_calls,
                                     terminal_event=terminal_event,
                                 ):
@@ -174,7 +171,7 @@ class DaemonHarness:
                         data="User daemon did not emit a run event before timeout",
                         agent_run_id=agent_run_id,
                     )
-                    for missing_return in _missing_tool_return_events(
+                    for missing_return in missing_tool_return_events(
                         outstanding_tool_calls=outstanding_tool_calls,
                         terminal_event=terminal_event,
                     ):
@@ -213,7 +210,9 @@ class DaemonHarness:
                         and message.tool_name
                     ):
                         outstanding_tool_calls[message.tool_call_id] = message.tool_name
-                    elif message.kind == MessageKind.TOOL_RETURN and message.tool_call_id:
+                    elif (
+                        message.kind == MessageKind.TOOL_RETURN and message.tool_call_id
+                    ):
                         outstanding_tool_calls.pop(message.tool_call_id, None)
 
                 if event.type in {
@@ -222,7 +221,7 @@ class DaemonHarness:
                     AgentEventType.ERROR,
                     AgentEventType.REJECTED,
                 }:
-                    for missing_return in _missing_tool_return_events(
+                    for missing_return in missing_tool_return_events(
                         outstanding_tool_calls=outstanding_tool_calls,
                         terminal_event=event,
                     ):
@@ -242,49 +241,6 @@ class DaemonHarness:
                 user_id=daemon_user_id,
                 agent_run_id=agent_run_id,
             )
-
-
-def _missing_tool_return_error(event_type: AgentEventType) -> str:
-    if event_type == AgentEventType.STOPPED:
-        return "Daemon run stopped before the tool returned a result."
-    if event_type == AgentEventType.ERROR:
-        return "Daemon run failed before the tool returned a result."
-    if event_type == AgentEventType.REJECTED:
-        return "Daemon run was rejected before the tool returned a result."
-    return "Daemon run completed without a tool return."
-
-
-def _missing_tool_return_events(
-    *,
-    outstanding_tool_calls: dict[str, str],
-    terminal_event: AgentEvent,
-) -> list[AgentEvent]:
-    events = [
-        AgentEvent(
-            type=AgentEventType.MESSAGE,
-            data=MessageDraft.of_tool_return(
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                tool_result={
-                    "success": False,
-                    "error": _missing_tool_return_error(terminal_event.type),
-                    **(
-                        {"interaction_fallback": True}
-                        if tool_name in {"ask_user", "request_approval"}
-                        else {}
-                    ),
-                },
-                metadata={
-                    "synthetic_tool_return": True,
-                    "terminal_event": terminal_event.type.value,
-                },
-            ),
-            agent_run_id=terminal_event.agent_run_id,
-        )
-        for tool_call_id, tool_name in outstanding_tool_calls.items()
-    ]
-    outstanding_tool_calls.clear()
-    return events
 
 
 def _daemon_id_from_options(options: HarnessOptions) -> UUID:
@@ -341,7 +297,9 @@ def _run_start_payload(
             runtime_instructions=runtime_instructions,
         ),
         "agent": agent.model_dump(mode="json"),
-        "conversation": conversation.model_dump(mode="json", exclude={"messages", "agent_runs"}),
+        "conversation": conversation.model_dump(
+            mode="json", exclude={"messages", "agent_runs"}
+        ),
         "context": ctx.model_dump(mode="json"),
         "runtime_profile": options.extra.get("runtime_profile"),
         "runtime_credentials": options.extra.get("runtime_credentials"),
@@ -476,7 +434,9 @@ def _prompt_payload(
     session_id: str | None,
     runtime_instructions: str | None = None,
 ) -> JsonObject:
-    instructions = build_agent_instructions(agent=agent, conversation=conversation, ctx=ctx)
+    instructions = build_agent_instructions(
+        agent=agent, conversation=conversation, ctx=ctx
+    )
     # Add volatile context only to this dispatch payload. The Message entities
     # remain untouched, so runtime notes never enter persisted conversation
     # history and the stable prompt prefix remains cacheable.
@@ -503,9 +463,12 @@ def _prompt_payload(
     payload: JsonObject = {
         "user_prompt": user_prompt,
         "output_schema": agent.output_schema or {},
-        "structured": bool(agent.output_schema) or conversation.type == ConversationType.TASK,
+        "structured": bool(agent.output_schema)
+        or conversation.type == ConversationType.TASK,
     }
-    system_prompt = "\n\n".join(section for section in session_sections if section.strip())
+    system_prompt = "\n\n".join(
+        section for section in session_sections if section.strip()
+    )
     if session_id is None:
         payload["system_prompt"] = system_prompt
     else:
@@ -517,7 +480,10 @@ def _prompt_payload(
 def _join_prompt_parts(system_prompt: str, user_prompt: str) -> str:
     return "\n\n".join(
         section
-        for section in (system_prompt, "# Conversation\n" + user_prompt if user_prompt else "")
+        for section in (
+            system_prompt,
+            "# Conversation\n" + user_prompt if user_prompt else "",
+        )
         if section.strip()
     )
 
