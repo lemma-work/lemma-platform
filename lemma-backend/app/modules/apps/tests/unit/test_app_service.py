@@ -428,6 +428,48 @@ async def test_public_app_branding_can_be_removed_by_org_entitlement(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_public_app_branding_fails_closed_when_entitlement_lookup_fails(
+    monkeypatch,
+):
+    repo = AsyncMock()
+    storage = AsyncMock()
+    entitlement = AsyncMock()
+    entitlement.can_remove_app_branding.side_effect = RuntimeError("billing unavailable")
+    service = AppService(
+        repo,
+        Mock(return_value=storage),
+        AsyncMock(),
+        app_branding_entitlement=entitlement,
+    )
+    app = AppEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="Fallback App",
+        public_slug="fallback-app",
+        current_release_id=uuid4(),
+    )
+    release = AppReleaseEntity(
+        id=app.current_release_id,
+        app_id=app.id,
+        version="version",
+        dist_root_path="releases/version/dist/",
+    )
+    repo.get_by_public_slug.return_value = app
+    repo.get_release.return_value = release
+    storage.read_file.return_value = b"<html><head></head><body>fallback</body></html>"
+    monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.work")
+
+    asset = await _get_public_app_asset(service, "fallback-app")
+    body = asset.content.decode()
+
+    entitlement.can_remove_app_branding.assert_awaited_once_with(pod_id=app.pod_id)
+    assert APP_BRANDING_SENTINEL in body
+    assert "Remix on Lemma" in body
+
+
+@pytest.mark.asyncio
 async def test_get_app_asset_serves_static_asset_without_fallback():
     repo = AsyncMock()
     authorization_service = AsyncMock()
