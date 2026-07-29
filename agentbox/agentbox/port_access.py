@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -119,11 +120,28 @@ class PortAccessService:
         signer: PortAccessSigner,
         *,
         public_base_url: str,
+        trusted_function_activity_seconds: float = 300,
+        trusted_function_activity_refresh_seconds: float = 60,
     ) -> None:
+        if not 1 <= trusted_function_activity_seconds <= 24 * 60 * 60:
+            raise ValueError(
+                "trusted function activity lease must be in 1..86400 seconds"
+            )
+        if not 1 <= trusted_function_activity_refresh_seconds <= 60 * 60:
+            raise ValueError(
+                "trusted function activity refresh must be in 1..3600 seconds"
+            )
         self._database = database
         self._provider = provider
         self._signer = signer
         self._public_base_url = public_base_url.rstrip("/")
+        self._trusted_function_activity = timedelta(
+            seconds=trusted_function_activity_seconds
+        )
+        self._trusted_function_activity_refresh = timedelta(
+            seconds=trusted_function_activity_refresh_seconds
+        )
+        self._trusted_activity_locks: dict[SandboxKey, asyncio.Lock] = {}
 
     async def create(
         self,
@@ -237,6 +255,107 @@ class PortAccessService:
             activity_until=claims.expires_at,
         )
         return claims, target
+
+    async def resolve_trusted_function(
+        self,
+        logical_id: UUID,
+        *,
+        deadline_at: datetime,
+        activity_until: datetime | None = None,
+    ) -> ProviderPortTarget:
+        """Resolve the current function runtime for an API-key-authenticated caller.
+
+        The stable trusted route deliberately has no second bearer token. Its
+        manager API key authenticates the backend, while the function bearer
+        token in ``Authorization`` continues through the proxy to authorize the
+        exact caller, function, revision, and runtime operation.
+        """
+
+        key = SandboxKey(
+            workload_kind=WorkloadKind.FUNCTION,
+            logical_id=logical_id,
+        )
+        now = datetime.now(timezone.utc)
+        minimum_activity_until = now + self._trusted_function_activity
+        if activity_until is not None and (
+            activity_until.tzinfo is None or activity_until.utcoffset() is None
+        ):
+            raise self._invalid("activity_until must include a timezone")
+        activity_until = max(
+            minimum_activity_until,
+            activity_until or minimum_activity_until,
+        )
+        maximum_activity_until = now + timedelta(hours=24)
+        if activity_until > maximum_activity_until:
+            raise self._invalid("activity_until cannot exceed 24 hours")
+        protected_until: datetime
+        async with self._database.uow() as uow:
+            logical = await uow.repository.get_logical(key)
+            allocation = await uow.repository.current_allocation(key)
+            await uow.commit()
+        if logical is None:
+            raise AgentBoxError(
+                ErrorCode.SANDBOX_NOT_FOUND,
+                "function sandbox does not exist",
+                retry=RetryDisposition.DO_NOT_RETRY,
+                status_code=404,
+            )
+        protected_until = logical.protected_until or now
+        if protected_until < activity_until:
+            refresh_lock = self._trusted_activity_locks.setdefault(
+                key,
+                asyncio.Lock(),
+            )
+            async with refresh_lock:
+                async with self._database.uow() as uow:
+                    logical = await uow.repository.get_logical(key)
+                    allocation = await uow.repository.current_allocation(key)
+                    if logical is None:
+                        raise AgentBoxError(
+                            ErrorCode.SANDBOX_NOT_FOUND,
+                            "function sandbox does not exist",
+                            retry=RetryDisposition.DO_NOT_RETRY,
+                            status_code=404,
+                        )
+                    protected_until = logical.protected_until or now
+                    if protected_until < activity_until:
+                        target_until = min(
+                            activity_until + self._trusted_function_activity_refresh,
+                            maximum_activity_until,
+                        )
+                        logical = await uow.repository.protect_activity(
+                            key,
+                            until=target_until,
+                            now=now,
+                        )
+                        allocation = await uow.repository.current_allocation(key)
+                        protected_until = logical.protected_until or target_until
+                    await uow.commit()
+        if (
+            allocation is None
+            or allocation.provider_id is None
+            or allocation.state != AllocationState.ACTIVE
+        ):
+            raise AgentBoxError(
+                ErrorCode.PROVISIONING,
+                "function sandbox is not ready for trusted runtime access",
+                retry=RetryDisposition.WAIT,
+                status_code=409,
+                retry_after_ms=250,
+            )
+        return await self._provider.resolve_port_target(
+            ProviderAllocationRef(
+                provider_id=allocation.provider_id,
+                provider_instance_id=allocation.provider_instance_id,
+                allocation_id=allocation.allocation_id,
+                allocation_token=allocation.allocation_token,
+                key=allocation.key,
+            ),
+            port=8090,
+            protocol=PortProtocol.HTTP,
+            deadline_at=deadline_at,
+            activity_until=protected_until,
+        )
 
     @staticmethod
     def _invalid(message: str) -> AgentBoxError:

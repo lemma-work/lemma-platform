@@ -3,15 +3,18 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, Request, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 import websockets
 
-from agentbox.domain import AgentBoxError
+from agentbox.auth import require_api_key
+from agentbox.domain import AgentBoxError, ErrorCode, RetryDisposition
 from agentbox.observability import create_inherited_task, get_logger
 from agentbox.port_access import PortAccessService
+from agentbox.ports import ProviderPortTarget
 
 from .deps import port_access, port_proxy_http_client
 from .fabric import agentbox_error_response
@@ -31,7 +34,10 @@ _HOP_BY_HOP = frozenset(
         "upgrade",
     }
 )
-_PRIVATE_REQUEST_HEADERS = frozenset({"host", "x-api-key", "content-length"})
+_TRUSTED_ACTIVITY_HEADER = "x-agentbox-activity-until"
+_PRIVATE_REQUEST_HEADERS = frozenset(
+    {"host", "x-api-key", _TRUSTED_ACTIVITY_HEADER, "content-length"}
+)
 
 
 @access_router.api_route(
@@ -57,6 +63,65 @@ async def proxy_http_port(
     except AgentBoxError as exc:
         return agentbox_error_response(exc)
 
+    return await _proxy_http_request(
+        request,
+        path=path,
+        target=target,
+        client=client,
+        public_prefix=(str(request.base_url).rstrip("/") + f"/port-access/{token}"),
+    )
+
+
+@access_router.api_route(
+    "/trusted/function-runtimes/{logical_id}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    include_in_schema=False,
+    dependencies=[Depends(require_api_key)],
+)
+@access_router.api_route(
+    "/trusted/function-runtimes/{logical_id}/{path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    include_in_schema=False,
+    dependencies=[Depends(require_api_key)],
+)
+async def proxy_trusted_function_runtime(
+    request: Request,
+    logical_id: UUID,
+    path: str = "",
+    service: PortAccessService = Depends(port_access),
+    client: httpx.AsyncClient = Depends(port_proxy_http_client),
+):
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=20)
+    try:
+        activity_until = _activity_until(request)
+        target = await service.resolve_trusted_function(
+            logical_id,
+            deadline_at=deadline,
+            activity_until=activity_until,
+        )
+    except AgentBoxError as exc:
+        return agentbox_error_response(exc)
+
+    return await _proxy_http_request(
+        request,
+        path=path,
+        target=target,
+        client=client,
+        public_prefix=(
+            str(request.base_url).rstrip("/")
+            + f"/trusted/function-runtimes/{logical_id}"
+        ),
+    )
+
+
+async def _proxy_http_request(
+    request: Request,
+    *,
+    path: str,
+    target: ProviderPortTarget,
+    client: httpx.AsyncClient,
+    public_prefix: str,
+):
     target_url = _upstream_url(target.base_url, path, request.url.query)
     headers = _request_headers(list(request.headers.items()))
     headers.update({item.name: item.value for item in target.headers})
@@ -101,7 +166,6 @@ async def proxy_http_port(
     }
     location = response_headers.get("location")
     if location and location.startswith(target.base_url):
-        public_prefix = str(request.base_url).rstrip("/") + f"/port-access/{token}"
         response_headers["location"] = public_prefix + location[len(target.base_url) :]
 
     async def body():
@@ -117,6 +181,21 @@ async def proxy_http_port(
         headers=response_headers,
         media_type=upstream.headers.get("content-type"),
     )
+
+
+def _activity_until(request: Request) -> datetime | None:
+    raw = request.headers.get(_TRUSTED_ACTIVITY_HEADER)
+    if raw is None:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise AgentBoxError(
+            ErrorCode.INVALID_REQUEST,
+            "X-AgentBox-Activity-Until must be an ISO 8601 timestamp",
+            retry=RetryDisposition.DO_NOT_RETRY,
+            status_code=422,
+        ) from exc
 
 
 @access_router.websocket("/port-access/{token}")

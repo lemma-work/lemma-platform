@@ -14,6 +14,7 @@ import pytest
 
 from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
 from agentbox.api.port_proxy import access_router, create_port_proxy_http_client
+from agentbox.config import settings
 from agentbox.domain import (
     AdmissionClass,
     AgentBoxError,
@@ -201,7 +202,7 @@ async def test_real_e2b_workspace_full_conformance(tmp_path: Path) -> None:
                     "printf 'pnpm:%s\\n' \"$(pnpm --version)\"; "
                     "printf 'uv:%s\\n' \"$(uv --version)\"; "
                     "printf 'python:%s\\n' "
-                    '"$(python -c \'import sys; '
+                    "\"$(python -c 'import sys; "
                     'print("%d.%d" % sys.version_info[:2])\')"; '
                     "printf 'lemma:%s\\n' \"$(lemma --version)\"; "
                     "lit --help >/dev/null"
@@ -601,7 +602,9 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
 
 async def test_real_e2b_function_runtime_port_and_exact_destroy(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(settings, "agentbox_api_key", "e2b-test-manager-key")
     profile = _function_profile()
     registry = ProfileRegistry((profile,))
     adapter = _adapter(registry, scope=f"e2b:function-test:{uuid4()}")
@@ -656,13 +659,6 @@ async def test_real_e2b_function_runtime_port_and_exact_destroy(
             "protocol_version": 2,
         }
 
-        grant = await port_access.create(
-            key,
-            port=8090,
-            protocol=PortProtocol.HTTP,
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=2),
-        )
-        token = grant.url.split("/port-access/", 1)[1].rstrip("/")
         proxy_app = FastAPI()
         proxy_app.state.port_access = port_access
         proxy_app.state.port_proxy_http_client = create_port_proxy_http_client()
@@ -674,7 +670,10 @@ async def test_real_e2b_function_runtime_port_and_exact_destroy(
             ) as proxy_client:
                 responses = await asyncio.gather(
                     *(
-                        proxy_client.get(f"/port-access/{token}/healthz")
+                        proxy_client.get(
+                            f"/trusted/function-runtimes/{key.logical_id}/healthz",
+                            headers={"X-API-Key": "e2b-test-manager-key"},
+                        )
                         for _ in range(10)
                     )
                 )
