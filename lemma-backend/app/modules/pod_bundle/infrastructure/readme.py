@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import html
+import re
 from urllib.parse import urlencode
 
 from app.core.config import settings
@@ -94,8 +95,16 @@ def render_readme(
     icon_url: str | None = None,
 ) -> str:
     name = (pod_name or "Lemma Pod").strip() or "Lemma Pod"
+    name = re.sub(r"[\r\n]+", " ", name)
     escaped_name = html.escape(name, quote=True)
-    tagline = (description or "").strip() or _DEFAULT_TAGLINE
+    markdown_name = _escape_markdown(name)
+    tagline = _escape_markdown(
+        re.sub(
+            r"[\r\n]+",
+            " ",
+            (description or "").strip() or _DEFAULT_TAGLINE,
+        )
+    )
 
     present = [
         (label, emoji, resource_counts.get(key, 0))
@@ -104,12 +113,17 @@ def render_readme(
     ]
 
     lines: list[str] = ['<div align="center">', ""]
-    if icon_url:
-        lines += [f'<img src="{icon_url}" width="88" height="88" alt="{name}" />', ""]
+    safe_icon_url = _safe_icon_url(icon_url)
+    if safe_icon_url:
+        lines += [
+            f'<img src="{safe_icon_url}" width="88" height="88" '
+            f'alt="{escaped_name}" />',
+            "",
+        ]
     lines += [
         f'<img src="./social-card.png" width="100%" alt="Run {escaped_name} on Lemma" />',
         "",
-        f"# {name}",
+        f"# {markdown_name}",
         "",
         f"### {tagline}",
         "",
@@ -155,3 +169,19 @@ def render_readme(
         "",
     ]
     return "\n".join(lines)
+
+
+def _escape_markdown(value: str) -> str:
+    return re.sub(r"([\\`*_{}\[\]()<>#+.!|~-])", r"\\\1", value)
+
+
+def _safe_icon_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    from urllib.parse import urlparse
+
+    normalized = value.strip()
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return html.escape(normalized, quote=True)

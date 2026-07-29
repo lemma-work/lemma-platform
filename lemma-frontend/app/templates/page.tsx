@@ -56,7 +56,18 @@ export default function TemplatesPage() {
                 </p>
 
                 <div className="mt-16 grid gap-5 sm:grid-cols-2">
-                    {PUBLIC_TEMPLATES.map((template) => (
+                    {PUBLIC_TEMPLATES.length === 0 ? (
+                        <div className="surface-panel p-7 sm:col-span-2 sm:p-9">
+                            <p className="type-eyebrow-mono text-[var(--text-tertiary)]">Coming soon</p>
+                            <h2 className="mt-6 text-3xl font-semibold tracking-[-0.035em]">
+                                Verified templates are being prepared.
+                            </h2>
+                            <p className="mt-3 max-w-xl leading-7 text-[var(--text-secondary)]">
+                                Every template listed here will be backed by a public, end-to-end tested GitHub
+                                bundle.
+                            </p>
+                        </div>
+                    ) : PUBLIC_TEMPLATES.map((template) => (
                         <Link
                             key={template.slug}
                             href={`/templates/${template.slug}`}

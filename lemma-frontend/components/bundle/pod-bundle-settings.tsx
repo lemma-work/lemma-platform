@@ -97,7 +97,13 @@ export function PodBundleSettingsPanel({ podId, podName, canUpdate, recipes }: P
                 ) : null}
             </div>
 
-            <ShareSheet podId={podId} podName={podName} open={shareOpen} onOpenChange={setShareOpen} />
+            <ShareSheet
+                podId={podId}
+                podName={podName}
+                open={shareOpen}
+                onOpenChange={setShareOpen}
+                canPublish={canUpdate}
+            />
             {canUpdate ? (
                 <ImportDialog
                     podId={podId}

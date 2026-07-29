@@ -433,6 +433,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod_bundle.handlers.url_import_s_terminal_s.degraded': EventSpec('warning', frozenset({'import_id'})),
     'pod_bundle.import_use_cases.clean_staging_idle_cancelled_import.diagnostic': EventSpec('debug', frozenset({'import_id'})),
     'pod_bundle.plan_builder.skipping_surface_snapshot_pod_s.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
+    'pod_bundle.publish_lock.release.diagnostic': EventSpec('debug', frozenset({'account_id', 'repo_name'})),
     'pod_bundle.publish_task.persist_publish_s_s.diagnostic': EventSpec('debug', frozenset({'publish_id'})),
     'pod_bundle.publish_task.pod_publish_s_retryable_s.propagated': EventSpec('debug', frozenset({'publish_id'})),
     'pod_bundle.publish_task.pod_publish_s_terminal_s.degraded': EventSpec('warning', frozenset({'publish_id'})),

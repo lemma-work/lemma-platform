@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { BundleProgressBar } from '@/components/bundle/bundle-progress';
+import { AccountVariableField } from '@/components/bundle/account-variable-field';
 import { PodShareCard } from '@/components/bundle/pod-share-card';
 import {
     getPublish,
@@ -29,14 +30,17 @@ import {
     triggerBundleDownload,
     type BundleProgressView,
     type PublishStatusResponse,
+    type PublishMode,
 } from '@/lib/hooks/use-pod-bundle';
 import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
+import { usePod } from '@/lib/hooks/use-pods';
 
 interface ShareSheetProps {
     podId: string;
     podName?: string | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    canPublish?: boolean;
 }
 
 /** The design-system Switch is headless — it needs a track + thumb to render. */
@@ -58,9 +62,24 @@ function Toggle({
     );
 }
 
-function looksLikeNotConnected(message: string | null | undefined): boolean {
-    const text = (message || '').toLowerCase();
-    return text.includes('not_connected') || text.includes('connect') || text.includes('no github');
+function errorCode(error: unknown): string | null {
+    if (error && typeof error === 'object' && 'code' in error) {
+        const code = (error as { code?: unknown }).code;
+        return typeof code === 'string' ? code : null;
+    }
+    return null;
+}
+
+function needsGithubAccount(code: string | null | undefined): boolean {
+    return (
+        code === 'ACCOUNT_NOT_FOUND' ||
+        code === 'ACCOUNT_CREDENTIALS_NOT_FOUND' ||
+        code === 'ACCOUNT_NOT_CONNECTED' ||
+        code === 'CONNECTOR_UNAUTHORIZED' ||
+        code === 'CONNECTOR_ACCESS_DENIED' ||
+        code === 'OPERATION_EXECUTION_UNAUTHORIZED' ||
+        code === 'OPERATION_EXECUTION_ACCESS_DENIED'
+    );
 }
 
 function publishPhaseLabel(status: string): string {
@@ -82,7 +101,8 @@ function githubImportPath(repoUrl: string): string | null {
     }
 }
 
-export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetProps) {
+export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = true }: ShareSheetProps) {
+    const { data: pod } = usePod(podId);
     const defaultRepo = useMemo(() => toRepoSlug(podName || 'my-pod') || 'my-pod', [podName]);
 
     // Export
@@ -93,13 +113,15 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
     // Publish
     const [repoName, setRepoName] = useState(defaultRepo);
     const [isPrivate, setIsPrivate] = useState(false);
+    const [publishMode, setPublishMode] = useState<PublishMode>('CREATE');
+    const [githubAccountId, setGithubAccountId] = useState('');
     const [aiReadme, setAiReadme] = useState(true);
     const [publishing, setPublishing] = useState(false);
     const [publishView, setPublishView] = useState<BundleProgressView | null>(null);
     const [published, setPublished] = useState<PublishStatusResponse | null>(null);
     const [needsGithub, setNeedsGithub] = useState(false);
     const publishedInstallUrl = useMemo(() => {
-        const path = published?.repo_url ? githubImportPath(published.repo_url) : null;
+        const path = published?.repo_url && !published.private ? githubImportPath(published.repo_url) : null;
         if (!path || typeof window === 'undefined') return null;
         return new URL(path, window.location.origin).toString();
     }, [published]);
@@ -136,7 +158,7 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
 
     async function handlePublish() {
         const name = repoName.trim();
-        if (publishing || !name) return;
+        if (publishing || !name || !githubAccountId) return;
         setPublishing(true);
         setPublished(null);
         setNeedsGithub(false);
@@ -144,7 +166,9 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
         try {
             const started = await startPublish(podId, {
                 repo_name: name,
+                mode: publishMode,
                 private: isPrivate,
+                account_id: githubAccountId,
                 ai_readme: aiReadme,
             });
             const final = await trackBundleJob({
@@ -157,14 +181,13 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
             if (final.status === 'COMPLETED') {
                 setPublished(final);
                 toast.success('Published to GitHub');
-            } else if (looksLikeNotConnected(final.error)) {
+            } else if (needsGithubAccount(final.error_code)) {
                 setNeedsGithub(true);
             } else {
                 throw new Error(final.error || 'Publish failed');
             }
         } catch (error) {
-            const message = error instanceof Error ? error.message : '';
-            if (looksLikeNotConnected(message)) {
+            if (needsGithubAccount(errorCode(error))) {
                 setNeedsGithub(true);
             } else {
                 showResourceErrorToast(error, 'Publish failed');
@@ -247,6 +270,7 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
                     </section>
 
                     {/* Publish to GitHub */}
+                    {canPublish ? (
                     <section className="rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
                         <div className="flex items-center gap-2 text-sm font-medium text-[var(--text-primary)]">
                             <Github className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -297,8 +321,9 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
                                     </Button>
                                 </div>
                                 <p className="text-xs text-[var(--text-tertiary)]">
-                                    This link opens the pod directly in Lemma. The GitHub repository remains its
-                                    public, inspectable source.
+                                    {published.private
+                                        ? 'Private repositories can be imported by members who select an authorized GitHub account.'
+                                        : 'This link opens the pod directly in Lemma. The GitHub repository remains its public, inspectable source.'}
                                 </p>
                             </div>
                         ) : publishing ? (
@@ -321,6 +346,46 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
                                         placeholder="my-pod"
                                     />
                                 </div>
+                                <AccountVariableField
+                                    organizationId={pod?.organization_id}
+                                    podId={podId}
+                                    connectorId="github"
+                                    provider="COMPOSIO"
+                                    label="GitHub account"
+                                    description="The connected account that owns and publishes the repository."
+                                    required
+                                    value={githubAccountId}
+                                    onChange={(value) => {
+                                        setGithubAccountId(value);
+                                        setNeedsGithub(false);
+                                    }}
+                                />
+                                <div className="space-y-2">
+                                    <Label className="text-xs">Publish mode</Label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {(['CREATE', 'UPDATE'] as PublishMode[]).map((mode) => (
+                                            <Button
+                                                key={mode}
+                                                type="button"
+                                                variant={publishMode === mode ? 'default' : 'secondary'}
+                                                size="sm"
+                                                onClick={() => setPublishMode(mode)}
+                                            >
+                                                {mode === 'CREATE' ? 'Create new' : 'Update existing'}
+                                            </Button>
+                                        ))}
+                                    </div>
+                                    {publishMode === 'UPDATE' ? (
+                                        <p className="text-xs text-[var(--text-tertiary)]">
+                                            Replaces README and Lemma-managed bundle files, removes stale managed
+                                            files, and preserves unrelated repository content.
+                                        </p>
+                                    ) : (
+                                        <p className="text-xs text-[var(--text-tertiary)]">
+                                            Fails safely if this repository name already exists.
+                                        </p>
+                                    )}
+                                </div>
                                 <div className="flex items-start justify-between gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3">
                                     <div className="flex items-start gap-2">
                                         <FileText className="mt-0.5 h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
@@ -333,10 +398,16 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
                                     </div>
                                     <Toggle checked={aiReadme} onCheckedChange={setAiReadme} />
                                 </div>
-                                <div className="flex items-center justify-between gap-3">
-                                    <span className="text-sm text-[var(--text-secondary)]">Private repository</span>
-                                    <Toggle checked={isPrivate} onCheckedChange={setIsPrivate} />
-                                </div>
+                                {publishMode === 'CREATE' ? (
+                                    <div className="flex items-center justify-between gap-3">
+                                        <span className="text-sm text-[var(--text-secondary)]">Private repository</span>
+                                        <Toggle checked={isPrivate} onCheckedChange={setIsPrivate} />
+                                    </div>
+                                ) : (
+                                    <p className="text-xs text-[var(--text-tertiary)]">
+                                        Update keeps the existing repository&apos;s visibility.
+                                    </p>
+                                )}
 
                                 {needsGithub ? (
                                     <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3 text-xs text-[var(--text-secondary)]">
@@ -350,13 +421,18 @@ export function ShareSheet({ podId, podName, open, onOpenChange }: ShareSheetPro
                                     </div>
                                 ) : null}
 
-                                <Button className="w-full" onClick={handlePublish} disabled={!repoName.trim()}>
+                                <Button
+                                    className="w-full"
+                                    onClick={handlePublish}
+                                    disabled={!repoName.trim() || !githubAccountId}
+                                >
                                     <Github className="mr-2 h-4 w-4" />
                                     Publish to GitHub
                                 </Button>
                             </div>
                         )}
                     </section>
+                    ) : null}
                 </div>
             </SheetContent>
         </Sheet>

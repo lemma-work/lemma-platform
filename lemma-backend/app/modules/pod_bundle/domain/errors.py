@@ -92,3 +92,60 @@ class AppBuildFailedError(PodBundleDomainError):
         super().__init__(
             message, code="POD_BUNDLE_APP_BUILD_FAILED", status_code=422, details=details
         )
+
+
+class GithubRepositoryExistsError(PodBundleDomainError):
+    def __init__(self, repo_name: str):
+        super().__init__(
+            f"GitHub repository '{repo_name}' already exists. Choose Update mode "
+            "to replace Lemma-managed files.",
+            code="POD_BUNDLE_REPOSITORY_EXISTS",
+            status_code=409,
+        )
+
+
+class GithubRepositoryNotFoundError(PodBundleDomainError):
+    def __init__(self, repo_name: str):
+        super().__init__(
+            f"GitHub repository '{repo_name}' does not exist. Choose Create mode first.",
+            code="POD_BUNDLE_REPOSITORY_NOT_FOUND",
+            status_code=404,
+        )
+
+
+class GithubPublishCapabilityUnavailableError(PodBundleDomainError):
+    def __init__(self, operation_name: str):
+        super().__init__(
+            "The connected GitHub provider cannot perform atomic repository "
+            "publishing right now.",
+            code="GITHUB_PUBLISH_CAPABILITY_UNAVAILABLE",
+            status_code=503,
+            details={"operation": operation_name},
+        )
+
+
+class GithubBranchRaceError(PodBundleDomainError):
+    def __init__(self):
+        super().__init__(
+            "The GitHub branch changed while Lemma was publishing. Review the "
+            "new commits, then retry Update mode.",
+            code="POD_BUNDLE_GITHUB_BRANCH_CHANGED",
+            status_code=409,
+        )
+
+
+class GithubImportError(PodBundleDomainError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        status_code: int,
+        details: object | None = None,
+    ):
+        super().__init__(
+            message,
+            code=code,
+            status_code=status_code,
+            details=details,
+        )

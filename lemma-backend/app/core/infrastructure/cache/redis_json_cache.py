@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Generic, TypeVar
+from collections.abc import Awaitable
+from typing import Any, Generic, TypeVar, cast
 from weakref import WeakSet
 
 from redis.asyncio import Redis
@@ -10,6 +11,12 @@ from redis.asyncio import Redis
 
 T = TypeVar("T")
 _live_caches: WeakSet["RedisJsonCache[Any]"] = WeakSet()
+_DELETE_IF_VALUE_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
 
 
 class RedisJsonCache(Generic[T]):
@@ -49,6 +56,37 @@ class RedisJsonCache(Generic[T]):
             payload,
             ex=ttl_seconds if ttl_seconds is not None else self._ttl_seconds,
         )
+
+    async def set_raw_if_absent(
+        self,
+        suffix: str,
+        payload: str,
+        *,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        """Atomically acquire a namespaced, expiring value."""
+        redis = await self._get_redis()
+        result = await redis.set(
+            self.build_key(suffix),
+            payload,
+            ex=ttl_seconds if ttl_seconds is not None else self._ttl_seconds,
+            nx=True,
+        )
+        return bool(result)
+
+    async def delete_if_value(self, suffix: str, expected: str) -> bool:
+        """Delete a namespaced value only when it is still owned by ``expected``."""
+        redis = await self._get_redis()
+        deleted = await cast(
+            Awaitable[Any],
+            redis.eval(
+                _DELETE_IF_VALUE_SCRIPT,
+                1,
+                self.build_key(suffix),
+                expected,
+            ),
+        )
+        return bool(deleted)
 
     async def get_json(self, suffix: str) -> Any | None:
         raw = await self.get_raw(suffix)

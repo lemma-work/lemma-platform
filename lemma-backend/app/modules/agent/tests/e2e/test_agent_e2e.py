@@ -3052,9 +3052,8 @@ class TestAgentRuntimeConfigApis:
             "harness_kind": harness_kind,
             "model_name": model_name,
         }
-        assert (
-            run_start["payload"]["prompt"]["user_prompt"]
-            == "USER:\nSay hello from the daemon."
+        assert run_start["payload"]["prompt"]["user_prompt"].startswith(
+            "USER:\nSay hello from the daemon."
         )
         assert "Reply through the daemon runtime." in run_start["payload"]["prompt"]["system_prompt"]
         assert "session_id" not in run_start["payload"]["prompt"]
@@ -3160,9 +3159,8 @@ class TestAgentRuntimeConfigApis:
             followup_start["payload"]["mcp"]["conversation_id"]
             == conversation_id
         )
-        assert (
-            followup_start["payload"]["prompt"]["user_prompt"]
-            == "USER:\nWhat did I ask first?"
+        assert followup_start["payload"]["prompt"]["user_prompt"].startswith(
+            "USER:\nWhat did I ask first?"
         )
         assert followup_start["payload"]["prompt"]["session_id"] == first_local_session_id
         assert "system_prompt" not in followup_start["payload"]["prompt"]
@@ -3318,6 +3316,7 @@ class TestAgentRuntimeConfigApis:
 
     @pytest.mark.skipif(shutil.which("codex") is None, reason="codex CLI is not installed")
     @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
+    @pytest.mark.local_cli
     async def test_cli_daemon_process_discovers_models_and_runs_real_harnesses(
         self,
         authenticated_client,

@@ -8,7 +8,10 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agent_surfaces.domain.ingress_context import SurfaceChatContext
+from app.modules.agent_surfaces.domain.ingress_context import (
+    SurfaceChatContext,
+    SurfaceReplyContext,
+)
 from app.modules.agent_surfaces.domain.ingress_request import SurfacePlatformWebhookIngress
 from app.modules.agent_surfaces.tests.e2e.helpers import (
     _conversation_by_external_thread,
@@ -49,8 +52,8 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
     message_store,
     monkeypatch,
 ):
-    """A surface restricted to another email domain ignores the sender; widening
-    the allow-list to the sender's domain lets the chat through."""
+    """A restricted surface sends setup guidance without running the agent;
+    widening the allow-list to the sender's domain lets the chat through."""
     from app.core.config import settings as app_settings
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
     from app.modules.agent_surfaces.events.handlers import (
@@ -96,7 +99,8 @@ async def test_slack_identity_policy_blocks_then_allows_sender_domain(
             source="slack", payload=blocked_payload, headers={}
         )
     )
-    assert blocked_context is None
+    assert isinstance(blocked_context, SurfaceReplyContext)
+    assert blocked_context.reply_kind == "surface_setup"
 
     sender_domain = fixed_test_user["email"].rsplit("@", 1)[-1]
     allowed = await authenticated_client.patch(

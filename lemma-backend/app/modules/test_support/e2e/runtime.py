@@ -1085,9 +1085,8 @@ async def full_stack(
             text=True,
         )
         readiness_markers = (
-            "Worker starting...",
-            "`HandleAgentRunEvent` waiting for messages",
-            "`HandleScheduleEvents` waiting for messages",
+            '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+            '"event": "service.started"',
         )
         startup_ok = False
         for _ in range(300):

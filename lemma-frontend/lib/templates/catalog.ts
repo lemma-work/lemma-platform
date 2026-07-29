@@ -11,39 +11,9 @@ export interface PublicTemplate {
     }>;
 }
 
-export const PUBLIC_TEMPLATES: PublicTemplate[] = [
-    {
-        slug: 'research-desk',
-        name: 'Research Desk',
-        kicker: 'Source-backed research that keeps moving',
-        description:
-            'Collect evidence, investigate a question, and turn what you find into briefs your team can use.',
-        github: 'https://github.com/lemma-work/research-desk',
-        outcomes: [
-            'One durable home for sources, notes, questions, and briefs',
-            'An agent that researches against evidence instead of guessing',
-            'A shared queue so teammates can contribute and review',
-        ],
-        includes: [
-            {
-                label: 'Research app',
-                detail: 'A focused desk for questions, evidence, notes, and finished briefs.',
-            },
-            {
-                label: 'Research agent',
-                detail: 'Investigates open questions and links every useful claim back to a source.',
-            },
-            {
-                label: 'Evidence workflow',
-                detail: 'Moves work from capture through review to a shareable, source-backed result.',
-            },
-            {
-                label: 'Shared data',
-                detail: 'Keeps sources, findings, and decisions available to the whole team.',
-            },
-        ],
-    },
-];
+// Keep the catalogue empty until a template has a verified, public GitHub
+// bundle that completes the same publish -> import -> apply release smoke test.
+export const PUBLIC_TEMPLATES: PublicTemplate[] = [];
 
 export function getPublicTemplateBySlug(slug: string | null | undefined): PublicTemplate | null {
     return PUBLIC_TEMPLATES.find((template) => template.slug === slug) ?? null;

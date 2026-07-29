@@ -48,10 +48,37 @@ async def polish_readme(readme: str, *, polish_fn: PolishFn | None = None) -> st
         )
         return readme
     polished = _strip_code_fence((polished or "").strip())
-    # A model that returns nothing or drops the install badge is not trusted.
-    if not polished or "img.shields.io" not in polished:
+    if not polished or not _preserves_required_invariants(readme, polished):
         return readme
     return polished
+
+
+def _preserves_required_invariants(original: str, polished: str) -> bool:
+    """Reject model output that drops any executable landing-page structure."""
+    required_exact_lines: list[str] = []
+    for line in original.splitlines():
+        stripped = line.strip()
+        if (
+            "img.shields.io" in stripped
+            and ("<img" in stripped or "<a " in stripped)
+            or "social-card.png" in stripped
+            or stripped == '<div align="center">'
+            or stripped.startswith("| ") and " **" in stripped
+        ):
+            required_exact_lines.append(stripped)
+    required_markers = [
+        marker
+        for marker in ("## 🚀 Install", "/import/github/")
+        if marker in original
+    ]
+    preserves_lines = all(line in polished for line in required_exact_lines)
+    preserves_markers = all(marker in polished for marker in required_markers)
+    preserves_centering = (
+        polished.count('<div align="center">')
+        >= original.count('<div align="center">')
+        and polished.count("</div>") >= original.count("</div>")
+    )
+    return preserves_lines and preserves_markers and preserves_centering
 
 
 def _strip_code_fence(text: str) -> str:

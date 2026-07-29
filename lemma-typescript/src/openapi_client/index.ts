@@ -223,6 +223,7 @@ export type { PodRoleResourcePermissionRequest } from './models/PodRoleResourceP
 export type { PodRoleResourcePermissionResponse } from './models/PodRoleResourcePermissionResponse.js';
 export type { PodRoleResponse } from './models/PodRoleResponse.js';
 export type { PodUpdateRequest } from './models/PodUpdateRequest.js';
+export { PublishMode } from './models/PublishMode.js';
 export type { PublishStartRequest } from './models/PublishStartRequest.js';
 export { PublishStatus } from './models/PublishStatus.js';
 export type { PublishStatusResponse } from './models/PublishStatusResponse.js';
