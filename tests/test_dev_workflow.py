@@ -62,7 +62,7 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(backend_env["ENVIRONMENT"], "local")
             self.assertEqual(backend_env["LOG_LEVEL"], "DEBUG")
             self.assertTrue(backend_env["DATASTORE_DATABASE_URL"].endswith("/lemma_datastore"))
-            self.assertEqual(backend_env["DOCUMENT_PROCESSOR"], "kreuzberg")
+            self.assertEqual(backend_env["DOCUMENT_PROCESSOR"], "markitdown")
             self.assertEqual(backend_env["EMAIL_TRANSPORT"], "filesystem")
             self.assertEqual(backend_env["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false")
             self.assertEqual(backend_env["API_URL"], "http://localhost:8710")
@@ -98,24 +98,68 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 sum(line.startswith("AGENTBOX_API_KEY=") for line in lines), 1
             )
+            self.assertEqual(
+                sum(line.startswith("APP_BASE_DOMAIN=") for line in lines), 1
+            )
 
-    def test_wait_agentbox_reports_exited_pid_and_log_path(self):
+    def test_init_backend_env_includes_local_app_domain(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            backend = tmp / "backend"
+            backend.mkdir()
+
+            self.run_make(
+                tmp,
+                "_init-backend-env",
+                variables={"BACKEND_DIR": str(backend)},
+            )
+
+            backend_env = self.env_values(backend / ".env")
+            self.assertEqual(
+                backend_env["APP_BASE_DOMAIN"], "apps.lemma.localhost:8710"
+            )
+
+    def test_backend_and_frontend_receive_local_app_domains(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+
+            backend = self.run_make(tmp, "-n", "_run-backend")
+            self.assertIn(
+                "APP_BASE_DOMAIN=apps.lemma.localhost:8710", backend.stdout
+            )
+
+            frontend = self.run_make(tmp, "-n", "_run-frontend")
+            self.assertIn(
+                "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost",
+                frontend.stdout,
+            )
+
+    def test_fresh_dev_database_imports_native_connector_catalog(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+
+            result = self.run_make(tmp, "-n", "_ensure-native-connectors")
+
+            self.assertIn(
+                "scripts/import_connector_catalog.py --provider native",
+                result.stdout,
+            )
+            self.assertIn(
+                "SELECT 1 FROM connectors WHERE id = 'telegram'",
+                result.stdout,
+            )
+
+    def test_wait_agentbox_reports_stopped_unified_backend(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             agentbox = tmp / "agentbox"
-            logs = tmp / "logs"
             agentbox.mkdir()
-            logs.mkdir()
-            (agentbox / ".dev-agentbox.pid").write_text("99999999\n")
-            log_file = logs / "agentbox.log"
-            log_file.write_text("startup failed\n")
 
             result = self.run_make(
                 tmp,
                 "_wait-agentbox",
                 variables={
                     "AGENTBOX_DIR": str(agentbox),
-                    "DEV_LOG_DIR": str(logs),
                     "DEV_AGENTBOX_PORT": "1",
                     "AGENTBOX_READY_TIMEOUT": "1",
                 },
@@ -124,26 +168,25 @@ class DevWorkflowTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             output = result.stdout + result.stderr
-            self.assertIn("AgentBox exited before becoming ready", output)
-            self.assertIn(str(log_file), output)
-            self.assertIn("startup failed", output)
+            self.assertIn("Embedded AgentBox did not become ready", output)
+            self.assertIn("unified backend process is not running", output)
 
-    def test_agentbox_launch_uses_postgres_and_canonical_images(self):
+    def test_unified_backend_uses_postgres_and_canonical_agentbox_images(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
             result = self.run_make(
                 tmp,
                 "-n",
-                "_run-agentbox",
-                variables={
-                    "DEV_LOG_DIR": str(tmp / "logs"),
-                },
+                "_run-backend",
             )
 
-            self.assertIn("AGENTBOX_STATE_DATABASE_URL=postgresql://", result.stdout)
+            self.assertIn(
+                "AGENTBOX_STATE_DATABASE_URL=postgresql+psycopg://",
+                result.stdout,
+            )
             self.assertIn("AGENTBOX_WORKSPACE_IMAGE=agentbox-workspace:dev", result.stdout)
             self.assertIn("AGENTBOX_FUNCTION_IMAGE=agentbox-function:dev", result.stdout)
-            self.assertIn("uv run --extra postgres uvicorn", result.stdout)
+            self.assertIn("uv run --extra local uvicorn local_app:app", result.stdout)
 
     def test_public_mode_tunnels_only_api_and_keeps_frontend_local(self):
         with tempfile.TemporaryDirectory() as raw_tmp:

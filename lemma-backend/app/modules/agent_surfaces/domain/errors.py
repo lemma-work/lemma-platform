@@ -67,3 +67,33 @@ class AgentSurfaceCredentialError(AgentSurfaceError):
             code="AGENT_SURFACE_CREDENTIAL_ERROR",
             status_code=400,
         )
+
+
+class TelegramManagerNotConfiguredError(AgentSurfaceError):
+    def __init__(self):
+        super().__init__(
+            message="Telegram managed-bot provisioning is not configured",
+            code="TELEGRAM_MANAGER_NOT_CONFIGURED",
+            status_code=503,
+        )
+
+
+class TelegramManagedBotSetupNotFoundError(AgentSurfaceError):
+    def __init__(self, setup_id: str):
+        super().__init__(
+            message=f"Telegram managed-bot setup '{setup_id}' not found",
+            code="TELEGRAM_MANAGED_BOT_SETUP_NOT_FOUND",
+            status_code=404,
+        )
+
+
+class TelegramManagedBotSetupAlreadyInProgressError(AgentSurfaceError):
+    def __init__(self, surface_name: str):
+        super().__init__(
+            message=(
+                f"Telegram managed-bot setup for surface '{surface_name}' "
+                "is already in progress"
+            ),
+            code="TELEGRAM_MANAGED_BOT_SETUP_ALREADY_IN_PROGRESS",
+            status_code=409,
+        )

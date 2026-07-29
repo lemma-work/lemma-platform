@@ -33,8 +33,13 @@ from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
 )
 from app.modules.agent_surfaces.platforms.slack.client import slack_access_token
 from app.modules.agent_surfaces.platforms.telegram.client import (
+    ALLOWED_UPDATES,
     normalize_bot_base_url,
     resolve_api_base,
+)
+from app.modules.agent_surfaces.platforms.telegram.update_batching import (
+    assemble_telegram_updates as _assemble_telegram_updates,
+    next_telegram_offset as _next_telegram_offset,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceRepository,
@@ -349,9 +354,7 @@ class TelegramPollingReceiverRunner:
                 try:
                     params: dict[str, Any] = {
                         "timeout": 30,
-                        "allowed_updates": json.dumps(
-                            ["message", "edited_message", "callback_query"]
-                        ),
+                        "allowed_updates": json.dumps(ALLOWED_UPDATES),
                     }
                     if offset is not None:
                         params["offset"] = offset
@@ -360,7 +363,24 @@ class TelegramPollingReceiverRunner:
                         client, base_url, "getUpdates", params
                     )
                     conflict_deadline = None
-                    for update in data.get("result") or []:
+                    updates = list(data.get("result") or [])
+                    if any(isinstance(item.get("message"), dict) for item in updates):
+                        next_offset = _next_telegram_offset(updates, offset)
+                        await asyncio.sleep(0.45)
+                        drain_params: dict[str, Any] = {
+                            "timeout": 0,
+                            "allowed_updates": json.dumps(ALLOWED_UPDATES),
+                        }
+                        if next_offset is not None:
+                            drain_params["offset"] = next_offset
+                        drained = await self._telegram_api(
+                            client,
+                            base_url,
+                            "getUpdates",
+                            drain_params,
+                        )
+                        updates.extend(drained.get("result") or [])
+                    for update in _assemble_telegram_updates(updates):
                         update_id = update.get("update_id")
                         _kinds = [
                             key

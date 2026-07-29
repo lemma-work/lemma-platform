@@ -68,6 +68,9 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
 )
+from app.modules.agent_surfaces.services.telegram_mini_app_mixin import (
+    TelegramMiniAppSyncMixin,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -106,7 +109,7 @@ _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
 _WEBHOOK_RETRY_POLICY = RetryPolicy(max_attempts=3, base_delay=0.5)
 
 
-class AgentSurfaceService:
+class AgentSurfaceService(TelegramMiniAppSyncMixin):
     def __init__(
         self,
         *,

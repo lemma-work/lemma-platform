@@ -2,6 +2,7 @@ import type { GeneratedClientAdapter } from "../generated.js";
 import type { SurfaceCreateRequest } from "../openapi_client/models/SurfaceCreateRequest.js";
 import type { SurfaceUpdateRequest } from "../openapi_client/models/SurfaceUpdateRequest.js";
 import type { SurfaceSendRequest } from "../openapi_client/models/SurfaceSendRequest.js";
+import type { TelegramManagedBotSetupRequest } from "../openapi_client/models/TelegramManagedBotSetupRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -46,6 +47,21 @@ export class PodSurfacesNamespace {
   create(podId: string, payload: SurfaceCreateRequest) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceCreate(podId, payload),
+    );
+  }
+
+  startTelegramBotSetup(
+    podId: string,
+    payload: TelegramManagedBotSetupRequest,
+  ) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceTelegramManagedStart(podId, payload),
+    );
+  }
+
+  getTelegramBotSetup(podId: string, setupId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceTelegramManagedGet(podId, setupId),
     );
   }
 
