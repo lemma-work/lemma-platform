@@ -29,9 +29,18 @@ class AgentHostEventNormalizer:
         self.tool_calls: dict[str, str] = {}
         self.closed_tool_calls: set[str] = set()
 
-    def normalize(self, row: AgentHostEventModel) -> list[AgentEvent]:
+    def normalize(
+        self,
+        row: AgentHostEventModel,
+        *,
+        payload_override: JsonObject | None = None,
+    ) -> list[AgentEvent]:
         event_type = AgentHostEventType(row.type)
-        payload = _json_object(row.payload)
+        payload = (
+            payload_override
+            if payload_override is not None
+            else _json_object(row.payload)
+        )
         object_id = row.object_id or f"event-{row.sequence}"
         metadata = {
             "agent_host_object_id": object_id,
@@ -91,7 +100,7 @@ class AgentHostEventNormalizer:
         *,
         kind: str = "text",
     ) -> list[AgentEvent]:
-        text = _event_text(payload)
+        text = event_text(payload)
         storage[object_id] = storage.get(object_id, "") + text
         return [self._token(text, kind=kind)] if text else []
 
@@ -262,7 +271,7 @@ class AgentHostEventNormalizer:
         storage: dict[str, str],
         kind: str,
     ) -> list[AgentEvent]:
-        full_text = _event_text(payload)
+        full_text = event_text(payload)
         previous = storage.get(object_id, "")
         storage[object_id] = full_text
         if full_text.startswith(previous):
@@ -347,10 +356,18 @@ def _json_object(value: object) -> JsonObject:
     return dict(value) if isinstance(value, dict) else {}
 
 
-def _event_text(payload: JsonObject) -> str:
-    return str(
-        payload.get("text") or payload.get("delta") or payload.get("content") or ""
-    )
+def event_text(payload: JsonObject) -> str:
+    for key in ("text", "delta"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            return value
+    content = payload.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        text = content.get("text")
+        return text if isinstance(text, str) else ""
+    return ""
 
 
 def _integer(value: object, *, default: int = 0) -> int:

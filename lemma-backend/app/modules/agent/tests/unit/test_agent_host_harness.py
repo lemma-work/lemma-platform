@@ -75,6 +75,55 @@ def test_normalizer_streams_and_persists_one_final_message() -> None:
     assert terminal[-1].type is AgentEventType.COMPLETED
 
 
+def test_normalizer_does_not_stringify_non_text_acp_content() -> None:
+    normalizer = AgentHostEventNormalizer(
+        agent_run_id=uuid4(),
+        model_name="gpt-test",
+    )
+
+    events = normalizer.normalize(
+        _row(
+            sequence=1,
+            event_type="agent_message_chunk",
+            object_id="image-1",
+            payload={
+                "content": {
+                    "type": "image",
+                    "data": "base64-is-handled-before-normalization",
+                    "mimeType": "image/png",
+                }
+            },
+        )
+    )
+
+    assert events == []
+
+    rendered = "![Generated image](/me/c/test/agent-output/image.png)"
+    streamed = normalizer.normalize(
+        _row(
+            sequence=2,
+            event_type="agent_message_chunk",
+            object_id="image-1",
+            payload={"content": {"type": "image"}},
+        ),
+        payload_override={"text": rendered},
+    )
+    terminal = normalizer.normalize(
+        _row(
+            sequence=3,
+            event_type="terminal",
+            object_id=None,
+            payload={"state": "SUCCEEDED"},
+        )
+    )
+
+    assert streamed[0].data == {"kind": "text", "data": rendered}
+    final_message = next(
+        event.data for event in terminal if event.type is AgentEventType.MESSAGE
+    )
+    assert final_message.text == rendered
+
+
 def test_normalizer_closes_unfinished_tool_call_before_failure() -> None:
     normalizer = AgentHostEventNormalizer(
         agent_run_id=uuid4(),

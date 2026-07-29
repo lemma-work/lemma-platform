@@ -19,6 +19,7 @@ from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
+    AgentEventType,
     HarnessKind,
     HarnessOptions,
     JsonObject,
@@ -35,7 +36,11 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
 from app.modules.agent.infrastructure.harnesses.agent_host_events import (
     AgentHostEventNormalizer,
     error_event,
+    event_text,
     is_terminal_event,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host_artifacts import (
+    AgentHostArtifactWriter,
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
     mcp_payload,
@@ -101,11 +106,13 @@ class RemoteHarness:
         self,
         uow_factory: UnitOfWorkFactory,
         *,
+        artifact_writer: AgentHostArtifactWriter | None = None,
         event_timeout_seconds: float = DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
         poll_interval_seconds: float = DEFAULT_AGENT_HOST_POLL_INTERVAL_SECONDS,
         terminal_event_grace_seconds: float = DEFAULT_TERMINAL_EVENT_GRACE_SECONDS,
     ) -> None:
         self.uow_factory = uow_factory
+        self.artifact_writer = artifact_writer
         self.event_timeout_seconds = event_timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.terminal_event_grace_seconds = terminal_event_grace_seconds
@@ -169,7 +176,15 @@ class RemoteHarness:
                 )
                 lease = await repo.get_run_lease(run_id=agent_run_id)
 
-            sequence, events = _normalize_rows(normalizer, rows, sequence)
+            sequence, events = await _normalize_rows(
+                normalizer,
+                rows,
+                sequence,
+                artifact_writer=self.artifact_writer,
+                ctx=ctx,
+                conversation=conversation,
+                agent_run_id=agent_run_id,
+            )
             for event in events:
                 yield event
                 if is_terminal_event(event):
@@ -350,18 +365,55 @@ class RemoteHarness:
             )
 
 
-def _normalize_rows(
+async def _normalize_rows(
     normalizer: AgentHostEventNormalizer,
     rows: list[AgentHostEventModel],
     sequence: int,
+    *,
+    artifact_writer: AgentHostArtifactWriter | None,
+    ctx: AgentContext,
+    conversation: Conversation,
+    agent_run_id: UUID,
 ) -> tuple[int, list[AgentEvent]]:
     events: list[AgentEvent] = []
     for row in rows:
         sequence = row.sequence
-        events.extend(normalizer.normalize(row))
+        payload_override: JsonObject | None = None
+        if artifact_writer is not None:
+            from app.modules.agent.services.workspace_location import resolve_pod_cwd
+
+            materialized = await artifact_writer.materialize_event(
+                payload=_json_object(row.payload),
+                pod_id=conversation.pod_id,
+                user_context=ctx,
+                directory_path=f"{resolve_pod_cwd(conversation)}/agent-output",
+                agent_run_id=agent_run_id,
+                event_sequence=row.sequence,
+                harness_key=row.harness_key,
+            )
+            if materialized.markdown:
+                payload_override = _json_object(row.payload)
+                existing = event_text(payload_override)
+                payload_override["text"] = (
+                    f"{existing}\n\n{materialized.markdown}"
+                    if existing
+                    else materialized.markdown
+                )
+            for warning in materialized.warnings:
+                events.append(
+                    AgentEvent(
+                        type=AgentEventType.STATUS,
+                        data={
+                            "status": "agent_host.artifact_warning",
+                            "detail": warning,
+                            "agent_host_sequence": row.sequence,
+                        },
+                        agent_run_id=agent_run_id,
+                        sequence=row.sequence,
+                    )
+                )
+        events.extend(normalizer.normalize(row, payload_override=payload_override))
     return sequence, events
-
-
 def _terminal_checkpoint_state(
     *,
     lease: AgentHostRunLeaseModel | None,

@@ -165,6 +165,11 @@ lemma-agent-host run --agent claude-code --prompt 'Reply exactly: CLAUDE_OK'
 lemma-agent-host run --agent opencode --prompt 'Reply exactly: OPENCODE_OK'
 ```
 
+Pass `--json` for NDJSON containing the negotiated session, every ACP stream
+event (including non-text content blocks), and the terminal outcome. This keeps
+agent thoughts separate from assistant-message chunks and is the preferred
+format for repeatable diagnostics.
+
 This mode is intended for release qualification and local diagnosis. It creates
 an isolated scratch directory under the Agent Host data directory.
 
@@ -191,13 +196,26 @@ The crate has:
   configuration, lease heartbeats, journal replay, and service definitions;
 - a fake-process ACP end-to-end test using the official Rust ACP SDK;
 - a loopback HTTP end-to-end test covering pairing, token refresh, polling,
-  integration publication, event replay, MCP resolution, and self-revocation;
+  harness publication, event replay, MCP resolution, and self-revocation;
 - backend PostgreSQL migration and full protocol tests; and
 - Desktop/locald supervision tests that verify restart and full process-tree
   cleanup.
 
-Real-provider smoke runs are part of release qualification but are not run in
-public CI because they require the developer's authenticated provider account.
+The ignored real-harness test runs the same ACP driver against authenticated
+Codex, Claude Code, and OpenCode installations, then pairs a complete
+`HostRuntime` with an isolated loopback control plane and dispatches one durable
+Codex command through polling, the journal, event append/ack, and terminal
+checkpointing. It asserts that expected answers arrive in assistant-message
+stream events rather than thought events:
+
+```bash
+LEMMA_REAL_AGENT_HOST_DATA_DIR=/path/to/agent-host-data \
+  cargo test --test real_harness_e2e -- --ignored --nocapture
+```
+
+Set `LEMMA_REAL_AGENT_E2E_AGENTS=codex,opencode` to select a subset. These tests
+are release qualification, not public CI: they require the developer's provider
+accounts and spend real quota.
 
 ## License
 

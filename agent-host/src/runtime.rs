@@ -39,6 +39,7 @@ pub struct HostRuntime {
     manifest: AdapterManifest,
     vault: Arc<dyn SecretVault>,
     driver: Arc<dyn AgentDriver>,
+    mcp_bridge_executable: PathBuf,
     instance_id: Uuid,
 }
 
@@ -58,6 +59,7 @@ impl HostRuntime {
             manifest,
             vault,
             driver: Arc::new(AcpDriver),
+            mcp_bridge_executable: std::env::current_exe()?,
             instance_id: Uuid::new_v4(),
         })
     }
@@ -66,6 +68,17 @@ impl HostRuntime {
     #[must_use]
     pub fn with_driver(mut self, driver: Arc<dyn AgentDriver>) -> Self {
         self.driver = driver;
+        self
+    }
+
+    /// Overrides the executable used for the internal MCP bridge.
+    ///
+    /// This exists for integration tests, whose `current_exe()` is the test
+    /// harness rather than the Agent Host binary.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_mcp_bridge_executable(mut self, executable: PathBuf) -> Self {
+        self.mcp_bridge_executable = executable;
         self
     }
 
@@ -148,6 +161,7 @@ impl HostRuntime {
                             self.manifest.clone(),
                             self.vault.as_ref(),
                             Arc::clone(&self.driver),
+                            self.mcp_bridge_executable.clone(),
                             Arc::clone(&global_capacity),
                             current.max_runs,
                             shutdown_rx,
@@ -195,6 +209,7 @@ struct TargetWorker {
     journal: Journal,
     manifest: AdapterManifest,
     driver: Arc<dyn AgentDriver>,
+    mcp_bridge_executable: PathBuf,
     global_capacity: Arc<Semaphore>,
     max_runs: u16,
     shutdown: watch::Receiver<bool>,
@@ -215,6 +230,7 @@ impl TargetWorker {
         manifest: AdapterManifest,
         vault: &dyn SecretVault,
         driver: Arc<dyn AgentDriver>,
+        mcp_bridge_executable: PathBuf,
         global_capacity: Arc<Semaphore>,
         max_runs: u16,
         shutdown: watch::Receiver<bool>,
@@ -235,6 +251,7 @@ impl TargetWorker {
             journal,
             manifest,
             driver,
+            mcp_bridge_executable,
             global_capacity,
             max_runs,
             shutdown,
@@ -447,6 +464,7 @@ impl TargetWorker {
         let client = self.client.clone();
         let journal = self.journal.clone();
         let driver = Arc::clone(&self.driver);
+        let mcp_bridge_executable = self.mcp_bridge_executable.clone();
         let paths = self.paths.clone();
         let run_id = spec.agent_run_id;
         let handle = tokio::spawn(async move {
@@ -483,9 +501,8 @@ impl TargetWorker {
             );
             let scratch = scratch_directory(&paths, target_id, run_id);
             std::fs::create_dir_all(&scratch)?;
-            let executable = std::env::current_exe()?;
             let mcp_server = McpServer::Stdio(
-                McpServerStdio::new("lemma", executable)
+                McpServerStdio::new("lemma", mcp_bridge_executable)
                     .args(vec![
                         "--data-dir".to_owned(),
                         paths.root.to_string_lossy().into_owned(),

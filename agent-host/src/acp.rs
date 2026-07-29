@@ -566,7 +566,9 @@ fn session_config_value(key: &str, selection: &Value) -> Result<SessionConfigOpt
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::{ContentChunk, SessionUpdate, TextContent};
+    use agent_client_protocol::schema::v1::{
+        ContentChunk, ImageContent, SessionUpdate, TextContent,
+    };
 
     use super::*;
 
@@ -599,6 +601,24 @@ mod tests {
         let (kind, _, payload) = normalize_session_update(&update).unwrap();
         assert_eq!(kind, EventType::AgentMessageChunk);
         assert_eq!(payload.get("text"), Some(&Value::String("hi".into())));
+    }
+
+    #[test]
+    fn image_chunk_preserves_the_standard_acp_content_block() {
+        let update = SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::Image(
+            ImageContent::new("cG5n", "image/png"),
+        )));
+        let (kind, _, payload) = normalize_session_update(&update).unwrap();
+        assert_eq!(kind, EventType::AgentMessageChunk);
+        assert_eq!(
+            payload.get("content"),
+            Some(&serde_json::json!({
+                "type": "image",
+                "data": "cG5n",
+                "mimeType": "image/png",
+            }))
+        );
+        assert!(!payload.contains_key("text"));
     }
 
     #[test]

@@ -44,6 +44,9 @@ from app.modules.agent.infrastructure.harnesses import (
     HarnessRegistry,
     PydanticAIHarness,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host_artifacts import (
+    PodFileAgentHostArtifactWriter,
+)
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostDispatchRepository,
@@ -79,10 +82,14 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def build_harness_registry() -> HarnessRegistry:
+    uow_factory = provide_uow_factory()
     return HarnessRegistry(
         [
             PydanticAIHarness(),
-            RemoteHarness(provide_uow_factory()),
+            RemoteHarness(
+                uow_factory,
+                artifact_writer=PodFileAgentHostArtifactWriter(uow_factory),
+            ),
         ]
     )
 

@@ -112,6 +112,9 @@ enum Command {
         agent: String,
         #[arg(long)]
         prompt: String,
+        /// Emit the ACP session, every streamed event, and the terminal outcome as NDJSON.
+        #[arg(long)]
+        json: bool,
     },
     /// Internal run-scoped stdio MCP bridge used by ACP adapters.
     #[command(hide = true)]
@@ -362,7 +365,11 @@ async fn main() -> anyhow::Result<()> {
             );
             Ok(())
         }
-        Command::Run { agent, prompt } => {
+        Command::Run {
+            agent,
+            prompt,
+            json,
+        } => {
             let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
             let adapter = manifest.resolve(&agent)?;
             let scratch = paths.root.join("smoke").join(Uuid::new_v4().to_string());
@@ -387,13 +394,25 @@ async fn main() -> anyhow::Result<()> {
                         scratch_directory: scratch,
                         mcp_server: None,
                     },
-                    Arc::new(ConsoleCallbacks),
+                    Arc::new(ConsoleCallbacks { json }),
                 )
                 .await?;
-            eprintln!(
-                "Agent stopped with {} ({:?}).",
-                outcome.stop_reason, outcome.state
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "kind": "outcome",
+                        "provider_session_id": outcome.provider_session_id,
+                        "state": outcome.state,
+                        "stop_reason": outcome.stop_reason,
+                    })
+                );
+            } else {
+                eprintln!(
+                    "Agent stopped with {} ({:?}).",
+                    outcome.stop_reason, outcome.state
+                );
+            }
             Ok(())
         }
         Command::McpBridge {
@@ -403,24 +422,44 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-struct ConsoleCallbacks;
+struct ConsoleCallbacks {
+    json: bool,
+}
 
 impl AcpCallbacks for ConsoleCallbacks {
     fn before_prompt(&self, provider_session_id: &str) -> anyhow::Result<()> {
-        eprintln!("ACP session: {provider_session_id}");
+        if self.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "kind": "session",
+                    "provider_session_id": provider_session_id,
+                })
+            );
+        } else {
+            eprintln!("ACP session: {provider_session_id}");
+        }
         Ok(())
     }
 
     fn event(
         &self,
         event_type: EventType,
-        _object_id: Option<String>,
+        object_id: Option<String>,
         payload: JsonMap,
     ) -> anyhow::Result<()> {
-        if matches!(
-            event_type,
-            EventType::AgentMessageChunk | EventType::AgentThoughtChunk
-        ) && let Some(text) = payload.get("text").and_then(Value::as_str)
+        if self.json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "kind": "event",
+                    "event_type": event_type,
+                    "object_id": object_id,
+                    "payload": payload,
+                })
+            );
+        } else if event_type == EventType::AgentMessageChunk
+            && let Some(text) = payload.get("text").and_then(Value::as_str)
         {
             print!("{text}");
         }
