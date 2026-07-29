@@ -26,6 +26,13 @@ EXPECTED = [
     ("whatsapp_display_phone_number", "WHATSAPP_DISPLAY_PHONE_NUMBER", None),
     ("telegram_bot_token", "TELEGRAM_BOT_TOKEN", None),
     ("telegram_webhook_secret", "TELEGRAM_WEBHOOK_SECRET", None),
+    ("telegram_manager_bot_token", "TELEGRAM_MANAGER_BOT_TOKEN", None),
+    ("telegram_manager_bot_username", "TELEGRAM_MANAGER_BOT_USERNAME", None),
+    (
+        "telegram_manager_webhook_secret",
+        "TELEGRAM_MANAGER_WEBHOOK_SECRET",
+        None,
+    ),
     ("resend_api_key", "RESEND_API_KEY", None),
     ("resend_inbound_domain", "RESEND_INBOUND_DOMAIN", "ops.lemma.work"),
     ("resend_from_name", "RESEND_FROM_NAME", "Lemma"),
@@ -43,6 +50,11 @@ EXPECTED = [
         24,
     ),
     ("enable_telegram_polling_mode", "ENABLE_TELEGRAM_POLLING_MODE", False),
+    (
+        "enable_telegram_manager_polling_mode",
+        "ENABLE_TELEGRAM_MANAGER_POLLING_MODE",
+        False,
+    ),
     ("enable_slack_socket_mode", "ENABLE_SLACK_SOCKET_MODE", False),
 ]
 

@@ -55,6 +55,9 @@ _KNOWN_TOKEN_PATTERNS = (
     re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\b(?:sk|rk)_live_[A-Za-z0-9]{16,}\b"),
     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"),
+    # Telegram Bot API tokens appear in the request path rather than an
+    # Authorization header, so generic URL query redaction cannot catch them.
+    re.compile(r"\b[0-9]{6,}:[A-Za-z0-9_-]{20,}\b"),
 )
 _SENSITIVE_URL_PARAMS = frozenset(
     {

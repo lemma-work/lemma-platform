@@ -28,7 +28,19 @@ fi
 if ! command -v uv >/dev/null 2>&1; then
   say "Installing uv (https://astral.sh/uv)…"
   command -v curl >/dev/null 2>&1 || fail "curl is required; install curl and re-run"
-  curl -LsSf https://astral.sh/uv/install.sh | sh
+  UV_INSTALLER="$(mktemp)"
+  trap 'rm -f "$UV_INSTALLER"' EXIT
+  curl -LsSf \
+    --connect-timeout 20 \
+    --retry 5 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    --output "$UV_INSTALLER" \
+    https://astral.sh/uv/install.sh \
+    || fail "could not download the uv installer; check your network and re-run"
+  sh "$UV_INSTALLER"
+  rm -f "$UV_INSTALLER"
+  trap - EXIT
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
   command -v uv >/dev/null 2>&1 || fail "uv installed but not on PATH; open a new shell and re-run"
 fi

@@ -12013,6 +12013,9 @@
           },
           "send_policy": {
             "$ref": "#/components/schemas/SurfaceSendPolicyConfig"
+          },
+          "telegram": {
+            "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
           }
         },
         "title": "SurfaceBehaviorConfigInput",
@@ -12117,6 +12120,9 @@
           },
           "send_policy": {
             "$ref": "#/components/schemas/SurfaceSendPolicyConfig"
+          },
+          "telegram": {
+            "$ref": "#/components/schemas/SurfaceTelegramConfigInput"
           }
         },
         "title": "SurfaceConfigResponse",
@@ -12701,6 +12707,25 @@
         "title": "SurfaceSetupStep",
         "type": "object"
       },
+      "SurfaceTelegramConfigInput": {
+        "additionalProperties": false,
+        "description": "Selects the pod app exposed as this bot's Telegram Mini App.",
+        "properties": {
+          "app_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "App Name"
+          }
+        },
+        "title": "SurfaceTelegramConfigInput",
+        "type": "object"
+      },
       "SurfaceUpdateRequest": {
         "additionalProperties": false,
         "description": "Body for `PATCH /pods/{pod_id}/surfaces/{surface_name}`.\n\nPartial update (merge semantics): only fields present in the request are\napplied. The surface's ``platform`` and ``name`` are immutable \u2014 delete and\nrecreate to change either.",
@@ -12944,6 +12969,134 @@
           "updated_at"
         ],
         "title": "TableSummaryResponse",
+        "type": "object"
+      },
+      "TelegramManagedBotSetupRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/SurfaceBehaviorConfigInput"
+          },
+          "default_agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Agent Name"
+          },
+          "is_enabled": {
+            "default": true,
+            "title": "Is Enabled",
+            "type": "boolean"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pod-unique surface name. Defaults to telegram.",
+            "title": "Name"
+          }
+        },
+        "title": "TelegramManagedBotSetupRequest",
+        "type": "object"
+      },
+      "TelegramManagedBotSetupResponse": {
+        "properties": {
+          "account_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
+          "bot_launch_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Launch Url"
+          },
+          "bot_username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bot Username"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "launch_url": {
+            "title": "Launch Url",
+            "type": "string"
+          },
+          "manager_bot_username": {
+            "title": "Manager Bot Username",
+            "type": "string"
+          },
+          "setup_id": {
+            "title": "Setup Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "surface_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface Id"
+          }
+        },
+        "required": [
+          "setup_id",
+          "status",
+          "launch_url",
+          "manager_bot_username",
+          "expires_at"
+        ],
+        "title": "TelegramManagedBotSetupResponse",
         "type": "object"
       },
       "UpdateAgentRequest": {
@@ -16172,7 +16325,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.5"
+    "version": "0.6.8"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -28239,6 +28392,128 @@
         }
       }
     },
+    "/pods/{pod_id}/telegram-bot-setups": {
+      "post": {
+        "operationId": "agent.surface.telegram_managed.start",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramManagedBotSetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramManagedBotSetupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Telegram Managed Bot Setup",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.surface.telegram_managed"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.surface.telegram_managed",
+          "result": "entity",
+          "verb": "start"
+        }
+      }
+    },
+    "/pods/{pod_id}/telegram-bot-setups/{setup_id}": {
+      "get": {
+        "operationId": "agent.surface.telegram_managed.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "setup_id",
+            "required": true,
+            "schema": {
+              "title": "Setup Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramManagedBotSetupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Telegram Managed Bot Setup",
+        "tags": [
+          "Agent Surfaces"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.surface.telegram_managed",
+          "result": "entity",
+          "verb": "get"
+        }
+      }
+    },
     "/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token": {
       "post": {
         "description": "Mint a short-lived, signed embed URL for a widget the caller may view.\n\nPer-view (not baked into the persisted tool result) so the token stays\nephemeral and membership is re-checked each time the widget is opened.",
@@ -29497,6 +29772,35 @@
           "resource": "agent.surface",
           "result": "entity",
           "verb": "teams_admin_consent_callback"
+        }
+      }
+    },
+    "/surfaces/webhooks/telegram-manager": {
+      "post": {
+        "operationId": "surface.webhook.handle_telegram_manager",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Handle Telegram manager-bot webhook",
+        "tags": [
+          "Agent Surfaces (Ingress)"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "surface.webhook"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "surface.webhook",
+          "result": "entity",
+          "verb": "handle_telegram_manager"
         }
       }
     },

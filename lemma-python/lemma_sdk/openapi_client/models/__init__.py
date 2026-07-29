@@ -413,11 +413,14 @@ _NAME_TO_MODULE = {
     'SurfaceSetupPhase': 'surface_setup_phase',
     'SurfaceSetupResponse': 'surface_setup_response',
     'SurfaceSetupStep': 'surface_setup_step',
+    'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUpdateRequest': 'surface_update_request',
     'TableDetailResponse': 'table_detail_response',
     'TableDetailResponseConfigType0': 'table_detail_response_config_type_0',
     'TableListResponse': 'table_list_response',
     'TableSummaryResponse': 'table_summary_response',
+    'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
+    'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
     'Update': 'update',
     'UpdateAgentRequest': 'update_agent_request',
     'UpdateAgentRequestInputSchemaType0': 'update_agent_request_input_schema_type_0',
@@ -901,11 +904,14 @@ if TYPE_CHECKING:
     from .surface_setup_phase import SurfaceSetupPhase
     from .surface_setup_response import SurfaceSetupResponse
     from .surface_setup_step import SurfaceSetupStep
+    from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_update_request import SurfaceUpdateRequest
     from .table_detail_response import TableDetailResponse
     from .table_detail_response_config_type_0 import TableDetailResponseConfigType0
     from .table_list_response import TableListResponse
     from .table_summary_response import TableSummaryResponse
+    from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
+    from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
     from .update import Update
     from .update_agent_request import UpdateAgentRequest
     from .update_agent_request_input_schema_type_0 import UpdateAgentRequestInputSchemaType0
@@ -1402,11 +1408,14 @@ __all__ = [
     'SurfaceSetupPhase',
     'SurfaceSetupResponse',
     'SurfaceSetupStep',
+    'SurfaceTelegramConfigInput',
     'SurfaceUpdateRequest',
     'TableDetailResponse',
     'TableDetailResponseConfigType0',
     'TableListResponse',
     'TableSummaryResponse',
+    'TelegramManagedBotSetupRequest',
+    'TelegramManagedBotSetupResponse',
     'Update',
     'UpdateAgentRequest',
     'UpdateAgentRequestInputSchemaType0',

@@ -54,6 +54,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.get` | Get Surface |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/channels` | `agent.surface.channels` | List Surface Channels |
 | GET | `/pods/{pod_id}/surfaces/{surface_name}/setup` | `agent.surface.setup` | Get Surface Setup |
+| GET | `/pods/{pod_id}/telegram-bot-setups/{setup_id}` | `agent.surface.telegram_managed.get` | Get Telegram Managed Bot Setup |
 | GET | `/surfaces/me` | `agent.surface.list_mine` | List My Surfaces |
 | GET | `/surfaces/teams/admin-consent/callback` | `agent.surface.teams_admin_consent_callback` | Teams Admin Consent Callback |
 | GET | `/surfaces/webhooks/{platform}` | `surface.webhook.verify` | Verify surface webhook using the platform callback URL |
@@ -61,6 +62,8 @@ run `uv run python scripts/generate_route_inventory.py`.
 | PATCH | `/pods/{pod_id}/surfaces/{surface_name}` | `agent.surface.update` | Update Surface |
 | POST | `/pods/{pod_id}/surfaces` | `agent.surface.create` | Create Surface |
 | POST | `/pods/{pod_id}/surfaces/{surface_name}/send` | `agent.surface.send` | Send Surface Message |
+| POST | `/pods/{pod_id}/telegram-bot-setups` | `agent.surface.telegram_managed.start` | Start Telegram Managed Bot Setup |
+| POST | `/surfaces/webhooks/telegram-manager` | `surface.webhook.handle_telegram_manager` | Handle Telegram manager-bot webhook |
 | POST | `/surfaces/webhooks/{platform}` | `surface.webhook.handle_platform` | Handle platform-level surface webhook |
 | POST | `/surfaces/{surface_id}/webhook` | `surface.webhook.handle_surface` | Handle surface-level webhook |
 | PUT | `/surfaces/me/default` | `agent.surface.set_my_default` | Set My Default Surface |

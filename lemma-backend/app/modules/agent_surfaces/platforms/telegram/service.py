@@ -11,7 +11,10 @@ import httpx
 from pydantic_ai.tools import RunContext
 
 from app.modules.agent.contracts import ConversationContext
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
     SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
@@ -26,13 +29,18 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
 )
 from app.modules.agent_surfaces.platforms import common
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
-from app.modules.agent_surfaces.platforms.rendering import chunk_text, to_markdown_v2
+from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
-    TelegramApiError,
     TelegramClient,
     classify_telegram_error,
     telegram_retry_after,
+)
+from app.modules.agent_surfaces.platforms.telegram.message_experience import (
+    acknowledge_interaction as acknowledge_telegram_interaction,
+    end_progress as end_telegram_progress,
+    send_chunk,
+    stream_progress as stream_telegram_progress,
 )
 from app.modules.agent_surfaces.platforms.telegram.models import (
     TelegramCurrentChatParams,
@@ -143,6 +151,18 @@ class TelegramPlatformService:
         thread_id = self._message_thread_id(event)
         reply_to = event.reply_target.get("message_id")
         reply_markup = (metadata or {}).get("reply_markup")
+        retry_action = (metadata or {}).get("retry_action") is True
+        if retry_action and not isinstance(reply_markup, dict):
+            retry_token = await put_callback_token(
+                {
+                    "action": "retry",
+                }
+            )
+            reply_markup = {
+                "inline_keyboard": [
+                    [{"text": "Try again", "callback_data": retry_token}]
+                ]
+            }
 
         raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [
             message or ""
@@ -249,25 +269,23 @@ class TelegramPlatformService:
         return True
 
     async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:
-        rendered = to_markdown_v2(raw_text)
-        use_markdown = len(rendered) <= TELEGRAM_MESSAGE_LIMIT
-        body = {**payload, "text": rendered if use_markdown else raw_text}
-        if use_markdown:
-            body["parse_mode"] = "MarkdownV2"
-        try:
-            await self._call_with_retry("sendMessage", body)
-        except TelegramApiError as exc:
-            if not (use_markdown and exc.is_parse_entities_error):
-                logger.debug(
-                    'agent_surfaces.service.telegram_sendmessage_chat_s_s.diagnostic'
-                )
-                raise
-            logger.debug(
-                'agent_surfaces.service.telegram_markdownv2_parse_chat_s.diagnostic'
-            )
-            plain_body = {k: v for k, v in payload.items()}
-            plain_body["text"] = raw_text
-            await self._call_with_retry("sendMessage", plain_body)
+        await send_chunk(self._call_with_retry, payload, raw_text)
+
+    async def acknowledge_interaction(
+        self,
+        interaction: ParsedSurfaceInteraction,
+        *,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        await acknowledge_telegram_interaction(
+            self._client,
+            interaction,
+            text=text,
+            show_alert=show_alert,
+            clear_actions=clear_actions,
+        )
 
     async def _call_with_retry(
         self, method: str, payload: dict[str, Any]
@@ -419,51 +437,20 @@ class TelegramPlatformService:
         progress_text: str,
         progress_handle: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Send/edit a live progress message; return {"message_id": ...}."""
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        if not self._bot_token or not chat_id:
-            return progress_handle
-        text = f"⏳ {progress_text}"
-        message_id = (progress_handle or {}).get("message_id")
-        try:
-            if message_id:
-                await self._call_with_retry(
-                    "editMessageText",
-                    {"chat_id": chat_id, "message_id": message_id, "text": text},
-                )
-                return progress_handle
-            payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-            thread_id = self._message_thread_id(event)
-            if thread_id is not None:
-                payload["message_thread_id"] = thread_id
-            result = await self._call_with_retry("sendMessage", payload)
-            new_id = ((result or {}).get("result") or {}).get("message_id")
-            return {"message_id": new_id} if new_id else progress_handle
-        except TelegramApiError as exc:
-            if exc.is_not_modified:
-                return progress_handle
-            raise
+        return await stream_telegram_progress(
+            self._call_with_retry,
+            event,
+            progress_text,
+            progress_handle,
+            bot_token=self._bot_token,
+        )
 
     async def end_progress(
         self,
         event: ParsedInboundSurfaceEvent,
         progress_handle: dict[str, Any] | None = None,
     ) -> None:
-        """Delete the streaming progress message (the final answer is sent
-        separately as its own message)."""
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        message_id = (progress_handle or {}).get("message_id")
-        if not chat_id or not message_id:
-            return
-        try:
-            await self._client.call(
-                "deleteMessage", {"chat_id": chat_id, "message_id": message_id}
-            )
-        except Exception:
-            logger.debug(
-                "agent_surfaces.service.telegram_progress_message_cleanup_best.observed",
-                chat_id=chat_id,
-            )
+        await end_telegram_progress(self._client, event, progress_handle)
 
     async def download_attachment_bytes(
         self,

@@ -98,6 +98,56 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(
                 sum(line.startswith("AGENTBOX_API_KEY=") for line in lines), 1
             )
+            self.assertEqual(
+                sum(line.startswith("APP_BASE_DOMAIN=") for line in lines), 1
+            )
+
+    def test_init_backend_env_includes_local_app_domain(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            backend = tmp / "backend"
+            backend.mkdir()
+
+            self.run_make(
+                tmp,
+                "_init-backend-env",
+                variables={"BACKEND_DIR": str(backend)},
+            )
+
+            backend_env = self.env_values(backend / ".env")
+            self.assertEqual(
+                backend_env["APP_BASE_DOMAIN"], "apps.lemma.localhost:8710"
+            )
+
+    def test_backend_and_frontend_receive_local_app_domains(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+
+            backend = self.run_make(tmp, "-n", "_run-backend")
+            self.assertIn(
+                "APP_BASE_DOMAIN=apps.lemma.localhost:8710", backend.stdout
+            )
+
+            frontend = self.run_make(tmp, "-n", "_run-frontend")
+            self.assertIn(
+                "NEXT_PUBLIC_APPS_DOMAIN_SUFFIX=apps.lemma.localhost",
+                frontend.stdout,
+            )
+
+    def test_fresh_dev_database_imports_native_connector_catalog(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+
+            result = self.run_make(tmp, "-n", "_ensure-native-connectors")
+
+            self.assertIn(
+                "scripts/import_connector_catalog.py --provider native",
+                result.stdout,
+            )
+            self.assertIn(
+                "SELECT 1 FROM connectors WHERE id = 'telegram'",
+                result.stdout,
+            )
 
     def test_wait_agentbox_reports_exited_unified_backend_pid(self):
         with tempfile.TemporaryDirectory() as raw_tmp:

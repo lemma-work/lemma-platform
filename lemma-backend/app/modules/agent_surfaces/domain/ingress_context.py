@@ -24,6 +24,7 @@ SurfaceReplyKind = Literal[
 class SurfaceContextBase(BaseModel):
     platform: SurfacePlatform
     surface_id: UUID | None = None
+    surface_name: str | None = None
     surface_account_id: UUID | None = None
     surface_config: SurfaceConfig | None = None
     agent_display_name: str | None = None

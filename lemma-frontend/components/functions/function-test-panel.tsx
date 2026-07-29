@@ -568,7 +568,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
     }, [functionSessionRunId, functionSessionStatus, refreshRuns]);
 
     const sortedRuns = useMemo(
-        () => [...(runs as unknown as FunctionRun[])].sort((a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? '')),
+        () => [...(runs as unknown as FunctionRun[])].sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime()),
         [runs]
     );
 

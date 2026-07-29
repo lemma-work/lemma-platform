@@ -226,6 +226,17 @@ class SurfacePlatformAdapterPort(Protocol):
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> "ParsedSurfaceInteraction | None": ...
 
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: "ParsedSurfaceInteraction",
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        raise NotImplementedError
+
     # Parse an interaction submission (Slack block_actions, Teams Action.Submit)
     # into a routable interaction, or None when the payload is not an interaction.
 

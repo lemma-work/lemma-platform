@@ -402,6 +402,55 @@ async def test_progress_observer_refreshes_telegram_typing_in_process(monkeypatc
     }
 
 
+async def test_progress_observer_delivers_retryable_telegram_error():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(),
+        metadata={"surface_platform": "TELEGRAM"},
+    )
+
+    await observer.on_event(
+        AgentEvent(type=AgentEventType.ERROR, data={"error": "provider failed"}),
+        conversation,
+        SimpleNamespace(),
+    )
+    await observer.on_run_finished(conversation, SimpleNamespace())
+
+    assert service.messages == [
+        {
+            "conversation_id": conversation.id,
+            "message": (
+                "I couldn’t finish that request. "
+                "Try it again without resending your message."
+            ),
+            "metadata": {"retry_action": True},
+        }
+    ]
+
+
+async def test_progress_observer_delivers_preflight_telegram_error():
+    service = _SurfaceService()
+    observer = _observer(service)
+    conversation = SimpleNamespace(
+        id=uuid4(),
+        metadata={"surface_platform": "TELEGRAM"},
+    )
+
+    await observer.on_run_failed(conversation, RuntimeError("runtime missing"))
+
+    assert service.messages == [
+        {
+            "conversation_id": conversation.id,
+            "message": (
+                "I couldn’t finish that request. "
+                "Try it again without resending your message."
+            ),
+            "metadata": {"retry_action": True},
+        }
+    ]
+
+
 async def test_progress_observer_strips_inline_thinking_tags_from_text():
     """Some models emit thinking inline in TextPart as think tags. The observer
     must strip them so they never get buffered or delivered to a surface."""

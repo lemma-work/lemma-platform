@@ -2,7 +2,6 @@ import type { GeneratedClientAdapter } from "../generated.js";
 import type { CreateFunctionRequest } from "../openapi_client/models/CreateFunctionRequest.js";
 import type { ExecuteFunctionRequest } from "../openapi_client/models/ExecuteFunctionRequest.js";
 import type { FunctionPermissionsReplaceRequest } from "../openapi_client/models/FunctionPermissionsReplaceRequest.js";
-import type { JsonObject } from "../openapi_client/models/JsonObject.js";
 import type { UpdateFunctionRequest } from "../openapi_client/models/UpdateFunctionRequest.js";
 import { FunctionsService } from "../openapi_client/services/FunctionsService.js";
 import type { RunFunctionOptions } from "../types.js";
@@ -44,7 +43,7 @@ export class FunctionsNamespace {
     create: (name: string, options: RunFunctionOptions = {}) =>
       this.client.request(() => {
         const payload: ExecuteFunctionRequest = {
-          input_data: options.input as JsonObject | undefined,
+          input_data: options.input as ExecuteFunctionRequest["input_data"],
         };
         return FunctionsService.functionRun(this.podId(), name, payload);
       }),

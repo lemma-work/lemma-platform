@@ -69,8 +69,8 @@ const getRunStatusStyles = (status?: string) => {
     return 'state-badge-info';
 };
 
-const formatRunTime = (value: string) => {
-    const date = new Date(value);
+const formatRunTime = (value: string | null) => {
+    const date = new Date(value ?? '');
     return Number.isNaN(date.getTime())
         ? 'Unknown time'
         : date.toLocaleString([], {
@@ -168,7 +168,7 @@ export function FunctionEditor({
     });
     const sortedRuns = useMemo(() => {
         return [...(runs as FunctionRun[])].sort(
-            (a, b) => Date.parse(b.created_at ?? '') - Date.parse(a.created_at ?? ''),
+            (a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime(),
         );
     }, [runs]);
     const runsScrollRef = useRef<HTMLDivElement | null>(null);
@@ -689,7 +689,7 @@ export function FunctionEditor({
                                                         {run.status}
                                                     </Badge>
                                                 </div>
-                                                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{formatRunTime(run.created_at ?? '')}</p>
+                                                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{formatRunTime(run.created_at)}</p>
                                             </button>
                                         ))}
 

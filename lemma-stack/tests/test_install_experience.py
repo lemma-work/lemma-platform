@@ -305,6 +305,8 @@ def test_install_sh_structure():
     assert "--cli-only" in content, "install.sh must support managed CLI-only setup"
     assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
     assert "curl" in content, "install.sh must use curl to install uv"
+    assert "--retry-all-errors" in content, "uv download must retry transient failures"
+    assert "--output" in content, "uv installer must be downloaded before execution"
 
 
 # --- Version consistency ----------------------------------------------------

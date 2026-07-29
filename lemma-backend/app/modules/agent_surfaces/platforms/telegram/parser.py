@@ -23,7 +23,16 @@ class TelegramMessageParser:
             # the interaction path (``parse_inbound_interaction``); they are not
             # chat messages, so the message parser ignores them.
             return None
-        message_text = self._extract_text(message)
+        batch_messages = payload.get("_lemma_batch_messages")
+        if not isinstance(batch_messages, list) or not batch_messages:
+            batch_messages = [message]
+        message_text = "\n".join(
+            text
+            for item in batch_messages
+            if isinstance(item, dict)
+            for text in [self._extract_text(item).strip()]
+            if text
+        )
 
         if not message_text:
             message_text = ""
@@ -48,7 +57,16 @@ class TelegramMessageParser:
         )
 
         thread_id = str(message.get("message_thread_id") or chat_id)
-        message_id = str(message.get("message_id", ""))
+        message_ids = [
+            str(item.get("message_id"))
+            for item in batch_messages
+            if isinstance(item, dict) and item.get("message_id") is not None
+        ]
+        message_id = (
+            f"batch:{message_ids[0]}-{message_ids[-1]}"
+            if len(message_ids) > 1
+            else str(message.get("message_id", ""))
+        )
 
         # A mention can be a plain @username (`mention`), a name-link to a
         # username-less user/bot (`text_mention`), or a slash command
@@ -89,7 +107,19 @@ class TelegramMessageParser:
         reply_to_message = message.get("reply_to_message") or {}
         is_reply_to_bot = bool((reply_to_message.get("from") or {}).get("is_bot"))
 
-        attachments = self._parse_attachments(message)
+        attachments = [
+            attachment
+            for item in batch_messages
+            if isinstance(item, dict)
+            for attachment in self._parse_attachments(item)
+        ]
+        media_group_ids = list(
+            dict.fromkeys(
+                str(item.get("media_group_id"))
+                for item in batch_messages
+                if isinstance(item, dict) and item.get("media_group_id") is not None
+            )
+        )
 
         return ParsedInboundSurfaceEvent(
             platform=self.platform,
@@ -128,6 +158,8 @@ class TelegramMessageParser:
                 "contact_shared_by_sender": contact_details["contact_shared_by_sender"],
                 "shared_contact_phone": contact_details["shared_contact_phone"],
                 "attachments": attachments,
+                "batched_message_count": len(batch_messages),
+                "media_group_ids": media_group_ids,
                 # Carried for the ingress enrichment step to verify against the
                 # bot's actual @username / user id.
                 "mentioned_usernames": mentioned_usernames,
