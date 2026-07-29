@@ -212,6 +212,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic': EventSpec('debug', frozenset()),
     'agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic': EventSpec('debug', frozenset({'account_id'})),
     'agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic': EventSpec('debug', frozenset({'account_id'})),
+    'apps.app_asset_resolver.branding_entitlement.diagnostic': EventSpec('warning', frozenset({'error_type', 'pod_id'})),
     'apps.app_service.app_html_lint.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
     'apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic': EventSpec('debug', frozenset({'app_id'})),
     'authorization.resource_names.dangling_grants_skipped': EventSpec('debug', frozenset({'pod_id'})),
