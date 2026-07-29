@@ -104,6 +104,20 @@ class TelegramManagerService:
         if not self.configured:
             raise TelegramManagerNotConfiguredError()
 
+        existing = await self._store.get_by_target(pod_id, surface_name)
+        if (
+            existing is not None
+            and existing.user_id == user_id
+            and existing.organization_id == organization_id
+            and existing.status
+            in {
+                TelegramManagedBotSetupStatus.PENDING,
+                TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM,
+                TelegramManagedBotSetupStatus.PROVISIONING,
+            }
+        ):
+            return existing
+
         for _ in range(5):
             setup_id = secrets.token_urlsafe(18)
             request_id = secrets.randbelow(2_147_483_646) + 1
@@ -134,10 +148,7 @@ class TelegramManagerService:
     def launch_url(self, setup: TelegramManagedBotSetup) -> str:
         if not self.configured:
             raise TelegramManagerNotConfiguredError()
-        return (
-            f"https://t.me/{self._manager_username}"
-            f"?start=surface_{setup.setup_id}"
-        )
+        return f"https://t.me/{self._manager_username}?start=surface_{setup.setup_id}"
 
     async def get_setup(
         self,
@@ -199,9 +210,7 @@ class TelegramManagerService:
         owner: str,
     ) -> AsyncIterator[None]:
         owner_task = asyncio.current_task()
-        lease_lost_message = (
-            f"Telegram provisioning lease lost for {setup_id}:{owner}"
-        )
+        lease_lost_message = f"Telegram provisioning lease lost for {setup_id}:{owner}"
 
         async def _renew() -> None:
             while True:
@@ -262,11 +271,15 @@ def _suggested_bot_username(
     surface_name: str,
     setup_id: str,
 ) -> str:
-    base = re.sub(
-        r"[^A-Za-z0-9_]+",
-        "_",
-        f"lemma_{pod_name}_{surface_name}",
-    ).strip("_").lower()
+    base = (
+        re.sub(
+            r"[^A-Za-z0-9_]+",
+            "_",
+            f"lemma_{pod_name}_{surface_name}",
+        )
+        .strip("_")
+        .lower()
+    )
     suffix = setup_id[:4].lower()
     max_base = 32 - len(f"_{suffix}_bot")
     base = base[:max_base].rstrip("_") or "lemma"
