@@ -178,6 +178,7 @@ POD_USER_PERMISSIONS: frozenset[str] = frozenset(
 POD_EDITOR_PERMISSIONS: frozenset[str] = frozenset(
     set(POD_USER_PERMISSIONS)
     | {
+        Permissions.POD_UPDATE,
         Permissions.DATASTORE_TABLE_CREATE,
         Permissions.DATASTORE_TABLE_UPDATE,
         Permissions.FOLDER_WRITE,

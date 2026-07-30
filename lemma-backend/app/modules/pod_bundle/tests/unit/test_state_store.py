@@ -275,3 +275,28 @@ def test_failed_job_reopens_only_with_explicit_incremented_attempt():
         incoming,
         allow_failed_reopen=True,
     )
+
+
+def test_retryable_nonterminal_job_advances_once_when_marker_is_cleared():
+    existing = _state()
+    existing.status = ImportStatus.FETCHING
+    existing.retryable = True
+    incoming = existing.model_copy(deep=True)
+    incoming.retryable = False
+    incoming.attempt += 1
+
+    PodBundleStateStore._validate_transition(
+        BundleJobKind.IMPORT,
+        existing,
+        incoming,
+        allow_failed_reopen=False,
+    )
+
+    still_marked = incoming.model_copy(update={"retryable": True})
+    with pytest.raises(BundleStateConflictError):
+        PodBundleStateStore._validate_transition(
+            BundleJobKind.IMPORT,
+            existing,
+            still_marked,
+            allow_failed_reopen=False,
+        )

@@ -22,6 +22,8 @@ import tempfile
 from pathlib import Path
 from uuid import UUID
 
+from streaq import StreaqRetry
+
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
@@ -46,6 +48,9 @@ from app.modules.pod_bundle.domain.state import (
     PublishStatus,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
+from app.modules.pod_bundle.infrastructure import github_fetcher
+from app.modules.pod_bundle.infrastructure import publish_lock
+from app.modules.pod_bundle.infrastructure import publish_manifest
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
     error_payload,
@@ -64,6 +69,21 @@ logger = get_logger(__name__)
 
 class _ImportCancellation(Exception):
     pass
+
+
+def _github_import_fetcher(worker_ctx: AppWorkerContext, state: ImportState):
+    runner = None
+    if state.account_id is not None:
+        runner = _github_import_operation_runner(worker_ctx=worker_ctx, state=state)
+    elif (
+        pod_bundle_settings.pod_bundle_github_token is None
+        and "GitHub import used anonymous API access and may be rate-limited."
+        not in state.warnings
+    ):
+        state.warnings.append(
+            "GitHub import used anonymous API access and may be rate-limited."
+        )
+    return github_fetcher.GithubBundleFetcher(operation_runner=runner)
 
 
 async def _cancellation_requested(store, import_id: UUID) -> ImportState | None:
@@ -313,7 +333,7 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
+        await _fail_import(store, state, exc)
         logger.warning(
             "pod_bundle.handlers.pod_bundle_plan_s_terminal.degraded",
             import_id=import_id,
@@ -354,6 +374,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
             )
         except ValueError as exc:
             raise BundleInvalidError(str(exc)) from exc
+        publish_manifest.prepare_published_bundle(bundle_root)
 
         async with uow_scope(worker_ctx.uow_factory) as uow:
             ctx = await AuthorizationDataService(uow.session).build_user_context(
@@ -384,9 +405,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
 
 @streaq_task(name="import_pod_github")
 async def import_pod_github(context: dict[str, str | None]) -> None:
-    """Fetch a public repo's zipball, stage it, then plan — one job, so a single
-    ``import_id`` covers fetch + plan. Falls through to the same planning routine
-    as an uploaded bundle."""
+    """Fetch a GitHub zipball, using the selected connector account when set."""
     worker_ctx: AppWorkerContext = streaq_worker.context
     import_id = UUID(str(context["import_id"]))
 
@@ -400,6 +419,12 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
         return
 
     try:
+        if state.retryable or state.error is not None:
+            state.attempt += 1
+        state.error = None
+        state.error_type = None
+        state.error_code = None
+        state.retryable = False
         await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.FETCHING
         await store.save_import(state)
@@ -407,17 +432,12 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             import_id, status_payload(state.status.value, state.seq)
         )
 
-        from app.modules.pod_bundle.infrastructure.github_fetcher import (
-            GithubBundleFetcher,
-            parse_repo_ref,
-        )
-
-        owner, repo = parse_repo_ref(
+        owner, repo = github_fetcher.parse_repo_ref(
             repo_url=state.source.repo_url,
             owner=(context.get("owner")),
             repo=(context.get("repo")),
         )
-        zip_bytes = await GithubBundleFetcher().fetch_zipball(
+        zip_bytes = await _github_import_fetcher(worker_ctx, state).fetch_zipball(
             owner=owner, repo=repo, ref=state.source.ref
         )
         await _raise_if_cancelled(store, import_id)
@@ -434,21 +454,29 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
+        if _is_retryable_import_error(exc) and state.attempt < 3:
+            await _record_import_retry(store, state, exc)
+            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+        await _fail_import(store, state, exc)
         logger.warning(
             "pod_bundle.handlers.github_import_s_terminal_s.degraded",
             import_id=import_id,
         )
-    except Exception:
+    except Exception as exc:
+        if state.attempt < 3:
+            await _record_import_retry(store, state, exc)
+            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
         await _fail_import(
-            store, state, "GitHub import failed due to a transient error."
+            store,
+            state,
+            exc,
+            public_message="GitHub import failed after three transient attempts.",
         )
         logger.debug(
             'pod_bundle.handlers.github_import_s_retryable_s.propagated',
             import_id=import_id,
         exc_info=True,
     )
-        raise
 
 
 @streaq_task(name="import_pod_url")
@@ -497,7 +525,7 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
+        await _fail_import(store, state, exc)
         logger.warning(
             "pod_bundle.handlers.url_import_s_terminal_s.degraded", import_id=import_id
         )
@@ -575,6 +603,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 )
             except ValueError as exc:
                 raise BundleInvalidError(str(exc)) from exc
+            publish_manifest.prepare_published_bundle(bundle_root)
 
             while (step := state.plan.next_pending_step()) is not None:
                 await _raise_if_cancelled(store, import_id)
@@ -657,7 +686,10 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                     step.error = str(exc)
                     await _checkpoint(store, state, step)
                     await _fail_import(
-                        store, state, f"Step '{step.name}' failed: {exc}"
+                        store,
+                        state,
+                        exc,
+                        public_message=f"Step '{step.name}' failed: {exc}",
                     )
                     logger.debug(
                         'pod_bundle.handlers.import_s_step_s_s.diagnostic',
@@ -690,7 +722,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
+        await _fail_import(store, state, exc)
         logger.warning(
             "pod_bundle.handlers.pod_bundle_apply_s_terminal.degraded",
             import_id=import_id,
@@ -706,6 +738,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
 
 
 async def _checkpoint(store, state: ImportState, step) -> None:
+    assert state.plan is not None
     done = sum(1 for s in state.plan.steps if s.status.value in ("DONE", "SKIPPED"))
     state.progress.done = done
     state.progress.total = len(state.plan.steps)
@@ -788,6 +821,7 @@ async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> No
         async with context_scope(ctx):
             pod_service = get_pod_service(uow)
             pod = await pod_service.get_pod(state.pod_id, state.user_id)
+            assert pod is not None
             new_config = pod.config.model_copy(
                 update={"recipes": [*pod.config.recipes, recipe]}
             )
@@ -799,13 +833,79 @@ async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> No
             )
 
 
-async def _fail_import(store, state: ImportState, message: str) -> None:
+def _is_retryable_import_error(exc: DomainError) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    return status_code in {408, 429} or (
+        isinstance(status_code, int) and status_code >= 500
+    )
+
+
+async def _record_import_retry(
+    store,
+    state: ImportState,
+    exc: Exception,
+) -> None:
+    state.error = "GitHub is temporarily unavailable; retrying import."
+    state.error_type = type(exc).__name__
+    state.error_code = str(
+        getattr(exc, "code", None) or "GITHUB_IMPORT_TRANSIENT"
+    )
+    state.retryable = True
+    await store.save_import(state)
+
+
+def _github_import_operation_runner(
+    *,
+    worker_ctx: AppWorkerContext,
+    state: ImportState,
+):
+    async def run(operation_name: str, payload: dict) -> dict:
+        async with uow_scope(worker_ctx.uow_factory) as uow:
+            actor = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=state.user_id,
+                pod_id=state.pod_id,
+            )
+            from app.composition.pod_bundle_resources import (
+                build_connector_operation_service,
+            )
+
+            service = build_connector_operation_service(uow)
+            response = await service.execute_operation(
+                connector_id="github",
+                operation_name=operation_name,
+                payload=payload,
+                user_id=state.user_id,
+                actor=actor,
+                account_id=state.account_id,
+            )
+        if hasattr(response, "model_dump"):
+            return response.model_dump(mode="json")
+        return response if isinstance(response, dict) else {}
+
+    return run
+
+
+async def _fail_import(
+    store,
+    state: ImportState,
+    error: str | Exception,
+    *,
+    public_message: str | None = None,
+) -> None:
     state.status = ImportStatus.FAILED
-    state.error = message
+    state.error = public_message or str(error)
+    state.error_type = type(error).__name__ if isinstance(error, Exception) else None
+    state.error_code = str(
+        getattr(error, "code", None) or "POD_BUNDLE_IMPORT_FAILED"
+    )
+    state.retryable = False
     state.completed_at = _now()
     try:
         await store.save_import(state)
-        await publish_bundle_event(state.import_id, error_payload(message, state.seq))
+        await publish_bundle_event(
+            state.import_id,
+            error_payload(state.error, state.seq),
+        )
     except Exception:  # noqa: BLE001 - failure bookkeeping is best-effort
         logger.debug(
             'pod_bundle.handlers.persist_state_import_s_s.diagnostic',
@@ -848,6 +948,7 @@ async def _sweep(store, staging) -> tuple[int, int]:
 
     reclaimed = 0
     recovered_states = await store.recover_stale_jobs(cutoff=cutoff)
+    await publish_lock.release_recovered_publish_locks(recovered_states)
     recovered = len(recovered_states)
     for state in recovered_states:
         job_id = getattr(

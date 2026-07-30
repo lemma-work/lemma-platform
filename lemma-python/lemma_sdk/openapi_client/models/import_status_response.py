@@ -34,8 +34,11 @@ class ImportStatusResponse:
         committed_steps (list[int] | Unset):
         current_step (int | None | Unset):
         error (None | str | Unset):
+        error_code (None | str | Unset):
         plan (ImportPlanResponse | None | Unset):
         progress (ExportProgressResponse | Unset):
+        retryable (bool | Unset):  Default: False.
+        warnings (list[str] | Unset):
     """
 
     events_url: str
@@ -47,8 +50,11 @@ class ImportStatusResponse:
     committed_steps: list[int] | Unset = UNSET
     current_step: int | None | Unset = UNSET
     error: None | str | Unset = UNSET
+    error_code: None | str | Unset = UNSET
     plan: ImportPlanResponse | None | Unset = UNSET
     progress: ExportProgressResponse | Unset = UNSET
+    retryable: bool | Unset = False
+    warnings: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -88,6 +94,12 @@ class ImportStatusResponse:
         else:
             error = self.error
 
+        error_code: None | str | Unset
+        if isinstance(self.error_code, Unset):
+            error_code = UNSET
+        else:
+            error_code = self.error_code
+
         plan: dict[str, Any] | None | Unset
         if isinstance(self.plan, Unset):
             plan = UNSET
@@ -99,6 +111,12 @@ class ImportStatusResponse:
         progress: dict[str, Any] | Unset = UNSET
         if not isinstance(self.progress, Unset):
             progress = self.progress.to_dict()
+
+        retryable = self.retryable
+
+        warnings: list[str] | Unset = UNSET
+        if not isinstance(self.warnings, Unset):
+            warnings = self.warnings
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -119,10 +137,16 @@ class ImportStatusResponse:
             field_dict["current_step"] = current_step
         if error is not UNSET:
             field_dict["error"] = error
+        if error_code is not UNSET:
+            field_dict["error_code"] = error_code
         if plan is not UNSET:
             field_dict["plan"] = plan
         if progress is not UNSET:
             field_dict["progress"] = progress
+        if retryable is not UNSET:
+            field_dict["retryable"] = retryable
+        if warnings is not UNSET:
+            field_dict["warnings"] = warnings
 
         return field_dict
 
@@ -183,6 +207,15 @@ class ImportStatusResponse:
 
         error = _parse_error(d.pop("error", UNSET))
 
+        def _parse_error_code(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        error_code = _parse_error_code(d.pop("error_code", UNSET))
+
         def _parse_plan(data: object) -> ImportPlanResponse | None | Unset:
             if data is None:
                 return data
@@ -207,6 +240,10 @@ class ImportStatusResponse:
         else:
             progress = ExportProgressResponse.from_dict(_progress)
 
+        retryable = d.pop("retryable", UNSET)
+
+        warnings = cast(list[str], d.pop("warnings", UNSET))
+
         import_status_response = cls(
             events_url=events_url,
             import_id=import_id,
@@ -217,8 +254,11 @@ class ImportStatusResponse:
             committed_steps=committed_steps,
             current_step=current_step,
             error=error,
+            error_code=error_code,
             plan=plan,
             progress=progress,
+            retryable=retryable,
+            warnings=warnings,
         )
 
         import_status_response.additional_properties = d

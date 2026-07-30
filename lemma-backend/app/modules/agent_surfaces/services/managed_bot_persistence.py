@@ -94,9 +94,7 @@ async def persist_managed_bot(
             account.credentials = GenericCredentials.model_validate(
                 {"bot_token": bot_token}
             )
-            account.display_name = (
-                f"@{bot_username}" if bot_username else str(bot_id)
-            )
+            account.display_name = f"@{bot_username}" if bot_username else str(bot_id)
             account = await accounts.update(account)
         from app.modules.agent_surfaces.api.dependencies import get_surface_service
 

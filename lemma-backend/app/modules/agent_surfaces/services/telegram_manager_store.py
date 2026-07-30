@@ -247,9 +247,7 @@ class TelegramManagedBotSetupStore:
                     setup.setup_id,
                 )
             if not target_created:
-                raise TelegramManagedBotSetupAlreadyInProgressError(
-                    setup.surface_name
-                )
+                raise TelegramManagedBotSetupAlreadyInProgressError(setup.surface_name)
             return False
         finally:
             await redis.aclose()
@@ -259,6 +257,31 @@ class TelegramManagedBotSetupStore:
         try:
             raw = await redis.get(self._setup_key(setup_id))
             return TelegramManagedBotSetup.model_validate_json(raw) if raw else None
+        finally:
+            await redis.aclose()
+
+    async def get_by_target(
+        self,
+        pod_id: UUID,
+        surface_name: str,
+    ) -> TelegramManagedBotSetup | None:
+        redis = Redis.from_url(self._redis_url, decode_responses=True)
+        target_key = self._target_key(pod_id, surface_name)
+        try:
+            setup_id = await redis.get(target_key)
+            if not setup_id:
+                return None
+            raw = await redis.get(self._setup_key(setup_id))
+            if raw:
+                return TelegramManagedBotSetup.model_validate_json(raw)
+            await _eval(
+                redis,
+                _COMPARE_DELETE_SCRIPT,
+                1,
+                target_key,
+                setup_id,
+            )
+            return None
         finally:
             await redis.aclose()
 

@@ -251,9 +251,8 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     fake_slack,
     monkeypatch,
 ):
-    """The config the API returns mirrors exactly what callers send:
-    {identity, channels, dm_conversation_reset_after_hours} — no derived or
-    internal fields, and partial upserts leave unsent fields untouched."""
+    """The config the API returns mirrors the public editable fields, including
+    platform-specific Telegram settings, and partial updates preserve omissions."""
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -297,6 +296,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "telegram",
     }
     assert config["dm_conversation_reset_after_hours"] == 6
     # Identity values are normalized on write.
@@ -326,12 +326,14 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "telegram",
     }
     assert set(schemas["SurfaceBehaviorConfigInput"]["properties"]) == {
         "identity",
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "telegram",
     }
 
 

@@ -17,6 +17,10 @@ from uuid import UUID, uuid4
 from fastapi import status
 from httpx import AsyncClient
 
+from app.modules.test_support.e2e_authz import (
+    signup_user as signup_verified_user,
+)
+
 # Real arXiv papers (under tests/fixtures/arxiv/) used by the indexing/search
 # e2e so conversion + full-text/vector search run against genuine PDF text
 # rather than synthetic stand-ins. Each entry pairs a paper with a phrase that
@@ -631,24 +635,7 @@ class DatastoreApi:
 
 
 async def signup_user(async_client: AsyncClient, prefix: str) -> dict[str, str]:
-    email = f"test+{prefix}-{uuid4().hex[:8]}@example.com"
-    response = await async_client.post(
-        "/st/auth/signup",
-        json={
-            "formFields": [
-                {"id": "email", "value": email},
-                {"id": "password", "value": "TestPassword@123"},
-            ]
-        },
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    token = response.headers.get("st-access-token") or response.cookies.get(
-        "sAccessToken"
-    )
-    assert payload.get("status") == "OK", payload
-    assert token
-    return {"email": email, "token": token, "id": payload["user"]["id"]}
+    return await signup_verified_user(async_client, prefix)
 
 
 async def invite_to_pod(

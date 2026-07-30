@@ -24,6 +24,9 @@ from app.modules.apps.application.app_use_cases import AppUseCases
 from app.modules.apps.infrastructure.repositories import AppRepository
 from app.modules.apps.services.app_file_manager import AppFileManager
 from app.modules.apps.services.app_service import AppService
+from app.modules.apps.services.app_branding_provider import (
+    build_app_branding_entitlement_port,
+)
 from app.composition.authorization import create_authorization_service
 
 
@@ -51,6 +54,7 @@ def build_app_service(uow) -> AppService:
         app_repository=AppRepository(uow, message_bus=message_bus),
         file_manager_factory=_get_app_storage_factory(),
         authorization_service=create_authorization_service(uow),
+        app_branding_entitlement=build_app_branding_entitlement_port(uow),
     )
 
 

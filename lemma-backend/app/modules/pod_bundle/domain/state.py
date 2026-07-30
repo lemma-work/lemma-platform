@@ -47,6 +47,11 @@ class PublishStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class PublishMode(str, Enum):
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+
+
 class BundleJobKind(str, Enum):
     IMPORT = "IMPORT"
     EXPORT = "EXPORT"
@@ -182,6 +187,7 @@ class _BundleJobState(BaseModel):
     error: str | None = None
     error_type: str | None = None
     error_code: str | None = None
+    retryable: bool = False
     version: int = 0
     attempt: int = 1
     seq: int = 0
@@ -200,6 +206,7 @@ class _BundleJobState(BaseModel):
 class ImportState(_BundleJobState):
     import_id: UUID
     source: BundleSource
+    account_id: UUID | None = None
     status: ImportStatus = ImportStatus.QUEUED
     staging_key: str | None = None
     plan: ImportPlan | None = None
@@ -209,6 +216,7 @@ class ImportState(_BundleJobState):
     cancel_requested_at: datetime | None = None
     current_step: int | None = None
     committed_steps: list[int] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
@@ -251,6 +259,7 @@ class PublishState(_BundleJobState):
     publish_id: UUID
     status: PublishStatus = PublishStatus.QUEUED
     repo_name: str
+    mode: PublishMode = PublishMode.CREATE
     private: bool = False
     account_id: UUID | None = None
     ai_readme: bool = False
@@ -259,9 +268,11 @@ class PublishState(_BundleJobState):
     repo_created: bool = False
     repo_owner: str | None = None
     repo_slug: str | None = None
+    repo_branch: str | None = None
     readme: str | None = None
     files: list[PublishFileProgress] = Field(default_factory=list)
     progress: Progress = Field(default_factory=Progress)
+    warnings: list[str] = Field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:

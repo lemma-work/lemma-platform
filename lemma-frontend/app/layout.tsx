@@ -68,13 +68,18 @@ const dmMono = DM_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL?.startsWith("http")
+      ? process.env.NEXT_PUBLIC_SITE_URL
+      : "https://lemma.work",
+  ),
   title: {
     default: "Lemma",
     template: "%s | Lemma",
   },
   applicationName: "Lemma",
   description:
-    "Build AI pods for long-running agentic work. Design agents, records, workflows, and apps in one place.",
+    "Run your apps and agents. Bring your team.",
   keywords: [
     "Lemma",
     "AI agents",

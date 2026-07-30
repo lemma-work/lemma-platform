@@ -18,6 +18,10 @@ import {
     showResourceCreatedToast,
     showResourceErrorToast,
 } from '@/components/shared/resource-feedback';
+import {
+    buildAppRemixConversationHref,
+    normalizeRemixSource,
+} from '@/lib/remix/app-remix';
 
 const POD_IDEAS = [
     {
@@ -74,6 +78,14 @@ function CreatePodPageContent() {
             });
 
             showResourceCreatedToast('Pod', podName);
+            const remixSource = normalizeRemixSource(
+                new URLSearchParams(window.location.search).get('remixSource'),
+            );
+            if (remixSource) {
+                router.push(buildAppRemixConversationHref(pod.id, remixSource));
+                return;
+            }
+
             const params = new URLSearchParams({
                 assistantMessage: 'Hi',
                 conversationInstructions: [

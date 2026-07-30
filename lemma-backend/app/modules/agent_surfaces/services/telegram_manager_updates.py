@@ -5,6 +5,8 @@ import secrets
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
+
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.platforms.delivery import DeliveryClassification
@@ -157,14 +159,17 @@ async def _save_waiting_setup(
     setup.telegram_username = (
         str(from_user.get("username") or "").strip().lstrip("@") or None
     )
-    setup.telegram_display_name = " ".join(
-        part
-        for part in (
-            str(from_user.get("first_name") or "").strip(),
-            str(from_user.get("last_name") or "").strip(),
+    setup.telegram_display_name = (
+        " ".join(
+            part
+            for part in (
+                str(from_user.get("first_name") or "").strip(),
+                str(from_user.get("last_name") or "").strip(),
+            )
+            if part
         )
-        if part
-    ) or setup.telegram_username
+        or setup.telegram_username
+    )
     setup.status = TelegramManagedBotSetupStatus.WAITING_FOR_TELEGRAM
     saved = await runtime._store.save_if_status(
         setup,
@@ -323,7 +328,7 @@ def _setup_accepts_created_bot(
 def _parse_created_bot(bot: dict[str, Any]) -> tuple[int, str | None] | None:
     try:
         bot_id = int(bot["id"])
-    except (KeyError, TypeError, ValueError):
+    except KeyError, TypeError, ValueError:
         return None
     username = str(bot.get("username") or "").strip().lstrip("@") or None
     return bot_id, username
@@ -380,10 +385,7 @@ async def _begin_provisioning(
     if saved:
         return True
     current = await runtime._store.get(setup.setup_id)
-    if (
-        current is not None
-        and current.status is TelegramManagedBotSetupStatus.COMPLETE
-    ):
+    if current is not None and current.status is TelegramManagedBotSetupStatus.COMPLETE:
         return False
     raise TelegramManagedBotProvisioningInProgressError(
         f"Telegram managed-bot setup '{setup.setup_id}' changed state"
@@ -426,6 +428,7 @@ async def _provision(
         return True
     except (
         DomainError,
+        IntegrityError,
         KeyError,
         _PermanentProvisioningError,
         TelegramApiError,
@@ -554,9 +557,7 @@ def _safe_setup_error(exc: Exception) -> str:
 
 def _is_transient_setup_error(exc: Exception) -> bool:
     if isinstance(exc, TelegramApiError):
-        return (
-            classify_telegram_error(exc) is DeliveryClassification.TRANSIENT
-        )
+        return classify_telegram_error(exc) is DeliveryClassification.TRANSIENT
     return isinstance(exc, DomainError) and (
         exc.status_code == 429 or exc.status_code >= 500
     )

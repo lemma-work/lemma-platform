@@ -353,6 +353,7 @@ _NAME_TO_MODULE = {
     'PodRoleResourcePermissionResponse': 'pod_role_resource_permission_response',
     'PodRoleResponse': 'pod_role_response',
     'PodUpdateRequest': 'pod_update_request',
+    'PublishMode': 'publish_mode',
     'PublishStartRequest': 'publish_start_request',
     'PublishStatus': 'publish_status',
     'PublishStatusResponse': 'publish_status_response',
@@ -864,6 +865,7 @@ if TYPE_CHECKING:
     from .pod_role_resource_permission_response import PodRoleResourcePermissionResponse
     from .pod_role_response import PodRoleResponse
     from .pod_update_request import PodUpdateRequest
+    from .publish_mode import PublishMode
     from .publish_start_request import PublishStartRequest
     from .publish_status import PublishStatus
     from .publish_status_response import PublishStatusResponse
@@ -1388,6 +1390,7 @@ __all__ = [
     'PodRoleResourcePermissionResponse',
     'PodRoleResponse',
     'PodUpdateRequest',
+    'PublishMode',
     'PublishStartRequest',
     'PublishStatus',
     'PublishStatusResponse',

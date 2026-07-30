@@ -76,7 +76,7 @@ export default function LandingPage() {
         </Link>
         <nav className="lp-nav" aria-label="Primary navigation">
           <a href="#inside">How it works</a>
-          <a href="#showcase">Examples</a>
+          <Link href="/templates">Templates</Link>
           <a href="/docs" target="_blank" rel="noreferrer">
             Docs
           </a>
@@ -92,7 +92,7 @@ export default function LandingPage() {
         </nav>
         <div className="lp-header-actions">
           <Link className="lp-button primary" href="/auth">
-            Get started
+            Start building
           </Link>
         </div>
       </header>
@@ -105,7 +105,7 @@ export default function LandingPage() {
                 <GithubLogo aria-hidden className="lp-gh-icon" />
                 Open source
               </span>
-              Purpose-built AI apps
+              Apps · agents · teams
             </p>
             <h1 className="lp-hero-headline" id="hero-title">
               The software you need
@@ -114,13 +114,13 @@ export default function LandingPage() {
               </span>
             </h1>
             <p className="lp-subhead">
-              Lemma gives any job its own AI app. Add your teammates, and let
-              agents keep the work moving in the background.
+              Build the apps and agents your team actually needs. Bring your
+              team, and run it all on Lemma.
             </p>
 
             <div className="lp-actions">
               <Link className="lp-button primary" href="/auth">
-                Get started
+                Start building
               </Link>
               <a
                 className="lp-button secondary"
@@ -261,20 +261,18 @@ export default function LandingPage() {
               <div>
                 <p className="lp-section-kicker">What people build</p>
                 <h2 className="lp-section-title">
-                  A pod for every workflow your team runs on spreadsheets.
+                  Start with the job. <span>Make it yours.</span>
                 </h2>
                 <p className="lp-section-subhead">
-                  These are the architectures. Fork one and ship.
+                  Begin with a complete operating loop, then shape every part around your team.
                 </p>
               </div>
-              <a
+              <Link
                 className="lp-button secondary"
-                href="/docs"
-                target="_blank"
-                rel="noreferrer"
+                href="/templates"
               >
-                Browse starter kits
-              </a>
+                Browse templates
+              </Link>
             </div>
 
             <div className="lp-showcase-grid">
@@ -368,25 +366,23 @@ export default function LandingPage() {
 
         <section className="lp-section lp-footer-cta" id="github">
           <div className="lp-footer-box lp-reveal">
-            <h2>Start with a pod.</h2>
-            <p>Open-source. Self-host locally or run with Lemma.</p>
+            <h2>Run it on Lemma.</h2>
+            <p>Run your apps and agents. Bring your team.</p>
             <div className="lp-actions">
-              <a
+              <Link
                 className="lp-button primary"
+                href="/auth"
+              >
+                Start building
+              </Link>
+              <a
+                className="lp-button secondary"
                 href={githubUrl}
                 target="_blank"
                 rel="noreferrer"
               >
                 <GithubLogo aria-hidden className="lp-gh-icon" />
-                Star on GitHub
-              </a>
-              <a
-                className="lp-button secondary"
-                href="/docs"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Browse the docs
+                View on GitHub
               </a>
             </div>
           </div>

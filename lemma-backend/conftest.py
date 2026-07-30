@@ -141,20 +141,6 @@ def pytest_collection_modifyitems(config, items):
             )
 
 
-def pytest_sessionstart(session: pytest.Session) -> None:
-    del session
-    from app.modules.test_support import e2e_base
-
-    # pytest-xdist runs this hook in every worker. A worker-wide sweep by the
-    # shared ``lemma.e2e`` label can otherwise delete a sibling's live
-    # Postgres/Redis containers before that sibling finishes its shard.
-    # The controller process performs the stale-resource sweep before workers
-    # start; workers only tear down resources they created through their own
-    # context managers.
-    if not os.environ.get("PYTEST_XDIST_WORKER"):
-        e2e_base._cleanup_e2e_workspace_containers()
-
-
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
     del nextitem
     if "workspace" not in {marker.name for marker in item.iter_markers()}:
@@ -170,6 +156,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     del session, exitstatus
     from app.modules.test_support import e2e_base
 
+    # Context managers remove only the containers owned by this pytest process.
+    # Never sweep every ``lemma.e2e=true`` container here: a separately invoked
+    # pytest session may be running concurrently and uses the same shared label.
     e2e_base._close_shared_contexts()
-    if not os.environ.get("PYTEST_XDIST_WORKER"):
-        e2e_base._cleanup_e2e_workspace_containers()

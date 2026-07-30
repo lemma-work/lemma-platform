@@ -432,19 +432,11 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
 
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_workspace_containers_session():
-    # A broad stale-container sweep is safe only in a serial session. Under
-    # xdist, a sibling worker may already own an e2e-labeled Postgres/Redis
-    # container; sweeping by the shared label would kill its live stack.
-    parallel_worker = bool(os.environ.get("PYTEST_XDIST_WORKER"))
-    if not parallel_worker:
-        _cleanup_e2e_workspace_containers()
     yield
-    # Close exactly the contexts created by this pytest process. Their context
-    # managers remove their own containers and network without touching a
-    # sibling worker's resources.
+    # Close exactly the contexts created by this pytest process. Broad sweeps
+    # by the shared label are unsafe even in a serial session because another
+    # independently invoked pytest process may be running at the same time.
     _close_shared_contexts()
-    if not parallel_worker:
-        _cleanup_e2e_workspace_containers()
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)

@@ -187,17 +187,6 @@ class PlanBuilder:
             if _has_grants(payload):
                 grant_agents.append(d.name)
 
-        # --- agent grants (after all resources exist) ------------------------
-        for name in grant_agents:
-            steps.append(
-                PlanStep(
-                    index=0,
-                    kind=StepKind.AGENT_GRANTS,
-                    name=name,
-                    action=StepAction.UPDATE,
-                )
-            )
-
         # --- workflows -------------------------------------------------------
         existing_workflows = await self._existing.workflow_names()
         for d in _resource_subdirs(bundle_root, "workflows"):
@@ -237,6 +226,17 @@ class PlanBuilder:
 
         # --- files (folders parent-first, then file bytes) -------------------
         steps.extend(_file_steps(bundle_root))
+
+        # --- agent grants (after every referenced resource exists) -----------
+        for name in grant_agents:
+            steps.append(
+                PlanStep(
+                    index=0,
+                    kind=StepKind.AGENT_GRANTS,
+                    name=name,
+                    action=StepAction.UPDATE,
+                )
+            )
 
         # --- table data (after tables exist) ---------------------------------
         for name, _ in data_steps:
