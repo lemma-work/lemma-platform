@@ -656,17 +656,32 @@ impl Journal {
         // even though the Agent Host remains connected and healthy.
         let mut checkpoint_statement = connection.prepare(
             r#"
-            SELECT run_id, lease_epoch, checkpoint, state, checkpoint_detail
+            SELECT runs.run_id, runs.lease_epoch, runs.checkpoint,
+                   runs.state, runs.checkpoint_detail
               FROM runs
-             WHERE target_id=?1
+             WHERE runs.target_id=?1
                AND (
-                    checkpoint_pending=1
-                    OR state NOT IN (
+                    runs.checkpoint_pending=1
+                    OR runs.state NOT IN (
                         'WAITING_INPUT', 'SUCCEEDED', 'FAILED',
                         'CANCELLED', 'DISPATCH_UNKNOWN'
                     )
                )
-             ORDER BY updated_at LIMIT 256
+               AND NOT (
+                    runs.state IN (
+                        'WAITING_INPUT', 'SUCCEEDED', 'FAILED',
+                        'CANCELLED', 'DISPATCH_UNKNOWN'
+                    )
+                    AND EXISTS (
+                        SELECT 1
+                          FROM event_outbox
+                         WHERE event_outbox.target_id=runs.target_id
+                           AND event_outbox.run_id=runs.run_id
+                           AND event_outbox.lease_epoch=runs.lease_epoch
+                           AND event_outbox.acknowledged_at IS NULL
+                    )
+               )
+             ORDER BY runs.updated_at LIMIT 256
             "#,
         )?;
         let encoded = checkpoint_statement
@@ -1083,6 +1098,55 @@ mod tests {
             journal.pending_control(target).unwrap(),
             (vec![], vec![], vec![])
         );
+    }
+
+    #[test]
+    fn terminal_checkpoint_waits_for_terminal_event_acknowledgement() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        let event = journal
+            .append_event(
+                target,
+                spec.agent_run_id,
+                1,
+                EventType::Terminal,
+                None,
+                JsonMap::new(),
+            )
+            .unwrap();
+        journal
+            .checkpoint(
+                target,
+                spec.agent_run_id,
+                1,
+                Checkpoint::Terminal,
+                RunState::Succeeded,
+                &JsonMap::new(),
+            )
+            .unwrap();
+
+        let (_, checkpoints, _) = journal.pending_control(target).unwrap();
+        assert!(
+            checkpoints.is_empty(),
+            "terminal checkpoint must not race ahead of its durable terminal event"
+        );
+
+        journal
+            .acknowledge_events(
+                target,
+                &EventAck {
+                    run_id: spec.agent_run_id,
+                    lease_epoch: 1,
+                    acked_through: event.sequence,
+                },
+            )
+            .unwrap();
+        let (_, checkpoints, _) = journal.pending_control(target).unwrap();
+        assert_eq!(checkpoints.len(), 1);
+        assert_eq!(checkpoints[0].checkpoint, Checkpoint::Terminal);
+        assert_eq!(checkpoints[0].state, RunState::Succeeded);
     }
 
     #[test]
