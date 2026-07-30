@@ -183,6 +183,19 @@ describe("latestPlanSummary", () => {
     expect(plan?.activeStep).toBe("Parse rows");
   });
 
+  it("parses checklist input with large whitespace prefixes in linear time", () => {
+    const plan = latestPlanSummary([
+      tool("a", {
+        toolCallId: "c",
+        toolName: "write_todos",
+        args: { todos: [`${" ".repeat(100_000)}- [x] Safe step`] },
+        state: "result",
+        result: {},
+      }),
+    ]);
+    expect(plan?.steps).toEqual([{ step: "Safe step", status: "completed" }]);
+  });
+
   it("prefers the write_todos result's full list over partial call args", () => {
     const plan = latestPlanSummary([
       tool("a", {
@@ -264,5 +277,10 @@ describe("collectCompletedRunTraceGroups", () => {
 describe("normalizeAssistantMarkdown", () => {
   it("breaks a compact inline heading onto its own block", () => {
     expect(normalizeAssistantMarkdown("Done. ## Next steps")).toContain("\n\n");
+  });
+
+  it("normalizes horizontal rules after large whitespace runs", () => {
+    const whitespace = "\t".repeat(100_000);
+    expect(normalizeAssistantMarkdown(`Before${whitespace}---${whitespace}After`)).toBe("Before\n\nAfter");
   });
 });

@@ -835,14 +835,19 @@ function normalizePlanStatus(rawStatus: unknown): PlanStatus {
  * markdown checklist line (`- [ ] todo`, `- [x] done`, `- [~] in-progress`). */
 function parsePlanStep(entry: unknown, index: number): PlanStepState | null {
   if (typeof entry === "string") {
-    const match = /^\s*[-*]?\s*\[([ xX~-])\]\s*(.*)$/.exec(entry);
-    if (match) {
-      const mark = match[1].toLowerCase();
+    let candidate = entry.trimStart();
+    if (candidate.startsWith("-") || candidate.startsWith("*")) {
+      candidate = candidate.slice(1).trimStart();
+    }
+    const mark = candidate.length >= 3 && candidate[0] === "[" && candidate[2] === "]"
+      ? candidate[1].toLowerCase()
+      : "";
+    if (mark !== "" && " x~-".includes(mark)) {
       const status: PlanStatus = mark === "x" ? "completed" : (mark === "~" || mark === "-") ? "in_progress" : "pending";
-      const step = match[2].trim();
+      const step = candidate.slice(3).trim();
       return step ? { step, status } : null;
     }
-    const step = entry.replace(/^\s*[-*]\s*/, "").trim();
+    const step = candidate.trim();
     return step ? { step, status: "pending" } : null;
   }
 
@@ -957,8 +962,7 @@ export {
 export function normalizeAssistantMarkdown(content: string): string {
   const trimmed = content.trim();
   const isCompactMarkdown = trimmed.split(/\r?\n/).length <= 2 && /(?:[ \t]---[ \t]|[ \t]#{1,6}\s|\|\s+\|)/.test(trimmed);
-  const normalized = trimmed
-    .replace(/[ \t]+---[ \t]+/g, "\n\n")
+  const normalized = replaceSpacedHorizontalRules(trimmed)
     .replace(/([.!?)\]])[ \t]+(?=#{1,6}\s)/g, "$1\n\n")
     .replace(/\|\s+\|/g, "|\n|")
     .replace(/\|\s+(?=\|?\s*:?-{3,})/g, "|\n")
@@ -969,4 +973,32 @@ export function normalizeAssistantMarkdown(content: string): string {
   return normalized
     .replace(/^#{1,6}\s+/gm, "")
     .replace(/(^|\n)([^|\n]{3,120}?)\s+(\|[^\n]+\|)(?=\n\|?\s*:?-{3,})/g, "$1$2\n\n$3");
+}
+
+/** Replace inline horizontal rules without regex backtracking on agent output. */
+function replaceSpacedHorizontalRules(content: string): string {
+  const isHorizontalSpace = (character: string): boolean => character === " " || character === "\t";
+  const chunks: string[] = [];
+  let copiedThrough = 0;
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    if (!isHorizontalSpace(content[cursor])) {
+      cursor += 1;
+      continue;
+    }
+    const whitespaceStart = cursor;
+    while (cursor < content.length && isHorizontalSpace(content[cursor])) cursor += 1;
+    if (content.slice(cursor, cursor + 3) !== "---") continue;
+    const trailingStart = cursor + 3;
+    if (trailingStart >= content.length || !isHorizontalSpace(content[trailingStart])) continue;
+    cursor = trailingStart + 1;
+    while (cursor < content.length && isHorizontalSpace(content[cursor])) cursor += 1;
+    chunks.push(content.slice(copiedThrough, whitespaceStart), "\n\n");
+    copiedThrough = cursor;
+  }
+
+  if (copiedThrough === 0) return content;
+  chunks.push(content.slice(copiedThrough));
+  return chunks.join("");
 }
