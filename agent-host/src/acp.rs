@@ -144,12 +144,11 @@ impl AgentDriver for AcpDriver {
                             .options
                             .iter()
                             .find(|option| option.kind == PermissionOptionKind::AllowOnce)
-                            .map(|option| {
+                            .map_or(RequestPermissionOutcome::Cancelled, |option| {
                                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                                     option.option_id.clone(),
                                 ))
-                            })
-                            .unwrap_or(RequestPermissionOutcome::Cancelled);
+                            });
                         return responder.respond(RequestPermissionResponse::new(outcome));
                     }
                     let payload = permission_payload(&request);
