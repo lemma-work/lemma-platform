@@ -37,8 +37,11 @@ impl Default for StateSnapshot {
             phase_label: "Booting local services".into(),
             phase_progress: 4,
             detail: String::new(),
-            url: "http://app.lemma.localhost:3711".into(),
-            api_url: "http://app.lemma.localhost:8711".into(),
+            // There is deliberately no legacy localhost fallback. The daemon
+            // fills these from its reserved application ports after loading
+            // the authenticated host pack.
+            url: String::new(),
+            api_url: String::new(),
             last_error: None,
             updated_at_ms: now_ms(),
         }
@@ -52,6 +55,15 @@ impl StateSnapshot {
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
         state.api_url = migrate_legacy_local_api_url(&state.api_url);
+        if state.url == "http://app.lemma.localhost:3711"
+            && state.api_url == "http://app.lemma.localhost:8711"
+        {
+            // Do not carry the old shared development ports into the managed
+            // Desktop lifecycle. A loaded host pack replaces these with its
+            // reserved dynamic pair before the state reaches a client.
+            state.url.clear();
+            state.api_url.clear();
+        }
         // Older releases persisted the last progress phase independently from
         // the supervised lifecycle. A clean shutdown could therefore leave
         // `ready=false` alongside `phase=ready` and `progress=100`, causing a
@@ -329,6 +341,26 @@ mod tests {
             migrate_legacy_local_api_url("http://api.lemma.localhost.evil:8711"),
             "http://api.lemma.localhost.evil:8711"
         );
+    }
+
+    #[test]
+    fn legacy_shared_development_ports_are_not_loaded_as_desktop_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("state.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&StateSnapshot {
+                url: "http://app.lemma.localhost:3711".into(),
+                api_url: "http://app.lemma.localhost:8711".into(),
+                ..Default::default()
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let state = StateSnapshot::load(&path);
+        assert!(state.url.is_empty());
+        assert!(state.api_url.is_empty());
     }
 
     #[test]

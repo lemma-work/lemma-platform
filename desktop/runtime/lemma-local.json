@@ -24,9 +24,9 @@
   "host_packs": {
     "aarch64-apple-darwin": {
       "url": null,
-      "sha256": "142c7d84c983a851478a9c520558a0b457ab14f3b0f719c187e139c104998e17",
-      "size": 376925885,
-      "expanded_size": 1193912973,
+      "sha256": "d3460b8d4a1ebdb41def46dcc94d37ed3a3357b0b46736bcbc78344d78136370",
+      "size": 375239012,
+      "expanded_size": 1190133367,
       "format": "zip",
       "platform": "macos",
       "architecture": "aarch64",

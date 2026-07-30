@@ -322,13 +322,18 @@ impl Daemon {
                             thread::spawn(move || {
                                 let result = recovery.disable_sharing_transaction(&sharing);
                                 match result {
-                                    Ok(()) => recovery.broadcast(json!({
-                                        "v": PROTOCOL_VERSION,
-                                        "event": "sharing.changed",
-                                        "reason": "tunnel-exited",
-                                        "message": message,
-                                        "sharing": sharing.snapshot(true),
-                                    })),
+                                    Ok(()) => {
+                                        let (url, api_url) = recovery.canonical_urls();
+                                        recovery.broadcast(json!({
+                                            "v": PROTOCOL_VERSION,
+                                            "event": "sharing.changed",
+                                            "reason": "tunnel-exited",
+                                            "message": message,
+                                            "url": url,
+                                            "api_url": api_url,
+                                            "sharing": sharing.snapshot(true),
+                                        }))
+                                    }
                                     Err(error) => recovery.broadcast(scoped_error_event(
                                         "sharing",
                                         "sharing-recovery-failed",
@@ -662,12 +667,17 @@ impl Daemon {
         thread::spawn(move || {
             let result = daemon.disable_sharing_transaction(&sharing);
             match result {
-                Ok(()) => daemon.broadcast(json!({
-                    "v": PROTOCOL_VERSION,
-                    "event": "sharing.changed",
-                    "reason": "desktop-disconnected",
-                    "sharing": sharing.snapshot(true),
-                })),
+                Ok(()) => {
+                    let (url, api_url) = daemon.canonical_urls();
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "sharing.changed",
+                        "reason": "desktop-disconnected",
+                        "url": url,
+                        "api_url": api_url,
+                        "sharing": sharing.snapshot(true),
+                    }))
+                }
                 Err(error) => daemon.broadcast(scoped_error_event(
                     "sharing",
                     "sharing-disconnect-cleanup-failed",
@@ -829,13 +839,18 @@ impl Daemon {
             let _ = progress_stop.send(());
             let _ = progress_monitor.join();
             match result {
-                Ok(()) => daemon.broadcast(json!({
-                    "v": PROTOCOL_VERSION,
-                    "event": "sharing.changed",
-                    "id": id.as_ref(),
-                    "ok": true,
-                    "sharing": sharing.snapshot(true),
-                })),
+                Ok(()) => {
+                    let (url, api_url) = daemon.canonical_urls();
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "sharing.changed",
+                        "id": id.as_ref(),
+                        "ok": true,
+                        "url": url,
+                        "api_url": api_url,
+                        "sharing": sharing.snapshot(true),
+                    }))
+                }
                 Err(error) => daemon.broadcast(scoped_error_event(
                     "sharing",
                     "sharing-enable-failed",
@@ -944,13 +959,18 @@ impl Daemon {
         thread::spawn(move || {
             let result = daemon.disable_sharing_transaction(&sharing);
             match result {
-                Ok(()) => daemon.broadcast(json!({
-                    "v": PROTOCOL_VERSION,
-                    "event": "sharing.changed",
-                    "id": id.as_ref(),
-                    "ok": true,
-                    "sharing": sharing.snapshot(true),
-                })),
+                Ok(()) => {
+                    let (url, api_url) = daemon.canonical_urls();
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "sharing.changed",
+                        "id": id.as_ref(),
+                        "ok": true,
+                        "url": url,
+                        "api_url": api_url,
+                        "sharing": sharing.snapshot(true),
+                    }))
+                }
                 Err(error) => daemon.broadcast(scoped_error_event(
                     "sharing",
                     "sharing-disable-failed",
@@ -1007,6 +1027,11 @@ impl Daemon {
             .map(|(_, backend_port)| format!("http://app.lemma.localhost:{backend_port}"))
             .unwrap_or_else(|| state.api_url.clone());
         state.persist(&self.paths.state)
+    }
+
+    fn canonical_urls(&self) -> (String, String) {
+        let state = self.state.lock().expect("state lock poisoned");
+        (state.url.clone(), state.api_url.clone())
     }
 
     fn apply_operator_config(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {

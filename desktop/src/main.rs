@@ -10,6 +10,7 @@
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,7 +34,6 @@ use interprocess::local_socket::GenericNamespaced;
 use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
-const DEFAULT_LOCAL_URL: &str = "http://app.lemma.localhost:3711";
 const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
 // Desktop hotfix from silently reusing an older durable daemon with the same
@@ -61,6 +61,7 @@ struct UiState {
     running: bool,
     mode: String,
     url: String,
+    api_url: String,
     log_source: String,
     component: String,
     #[serde(skip)]
@@ -119,7 +120,6 @@ impl Shell {
             phase_key: "boot".into(),
             progress: 4,
             mode,
-            url: local_url(),
             ..Default::default()
         };
         Shell {
@@ -351,10 +351,6 @@ fn configured_connection_mode(config: &Value) -> String {
 
 fn hosted_url() -> String {
     std::env::var("LEMMA_DESKTOP_HOSTED_URL").unwrap_or_else(|_| DEFAULT_HOSTED_URL.into())
-}
-
-fn local_url() -> String {
-    std::env::var("LEMMA_DESKTOP_LOCAL_URL").unwrap_or_else(|_| DEFAULT_LOCAL_URL.into())
 }
 
 /// Where the monorepo checkout lives, used only for development fallbacks.
@@ -1415,8 +1411,13 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 if !ui.error {
                     ui.error_code.clear();
                 }
-                if let Some(url) = event["url"].as_str() {
-                    ui.url = url.to_string();
+                if let (Some(url), Some(api_url)) =
+                    (event["url"].as_str(), event["api_url"].as_str())
+                {
+                    if trusted_workspace_urls(url, api_url) {
+                        ui.url = url.to_string();
+                        ui.api_url = api_url.to_string();
+                    }
                 }
                 if !keep_actionable_error && !keep_terminal_error && !preserve_inflight_phase {
                     let phase = event.get("phase").and_then(Value::as_object);
@@ -1469,18 +1470,24 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 ui.throughput_bytes_per_second = None;
                 // Main, API, built-app, and workspace-app hosts all live below
                 // the reserved lemma.localhost loopback cookie boundary.
-                if let Some(url) = event["url"].as_str() {
-                    ui.url = url.to_string();
+                if let (Some(url), Some(api_url)) =
+                    (event["url"].as_str(), event["api_url"].as_str())
+                {
+                    if trusted_workspace_urls(url, api_url) {
+                        ui.url = url.to_string();
+                        ui.api_url = api_url.to_string();
+                    }
                 }
                 // Stay on the splash: the user proceeds via its CTA.
             }
             "sharing.changed" => {
-                if let Some(url) = event
-                    .get("sharing")
-                    .and_then(|sharing| sharing.get("canonical_url"))
-                    .and_then(Value::as_str)
+                if let (Some(url), Some(api_url)) =
+                    (event["url"].as_str(), event["api_url"].as_str())
                 {
-                    ui.url = url.to_owned();
+                    if trusted_workspace_urls(url, api_url) {
+                        ui.url = url.to_owned();
+                        ui.api_url = api_url.to_owned();
+                    }
                 }
             }
             "error" => {
@@ -1549,6 +1556,16 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
             }
             _ => {}
         }
+        if ui.mode == "local" && ui.ready && !trusted_workspace_urls(&ui.url, &ui.api_url) {
+            ui.ready = false;
+            ui.running = false;
+            ui.error = true;
+            ui.error_code = "untrusted-workspace-origin".into();
+            ui.phase = "Local services need attention".into();
+            ui.phase_key = "error".into();
+            ui.progress = 0;
+            ui.status = "locald did not provide an authenticated, isolated workspace origin".into();
+        }
         if ui.ready || !ui.error {
             ui.terminal_recovery_pending = false;
         }
@@ -1574,12 +1591,10 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         }
     }
     if kind == "sharing.changed" {
-        if let Some(url) = event
-            .get("sharing")
-            .and_then(|sharing| sharing.get("canonical_url"))
-            .and_then(Value::as_str)
-        {
-            let _ = open_app_window(app, url);
+        if let (Some(url), Some(api_url)) = (event["url"].as_str(), event["api_url"].as_str()) {
+            if trusted_workspace_urls(url, api_url) {
+                let _ = open_app_window(app, url);
+            }
         }
     }
     let quit_after_stop = kind == "done"
@@ -1850,7 +1865,7 @@ fn restart_impl(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn open_app(app: AppHandle) -> Result<(), String> {
-    let target = app_base_url(&app);
+    let target = app_base_url(&app)?;
     open_app_window(&app, &target)
 }
 
@@ -2376,7 +2391,12 @@ fn set_mode(app: &AppHandle, mode: &str) -> Result<(), String> {
     })?;
     {
         let shell: State<Shell> = app.state();
-        shell.ui.lock().unwrap().mode = mode.to_string();
+        let mut ui = shell.ui.lock().unwrap();
+        if ui.mode != mode && mode == "local" {
+            ui.url.clear();
+            ui.api_url.clear();
+        }
+        ui.mode = mode.to_string();
     }
     Ok(())
 }
@@ -2411,6 +2431,42 @@ fn same_origin(url: &tauri::Url, target: &str) -> bool {
         && url.port_or_known_default() == target.port_or_known_default()
 }
 
+fn trusted_workspace_urls(app_base: &str, api_base: &str) -> bool {
+    let (Ok(app), Ok(api)) = (tauri::Url::parse(app_base), tauri::Url::parse(api_base)) else {
+        return false;
+    };
+    if app.username() != ""
+        || app.password().is_some()
+        || app.query().is_some()
+        || app.fragment().is_some()
+        || api.username() != ""
+        || api.password().is_some()
+        || api.query().is_some()
+        || api.fragment().is_some()
+        || app.path() != "/"
+    {
+        return false;
+    }
+
+    if app.host_str() == Some("app.lemma.localhost") {
+        let (Some(app_port), Some(api_port)) = (app.port(), api.port()) else {
+            return false;
+        };
+        return app.scheme() == "http"
+            && api.scheme() == "http"
+            && api.host_str() == Some("app.lemma.localhost")
+            && api.path() == "/"
+            && app_port >= 49_152
+            && api_port >= 49_152
+            && app_port != api_port;
+    }
+
+    same_origin(&api, app_base)
+        && api.path() == "/_lemma/api"
+        && matches!(app.scheme(), "http" | "https")
+        && (app.scheme() == "https" || local_destination(&app))
+}
+
 fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
     matches!(url.scheme(), "http" | "https")
         && url.path().starts_with("/auth")
@@ -2419,29 +2475,97 @@ fn is_desktop_browser_auth_url(url: &tauri::Url) -> bool {
             .any(|(key, value)| key == "desktop_browser" && value == "1")
 }
 
-fn navigation_allowed(url: &tauri::Url) -> bool {
-    url.scheme() == "tauri" || same_origin(url, &hosted_url()) || same_origin(url, &local_url())
+fn navigation_context(app: &AppHandle) -> (String, String, String) {
+    let shell: State<Shell> = app.state();
+    let ui = shell.ui.lock().unwrap();
+    (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
 }
 
-fn navigation_disposition(url: &tauri::Url) -> NavigationDisposition {
+fn local_destination(url: &tauri::Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    let Ok(address) = host.parse::<IpAddr>() else {
+        return false;
+    };
+    match address {
+        IpAddr::V4(address) => {
+            address.is_loopback()
+                || address.is_private()
+                || address.is_link_local()
+                || address.is_unspecified()
+        }
+        IpAddr::V6(address) => {
+            address.is_loopback()
+                || address.is_unique_local()
+                || address.is_unicast_link_local()
+                || address.is_unspecified()
+        }
+    }
+}
+
+fn owned_published_app(url: &tauri::Url, api_base: &str) -> bool {
+    let Ok(api) = tauri::Url::parse(api_base) else {
+        return false;
+    };
+    url.scheme() == "http"
+        && api.scheme() == "http"
+        && url.port() == api.port()
+        && url
+            .host_str()
+            .is_some_and(|host| host.ends_with(".apps.lemma.localhost"))
+}
+
+fn navigation_disposition(
+    url: &tauri::Url,
+    mode: &str,
+    app_base: &str,
+    api_base: &str,
+) -> NavigationDisposition {
     if is_desktop_browser_auth_url(url) {
         NavigationDisposition::OpenExternal
-    } else if matches!(url.scheme(), "tauri" | "http" | "https") {
+    } else if url.scheme() == "tauri" {
+        NavigationDisposition::Allow
+    } else if !matches!(url.scheme(), "http" | "https") {
+        NavigationDisposition::Deny
+    } else if mode != "local"
+        || same_origin(url, app_base)
+        || same_origin(url, api_base)
+        || owned_published_app(url, api_base)
+        || !local_destination(url)
+    {
         NavigationDisposition::Allow
     } else {
         NavigationDisposition::Deny
     }
 }
 
-fn new_window_disposition(url: &tauri::Url, app_base: &str) -> NewWindowDisposition {
+fn new_window_disposition(
+    url: &tauri::Url,
+    mode: &str,
+    app_base: &str,
+    api_base: &str,
+) -> NewWindowDisposition {
     if url.as_str() == "about:blank" {
         NewWindowDisposition::Deny
     } else if is_desktop_browser_auth_url(url) {
         NewWindowDisposition::OpenExternal
-    } else if navigation_allowed(url) || same_origin(url, app_base) {
+    } else if navigation_disposition(url, mode, app_base, api_base) == NavigationDisposition::Allow
+        && (url.scheme() == "tauri"
+            || same_origin(url, app_base)
+            || same_origin(url, api_base)
+            || owned_published_app(url, api_base))
+    {
         NewWindowDisposition::NavigateInApp
-    } else {
+    } else if navigation_disposition(url, mode, app_base, api_base) == NavigationDisposition::Allow
+    {
         NewWindowDisposition::OpenExternal
+    } else {
+        NewWindowDisposition::Deny
     }
 }
 
@@ -2492,16 +2616,18 @@ fn desktop_context_script(mode: &str) -> String {
 
 // ---------------------------------------------------------------------------
 
-fn app_base_url(app: &AppHandle) -> String {
-    let (mode, url) = {
+fn app_base_url(app: &AppHandle) -> Result<String, String> {
+    let (mode, url, api_url) = {
         let shell: State<Shell> = app.state();
         let ui = shell.ui.lock().unwrap();
-        (ui.mode.clone(), ui.url.clone())
+        (ui.mode.clone(), ui.url.clone(), ui.api_url.clone())
     };
     if mode == "hosted" {
-        hosted_url()
+        Ok(hosted_url())
+    } else if trusted_workspace_urls(&url, &api_url) {
+        Ok(url)
     } else {
-        url
+        Err("the authenticated local workspace is not ready yet".into())
     }
 }
 
@@ -2518,7 +2644,7 @@ fn local_auth_url(base: &str, auth_mode: &str) -> String {
 
 #[tauri::command]
 async fn login(app: AppHandle, mode: Option<String>) -> Result<(), String> {
-    let base = app_base_url(&app);
+    let base = app_base_url(&app)?;
     let connection_mode = current_mode(&app);
     let auth_mode = if mode.as_deref() == Some("signup") {
         "signup"
@@ -2815,19 +2941,25 @@ fn main() {
                 .min_inner_size(980.0, 680.0)
                 .devtools(true)
                 .initialization_script(desktop_context_script(&mode))
-                .on_navigation(move |url| match navigation_disposition(url) {
-                    NavigationDisposition::Allow => true,
-                    NavigationDisposition::OpenExternal => {
-                        open_external(url.as_str());
-                        false
+                .on_navigation({
+                    let handle = handle.clone();
+                    move |url| {
+                        let (mode, app_base, api_base) = navigation_context(&handle);
+                        match navigation_disposition(url, &mode, &app_base, &api_base) {
+                            NavigationDisposition::Allow => true,
+                            NavigationDisposition::OpenExternal => {
+                                open_external(url.as_str());
+                                false
+                            }
+                            NavigationDisposition::Deny => false,
+                        }
                     }
-                    NavigationDisposition::Deny => false,
                 })
                 .on_new_window({
                     let handle = handle.clone();
                     move |url, _features| {
-                        let app_base = app_base_url(&handle);
-                        match new_window_disposition(&url, &app_base) {
+                        let (mode, app_base, api_base) = navigation_context(&handle);
+                        match new_window_disposition(&url, &mode, &app_base, &api_base) {
                             NewWindowDisposition::NavigateInApp => {
                                 let _ = navigate_app_window(&handle, url.as_str());
                             }
@@ -3014,8 +3146,74 @@ mod tests {
 
         for raw_url in urls {
             let url = tauri::Url::parse(raw_url).unwrap();
-            assert_eq!(navigation_disposition(&url), NavigationDisposition::Allow);
+            assert_eq!(
+                navigation_disposition(&url, "hosted", "https://lemma.work", ""),
+                NavigationDisposition::Allow
+            );
         }
+    }
+
+    #[test]
+    fn local_navigation_accepts_only_locald_owned_loopback_origins() {
+        let app_base = "http://app.lemma.localhost:63844";
+        let api_base = "http://app.lemma.localhost:63845";
+        for raw_url in [
+            "http://app.lemma.localhost:63844/auth",
+            "http://app.lemma.localhost:63845/files/download",
+            "http://sales.apps.lemma.localhost:63845/",
+        ] {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert_eq!(
+                navigation_disposition(&url, "local", app_base, api_base),
+                NavigationDisposition::Allow
+            );
+        }
+
+        for raw_url in [
+            "http://app.lemma.localhost:3710/",
+            "http://app.lemma.localhost:3711/verify-email",
+            "http://app.lemma.localhost:8710/",
+            "http://127.0.0.1:3000/",
+            "http://192.168.1.20:8000/",
+        ] {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert_eq!(
+                navigation_disposition(&url, "local", app_base, api_base),
+                NavigationDisposition::Deny
+            );
+        }
+    }
+
+    #[test]
+    fn local_workspace_origin_requires_isolated_locald_ports_or_a_canonical_gateway() {
+        assert!(trusted_workspace_urls(
+            "http://app.lemma.localhost:63844",
+            "http://app.lemma.localhost:63845"
+        ));
+        assert!(trusted_workspace_urls(
+            "http://192.168.1.20:51324",
+            "http://192.168.1.20:51324/_lemma/api"
+        ));
+        assert!(trusted_workspace_urls(
+            "https://lemma-example.ngrok.app",
+            "https://lemma-example.ngrok.app/_lemma/api"
+        ));
+        assert!(!trusted_workspace_urls(
+            "http://app.lemma.localhost:3711",
+            "http://app.lemma.localhost:8711"
+        ));
+        assert!(!trusted_workspace_urls(
+            "http://app.lemma.localhost:63844",
+            "http://app.lemma.localhost:8710"
+        ));
+    }
+
+    #[test]
+    fn desktop_frontend_launcher_has_no_shared_development_origin_fallback() {
+        let launcher = include_str!("../runtime/frontend-launcher.mjs");
+        assert!(launcher.contains("locald must provide the isolated frontend and API origins"));
+        assert!(!launcher.contains("app.lemma.localhost:3711"));
+        assert!(!launcher.contains("app.lemma.localhost:8711"));
     }
 
     #[test]
@@ -3026,7 +3224,10 @@ mod tests {
             "lemma://other",
         ] {
             let url = tauri::Url::parse(raw_url).unwrap();
-            assert_eq!(navigation_disposition(&url), NavigationDisposition::Deny);
+            assert_eq!(
+                navigation_disposition(&url, "hosted", "https://lemma.work", ""),
+                NavigationDisposition::Deny
+            );
         }
     }
 
@@ -3038,15 +3239,15 @@ mod tests {
         let blank = tauri::Url::parse("about:blank").unwrap();
 
         assert_eq!(
-            new_window_disposition(&first_party, app_base),
+            new_window_disposition(&first_party, "hosted", app_base, ""),
             NewWindowDisposition::NavigateInApp
         );
         assert_eq!(
-            new_window_disposition(&external, app_base),
+            new_window_disposition(&external, "hosted", app_base, ""),
             NewWindowDisposition::OpenExternal
         );
         assert_eq!(
-            new_window_disposition(&blank, app_base),
+            new_window_disposition(&blank, "hosted", app_base, ""),
             NewWindowDisposition::Deny
         );
     }
@@ -3064,11 +3265,11 @@ mod tests {
         assert!(!is_desktop_browser_auth_url(&ordinary));
         assert!(!is_desktop_browser_auth_url(&unrelated));
         assert_eq!(
-            navigation_disposition(&desktop),
+            navigation_disposition(&desktop, "hosted", "https://lemma.work", ""),
             NavigationDisposition::OpenExternal
         );
         assert_eq!(
-            new_window_disposition(&desktop, "https://lemma.work"),
+            new_window_disposition(&desktop, "hosted", "https://lemma.work", ""),
             NewWindowDisposition::OpenExternal
         );
     }
