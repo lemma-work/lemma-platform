@@ -45,7 +45,7 @@ def test_runner_applies_default_model_runaway_limits() -> None:
     )
 
     assert service.fixed_usage_limits.request_limit == 64
-    assert service.fixed_usage_limits.tool_calls_limit == 24
+    assert service.fixed_usage_limits.tool_calls_limit is None
 
 
 class _FailingContextManager:

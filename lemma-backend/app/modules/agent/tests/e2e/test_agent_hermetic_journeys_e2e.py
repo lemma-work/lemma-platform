@@ -10,7 +10,6 @@ import pytest
 from fastapi import status
 
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
-from app.modules.agent.domain.run_limits import MAX_AGENT_TOOL_CALLS_PER_RESPONSE
 from app.modules.test_support.e2e.scripted_model import (
     script_model_error,
     script_text,
@@ -66,6 +65,7 @@ async def _create_mock_agent(
     pod_id: str,
     runtime_profile_id: str,
     name_prefix: str,
+    toolsets: list[str] | None = None,
 ) -> dict:
     agent_name = f"{name_prefix}_{uuid4().hex[:8]}"
     response = await authenticated_client.post(
@@ -77,7 +77,7 @@ async def _create_mock_agent(
                 "profile_id": runtime_profile_id,
                 "model_name": "mock-safe-model",
             },
-            "toolsets": [],
+            "toolsets": toolsets or [],
         },
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
@@ -183,13 +183,13 @@ async def _wait_for_usage(
 
 
 @pytest.mark.asyncio
-async def test_public_sse_rejects_runaway_tool_batch_before_execution_or_persistence(
+async def test_public_sse_queues_large_tool_batch_and_completes_run(
     authenticated_client,
     fixed_test_org,
     e2e_settings,
     worker,
 ):
-    """One pathological model response cannot fan out into dozens of commands."""
+    """A large model batch executes every call without failing the run."""
     del worker
     runtime = await _create_runtime_profile(
         authenticated_client,
@@ -202,6 +202,7 @@ async def test_public_sse_rejects_runaway_tool_batch_before_execution_or_persist
         pod_id=pod["id"],
         runtime_profile_id=runtime["id"],
         name_prefix="runaway_batch",
+        toolsets=["TODO"],
     )
     conversation = await authenticated_client.post(
         f"/pods/{pod['id']}/conversations",
@@ -213,17 +214,10 @@ async def test_public_sse_rejects_runaway_tool_batch_before_execution_or_persist
                         "tool_calls": [
                             {
                                 "tool_name": "write_todos",
-                                "args": {
-                                    "todos": [
-                                        {
-                                            "content": f"must not execute {index}",
-                                            "status": "pending",
-                                        }
-                                    ]
-                                },
+                                "args": {"todos": [f"- [ ] batch item {index}"]},
                                 "tool_call_id": f"runaway-{index}",
                             }
-                            for index in range(MAX_AGENT_TOOL_CALLS_PER_RESPONSE + 1)
+                            for index in range(12)
                         ]
                     }
                 ]
@@ -240,22 +234,21 @@ async def test_public_sse_rejects_runaway_tool_batch_before_execution_or_persist
         "Attempt an unsafe parallel tool batch.",
     )
 
-    assert events[-1]["type"] == "error", events
-    assert "usage limit" in str(events[-1]["data"]).lower()
+    assert events[-1]["type"] == "completed", events[-1]
+    assert not any(event["type"] == "error" for event in events)
     assert not any(
-        event["type"] == "token"
+        event["type"] == "status"
         and isinstance(event.get("data"), dict)
-        and event["data"].get("kind") == "tool"
+        and event["data"].get("status") == "tool_batch_limited"
         for event in events
     )
     messages = await authenticated_client.get(
         f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
     )
     assert messages.status_code == status.HTTP_200_OK, messages.text
-    assert all(
-        item["kind"] not in {"TOOL_CALL", "TOOL_RETURN"}
-        for item in messages.json()["items"]
-    )
+    persisted = messages.json()["items"]
+    assert sum(item["kind"] == "TOOL_CALL" for item in persisted) == 12
+    assert sum(item["kind"] == "TOOL_RETURN" for item in persisted) == 12
 
 
 @pytest.mark.asyncio
@@ -291,7 +284,11 @@ async def test_public_sse_sanitizes_provider_failure_matrix_and_persists_failure
             None,
             "A tool failed repeatedly after several attempts",
         ),
-        ("usage_limit", None, "The agent run hit a usage limit."),
+        (
+            "usage_limit",
+            None,
+            "The agent could not finish within its safety budget.",
+        ),
         ("generic", None, "The model provider returned an error."),
     )
 

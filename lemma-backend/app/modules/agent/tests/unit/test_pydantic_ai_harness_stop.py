@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from uuid import UUID
 
 import anyio
 import pytest
-from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import (
     PartEndEvent,
     PartStartEvent,
@@ -13,12 +13,11 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from app.modules.agent.domain.run_limits import (
-    MAX_AGENT_TOOL_CALLS_PER_RESPONSE,
-    MAX_IDENTICAL_TOOL_CALLS_PER_RESPONSE,
-)
 from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
+from app.modules.agent.infrastructure.harnesses.tool_batch import (
+    BoundedToolExecutionCapability,
+)
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 
 
@@ -93,6 +92,38 @@ class _HangingToolNode:
 
 
 @pytest.mark.asyncio
+async def test_bounded_tool_execution_queues_parallel_side_effects() -> None:
+    capability = BoundedToolExecutionCapability(max_parallel_executions=5)
+    active = 0
+    maximum_active = 0
+
+    async def invoke(index: int) -> None:
+        async def handler(args):
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return args
+
+        await capability.wrap_tool_execute(
+            SimpleNamespace(),
+            call=ToolCallPart(
+                tool_name="exec_command",
+                args={"cmd": f"echo {index}"},
+                tool_call_id=f"parallel-{index}",
+            ),
+            tool_def=SimpleNamespace(),
+            args={"cmd": f"echo {index}"},
+            handler=handler,
+        )
+
+    await asyncio.gather(*(invoke(index) for index in range(12)))
+
+    assert maximum_active == 5
+
+
+@pytest.mark.asyncio
 async def test_stream_stop_unwinds_anyio_cancel_scope_in_generator_task() -> None:
     harness = PydanticAIHarness()
     should_stop = False
@@ -119,10 +150,10 @@ async def test_stream_stop_unwinds_anyio_cancel_scope_in_generator_task() -> Non
 
 
 @pytest.mark.asyncio
-async def test_oversized_tool_batch_is_rejected_before_calls_are_persisted() -> None:
+async def test_large_tool_batch_streams_every_call_without_rejection() -> None:
     harness = PydanticAIHarness()
     stream_events = []
-    for index in range(MAX_AGENT_TOOL_CALLS_PER_RESPONSE + 1):
+    for index in range(12):
         part = ToolCallPart(
             tool_name="exec_command",
             args={"cmd": f"echo {index}"},
@@ -136,28 +167,33 @@ async def test_oversized_tool_batch_is_rejected_before_calls_are_persisted() -> 
         )
     events = []
 
-    with pytest.raises(UsageLimitExceeded):
-        async for event in harness._stream_model_request(
-            _Node(stream_events),
-            _Run(),
-            agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
-            malformed_tool_call_ids=set(),
-            should_stop=None,
-        ):
-            events.append(event)
+    async for event in harness._stream_model_request(
+        _Node(stream_events),
+        _Run(),
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000002"),
+        malformed_tool_call_ids=set(),
+        should_stop=None,
+    ):
+        events.append(event)
 
-    assert not any(
-        event.type is AgentEventType.MESSAGE
-        and getattr(event.data, "kind", None) is MessageKind.TOOL_CALL
+    tool_calls = [
+        event
         for event in events
-    )
+        if event.type is AgentEventType.MESSAGE
+        and getattr(event.data, "kind", None) is MessageKind.TOOL_CALL
+    ]
+    assert len(tool_calls) == 12
+    assert [event.data.tool_call_id for event in tool_calls] == [
+        f"call-{index}" for index in range(12)
+    ]
+    assert not any(event.type is AgentEventType.STATUS for event in events)
 
 
 @pytest.mark.asyncio
-async def test_repeated_tool_batch_is_rejected_before_calls_are_persisted() -> None:
+async def test_repeated_tool_batch_is_not_synthetically_suppressed() -> None:
     harness = PydanticAIHarness()
     stream_events = []
-    for index in range(MAX_IDENTICAL_TOOL_CALLS_PER_RESPONSE + 1):
+    for index in range(3):
         part = ToolCallPart(
             tool_name="exec_command",
             args={"cmd": "echo done"},
@@ -171,21 +207,26 @@ async def test_repeated_tool_batch_is_rejected_before_calls_are_persisted() -> N
         )
     events = []
 
-    with pytest.raises(UsageLimitExceeded):
-        async for event in harness._stream_model_request(
-            _Node(stream_events),
-            _Run(),
-            agent_run_id=UUID("00000000-0000-0000-0000-000000000003"),
-            malformed_tool_call_ids=set(),
-            should_stop=None,
-        ):
-            events.append(event)
+    async for event in harness._stream_model_request(
+        _Node(stream_events),
+        _Run(),
+        agent_run_id=UUID("00000000-0000-0000-0000-000000000003"),
+        malformed_tool_call_ids=set(),
+        should_stop=None,
+    ):
+        events.append(event)
 
-    assert not any(
-        event.type is AgentEventType.MESSAGE
-        and getattr(event.data, "kind", None) is MessageKind.TOOL_CALL
+    tool_calls = [
+        event
         for event in events
-    )
+        if event.type is AgentEventType.MESSAGE
+        and getattr(event.data, "kind", None) is MessageKind.TOOL_CALL
+    ]
+    assert [event.data.tool_call_id for event in tool_calls] == [
+        "repeated-call-0",
+        "repeated-call-1",
+        "repeated-call-2",
+    ]
 
 
 @pytest.mark.asyncio

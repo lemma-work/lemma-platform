@@ -1,47 +1,50 @@
-"""Admission control for one in-process model tool-call response."""
+"""Bounded execution and streaming for model tool-call batches."""
 
-import json
-from collections.abc import Awaitable, Callable, Sequence
-from typing import AsyncIterator
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from typing import Any
 from uuid import UUID
 
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai import RunContext
+from pydantic_ai.capabilities import AbstractCapability
+from pydantic_ai.messages import ToolCallPart
+from pydantic_ai.tools import ToolDefinition
 
-from app.core.log.log import get_logger
-from app.modules.agent.domain.run_limits import (
-    MAX_AGENT_TOOL_CALLS_PER_RESPONSE,
-    MAX_IDENTICAL_TOOL_CALLS_PER_RESPONSE,
-)
-from app.modules.agent.domain.value_objects import (
-    AgentEvent,
-    AgentEventType,
-)
+from app.modules.agent.domain.run_limits import MAX_PARALLEL_TOOL_EXECUTIONS
+from app.modules.agent.domain.value_objects import AgentEvent, AgentEventType
 
-logger = get_logger(__name__)
 StopChecker = Callable[[], Awaitable[bool]]
 
 
-def validate_tool_call_batch(events: Sequence[AgentEvent]) -> None:
-    if len(events) > MAX_AGENT_TOOL_CALLS_PER_RESPONSE:
-        logger.warning(
-            "agent.pydantic_ai.tool_batch_limit_exceeded.degraded",
-            tool_call_count=len(events),
-            tool_call_limit=MAX_AGENT_TOOL_CALLS_PER_RESPONSE,
-        )
-        raise UsageLimitExceeded(
-            "A single model response exceeded the tool call safety limit."
-        )
+class BoundedToolExecutionCapability(AbstractCapability[object]):
+    """Queue tool bodies through a small shared concurrency pool.
 
-    repeated_call_count = _max_identical_tool_call_count(events)
-    if repeated_call_count > MAX_IDENTICAL_TOOL_CALLS_PER_RESPONSE:
-        logger.warning(
-            "agent.pydantic_ai.repeated_tool_batch_rejected.degraded",
-            repeated_tool_call_count=repeated_call_count,
-            repeated_tool_call_limit=MAX_IDENTICAL_TOOL_CALLS_PER_RESPONSE,
-        )
-        raise UsageLimitExceeded(
-            "A single model response repeated an identical tool call too many times."
-        )
+    Every model-requested call still executes and returns its real result. The
+    bound protects AgentBox, subprocess, and connector capacity without turning
+    a recoverable model response into rejected tool calls or a failed agent run.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_parallel_executions: int = MAX_PARALLEL_TOOL_EXECUTIONS,
+    ) -> None:
+        self._execution_slots = asyncio.Semaphore(max(1, max_parallel_executions))
+
+    async def wrap_tool_execute(
+        self,
+        ctx: RunContext[object],
+        *,
+        call: ToolCallPart,
+        tool_def: ToolDefinition,
+        args: dict[str, Any],
+        handler,
+    ) -> Any:
+        del ctx, call, tool_def
+        async with self._execution_slots:
+            return await handler(args)
 
 
 async def release_tool_call_batch(
@@ -51,7 +54,6 @@ async def release_tool_call_batch(
     agent_run_id: UUID,
     should_stop: StopChecker | None,
 ) -> AsyncIterator[AgentEvent]:
-    validate_tool_call_batch(call_events)
     for token_chunk in token_chunks:
         yield AgentEvent(
             type=AgentEventType.TOKEN,
@@ -61,31 +63,12 @@ async def release_tool_call_batch(
         if await _should_stop(should_stop):
             yield _stopped_event(agent_run_id)
             return
+
     for event in call_events:
         yield event
         if await _should_stop(should_stop):
             yield _stopped_event(agent_run_id)
             return
-
-
-def _max_identical_tool_call_count(events: Sequence[AgentEvent]) -> int:
-    fingerprints: dict[str, int] = {}
-    maximum = 0
-    for event in events:
-        message = event.data
-        fingerprint = json.dumps(
-            [
-                getattr(message, "tool_name", None),
-                getattr(message, "tool_args", None),
-            ],
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
-        count = fingerprints.get(fingerprint, 0) + 1
-        fingerprints[fingerprint] = count
-        maximum = max(maximum, count)
-    return maximum
 
 
 async def _should_stop(should_stop: StopChecker | None) -> bool:

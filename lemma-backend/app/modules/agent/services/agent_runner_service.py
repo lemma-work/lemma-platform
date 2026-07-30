@@ -159,7 +159,7 @@ class AgentRunnerService:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
         self.fallback_model_name = fallback_model_name
-        default_limits = UsageLimits(request_limit=64, tool_calls_limit=24)
+        default_limits = UsageLimits(request_limit=64)
         self.fixed_usage_limits = fixed_usage_limits or default_limits
         self.tool_assembler = RunToolAssembler(uow_factory)
         self.usage_recorder = RunUsageRecorder(uow_factory)

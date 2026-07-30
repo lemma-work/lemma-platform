@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 _PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompts"
 _POD_ASSISTANT_PROMPT_PATH = _PROMPT_DIR / "pod_assistant.md"
 _AGENT_BASE_PROMPT_PATH = _PROMPT_DIR / "agent_base.md"
+_TOOL_EXECUTION_PROMPT_PATH = _PROMPT_DIR / "tool_execution.md"
 _WORKSPACE_CLI_PROMPT_PATH = _PROMPT_DIR / "workspace_cli.md"
 _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
@@ -106,6 +107,7 @@ def build_agent_instructions(
         sections = [load_pod_assistant_base_prompt()]
     else:
         sections = [load_agent_base_prompt()]
+    sections.append(_read_required_prompt(_TOOL_EXECUTION_PROMPT_PATH))
 
     enabled = _fragment_toolsets(agent=agent, conversation=conversation)
 
@@ -132,7 +134,9 @@ def build_agent_instructions(
     # passes include_toolset_prompts=False; remote_harness passes True) and BOTH agent types
     # (pod-default + user) get told their cwd whenever they can run workspace tools.
     if AgentToolset.WORKSPACE_CLI in enabled:
-        sections.append(_workspace_directory_section(ctx=ctx, conversation=conversation))
+        sections.append(
+            _workspace_directory_section(ctx=ctx, conversation=conversation)
+        )
 
     if agent.instruction.strip():
         sections.append("# Agent Instructions\n" + agent.instruction.strip())

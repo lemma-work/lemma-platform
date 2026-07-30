@@ -127,7 +127,7 @@ async def test_usage_limit_exceeded_emits_sanitized_ui_message(monkeypatch) -> N
     assert len(events) == 1
     assert events[0].type == AgentEventType.ERROR
     assert "abc123" not in events[0].data
-    assert "Please check the agent runtime configuration." in events[0].data
+    assert "Retry to continue from the completed work." in events[0].data
 
 
 @pytest.mark.asyncio

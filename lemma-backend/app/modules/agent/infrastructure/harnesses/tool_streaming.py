@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic_ai import BinaryContent, FunctionToolCallEvent, FunctionToolResultEvent
 
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -39,7 +40,7 @@ async def stream_tool_results(
                     yield _stopped_event(agent_run_id)
                     return
 
-                next_event_task = asyncio.create_task(anext(iterator))
+                next_event_task = create_inherited_task(anext(iterator))
                 while not next_event_task.done():
                     await asyncio.wait(
                         {next_event_task},

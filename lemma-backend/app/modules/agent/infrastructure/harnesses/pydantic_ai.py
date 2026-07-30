@@ -60,6 +60,7 @@ from pydantic_ai.capabilities import ProcessHistory
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
 from app.modules.agent.infrastructure.harnesses.streaming import ModelTokenBuffers
 from app.modules.agent.infrastructure.harnesses.tool_batch import (
+    BoundedToolExecutionCapability,
     release_tool_call_batch,
 )
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
@@ -99,8 +100,8 @@ def _user_facing_error_message(exc: Exception) -> str:
         )
     if isinstance(exc, UsageLimitExceeded):
         return (
-            "The agent run hit a usage limit. "
-            "Please check the agent runtime configuration."
+            "The agent could not finish within its safety budget. "
+            "Retry to continue from the completed work."
         )
     return (
         "The model provider returned an error. "
@@ -244,6 +245,7 @@ class PydanticAIHarness:
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
         history, user_prompt = self._history_and_prompt(messages)
+        bounded_tool_execution = BoundedToolExecutionCapability()
         # e2e mock mode swaps only the model — the rest of the harness (tool
         # execution, streaming, events, persistence) runs for real.
         if is_mock_llm_enabled():
@@ -272,6 +274,7 @@ class PydanticAIHarness:
             summarization_model=model,
         )
         capabilities = list(options.capabilities or [])
+        capabilities.append(bounded_tool_execution)
         capabilities.extend(
             ProcessHistory(processor) for processor in history_processors
         )

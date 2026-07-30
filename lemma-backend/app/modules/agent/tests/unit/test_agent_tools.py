@@ -750,6 +750,9 @@ def test_runtime_context_brief_is_appended_to_agent_prompt():
 
     assert "# Runtime Context" in prompt
     assert "Pod: Acme (abc)" in prompt
+    assert "# Tool Execution Discipline" in prompt
+    assert "no more than ten tools in one response" in prompt
+    assert "Never issue identical tool calls" in prompt
     # Always appended after the agent instructions.
     assert prompt.index("Answer briefly.") < prompt.index("# Runtime Context")
 
@@ -1609,7 +1612,10 @@ def test_remote_harness_instructions_include_todo_guidance_only_with_toolset():
     remote_harness_prompt = build_agent_instructions(
         agent=with_todo, conversation=conversation, ctx=object()
     )
-    assert "# Task list" in remote_harness_prompt and "write_todos" in remote_harness_prompt
+    assert (
+        "# Task list" in remote_harness_prompt
+        and "write_todos" in remote_harness_prompt
+    )
 
     # The in-process LEMMA harness suppresses toolset prompts (the TodoCapability
     # supplies the same guidance), so it's not double-included here.
