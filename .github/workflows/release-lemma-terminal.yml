@@ -12,16 +12,15 @@ on:
 
 permissions:
   actions: read
-  contents: read
+  contents: write
 
 concurrency:
   group: release-lemma-terminal-${{ github.event.release.tag_name || inputs.version }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  verify-release:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -31,6 +30,96 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           sha: ${{ github.sha }}
+
+  build-agent-host:
+    name: Agent Host (${{ matrix.target }})
+    needs: verify-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Build native Agent Host
+        run: cargo build --manifest-path agent-host/Cargo.toml --release --locked --target ${{ matrix.target }}
+
+      - name: Package binary and checksum
+        shell: python
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          import hashlib
+          import os
+          import pathlib
+          import shutil
+          import subprocess
+
+          target = os.environ["TARGET"]
+          extension = ".exe" if os.name == "nt" else ""
+          source = (
+              pathlib.Path("agent-host")
+              / "target"
+              / target
+              / "release"
+              / f"lemma-agent-host{extension}"
+          )
+          output = pathlib.Path("dist") / f"lemma-agent-host-{target}{extension}"
+          output.parent.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(source, output)
+          digest = hashlib.sha256(output.read_bytes()).hexdigest()
+          output.with_name(f"{output.name}.sha256").write_text(
+              f"{digest}  {output.name}\n",
+              encoding="ascii",
+          )
+          subprocess.run([str(output.resolve()), "--help"], check=True)
+
+      - name: Verify clean uv tool install provisions Agent Host
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        env:
+          LEMMA_AGENT_HOST_RELEASE_BASE_URL: file://${{ github.workspace }}/dist
+          LEMMA_AGENT_HOST_INSTALL_DIR: ${{ runner.temp }}/lemma-agent-host
+        run: |
+          set -euo pipefail
+          python -m pip install uv
+          uv tool install --force ./lemma-cli
+          lemma agent-host install
+          lemma agent-host install
+
+      - name: Preserve Agent Host release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-host-${{ matrix.target }}
+          path: dist/*
+
+  publish:
+    needs:
+      - verify-release
+      - build-agent-host
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -170,6 +259,19 @@ jobs:
       - name: Check distribution
         working-directory: lemma-cli
         run: python -m twine check dist/*
+
+      - name: Download Agent Host release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agent-host-*
+          merge-multiple: true
+          path: agent-host-dist
+
+      - name: Publish Agent Host release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name || inputs.version }}
+          files: agent-host-dist/*
 
       - name: Publish package
         working-directory: lemma-cli

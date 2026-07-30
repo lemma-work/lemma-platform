@@ -11,6 +11,8 @@ from pathlib import Path
 
 import typer
 
+from .bootstrap import install_agent_host, managed_binary_path
+
 
 app = typer.Typer(
     help="Manage the durable local Agent Host.",
@@ -40,23 +42,27 @@ def _binary() -> str:
     if packaged.is_file():
         return str(packaged)
 
+    managed = managed_binary_path()
+    if managed.is_file():
+        return str(managed)
+
     repository = Path(__file__).resolve().parents[3]
     for profile in ("release", "debug"):
         development = repository / "agent-host" / "target" / profile / packaged_name
         if development.is_file():
             return str(development)
 
-    raise RuntimeError(
-        "lemma-agent-host is not installed. Install the Lemma Desktop app or "
-        "the Agent Host release binary, then place it on PATH (or set "
-        "LEMMA_AGENT_HOST_BIN)."
+    typer.echo(
+        "Agent Host is not installed; installing the version matched to this CLI...",
+        err=True,
     )
+    return str(install_agent_host())
 
 
 def _run(*arguments: str) -> None:
     try:
         result = subprocess.run([_binary(), *arguments], check=False)
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
         raise typer.BadParameter(f"could not start Agent Host: {exc}") from exc
     if result.returncode:
         raise typer.Exit(result.returncode)
@@ -107,6 +113,22 @@ def _run_lifecycle(command: str) -> None:
         if result.returncode == 0:
             return
     _run(command)
+
+
+@app.command("install")
+def install(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Redownload this CLI version's Agent Host binary.",
+    ),
+) -> None:
+    """Install the native Agent Host binary matched to this CLI release."""
+    try:
+        path = install_agent_host(force=force)
+    except (OSError, RuntimeError) as exc:
+        raise typer.BadParameter(f"could not install Agent Host: {exc}") from exc
+    typer.echo(f"Agent Host {path}")
 
 
 @app.command("connect")

@@ -12,7 +12,10 @@ uv tool install lemma-terminal
 ```
 
 This installs the `lemma` command globally. (Don't have `uv`? See
-[astral.sh/uv](https://astral.sh/uv).)
+[astral.sh/uv](https://astral.sh/uv). Agent Host is a native companion binary:
+the first `lemma agent-host` command downloads the exact version matched to the
+CLI and verifies its published SHA-256 checksum. You can provision it explicitly
+with `lemma agent-host install`.
 
 ```bash
 lemma --version

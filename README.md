@@ -212,7 +212,9 @@ lemma apps deploy my-app ./index.html   # deploy a no-build HTML app (or a Vite 
 **Or run your local harness through Lemma.** `lemma agent-host` pairs a machine and discovers local harnesses such as Claude Code, Codex, OpenCode, or Cursor. Runtime profiles choose a discovered harness, while Agent Host handles durable delivery, event streaming, and diagnostics.
 
 ```bash
-lemma agent-host install         # install verified adapters and the service
+lemma agent-host install         # install the checksum-verified native host
+lemma agent-host doctor --repair # install or repair verified harness adapters
+lemma agent-host install-service # register the background service
 lemma agent-host connect         # pair this machine
 lemma agent-host status          # inspect service and harness health
 lemma agent-host logs

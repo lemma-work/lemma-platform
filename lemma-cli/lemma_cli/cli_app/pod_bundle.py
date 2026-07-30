@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# This compatibility facade intentionally re-exports shared bundle vocabulary.
+# ruff: noqa: F401
+
 import io
 import json
 import subprocess
