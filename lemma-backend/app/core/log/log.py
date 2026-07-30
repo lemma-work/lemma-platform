@@ -370,9 +370,12 @@ def _is_console_handler(handler: logging.Handler) -> bool:
         return True
     if isinstance(handler, logging.FileHandler):
         return False
-    return isinstance(handler, logging.StreamHandler) and getattr(
-        handler, "stream", None
-    ) in {sys.stdout, sys.stderr}
+    # Libraries may capture the then-current stdout/stderr object at import time.
+    # Test capture and process bootstrappers can later replace ``sys.stderr``, so
+    # identity checks miss those stale console handlers and allow them to mutate
+    # records before Lemma's safe root pipeline sees them. A non-file
+    # StreamHandler is a console sink regardless of the specific stream object.
+    return isinstance(handler, logging.StreamHandler)
 
 
 def _deployment_environment(env: str) -> str:

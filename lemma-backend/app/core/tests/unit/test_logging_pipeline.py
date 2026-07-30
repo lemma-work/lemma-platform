@@ -317,7 +317,9 @@ def test_dependency_console_handlers_are_reconciled_to_safe_pipeline(
     captured_stdout,
 ) -> None:
     supertokens_logger = logging.getLogger("com.supertokens")
-    supertokens_console = logging.StreamHandler()
+    # Simulate a library handler that captured stderr before pytest/process
+    # redirection changed the global stream object.
+    supertokens_console = logging.StreamHandler(io.StringIO())
     supertokens_logger.addHandler(supertokens_console)
     supertokens_logger.propagate = False
     fastmcp_logger = logging.getLogger("fastmcp")
