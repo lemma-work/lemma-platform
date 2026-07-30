@@ -160,6 +160,71 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
     run_through_paired_agent_host(&paths, "codex").await;
 }
 
+#[tokio::test]
+#[ignore = "requires authenticated Codex and spends real image-generation quota"]
+async fn codex_native_image_generation_creates_a_publishable_artifact() {
+    if std::env::var("LEMMA_REAL_AGENT_E2E_IMAGE").as_deref() != Ok("1") {
+        eprintln!("set LEMMA_REAL_AGENT_E2E_IMAGE=1 to run the native image test");
+        return;
+    }
+    let paths = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(paths.adapters.clone());
+    let scratch = TempDir::new().unwrap();
+    let callbacks = Arc::new(StreamCapture::default());
+    let run = AcpDriver.run(
+        AcpRunRequest {
+            adapter: manifest.resolve("codex").unwrap(),
+            run_spec: RunSpec {
+                agent_run_id: Uuid::new_v4(),
+                conversation_id: Uuid::new_v4(),
+                harness_id: Uuid::new_v4(),
+                profile_revision: "real-image-e2e".to_owned(),
+                model_name: None,
+                config_selections: JsonMap::new(),
+                system_prompt: concat!(
+                    "Use Codex's built-in $imagegen capability for image requests. ",
+                    "Do not use Pillow, SVG, canvas, Python, shell scripts, or an ",
+                    "external image CLI. Copy final images into .lemma-artifacts."
+                )
+                .to_owned(),
+                prompt: vec![json!({
+                    "type": "text",
+                    "text": concat!(
+                        "Create a simple square diagnostic poster with a navy ",
+                        "background and the exact white text LEMMA IMAGE OK. Save ",
+                        "the final PNG as .lemma-artifacts/native-image-e2e.png."
+                    ),
+                })],
+                context: JsonMap::new(),
+                mcp_route_id: Uuid::nil(),
+                run_deadline: Utc::now() + chrono::Duration::minutes(10),
+            },
+            scratch_directory: scratch.path().to_path_buf(),
+            mcp_server: None,
+        },
+        callbacks,
+    );
+    let outcome = tokio::time::timeout(Duration::from_secs(600), run)
+        .await
+        .expect("Codex image generation timed out")
+        .expect("Codex image generation failed");
+    assert_eq!(outcome.state, RunState::Succeeded);
+
+    let image = scratch
+        .path()
+        .join(".lemma-artifacts")
+        .join("native-image-e2e.png");
+    let bytes = std::fs::read(&image)
+        .unwrap_or_else(|error| panic!("Codex did not create {}: {error}", image.display()));
+    assert!(
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "Codex image artifact is not a PNG"
+    );
+    println!("codex native image: {} bytes", bytes.len());
+}
+
 #[derive(Clone)]
 struct ControlServerState {
     host_id: Uuid,

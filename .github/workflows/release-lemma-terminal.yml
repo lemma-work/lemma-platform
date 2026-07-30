@@ -53,6 +53,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Import Developer ID certificate
+        id: apple-signing
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: actions/setup-python@v6
@@ -61,6 +69,23 @@ jobs:
 
       - name: Build native Agent Host
         run: cargo build --manifest-path agent-host/Cargo.toml --release --locked --target ${{ matrix.target }}
+
+      - name: Sign macOS Agent Host with Developer ID
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          binary="agent-host/target/${TARGET}/release/lemma-agent-host"
+          codesign --force --timestamp --options runtime \
+            --identifier ai.lemma.agent-host \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
+            "${binary}"
+          codesign --verify --strict --verbose=2 "${binary}"
+          codesign -d --requirements - "${binary}" 2>&1 \
+            | grep -F "identifier \"ai.lemma.agent-host\""
 
       - name: Package binary and checksum
         shell: python

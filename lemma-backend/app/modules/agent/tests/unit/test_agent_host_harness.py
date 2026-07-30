@@ -63,9 +63,10 @@ def test_normalizer_streams_and_persists_one_final_message() -> None:
         )
     )
 
-    assert first[0].type is AgentEventType.TOKEN
-    assert first[0].data == {"kind": "text", "data": "hello "}
-    assert second[0].data == {"kind": "text", "data": "world"}
+    assert first == []
+    assert second == []
+    assert terminal[0].type is AgentEventType.TOKEN
+    assert terminal[0].data == {"kind": "text", "data": "hello world"}
     message_events = [
         event for event in terminal if event.type is AgentEventType.MESSAGE
     ]
@@ -117,11 +118,71 @@ def test_normalizer_does_not_stringify_non_text_acp_content() -> None:
         )
     )
 
-    assert streamed[0].data == {"kind": "text", "data": rendered}
+    assert streamed == []
+    assert terminal[0].data == {"kind": "text", "data": rendered}
     final_message = next(
         event.data for event in terminal if event.type is AgentEventType.MESSAGE
     )
     assert final_message.text == rendered
+
+
+def test_normalizer_batches_word_sized_acp_deltas_for_the_ui() -> None:
+    normalizer = AgentHostEventNormalizer(
+        agent_run_id=uuid4(),
+        model_name="gpt-test",
+    )
+
+    events = []
+    for sequence, text in enumerate(
+        ("I ", "am ", "streaming ", "one ", "readable ", "chunk."),
+        start=1,
+    ):
+        events.extend(
+            normalizer.normalize(
+                _row(
+                    sequence=sequence,
+                    event_type="agent_message_chunk",
+                    object_id="message-1",
+                    payload={"text": text},
+                )
+            )
+        )
+
+    assert len(events) == 1
+    assert events[0].type is AgentEventType.TOKEN
+    assert events[0].data == {
+        "kind": "text",
+        "data": "I am streaming one readable chunk.",
+    }
+
+
+def test_normalizer_preserves_order_when_acp_switches_stream_objects() -> None:
+    normalizer = AgentHostEventNormalizer(
+        agent_run_id=uuid4(),
+        model_name="gpt-test",
+    )
+
+    first = normalizer.normalize(
+        _row(
+            sequence=1,
+            event_type="agent_message_chunk",
+            object_id="message-1",
+            payload={"text": "first fragment"},
+        )
+    )
+    switched = normalizer.normalize(
+        _row(
+            sequence=2,
+            event_type="agent_thought_chunk",
+            object_id="thought-1",
+            payload={"text": "then thinking"},
+        )
+    )
+
+    assert first == []
+    assert [event.data for event in switched] == [
+        {"kind": "text", "data": "first fragment"}
+    ]
 
 
 def test_normalizer_closes_unfinished_tool_call_before_failure() -> None:

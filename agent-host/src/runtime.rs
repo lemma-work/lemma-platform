@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use agent_client_protocol::schema::v1::{EnvVariable, McpServer, McpServerStdio};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -31,6 +33,9 @@ const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+const GENERATED_ARTIFACT_DIRECTORY: &str = ".lemma-artifacts";
+const MAX_GENERATED_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_GENERATED_IMAGES: usize = 10;
 
 pub struct HostRuntime {
     config: HostConfig,
@@ -530,7 +535,17 @@ impl TargetWorker {
                 scratch_directory: scratch.clone(),
                 mcp_server: Some(mcp_server),
             };
-            let outcome = tokio::time::timeout(remaining, driver.run(request, callbacks)).await;
+            let outcome =
+                tokio::time::timeout(remaining, driver.run(request, Arc::clone(&callbacks))).await;
+            if matches!(outcome, Ok(Ok(_)))
+                && let Err(error) = publish_generated_images(&scratch, callbacks.as_ref())
+            {
+                tracing::warn!(
+                    %run_id,
+                    %error,
+                    "could not publish a generated image artifact"
+                );
+            }
             let _ = std::fs::remove_dir_all(&scratch);
             match outcome {
                 Ok(Ok(outcome)) => {
@@ -909,6 +924,93 @@ fn scratch_directory(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> PathBu
         .join(run_id.to_string())
 }
 
+fn publish_generated_images(
+    scratch_directory: &std::path::Path,
+    callbacks: &dyn AcpCallbacks,
+) -> anyhow::Result<()> {
+    for (object_id, payload) in generated_image_payloads(scratch_directory)? {
+        callbacks.event(EventType::AgentMessageChunk, Some(object_id), payload)?;
+    }
+    Ok(())
+}
+
+fn generated_image_payloads(
+    scratch_directory: &std::path::Path,
+) -> anyhow::Result<Vec<(String, JsonMap)>> {
+    let directory = scratch_directory.join(GENERATED_ARTIFACT_DIRECTORY);
+    let Ok(entries) = std::fs::read_dir(&directory) else {
+        return Ok(Vec::new());
+    };
+    let mut paths = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    paths.sort();
+
+    let mut payloads = Vec::new();
+    for path in paths {
+        if payloads.len() >= MAX_GENERATED_IMAGES {
+            break;
+        }
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if !metadata.file_type().is_file() || metadata.len() > MAX_GENERATED_IMAGE_BYTES {
+            continue;
+        }
+        let Some(mime_type) = generated_image_mime_type(&path) else {
+            continue;
+        };
+        let bytes = std::fs::read(&path)?;
+        if !generated_image_signature_matches(&bytes, mime_type) {
+            continue;
+        }
+        let filename = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("generated-image")
+            .to_owned();
+        let mut payload = JsonMap::new();
+        payload.insert(
+            "content".to_owned(),
+            serde_json::json!({
+                "type": "image",
+                "data": STANDARD.encode(bytes),
+                "mimeType": mime_type,
+            }),
+        );
+        payload.insert("filename".to_owned(), Value::String(filename));
+        payloads.push((format!("generated-image-{}", payloads.len() + 1), payload));
+    }
+    Ok(payloads)
+}
+
+fn generated_image_mime_type(path: &std::path::Path) -> Option<&'static str> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "avif" => Some("image/avif"),
+        _ => None,
+    }
+}
+
+fn generated_image_signature_matches(bytes: &[u8], mime_type: &str) -> bool {
+    match mime_type {
+        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg" => bytes.starts_with(b"\xff\xd8\xff"),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        "image/avif" => {
+            bytes.len() >= 16
+                && &bytes[4..8] == b"ftyp"
+                && (bytes[8..32.min(bytes.len())]
+                    .windows(4)
+                    .any(|brand| brand == b"avif" || brand == b"avis"))
+        }
+        _ => false,
+    }
+}
+
 fn snapshot_revision(snapshot: &HarnessSnapshot) -> String {
     let value = serde_json::json!({
         "adapter_version": snapshot.adapter_version,
@@ -952,7 +1054,11 @@ fn redact_error(value: &str) -> String {
 
 #[cfg(test)]
 mod capability_tests {
-    use super::capabilities_from_acp;
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+    use tempfile::tempdir;
+
+    use super::{GENERATED_ARTIFACT_DIRECTORY, capabilities_from_acp, generated_image_payloads};
 
     #[test]
     fn maps_structured_acp_capabilities_without_string_heuristics() {
@@ -966,5 +1072,28 @@ mod capability_tests {
         assert!(capabilities.close_session);
         assert!(capabilities.images);
         assert!(!capabilities.durable_session_recovery);
+    }
+
+    #[test]
+    fn generated_images_are_bounded_to_the_explicit_artifact_directory() {
+        let root = tempdir().unwrap();
+        let artifacts = root.path().join(GENERATED_ARTIFACT_DIRECTORY);
+        std::fs::create_dir_all(&artifacts).unwrap();
+        let png = b"\x89PNG\r\n\x1a\nimage";
+        std::fs::write(artifacts.join("poster.png"), png).unwrap();
+        std::fs::write(root.path().join("private.png"), png).unwrap();
+        std::fs::write(artifacts.join("notes.txt"), b"not an image").unwrap();
+
+        let payloads = generated_image_payloads(root.path()).unwrap();
+
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].0, "generated-image-1");
+        assert_eq!(payloads[0].1["filename"], "poster.png");
+        let content = payloads[0].1["content"].as_object().unwrap();
+        assert_eq!(content["mimeType"], "image/png");
+        assert_eq!(
+            STANDARD.decode(content["data"].as_str().unwrap()).unwrap(),
+            png
+        );
     }
 }

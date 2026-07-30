@@ -217,6 +217,18 @@ Set `LEMMA_REAL_AGENT_E2E_AGENTS=codex,opencode` to select a subset. These tests
 are release qualification, not public CI: they require the developer's provider
 accounts and spend real quota.
 
+Codex native image generation has a separate opt-in smoke test because it spends
+image-generation quota. It verifies that `$imagegen` produces a real PNG in the
+explicit Agent Host artifact handoff directory:
+
+```bash
+LEMMA_REAL_AGENT_HOST_DATA_DIR=/path/to/agent-host-data \
+LEMMA_REAL_AGENT_E2E_IMAGE=1 \
+  cargo test --test real_harness_e2e \
+  codex_native_image_generation_creates_a_publishable_artifact \
+  -- --ignored --nocapture
+```
+
 ## License
 
 Lemma Agent Host is part of Lemma and is licensed under

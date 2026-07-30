@@ -14,6 +14,7 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     missing_tool_return_events,
 )
+from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
 from app.modules.agent.infrastructure.runtime_models import AgentHostEventModel
 from app.modules.usage.contracts import AgentRunUsage
 
@@ -26,6 +27,8 @@ class AgentHostEventNormalizer:
         self.model_name = model_name
         self.message_text: dict[str, str] = {}
         self.thought_text: dict[str, str] = {}
+        self.token_buffer = TextStreamBuffer()
+        self.token_buffer_key: tuple[str, str] | None = None
         self.tool_calls: dict[str, str] = {}
         self.closed_tool_calls: set[str] = set()
 
@@ -76,14 +79,17 @@ class AgentHostEventNormalizer:
         if event_type is AgentHostEventType.TOOL_CALL_UPDATE:
             return self._tool_call_update(row, object_id, payload, metadata)
         if event_type is AgentHostEventType.USAGE_UPDATE:
-            return self._usage_update(row, payload, metadata)
+            return [*self._drain_tokens(), self._usage_update(row, payload, metadata)]
         if event_type in {
             AgentHostEventType.RUN_STATE,
             AgentHostEventType.PLAN_UPSERT,
             AgentHostEventType.CONFIG_UPDATE,
             AgentHostEventType.WARNING,
         }:
-            return [self._status(row, event_type.value, payload, metadata)]
+            return [
+                *self._drain_tokens(),
+                self._status(row, event_type.value, payload, metadata),
+            ]
         if event_type is AgentHostEventType.PERMISSION_REQUEST:
             return self._permission_denied(row, payload, metadata)
         if event_type is AgentHostEventType.INPUT_REQUEST:
@@ -102,7 +108,7 @@ class AgentHostEventNormalizer:
     ) -> list[AgentEvent]:
         text = event_text(payload)
         storage[object_id] = storage.get(object_id, "") + text
-        return [self._token(text, kind=kind)] if text else []
+        return self._stream_delta(object_id, text, kind=kind)
 
     def _tool_call_upsert(
         self,
@@ -115,7 +121,8 @@ class AgentHostEventNormalizer:
         if object_id in self.tool_calls:
             return []
         self.tool_calls[object_id] = tool_name
-        return [
+        events = self._drain_tokens()
+        events.append(
             AgentEvent(
                 type=AgentEventType.MESSAGE,
                 data=MessageDraft.of_tool_call(
@@ -127,7 +134,8 @@ class AgentHostEventNormalizer:
                 agent_run_id=self.agent_run_id,
                 sequence=row.sequence,
             )
-        ]
+        )
+        return events
 
     def _tool_call_update(
         self,
@@ -154,6 +162,7 @@ class AgentHostEventNormalizer:
                 "error": str(payload.get("error") or status.lower()),
             }
         return [
+            *self._drain_tokens(),
             AgentEvent(
                 type=AgentEventType.MESSAGE,
                 data=MessageDraft.of_tool_return(
@@ -172,24 +181,22 @@ class AgentHostEventNormalizer:
         row: AgentHostEventModel,
         payload: JsonObject,
         metadata: JsonObject,
-    ) -> list[AgentEvent]:
+    ) -> AgentEvent:
         usage = _json_object(payload.get("usage")) or payload
-        return [
-            AgentEvent(
-                type=AgentEventType.USAGE,
-                data=AgentRunUsage(
-                    model_name=str(usage.get("model_name") or self.model_name),
-                    input_tokens=_integer(usage.get("input_tokens")),
-                    output_tokens=_integer(usage.get("output_tokens")),
-                    request_count=_integer(usage.get("request_count"), default=1),
-                    tool_call_count=_integer(usage.get("tool_call_count")),
-                    units=_number(usage.get("units")),
-                    metadata=metadata,
-                ),
-                agent_run_id=self.agent_run_id,
-                sequence=row.sequence,
-            )
-        ]
+        return AgentEvent(
+            type=AgentEventType.USAGE,
+            data=AgentRunUsage(
+                model_name=str(usage.get("model_name") or self.model_name),
+                input_tokens=_integer(usage.get("input_tokens")),
+                output_tokens=_integer(usage.get("output_tokens")),
+                request_count=_integer(usage.get("request_count"), default=1),
+                tool_call_count=_integer(usage.get("tool_call_count")),
+                units=_number(usage.get("units")),
+                metadata=metadata,
+            ),
+            agent_run_id=self.agent_run_id,
+            sequence=row.sequence,
+        )
 
     def _status(
         self,
@@ -280,7 +287,7 @@ class AgentHostEventNormalizer:
             delta = full_text
         else:
             delta = ""
-        return [self._token(delta, kind=kind)] if delta else []
+        return self._stream_delta(object_id, delta, kind=kind)
 
     def _token(self, text: str, *, kind: str = "text") -> AgentEvent:
         return AgentEvent(
@@ -289,8 +296,37 @@ class AgentHostEventNormalizer:
             agent_run_id=self.agent_run_id,
         )
 
+    def _stream_delta(
+        self,
+        object_id: str,
+        text: str,
+        *,
+        kind: str,
+    ) -> list[AgentEvent]:
+        if not text:
+            return []
+        key = (kind, object_id)
+        events = self._drain_tokens() if self.token_buffer_key not in {None, key} else []
+        self.token_buffer_key = key
+        events.extend(
+            self._token(chunk, kind=kind) for chunk in self.token_buffer.append(text)
+        )
+        return events
+
+    def _drain_tokens(self) -> list[AgentEvent]:
+        key = self.token_buffer_key
+        if key is None:
+            return []
+        kind, _object_id = key
+        events = [
+            self._token(chunk, kind=kind)
+            for chunk in self.token_buffer.drain(force=True)
+        ]
+        self.token_buffer_key = None
+        return events
+
     def _flush_messages(self) -> list[AgentEvent]:
-        events: list[AgentEvent] = []
+        events = self._drain_tokens()
         for object_id, text in self.thought_text.items():
             if text:
                 events.append(
