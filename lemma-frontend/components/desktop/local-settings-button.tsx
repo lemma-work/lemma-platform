@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
+import { Button } from "@/components/ui/button";
 import { Settings } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -22,20 +23,28 @@ type LocalSettingsButtonProps = {
   onOpen?: () => void;
 };
 
+function subscribeDesktopContext() {
+  return () => {};
+}
+
+function desktopLocalAvailable() {
+  return (
+    window.__LEMMA_DESKTOP__?.mode === "local"
+    && typeof window.__TAURI__?.core?.invoke === "function"
+  );
+}
+
 export function LocalSettingsButton({
   variant = "row",
   page = "overview",
   className,
   onOpen,
 }: LocalSettingsButtonProps) {
-  const [visible, setVisible] = useState(false);
-
-  useEffect(() => {
-    setVisible(
-      window.__LEMMA_DESKTOP__?.mode === "local"
-      && typeof window.__TAURI__?.core?.invoke === "function",
-    );
-  }, []);
+  const visible = useSyncExternalStore(
+    subscribeDesktopContext,
+    desktopLocalAvailable,
+    () => false,
+  );
 
   if (!visible) return null;
 
@@ -49,8 +58,10 @@ export function LocalSettingsButton({
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger asChild>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={open}
               className={cn("lemma-sidebar-rail-icon relative", className)}
               aria-label="Open Local settings"
@@ -60,7 +71,7 @@ export function LocalSettingsButton({
                 className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-[var(--state-success)] ring-1 ring-[var(--pod-shell-bg)]"
                 aria-hidden="true"
               />
-            </button>
+            </Button>
           </TooltipTrigger>
           <TooltipContent side="right">Local settings</TooltipContent>
         </Tooltip>
@@ -69,8 +80,10 @@ export function LocalSettingsButton({
   }
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="sm"
       onClick={open}
       className={cn(
         "lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring relative w-full text-[var(--text-secondary)]",
@@ -83,6 +96,6 @@ export function LocalSettingsButton({
         className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--state-success)]"
         aria-label="Local stack ready"
       />
-    </button>
+    </Button>
   );
 }
