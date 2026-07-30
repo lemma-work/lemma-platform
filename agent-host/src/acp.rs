@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, McpServer, NewSessionRequest, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SessionConfigOption, SessionConfigOptionValue, SessionNotification,
+    ContentBlock, InitializeRequest, McpServer, NewSessionRequest, PermissionOptionKind,
+    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    SelectedPermissionOutcome, SessionConfigOption, SessionConfigOptionValue, SessionNotification,
     SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ConnectionTo};
@@ -117,6 +117,7 @@ impl AgentDriver for AcpDriver {
         let run_spec = request.run_spec;
         let scratch_directory = request.scratch_directory;
         let mcp_server = request.mcp_server;
+        let has_scoped_mcp_server = mcp_server.is_some();
         let outcome = agent_client_protocol::Client
             .builder()
             .name("lemma-agent-host")
@@ -138,6 +139,19 @@ impl AgentDriver for AcpDriver {
             )
             .on_receive_request(
                 async move |request: RequestPermissionRequest, responder, _connection| {
+                    if has_scoped_mcp_server && is_scoped_mcp_tool_approval(&request) {
+                        let outcome = request
+                            .options
+                            .iter()
+                            .find(|option| option.kind == PermissionOptionKind::AllowOnce)
+                            .map(|option| {
+                                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+                                    option.option_id.clone(),
+                                ))
+                            })
+                            .unwrap_or(RequestPermissionOutcome::Cancelled);
+                        return responder.respond(RequestPermissionResponse::new(outcome));
+                    }
                     let payload = permission_payload(&request);
                     let _ = permission_callbacks.event(
                         EventType::PermissionRequest,
@@ -384,6 +398,15 @@ fn permission_payload(request: &RequestPermissionRequest) -> JsonMap {
         .collect()
 }
 
+fn is_scoped_mcp_tool_approval(request: &RequestPermissionRequest) -> bool {
+    serde_json::to_value(request)
+        .ok()
+        .and_then(|value| value.get("_meta").cloned())
+        .and_then(|meta| meta.get("is_mcp_tool_approval").cloned())
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
 fn tool_call_id(payload: &JsonMap) -> Option<String> {
     payload
         .get("toolCall")
@@ -619,6 +642,58 @@ mod tests {
             }))
         );
         assert!(!payload.contains_key("text"));
+    }
+
+    #[test]
+    fn codex_scoped_mcp_approval_is_recognized() {
+        let request: RequestPermissionRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": "session",
+            "toolCall": {
+                "kind": "execute",
+                "status": "pending",
+                "toolCallId": "call-1"
+            },
+            "options": [
+                {
+                    "kind": "allow_once",
+                    "name": "Allow",
+                    "optionId": "allow_once"
+                },
+                {
+                    "kind": "reject_once",
+                    "name": "Decline",
+                    "optionId": "decline"
+                }
+            ],
+            "_meta": {"is_mcp_tool_approval": true}
+        }))
+        .unwrap();
+
+        assert!(is_scoped_mcp_tool_approval(&request));
+    }
+
+    #[test]
+    fn native_tool_permission_is_not_treated_as_scoped_mcp() {
+        let request: RequestPermissionRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": "session",
+            "toolCall": {
+                "kind": "execute",
+                "status": "pending",
+                "toolCallId": "call-1",
+                "rawInput": {"command": "python -c 'print(42)'"}
+            },
+            "options": [
+                {
+                    "kind": "allow_once",
+                    "name": "Allow once",
+                    "optionId": "allow_once"
+                }
+            ],
+            "_meta": {"codex": {"reason": "run local shell"}}
+        }))
+        .unwrap();
+
+        assert!(!is_scoped_mcp_tool_approval(&request));
     }
 
     #[test]

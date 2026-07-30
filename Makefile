@@ -847,3 +847,5 @@ lint:
 migrate:
 	@echo "→ Applying database migrations…"
 	@cd $(BACKEND_DIR) && uv run alembic upgrade head
+	@cd $(AGENTBOX_DIR) && \
+		AGENTBOX_DATABASE_URL=$(DEV_AGENTBOX_DATABASE_URL) uv run alembic upgrade head

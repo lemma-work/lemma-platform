@@ -192,6 +192,23 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertIn("AGENTBOX_FUNCTION_IMAGE=agentbox-function:dev", result.stdout)
             self.assertIn("uv run --extra local uvicorn local_app:app", result.stdout)
 
+    def test_migrate_upgrades_backend_and_agentbox_state(self):
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp)
+            result = self.run_make(tmp, "-n", "migrate")
+
+            self.assertIn(
+                "cd lemma-backend && uv run alembic upgrade head",
+                result.stdout,
+            )
+            self.assertIn("cd agentbox", result.stdout)
+            self.assertIn(
+                "AGENTBOX_DATABASE_URL=postgresql+psycopg://"
+                "postgres:postgres@localhost:5432/agentbox "
+                "uv run alembic upgrade head",
+                result.stdout,
+            )
+
     def test_public_mode_tunnels_only_api_and_keeps_frontend_local(self):
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
