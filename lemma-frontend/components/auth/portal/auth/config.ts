@@ -17,7 +17,13 @@ function getRuntimeValue(key: string): string | undefined {
   }
 
   const nextRuntimeEnv = window.__ENV as Record<string, string | undefined> | undefined;
-  const runtimeValue = nextRuntimeEnv?.[`NEXT_PUBLIC_${key}`] || window.__LEMMA_AUTH_CONFIG__?.[key];
+  // The native Desktop shell injects its trusted local-auth policy before any
+  // page script runs. It must win over a stale runtime-config.js left by an
+  // older frontend pack; otherwise a local account can be sent back into the
+  // hosted email-verification flow while fully offline.
+  const runtimeValue =
+    window.__LEMMA_AUTH_CONFIG__?.[key] ||
+    nextRuntimeEnv?.[`NEXT_PUBLIC_${key}`];
   return runtimeValue && runtimeValue.trim() ? runtimeValue.trim() : undefined;
 }
 

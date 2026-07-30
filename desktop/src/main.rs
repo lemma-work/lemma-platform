@@ -18,7 +18,10 @@ use std::time::Duration;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::webview::WebviewBuilder;
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, State, Webview, WebviewUrl, WebviewWindowBuilder,
+};
 use tauri_plugin_autostart::ManagerExt as _;
 
 mod artifact_install;
@@ -32,6 +35,10 @@ use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
 const DEFAULT_LOCAL_URL: &str = "http://app.lemma.localhost:3711";
 const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
+// Must match locald's handshake revision. This prevents a newly installed
+// Desktop hotfix from silently reusing an older durable daemon with the same
+// public release number.
+const REQUIRED_LOCALD_API_REVISION: u64 = 3;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
@@ -581,6 +588,7 @@ fn locald_matches_host_pack(
         (None, None) => true,
         (Some(release), Some(root)) => {
             matches!(hello["mode"].as_str(), Some("host-packs" | "managed-local"))
+                && hello["daemon_api_revision"].as_u64() == Some(REQUIRED_LOCALD_API_REVISION)
                 && hello["host_pack_release"].as_str() == Some(release)
                 && hello["host_pack_root"].as_str() == Some(path_identity(root).as_str())
         }
@@ -631,7 +639,7 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
 
     let required_root = host_pack_root();
     let required_release = required_root.as_deref().and_then(host_pack_release);
-    if let Ok(mut connection) = connect_locald() {
+    if let Ok(connection) = connect_locald() {
         if locald_matches_host_pack(
             &connection.hello,
             required_release.as_deref(),
@@ -640,8 +648,7 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
             install_locald_connection(app, connection);
             return Ok(());
         }
-        request_locald_replacement(&mut connection)?;
-        wait_for_locald_exit()?;
+        replace_locald(connection)?;
     }
 
     spawn_locald()?;
@@ -698,20 +705,34 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         }
         return Ok(());
     }
+    let bundled_manifest = bundled_release_manifest();
     // A successfully installed and activated runtime is self-contained. Its
     // recorded artifact identity was written only after the manifest, archive
     // digests, extracted layout, and release markers were verified. Reuse that
-    // exact release without consulting the artifact host so ordinary Finder /
-    // Start-menu launches and later cached-runtime restarts keep working.
+    // exact release without consulting an artifact host when no manifest is
+    // bundled, so ordinary Finder / Start-menu launches and later cached
+    // runtime restarts keep working offline.
     //
-    // Explicit repair first quarantines the active directory, so it cannot
-    // take this path and still re-verifies/downloads from the current manifest.
-    if configured_runtime(&config, "installedRuntime").is_some_and(|runtime| {
+    // When a manifest is bundled, compare its artifact digests even if the
+    // semantic release is unchanged. This lets signed test builds replace a
+    // same-version runtime pack without silently retaining stale components.
+    if let Some(runtime) = configured_runtime(&config, "installedRuntime").filter(|runtime| {
         runtime.release == env!("CARGO_PKG_VERSION") && runtime.has_recorded_artifact_identity()
     }) {
-        return Ok(());
+        let Some(manifest) = bundled_manifest.as_ref() else {
+            return Ok(());
+        };
+        let matches = artifact_install::runtime_matches_manifest(
+            &runtime,
+            manifest,
+            env!("CARGO_PKG_VERSION"),
+        )
+        .map_err(|error| format!("could not verify the installed local runtime: {error}"))?;
+        if matches {
+            return Ok(());
+        }
     }
-    let manifest = bundled_release_manifest().ok_or_else(|| {
+    let manifest = bundled_manifest.ok_or_else(|| {
         "this online installer is missing its signed local release manifest".to_string()
     })?;
     let manifest_release = artifact_install::manifest_release(&manifest)
@@ -734,6 +755,9 @@ fn ensure_runtime_artifacts_inner(app: &AppHandle) -> Result<(), String> {
         }
     }
     let install_operation_id = operation_id("runtime-install");
+    stop_locald_for_runtime_maintenance(app).map_err(|error| {
+        format!("could not stop the previous local runtime before update: {error}")
+    })?;
     {
         let shell: State<Shell> = app.state();
         let mut ui = shell.ui.lock().unwrap();
@@ -997,7 +1021,7 @@ fn connect_locald() -> Result<LocaldConnection, String> {
     writeln!(
         send,
         "{}",
-        json!({"v": 1, "cmd": "hello", "token": token.trim()})
+        json!({"v": 1, "cmd": "hello", "token": token.trim(), "client": "desktop"})
     )
     .map_err(|error| format!("daemon authentication failed: {error}"))?;
     send.flush()
@@ -1035,10 +1059,10 @@ fn request_locald_replacement(connection: &mut LocaldConnection) -> Result<(), S
         .map_err(|error| format!("could not request daemon replacement: {error}"))
 }
 
-fn wait_for_locald_exit() -> Result<(), String> {
+fn wait_for_locald_exit(attempts: usize) -> Result<(), String> {
     let root = locald_root();
     let name = locald_socket_name(&root)?;
-    for _ in 0..450 {
+    for _ in 0..attempts {
         if LocalSocketStream::connect(name.clone()).is_err() {
             return Ok(());
         }
@@ -1047,10 +1071,151 @@ fn wait_for_locald_exit() -> Result<(), String> {
     Err("the previous local service manager did not stop for the app update".into())
 }
 
+fn replace_locald(mut connection: LocaldConnection) -> Result<(), String> {
+    let original_pid = connection.hello["pid"]
+        .as_u64()
+        .ok_or("the previous local service manager did not report its process identity")?;
+    request_locald_replacement(&mut connection)?;
+    drop(connection);
+    if wait_for_locald_exit(450).is_ok() {
+        return Ok(());
+    }
+
+    // Old same-version builds can be trapped inside a runtime recovery
+    // operation and reject their own graceful replacement command forever.
+    // Re-authenticate immediately before the fallback, require the identical
+    // PID and exact packaged executable path, then terminate only that daemon.
+    // Its process ledgers let the replacement daemon reclaim app-owned
+    // children without ever targeting unrelated host processes.
+    let current = connect_locald().map_err(|error| {
+        format!(
+            "the previous local service manager remained busy and could not be verified: {error}"
+        )
+    })?;
+    if current.hello["pid"].as_u64() != Some(original_pid) {
+        return Err(
+            "the local service manager changed during the app update; reopen Lemma to retry".into(),
+        );
+    }
+    force_terminate_packaged_locald(original_pid)?;
+    wait_for_locald_exit(150)
+}
+
+#[cfg(target_os = "macos")]
+fn force_terminate_packaged_locald(pid: u64) -> Result<(), String> {
+    let pid =
+        i32::try_from(pid).map_err(|_| "the local service manager PID is invalid".to_string())?;
+    if pid <= 1 || pid == std::process::id() as i32 {
+        return Err("refusing to terminate an invalid local service manager process".into());
+    }
+    stop_packaged_vz_child(pid)?;
+    let actual = macos_process_path(pid)?;
+    let expected =
+        bundled_locald().ok_or("the packaged local service manager executable is missing")?;
+    if actual != expected {
+        return Err(format!(
+            "refusing to stop an unexpected process during update: {}",
+            actual.display()
+        ));
+    }
+    let result = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if result != 0 {
+        return Err(format!(
+            "could not terminate the stale local service manager: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_process_path(pid: i32) -> Result<PathBuf, String> {
+    let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let length = unsafe {
+        libc::proc_pidpath(
+            pid,
+            buffer.as_mut_ptr().cast(),
+            libc::PROC_PIDPATHINFO_MAXSIZE as u32,
+        )
+    };
+    if length <= 0 {
+        return Err("could not verify the local service manager executable".into());
+    }
+    let terminator = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&buffer[..terminator]).into_owned(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn stop_packaged_vz_child(parent_pid: i32) -> Result<(), String> {
+    let output = Command::new("/usr/bin/pgrep")
+        .args(["-P", &parent_pid.to_string()])
+        .output()
+        .map_err(|error| format!("could not inspect the previous runtime helpers: {error}"))?;
+    if !output.status.success() {
+        return Ok(());
+    }
+    let expected = bundled_vz()
+        .ok_or("the packaged VM helper executable is missing")?
+        .canonicalize()
+        .map_err(|error| format!("could not verify the packaged VM helper: {error}"))?;
+    for child_pid in String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|value| value.trim().parse::<i32>().ok())
+    {
+        if child_pid <= 1 {
+            continue;
+        }
+        let Ok(actual) = macos_process_path(child_pid) else {
+            continue;
+        };
+        if actual.canonicalize().ok().as_ref() != Some(&expected) {
+            continue;
+        }
+        // VZ handles SIGTERM as a graceful guest stop. Bound that path, then
+        // force only the exact verified helper so an upgrade cannot leave the
+        // private data disk attached to an orphan.
+        if unsafe { libc::kill(child_pid, libc::SIGTERM) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(format!("could not stop the previous VM helper: {error}"));
+            }
+            continue;
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        while std::time::Instant::now() < deadline {
+            if unsafe { libc::kill(child_pid, 0) } != 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if unsafe { libc::kill(child_pid, 0) } == 0 {
+            let _ = unsafe { libc::kill(child_pid, libc::SIGKILL) };
+            let reap_deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while std::time::Instant::now() < reap_deadline {
+                if unsafe { libc::kill(child_pid, 0) } != 0 {
+                    std::thread::sleep(Duration::from_millis(500));
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn force_terminate_packaged_locald(_pid: u64) -> Result<(), String> {
+    Err("the previous local service manager is still busy; quit Lemma and retry the update".into())
+}
+
 fn stop_locald_for_runtime_maintenance(app: &AppHandle) -> Result<(), String> {
-    if let Ok(mut connection) = connect_locald() {
-        request_locald_replacement(&mut connection)?;
-        wait_for_locald_exit()?;
+    if let Ok(connection) = connect_locald() {
+        replace_locald(connection)?;
     }
     let shell: State<Shell> = app.state();
     *shell.locald_writer.lock().unwrap() = None;
@@ -1204,6 +1369,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 } else {
                     format!("{}: {}", ui.phase, detail)
                 };
+                ui.ready = false;
                 ui.error = ui.phase_key == "error";
                 if !ui.error {
                     ui.error_code.clear();
@@ -1235,19 +1401,38 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 ui.running = event["running"].as_bool().unwrap_or(ui.running);
                 ui.ready = event["ready"].as_bool().unwrap_or(ui.ready);
                 let event_status = event["status"].as_str().unwrap_or_default();
+                let preserve_inflight_phase = should_preserve_inflight_phase(
+                    &ui.active_operation_id,
+                    &ui.phase_key,
+                    event_status,
+                );
                 let event_is_error = event_status == "error";
                 let keep_actionable_error =
                     is_actionable_runtime_error(&ui.error_code) && !ui.ready && !event_is_error;
-                ui.error = event_is_error || keep_actionable_error;
+                let keep_terminal_error =
+                    ui.error && !ui.ready && event_status == "stopped" && !event_is_error;
+                ui.error = event_is_error || keep_actionable_error || keep_terminal_error;
                 if !ui.error {
                     ui.error_code.clear();
                 }
                 if let Some(url) = event["url"].as_str() {
                     ui.url = url.to_string();
                 }
-                if !keep_actionable_error {
+                if !keep_actionable_error && !keep_terminal_error && !preserve_inflight_phase {
                     let phase = event.get("phase").and_then(Value::as_object);
-                    if let Some(phase) = phase {
+                    if event_status == "stopped" && !ui.error {
+                        // Lifecycle state wins over persisted progress. Older
+                        // daemons may legitimately report stopped while their
+                        // last phase still says ready/100%.
+                        ui.phase = "Stopped".into();
+                        ui.phase_key = "stopped".into();
+                        ui.progress = 0;
+                        ui.eta_seconds = None;
+                        ui.downloaded_bytes = None;
+                        ui.total_bytes = None;
+                        ui.throughput_bytes_per_second = None;
+                        ui.status = "Local services are stopped".into();
+                    } else if let Some(phase) = phase {
                         ui.phase = phase
                             .get("label")
                             .and_then(Value::as_str)
@@ -1272,16 +1457,6 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                             format!("{}: {detail}", ui.phase)
                         };
                     }
-                    if event_status == "stopped" && phase.is_none() && !ui.error {
-                        ui.phase = "Stopped".into();
-                        ui.phase_key = "stopped".into();
-                        ui.progress = 0;
-                        ui.eta_seconds = None;
-                        ui.downloaded_bytes = None;
-                        ui.total_bytes = None;
-                        ui.throughput_bytes_per_second = None;
-                        ui.status = "Local services are stopped".into();
-                    }
                 }
             }
             "ready" => {
@@ -1299,6 +1474,15 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 }
                 // Stay on the splash: the user proceeds via its CTA.
             }
+            "sharing.changed" => {
+                if let Some(url) = event
+                    .get("sharing")
+                    .and_then(|sharing| sharing.get("canonical_url"))
+                    .and_then(Value::as_str)
+                {
+                    ui.url = url.to_owned();
+                }
+            }
             "error" => {
                 let code = event["code"].as_str().unwrap_or_default();
                 if code == "busy" {
@@ -1315,6 +1499,12 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     if event_operation_id.is_some_and(|id| id == ui.active_operation_id) {
                         ui.active_operation_id.clear();
                     }
+                } else if code.starts_with("sharing-") {
+                    // Sharing failures are shown inside Local settings. They
+                    // must not replace an otherwise healthy workspace with the
+                    // startup error screen.
+                    ui.error = false;
+                    ui.error_code.clear();
                 } else {
                     ui.error = true;
                     ui.error_code = code.into();
@@ -1372,7 +1562,26 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         (ui.clone(), schedule_terminal_recovery)
     };
 
+    let ready_workspace_url = (matches!(kind, "ready" | "state" | "status")
+        && snapshot.mode == "local"
+        && snapshot.ready
+        && !snapshot.error)
+        .then(|| snapshot.url.clone());
     let _ = app.emit("lemma:state", snapshot);
+    if let Some(url) = ready_workspace_url {
+        if main_window_showing_native_splash(app) {
+            let _ = open_app_window(app, &url);
+        }
+    }
+    if kind == "sharing.changed" {
+        if let Some(url) = event
+            .get("sharing")
+            .and_then(|sharing| sharing.get("canonical_url"))
+            .and_then(Value::as_str)
+        {
+            let _ = open_app_window(app, url);
+        }
+    }
     let quit_after_stop = kind == "done"
         && event["cmd"].as_str() == Some("stop")
         && event["ok"].as_bool() == Some(true)
@@ -1421,6 +1630,16 @@ fn is_actionable_runtime_error(code: &str) -> bool {
     )
 }
 
+fn should_preserve_inflight_phase(
+    active_operation_id: &str,
+    phase_key: &str,
+    status: &str,
+) -> bool {
+    !active_operation_id.is_empty()
+        && status == "stopped"
+        && !matches!(phase_key, "" | "boot" | "stopped" | "ready" | "error")
+}
+
 fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     let target = tauri::Url::parse(url).map_err(|error| format!("invalid app URL: {error}"))?;
     let window = app
@@ -1432,6 +1651,16 @@ fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     let _ = window.show();
     let _ = window.set_focus();
     Ok(())
+}
+
+fn main_window_showing_native_splash(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|window| window.url().ok())
+        .is_some_and(|url| native_splash_url(&url))
+}
+
+fn native_splash_url(url: &tauri::Url) -> bool {
+    url.scheme() == "tauri" && matches!(url.path(), "/" | "/index.html")
 }
 
 fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
@@ -1446,44 +1675,98 @@ fn show_control_center(app: &AppHandle) -> Result<(), String> {
     show_control_center_page(app, None)
 }
 
+fn control_navigation_allowed(url: &tauri::Url) -> bool {
+    trusted_control_url(url)
+}
+
 fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), String> {
     let page = match page.unwrap_or("overview") {
         "connectors" => "integrations",
+        "services" => "runtime",
+        "surfaces" => "channels",
+        "local-ai" => "models",
         page => page,
     };
     if !matches!(
         page,
-        "overview" | "ai" | "integrations" | "surfaces" | "services" | "updates" | "diagnostics"
+        "overview"
+            | "models"
+            | "ai"
+            | "sharing"
+            | "integrations"
+            | "channels"
+            | "runtime"
+            | "updates"
+            | "diagnostics"
     ) {
-        return Err(format!("unknown Control Center page: {page}"));
+        return Err(format!("unknown Local settings page: {page}"));
     }
-    if let Some(window) = app.get_webview_window("control") {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
+    if let Some(webview) = app.get_webview("control") {
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.show();
+            let _ = main.set_focus();
+        }
+        webview.set_focus().map_err(|error| error.to_string())?;
         let _ = app.emit_to("control", "lemma:control-page", page);
         return Ok(());
     }
+    let handle = app.clone();
+    let page = page.to_owned();
+    // Tauri documents a Windows deadlock when child webviews are created from
+    // synchronous commands/event handlers. Always create the trusted overlay
+    // from a worker and let add_child marshal the build onto the main thread.
+    std::thread::spawn(move || {
+        if let Err(error) = create_control_child(&handle, &page) {
+            eprintln!("[local-settings] {error}");
+            let _ = handle.emit(
+                "lemma:control-error",
+                format!("Could not open Local settings: {error}"),
+            );
+        }
+    });
+    Ok(())
+}
+
+fn create_control_child(app: &AppHandle, page: &str) -> Result<(), String> {
+    if app.get_webview("control").is_some() {
+        let _ = app.emit_to("control", "lemma:control-page", page);
+        return Ok(());
+    }
+    let main = app
+        .get_webview_window("main")
+        .ok_or("main window is not available")?;
+    main.show().map_err(|error| error.to_string())?;
     let initial_script = format!(
         "{}window.__LEMMA_CONTROL_PAGE__={};",
         desktop_context_script(&current_mode(app)),
         serde_json::to_string(page).unwrap_or_else(|_| "\"overview\"".into())
     );
-    let window = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("control.html".into()))
-        .title("Lemma Control Center")
-        .inner_size(1180.0, 780.0)
-        .min_inner_size(900.0, 640.0)
+    let builder = WebviewBuilder::new("control", WebviewUrl::App("control.html".into()))
+        .auto_resize()
+        .focused(true)
         .initialization_script(initial_script)
-        .on_navigation(|url| url.scheme() == "tauri")
+        .on_navigation(move |url| {
+            let allowed = control_navigation_allowed(url);
+            if std::env::var("LEMMA_DESKTOP_CONTROL_DEBUG").as_deref() == Ok("1") || !allowed {
+                eprintln!("[control-navigation] allowed={allowed} url={url}");
+            }
+            allowed
+        })
         .on_new_window(move |url, _features| {
             if matches!(url.scheme(), "http" | "https") {
                 open_external(url.as_str());
             }
             NewWindowResponse::Deny
-        })
-        .build()
+        });
+    let parent = main.as_ref().window();
+    let size = parent.inner_size().map_err(|error| error.to_string())?;
+    let webview = parent
+        .add_child(builder, PhysicalPosition::new(0, 0), size)
         .map_err(|error| error.to_string())?;
-    window.show().map_err(|error| error.to_string())?;
-    window.set_focus().map_err(|error| error.to_string())?;
+    webview
+        .set_auto_resize(true)
+        .map_err(|error| error.to_string())?;
+    webview.set_focus().map_err(|error| error.to_string())?;
     let _ = app.emit_to("control", "lemma:control-page", page);
     Ok(())
 }
@@ -1493,7 +1776,7 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn open_developer_tools(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+fn open_developer_tools(window: Webview, app: AppHandle) -> Result<(), String> {
     require_control_window(&window)?;
     let main = app
         .get_webview_window("main")
@@ -1505,7 +1788,12 @@ fn open_developer_tools(window: WebviewWindow, app: AppHandle) -> Result<(), Str
 }
 
 #[tauri::command]
-fn start(app: AppHandle) -> Result<(), String> {
+fn start(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_local_native_window(&window)?;
+    start_impl(app)
+}
+
+fn start_impl(app: AppHandle) -> Result<(), String> {
     let mode = current_mode(&app);
     if mode == "undecided" {
         return Err("choose a connection mode first".into());
@@ -1523,7 +1811,12 @@ fn start(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn stop(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
+fn stop(window: Webview, app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
+    require_local_native_window(&window)?;
+    stop_impl(app, include_infra)
+}
+
+fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
@@ -1537,7 +1830,12 @@ fn stop(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn restart(app: AppHandle) -> Result<(), String> {
+fn restart(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_local_native_window(&window)?;
+    restart_impl(app)
+}
+
+fn restart_impl(app: AppHandle) -> Result<(), String> {
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
@@ -1557,7 +1855,12 @@ fn open_app(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_logs(_app: AppHandle) -> Result<(), String> {
+fn open_logs(window: Webview) -> Result<(), String> {
+    require_local_native_window(&window)?;
+    open_logs_impl()
+}
+
+fn open_logs_impl() -> Result<(), String> {
     let logs = locald_root();
     #[cfg(target_os = "macos")]
     let opener = "/usr/bin/open";
@@ -1573,7 +1876,8 @@ fn open_logs(_app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn installer_log() -> Result<String, String> {
+fn installer_log(window: Webview) -> Result<String, String> {
+    require_local_native_window(&window)?;
     let path = install_log_path();
     let raw = match std::fs::read_to_string(&path) {
         Ok(raw) => raw,
@@ -1611,6 +1915,7 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
         ("migrations", "Migrations", root.join("logs/migrations.log")),
         ("backend", "Backend", root.join("logs/backend.log")),
         ("frontend", "Frontend", root.join("logs/frontend.log")),
+        ("local-ai", "Local AI (MLX)", root.join("logs/local-ai.log")),
         ("vm", "VM helper", vm_log),
         ("guest", "Guest services", guest_log),
         ("locald", "Service manager", root.join("locald.log")),
@@ -1620,7 +1925,7 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
 
 #[tauri::command]
 fn diagnostic_logs(
-    window: WebviewWindow,
+    window: Webview,
     source: Option<String>,
     cursor: Option<String>,
 ) -> Result<DiagnosticLogSnapshot, String> {
@@ -1781,29 +2086,62 @@ fn is_control_window_label(label: &str) -> bool {
     label == "control"
 }
 
-fn require_control_window(window: &WebviewWindow) -> Result<(), String> {
-    if is_control_window_label(window.label()) {
-        Ok(())
-    } else {
-        Err("this operation is available only in the privileged Control Center".into())
-    }
+fn trusted_control_url(url: &tauri::Url) -> bool {
+    let bundled = url.scheme() == "tauri"
+        && matches!(url.host_str(), None | Some("localhost"))
+        && url.path() == "/control.html";
+    // WebviewUrl::App is served by Tauri's fixed loopback asset server during
+    // `cargo tauri dev`. Keep this narrow exception out of release builds and
+    // accept only the exact asset host, port, and path used by the dev runner.
+    let development = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+        && url.port() == Some(1430)
+        && url.path() == "/control.html";
+    bundled || development
 }
 
-fn require_local_native_window(window: &WebviewWindow) -> Result<(), String> {
+fn trusted_native_asset_url(url: &tauri::Url) -> bool {
+    let bundled = url.scheme() == "tauri" && matches!(url.host_str(), None | Some("localhost"));
+    let development = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+        && url.port() == Some(1430);
+    bundled || development
+}
+
+fn require_control_window(window: &Webview) -> Result<(), String> {
+    if !is_control_window_label(window.label()) {
+        return Err(
+            "this operation is available only in the privileged Local settings view".into(),
+        );
+    }
+    let url = window
+        .url()
+        .map_err(|error| format!("could not inspect Local settings: {error}"))?;
+    if !trusted_control_url(&url) {
+        return Err("remote pages cannot use Local settings privileges".into());
+    }
+    Ok(())
+}
+
+fn require_local_native_window(window: &Webview) -> Result<(), String> {
     if !matches!(window.label(), "main" | "control") {
         return Err("this operation is available only in a Lemma native window".into());
     }
     let url = window
         .url()
         .map_err(|error| format!("could not inspect native window: {error}"))?;
-    if url.scheme() != "tauri" {
+    if !trusted_native_asset_url(&url)
+        || (window.label() == "control" && !trusted_control_url(&url))
+    {
         return Err("remote workspace pages cannot prepare the local runtime".into());
     }
     Ok(())
 }
 
 #[tauri::command]
-fn prepare_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+fn prepare_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
     require_local_native_window(&window)?;
     if current_mode(&app) != "local" {
         return Err("choose the local workspace before preparing its runtime".into());
@@ -1816,13 +2154,13 @@ fn prepare_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> 
 }
 
 #[tauri::command]
-fn runtime_info(window: WebviewWindow) -> Result<RuntimeInfo, String> {
+fn runtime_info(window: Webview) -> Result<RuntimeInfo, String> {
     require_control_window(&window)?;
     Ok(runtime_info_snapshot())
 }
 
 #[tauri::command]
-fn repair_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+fn repair_runtime(window: Webview, app: AppHandle) -> Result<(), String> {
     require_control_window(&window)?;
     if current_mode(&app) != "local" {
         return Err("runtime repair is available only for a local workspace".into());
@@ -1880,7 +2218,7 @@ fn repair_runtime(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn control_snapshot(window: WebviewWindow, app: AppHandle, id: String) -> Result<(), String> {
+fn control_snapshot(window: Webview, app: AppHandle, id: String) -> Result<(), String> {
     require_control_window(&window)?;
     ensure_locald(&app)?;
     send_to_locald(&app, json!({"cmd":"control.snapshot", "id": id}))
@@ -1888,7 +2226,7 @@ fn control_snapshot(window: WebviewWindow, app: AppHandle, id: String) -> Result
 
 #[tauri::command]
 fn apply_operator_config(
-    window: WebviewWindow,
+    window: Webview,
     app: AppHandle,
     id: String,
     payload: Value,
@@ -1902,7 +2240,83 @@ fn apply_operator_config(
 }
 
 #[tauri::command]
-fn set_connection_mode(app: AppHandle, mode: String) -> Result<(), String> {
+fn local_ai_action(
+    window: Webview,
+    app: AppHandle,
+    action: String,
+    model_id: String,
+    id: String,
+) -> Result<(), String> {
+    require_control_window(&window)?;
+    if current_mode(&app) != "local" {
+        return Err("local AI is available only for a local workspace".into());
+    }
+    if !matches!(action.as_str(), "install" | "start" | "stop" | "delete") {
+        return Err(format!("unknown local AI action: {action}"));
+    }
+    if model_id.trim().is_empty() {
+        return Err("choose a local AI model first".into());
+    }
+    ensure_locald(&app)?;
+    send_to_locald(
+        &app,
+        json!({
+            "cmd": format!("local-ai.{action}"),
+            "id": id,
+            "model_id": model_id,
+        }),
+    )
+}
+
+#[tauri::command]
+fn sharing_action(
+    window: Webview,
+    app: AppHandle,
+    action: String,
+    id: String,
+    payload: Option<Value>,
+) -> Result<(), String> {
+    require_control_window(&window)?;
+    if current_mode(&app) != "local" {
+        return Err("sharing is available only for a local workspace".into());
+    }
+    if !matches!(
+        action.as_str(),
+        "snapshot" | "preflight" | "enable" | "disable"
+    ) {
+        return Err(format!("unknown sharing action: {action}"));
+    }
+    ensure_locald(&app)?;
+    let mut request = json!({
+        "cmd": format!("sharing.{action}"),
+        "id": id,
+    });
+    if let Some(payload) = payload {
+        if action == "preflight" {
+            if let Some(provider) = payload.get("provider") {
+                request["provider"] = provider.clone();
+            }
+        } else {
+            request["payload"] = payload;
+        }
+    }
+    send_to_locald(&app, request)
+}
+
+#[tauri::command]
+fn close_local_settings(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_control_window(&window)?;
+    window.close().map_err(|error| error.to_string())?;
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_connection_mode(window: Webview, app: AppHandle, mode: String) -> Result<(), String> {
+    require_local_native_window(&window)?;
     if mode != "local" && mode != "hosted" {
         return Err(format!("unknown mode {mode:?}"));
     }
@@ -1936,7 +2350,7 @@ fn choose_connection_mode(app: AppHandle) -> Result<String, String> {
         open_app_window(&app, &hosted_url())?;
     } else {
         show_splash(&app);
-        start(app)?;
+        start_impl(app)?;
         return Ok(new_mode.into());
     }
     Ok(new_mode.into())
@@ -2155,8 +2569,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         true,
         Some("CmdOrCtrl+Alt+I"),
     )?;
-    let control_item =
-        MenuItem::with_id(app, "control", "Local Control Center…", true, None::<&str>)?;
+    let control_item = MenuItem::with_id(app, "control", "Local settings…", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?;
     let quit_and_stop_item = MenuItem::with_id(
         app,
@@ -2220,16 +2633,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     }
                 }
                 "start" => {
-                    let _ = start(app);
+                    let _ = start_impl(app);
                 }
                 "stop" => {
-                    let _ = stop(app, Some(false));
+                    let _ = stop_impl(app, Some(false));
                 }
                 "stop-all" => {
-                    let _ = stop(app, Some(true));
+                    let _ = stop_impl(app, Some(true));
                 }
                 "restart" => {
-                    let _ = restart(app);
+                    let _ = restart_impl(app);
                 }
                 "mode" => {
                     let _ = choose_connection_mode(app);
@@ -2246,7 +2659,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     let _ = show_control_center(&app);
                 }
                 "logs" => {
-                    let _ = open_logs(app);
+                    let _ = open_logs_impl();
                 }
                 "devtools" => {
                     if let Some(window) = app.get_webview_window("main") {
@@ -2256,14 +2669,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                     }
                 }
                 "quit" => {
-                    disconnect_locald(&app);
                     app.exit(0);
                 }
                 "quit-and-stop" => {
                     if current_mode(&app) == "local" {
                         let shell: State<Shell> = app.state();
                         shell.quit_after_stop.store(true, Ordering::Release);
-                        if stop(app.clone(), Some(true)).is_err() {
+                        if stop_impl(app.clone(), Some(true)).is_err() {
                             shell.quit_after_stop.store(false, Ordering::Release);
                         }
                     } else {
@@ -2284,6 +2696,64 @@ fn disconnect_locald(app: &AppHandle) {
     let _ = send_to_locald(app, json!({"cmd": "disconnect", "id": "shell-exit"}));
     let shell: State<Shell> = app.state();
     *shell.locald_writer.lock().unwrap() = None;
+}
+
+fn release_local_ai_before_exit() -> Result<(), String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(request_local_ai_release());
+    });
+    receiver
+        .recv_timeout(Duration::from_secs(120))
+        .map_err(|_| "timed out while stopping sharing and releasing MLX memory".to_string())?
+}
+
+fn request_local_ai_release() -> Result<(), String> {
+    let mut connection = connect_locald()?;
+    let id = format!("desktop-exit-local-ai-release-{}", std::process::id());
+    writeln!(
+        connection.writer,
+        "{}",
+        json!({"v": 1, "cmd": "local-ai.release", "id": id})
+    )
+    .map_err(|error| format!("could not request MLX shutdown: {error}"))?;
+    connection
+        .writer
+        .flush()
+        .map_err(|error| format!("could not request MLX shutdown: {error}"))?;
+
+    loop {
+        let mut line = String::new();
+        let bytes = connection
+            .reader
+            .read_line(&mut line)
+            .map_err(|error| format!("could not confirm MLX shutdown: {error}"))?;
+        if bytes == 0 {
+            return Err("locald disconnected before confirming MLX shutdown".into());
+        }
+        if line.len() > 1024 * 1024 {
+            return Err("locald MLX shutdown response exceeded 1 MiB".into());
+        }
+        let Ok(event) = serde_json::from_str::<Value>(line.trim_end()) else {
+            continue;
+        };
+        if event.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+            continue;
+        }
+        match event.get("event").and_then(Value::as_str) {
+            Some("done") if event.get("ok").and_then(Value::as_bool) == Some(true) => {
+                return Ok(());
+            }
+            Some("done" | "error") => {
+                return Err(event
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("locald could not release MLX memory")
+                    .to_string());
+            }
+            _ => {}
+        }
+    }
 }
 
 fn main() {
@@ -2325,6 +2795,9 @@ fn main() {
             repair_runtime,
             control_snapshot,
             apply_operator_config,
+            local_ai_action,
+            sharing_action,
+            close_local_settings,
             open_developer_tools
         ])
         .setup(move |app| {
@@ -2388,7 +2861,21 @@ fn main() {
                         ui.clone()
                     };
                     let _ = handle.emit("lemma:state", snapshot);
+                } else if let Err(error) = start_impl(handle.clone()) {
+                    let shell: State<Shell> = handle.state();
+                    let snapshot = {
+                        let mut ui = shell.ui.lock().unwrap();
+                        ui.error = true;
+                        ui.error_code = "startup-request-failed".into();
+                        ui.status = error;
+                        ui.ready = false;
+                        ui.clone()
+                    };
+                    let _ = handle.emit("lemma:state", snapshot);
                 }
+            }
+            if std::env::var("LEMMA_DESKTOP_OPEN_CONTROL").as_deref() == Ok("1") {
+                let _ = show_control_center(&handle);
             }
             Ok(())
         })
@@ -2415,6 +2902,11 @@ fn main() {
                 }
             }
             tauri::RunEvent::Exit => {
+                if current_mode(app) == "local" {
+                    if let Err(error) = release_local_ai_before_exit() {
+                        eprintln!("[local-ai-exit] {error}");
+                    }
+                }
                 disconnect_locald(app);
             }
             _ => {}
@@ -2450,12 +2942,19 @@ mod tests {
         std::fs::create_dir_all(&pack).unwrap();
         let current = json!({
             "event": "hello", "protocol": 1, "mode": "host-packs",
+            "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
             "host_pack_release": "1.2.3",
             "host_pack_root": path_identity(&pack),
         });
         let old_same_version = json!({
             "event": "hello", "protocol": 1, "mode": "host-packs",
+            "daemon_api_revision": REQUIRED_LOCALD_API_REVISION,
             "host_pack_release": "1.2.3",
+        });
+        let stale_daemon = json!({
+            "event": "hello", "protocol": 1, "mode": "host-packs",
+            "host_pack_release": "1.2.3",
+            "host_pack_root": path_identity(&pack),
         });
         let compatibility = json!({
             "event": "hello", "protocol": 1, "mode": "compatibility",
@@ -2473,6 +2972,11 @@ mod tests {
         ));
         assert!(!locald_matches_host_pack(
             &old_same_version,
+            Some("1.2.3"),
+            Some(&pack)
+        ));
+        assert!(!locald_matches_host_pack(
+            &stale_daemon,
             Some("1.2.3"),
             Some(&pack)
         ));
@@ -2594,19 +3098,106 @@ mod tests {
     }
 
     #[test]
-    fn control_center_exposes_honest_runtime_repair_and_rollback_boundaries() {
+    fn local_settings_exposes_honest_runtime_repair_and_rollback_boundaries() {
         let html = include_str!("../ui/control.html");
+        let script = include_str!("../ui/control.js");
 
         assert!(html.contains("Signed release lifecycle"));
-        assert!(html.contains("repair_runtime"));
-        assert!(html.contains("open_developer_tools"));
-        assert!(html.contains("Open developer tools"));
+        assert!(script.contains("repair_runtime"));
+        assert!(script.contains("open_developer_tools"));
+        assert!(html.contains("Developer tools"));
         assert!(html.contains("id=\"network-contract\""));
         assert!(html.contains("id=\"connector-callback\""));
-        assert!(html.contains("snapshot.state?.api_url"));
+        assert!(script.contains("snapshot.state?.api_url"));
         assert!(!html.contains("http://app.lemma.localhost:8711/api/v1/connectors"));
-        assert!(html.contains("schema-1 releases do not claim database-safe downgrade"));
-        assert!(html.contains("Lemma will not risk opening migrated data with an older backend"));
+        assert!(html.contains(
+            "Rollback stays unavailable until a release declares its data rollback boundary"
+        ));
+        assert!(html.contains("Databases, files, and workspaces are preserved"));
+    }
+
+    #[test]
+    fn cloudflare_sharing_defaults_to_safe_automatic_provisioning() {
+        let html = include_str!("../ui/control.html");
+        let script = include_str!("../ui/control.js");
+
+        assert!(html.contains("Automatic setup · recommended"));
+        assert!(html.contains("Use an existing named tunnel"));
+        assert!(
+            html.contains("Cloudflare automatic setup stores only its generated tunnel credential")
+        );
+        assert!(script.contains("payload.cloudflare_setup = $(\"cloudflare-setup\").value"));
+        assert!(script.contains("public_warning_confirmed: true"));
+        assert!(!script.contains("--overwrite-dns"));
+    }
+
+    #[test]
+    fn local_ai_is_explicit_and_hidden_without_apple_silicon_support() {
+        let html = include_str!("../ui/control.html");
+        let script = include_str!("../ui/control.js");
+
+        assert!(html.contains("id=\"nav-models\" hidden"));
+        assert!(script.contains("Downloads are resumable and opt-in"));
+        assert!(script.contains("$(\"nav-models\").hidden = !supported"));
+        assert!(script.contains("invoke(\"local_ai_action\""));
+        assert!(!script.contains("localAiAction(\"install\")();"));
+    }
+
+    #[test]
+    fn local_settings_navigation_is_restricted_to_trusted_packaged_and_dev_assets() {
+        assert!(control_navigation_allowed(
+            &tauri::Url::parse("tauri://localhost/control.html").unwrap()
+        ));
+        assert!(control_navigation_allowed(
+            &tauri::Url::parse("http://127.0.0.1:1430/control.html").unwrap()
+        ));
+        assert!(!control_navigation_allowed(
+            &tauri::Url::parse("http://127.0.0.1:1431/control.html").unwrap()
+        ));
+        assert!(!control_navigation_allowed(
+            &tauri::Url::parse("http://127.0.0.1:1430/index.html").unwrap()
+        ));
+        assert!(!control_navigation_allowed(
+            &tauri::Url::parse("tauri://localhost/index.html").unwrap()
+        ));
+        assert!(!control_navigation_allowed(
+            &tauri::Url::parse("https://example.com/control.html").unwrap()
+        ));
+    }
+
+    #[test]
+    fn ready_auto_navigation_only_treats_the_native_installer_as_splash() {
+        assert!(native_splash_url(
+            &tauri::Url::parse("tauri://localhost/index.html").unwrap()
+        ));
+        assert!(native_splash_url(
+            &tauri::Url::parse("tauri://localhost/").unwrap()
+        ));
+        assert!(!native_splash_url(
+            &tauri::Url::parse("http://app.lemma.localhost:3711/").unwrap()
+        ));
+        assert!(!native_splash_url(
+            &tauri::Url::parse("tauri://localhost/control.html").unwrap()
+        ));
+    }
+
+    #[test]
+    fn periodic_stopped_status_keeps_an_active_startup_phase_visible() {
+        assert!(should_preserve_inflight_phase(
+            "shell-start-123",
+            "infrastructure-health",
+            "stopped"
+        ));
+        assert!(!should_preserve_inflight_phase(
+            "",
+            "infrastructure-health",
+            "stopped"
+        ));
+        assert!(!should_preserve_inflight_phase(
+            "shell-stop-123",
+            "stopped",
+            "stopped"
+        ));
     }
 
     #[test]

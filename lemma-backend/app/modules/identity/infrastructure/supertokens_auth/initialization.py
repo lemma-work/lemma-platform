@@ -38,7 +38,7 @@ logger = get_logger(__name__)
 
 
 def email_verification_mode():
-    return "REQUIRED" if settings.auth_email_verification_required else "OPTIONAL"
+    return "REQUIRED" if settings.auth_email_verification_required else None
 
 
 def _supertokens_api_domain() -> str:
@@ -137,15 +137,21 @@ def initialize_supertokens():
                     service=LemmaPasswordResetEmailService()
                 ),
             ),
-            emailverification.init(
-                mode=email_verification_mode(),
-                email_delivery=EmailDeliveryConfig(
-                    service=LemmaVerificationEmailService()
-                ),
-                override=emailverification.EmailVerificationOverrideConfig(
-                    functions=override_email_verification_functions,
-                    apis=override_email_verification_apis,
-                ),
+            *(
+                [
+                    emailverification.init(
+                        mode="REQUIRED",
+                        email_delivery=EmailDeliveryConfig(
+                            service=LemmaVerificationEmailService()
+                        ),
+                        override=emailverification.EmailVerificationOverrideConfig(
+                            functions=override_email_verification_functions,
+                            apis=override_email_verification_apis,
+                        ),
+                    )
+                ]
+                if settings.auth_email_verification_required
+                else []
             ),
             dashboard.init(),
             thirdparty.init(

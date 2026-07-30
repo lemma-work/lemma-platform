@@ -35,6 +35,11 @@ downloads:
 - `lemma-host-pack-<target>.zip`;
 - `lemma-guest-runtime-<target>.zip`.
 
+The Apple Silicon host pack contains a separate locked MLX-LM package tree.
+The curated Ternary Bonsai and Qwen3 models are never bundled: each roughly
+2.3 GB download is an explicit Local settings opt-in owned and verified by
+`locald`.
+
 Every manifest entry contains source URL/resource, SHA-256, compressed size,
 expanded size, archive format, platform target, and release identity. Archives
 are resumable, verified while transferring, extracted into disposable staging,
@@ -78,6 +83,18 @@ Build Desktop sidecars:
 ```bash
 desktop/scripts/build-sidecar.sh
 ```
+
+For the Apple-Silicon MLX experiment, use the isolated dev launcher instead of
+building a DMG on every iteration:
+
+```bash
+desktop/scripts/dev-mlx.sh /absolute/path/to/local-runtime
+```
+
+The host pack must include `backend/mlx-runtime`. The launcher rebuilds the
+native sidecars, gracefully replaces the prior isolated dev daemon, and keeps
+its state under `/tmp/lemma-desktop-mlx-dev` so an installed Lemma daemon cannot
+capture the dev UI.
 
 For source-level installer testing, prepare an exact manifest and archives and
 set:
@@ -133,13 +150,34 @@ Acceptance flow:
 3. Confirm download/extraction stages show real progress and no Start button.
 4. Create a local account inside WKWebView; verify it remains authenticated.
 5. Confirm the workspace does not return to the installer after Ready.
-6. Configure Ollama, LM Studio, or an API provider; verify the AI banner clears.
-7. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
-8. Open a built React app at `*.apps.lemma.localhost`.
-9. Close the window; verify schedules/services remain available from the tray.
-10. Restart and confirm ports and data persist.
-11. Inspect every Diagnostics source and exercise runtime repair.
-12. Use **Quit and stop Lemma** and confirm the VM releases memory.
+6. Open **Local settings** from the workspace footer, close it with Escape,
+   reopen it from the tray, and confirm the underlying workspace state was not
+   remounted or lost.
+7. On Apple Silicon, download and use both curated models through the MLX card;
+   verify thinking, structured tool calls, progress, model switching, explicit
+   stop/delete, and restart recovery. Also verify Ollama, LM Studio, or an API
+   provider can replace them.
+8. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
+   second browser, create/sign into an account, and verify streamed chat, a
+   tool call, and a file transfer. Disable it and confirm the LAN port closes.
+9. Verify ngrok preflight without exposing credentials. Activate a public link
+   only after the open-signup confirmation, repeat streamed chat/file/webhook
+   checks, then disable it. After `cloudflared tunnel login`, verify automatic
+   setup creates one installation-owned named tunnel and DNS route, reuses it
+   after disable, and still offers an existing tunnel as an advanced option.
+   Quick Tunnels must not appear.
+10. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
+11. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
+    the UI honestly says published pod apps remain local-only.
+12. Close the window; verify schedules and active sharing remain available
+    from the tray. Full Quit must stop sharing before exiting.
+13. Restart and confirm ports and data persist, but LAN/Public mode does not
+    resume automatically.
+14. Inspect every Diagnostics source and exercise runtime repair.
+15. Start a local MLX model, issue a second start, and confirm there is still
+    exactly one server PID. Use normal **Quit Lemma** and confirm that PID is
+    gone before the shell exits.
+16. Use **Quit and stop Lemma** and confirm the VM also releases its memory.
 
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
 and unrelated listeners occupying persisted ports.

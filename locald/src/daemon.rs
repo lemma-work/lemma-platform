@@ -11,6 +11,7 @@ use interprocess::local_socket::{prelude::*, ListenerOptions};
 use serde_json::{json, Value};
 
 use crate::host_process::HostProcessManager;
+use crate::local_ai::LocalAiManager;
 use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
 use crate::native_host_pack;
 use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
@@ -18,10 +19,14 @@ use crate::paths::LocalPaths;
 use crate::protocol::{
     append_bounded_journal, authenticate, error_event, load_or_create_token, read_bounded_line,
 };
+use crate::sharing::{EnableSharingRequest, SharingController, SharingMode, TunnelProvider};
 use crate::state::StateSnapshot;
 use crate::PROTOCOL_VERSION;
 
 const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+// Bump whenever Desktop must replace a durable daemon even when the public
+// app/host-pack release has not changed (for example, a test-build hotfix).
+const DAEMON_API_REVISION: u64 = 3;
 
 struct SupervisorProcess {
     child: Child,
@@ -40,7 +45,9 @@ pub struct Daemon {
     host_processes: Option<Arc<HostProcessManager>>,
     host_pack_root: Option<String>,
     managed_runtime: Option<Arc<ManagedRuntimeController>>,
+    local_ai: Arc<LocalAiManager>,
     operator_config: Arc<OperatorConfigStore>,
+    sharing: Option<Arc<SharingController>>,
     host_operation_running: AtomicBool,
 }
 
@@ -69,11 +76,17 @@ impl Daemon {
         let host_processes = host_manifest
             .map(|path| HostProcessManager::load(&path, paths.root.join("logs")))
             .transpose()?;
+        let local_ai = Arc::new(LocalAiManager::load(
+            &paths.root,
+            host_pack_root.as_deref(),
+        )?);
         if let Some(manager) = host_processes.as_ref() {
             manager.set_backend_environment(operator_config.backend_environment()?);
-            if let Some(runtime) = manager.managed_runtime() {
-                state.url = format!("http://app.lemma.localhost:{}", runtime.ports.frontend);
-                state.api_url = format!("http://app.lemma.localhost:{}", runtime.ports.backend);
+            if let Some((frontend_port, backend_port)) = manager.application_ports() {
+                // LAN/Public desired state is deliberately not persisted.
+                // Every daemon launch starts from the private canonical origin.
+                state.url = format!("http://app.lemma.localhost:{frontend_port}");
+                state.api_url = format!("http://app.lemma.localhost:{backend_port}");
                 state.persist(&paths.state)?;
             }
         }
@@ -92,6 +105,21 @@ impl Daemon {
                     .controller(&paths, spec)
             })
             .transpose()?;
+        let sharing = host_processes
+            .as_ref()
+            .and_then(|manager| {
+                manager
+                    .application_ports()
+                    .map(|(frontend_port, backend_port)| {
+                        SharingController::load(
+                            &paths.root,
+                            state.url.clone(),
+                            frontend_port,
+                            backend_port,
+                        )
+                    })
+            })
+            .transpose()?;
         Ok(Arc::new(Self {
             paths,
             token,
@@ -104,7 +132,9 @@ impl Daemon {
             host_processes,
             host_pack_root: host_pack_root.map(path_identity),
             managed_runtime,
+            local_ai,
             operator_config,
+            sharing,
             host_operation_running: AtomicBool::new(false),
         }))
     }
@@ -137,8 +167,10 @@ impl Daemon {
         let daemon = Arc::clone(self);
         thread::spawn(move || {
             let mut previous = String::new();
+            let mut previous_local_ai = String::new();
             let mut next_runtime_probe = std::time::Instant::now();
             let mut next_runtime_recovery = std::time::Instant::now();
+            let mut next_local_ai_recovery = std::time::Instant::now();
             let mut runtime_failure_reported = false;
             loop {
                 let manager = daemon
@@ -237,6 +269,82 @@ impl Daemon {
                     previous = current;
                     daemon.broadcast(event);
                 }
+                if manager.backend_restart_available()
+                    && daemon.local_ai.needs_recovery()
+                    && now >= next_local_ai_recovery
+                    && daemon
+                        .host_operation_running
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                {
+                    next_local_ai_recovery = now + std::time::Duration::from_secs(15);
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "local-ai.phase",
+                        "stage": "recovery",
+                        "progress": 90,
+                        "detail": "restarting the app-owned MLX server",
+                        "local_ai": daemon.local_ai.status(),
+                    }));
+                    let recovery = Arc::clone(&daemon);
+                    thread::spawn(move || {
+                        if let Err(error) = recovery.recover_local_ai_stack() {
+                            recovery.broadcast(error_event(
+                                "local-ai-recovery-failed",
+                                format!("Could not recover local AI: {error}"),
+                                None,
+                            ));
+                        }
+                        recovery
+                            .host_operation_running
+                            .store(false, Ordering::Release);
+                    });
+                }
+                let local_ai = daemon.local_ai.status();
+                let current_local_ai = local_ai.to_string();
+                if current_local_ai != previous_local_ai {
+                    previous_local_ai = current_local_ai;
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "local-ai.status",
+                        "local_ai": local_ai,
+                    }));
+                }
+                if let Some(sharing) = daemon.sharing.as_ref() {
+                    if let Some(message) = sharing.poll_failure() {
+                        if daemon
+                            .host_operation_running
+                            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                            .is_ok()
+                        {
+                            let recovery = Arc::clone(&daemon);
+                            let sharing = Arc::clone(sharing);
+                            thread::spawn(move || {
+                                let result = recovery.disable_sharing_transaction(&sharing);
+                                match result {
+                                    Ok(()) => recovery.broadcast(json!({
+                                        "v": PROTOCOL_VERSION,
+                                        "event": "sharing.changed",
+                                        "reason": "tunnel-exited",
+                                        "message": message,
+                                        "sharing": sharing.snapshot(true),
+                                    })),
+                                    Err(error) => recovery.broadcast(scoped_error_event(
+                                        "sharing",
+                                        "sharing-recovery-failed",
+                                        format!(
+                                            "The tunnel exited and This computer mode could not be restored: {error}"
+                                        ),
+                                        None,
+                                    )),
+                                }
+                                recovery
+                                    .host_operation_running
+                                    .store(false, Ordering::Release);
+                            });
+                        }
+                    }
+                }
                 thread::sleep(std::time::Duration::from_secs(1));
             }
         });
@@ -259,6 +367,7 @@ impl Daemon {
             writeln!(send, "{denied}")?;
             return Ok(());
         }
+        let desktop_client = hello.get("client").and_then(Value::as_str) == Some("desktop");
 
         let subscriber_id = self.next_subscriber.fetch_add(1, Ordering::Relaxed);
         let (sender, receiver) = mpsc::channel::<String>();
@@ -282,6 +391,7 @@ impl Daemon {
                 "event": "hello",
                 "protocol": PROTOCOL_VERSION,
                 "daemon_version": DAEMON_VERSION,
+                "daemon_api_revision": DAEMON_API_REVISION,
                 "pid": std::process::id(),
                 "compatibility_supervisor": self.managed_runtime.is_none(),
                 "mode": if self.managed_runtime.is_some() {
@@ -327,6 +437,9 @@ impl Daemon {
             .lock()
             .expect("subscriber lock poisoned")
             .remove(&subscriber_id);
+        if desktop_client {
+            self.restore_sharing_after_desktop_disconnect();
+        }
         Ok(())
     }
 
@@ -356,8 +469,50 @@ impl Daemon {
                 }
                 return true;
             }
+            "sharing.snapshot" => {
+                match self.sharing.as_ref() {
+                    Some(sharing) => self.send_direct(
+                        client,
+                        json!({
+                            "v": PROTOCOL_VERSION,
+                            "event": "sharing.snapshot",
+                            "id": id.as_ref(),
+                            "sharing": sharing.snapshot(true),
+                        }),
+                    ),
+                    None => self.send_direct(
+                        client,
+                        error_event(
+                            "sharing-unavailable",
+                            "sharing requires the managed local desktop runtime",
+                            id.as_ref(),
+                        ),
+                    ),
+                }
+                return true;
+            }
+            "sharing.preflight" => {
+                self.sharing_preflight(request, client);
+                return true;
+            }
+            "sharing.enable" => {
+                self.start_sharing_enable(request, client.clone());
+                return true;
+            }
+            "sharing.disable" => {
+                self.start_sharing_disable(id, client.clone());
+                return true;
+            }
             "config.apply" => {
                 self.apply_operator_config(request, client);
+                return true;
+            }
+            "local-ai.release" => {
+                self.release_local_ai_for_desktop_exit(id.as_ref(), client);
+                return true;
+            }
+            "local-ai.install" | "local-ai.start" | "local-ai.stop" | "local-ai.delete" => {
+                self.start_local_ai_operation(command, request, client.clone());
                 return true;
             }
             _ => {}
@@ -431,6 +586,101 @@ impl Daemon {
         true
     }
 
+    fn release_local_ai_for_desktop_exit(&self, id: Option<&Value>, client: &mpsc::Sender<String>) {
+        self.send_direct(
+            client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": "local-ai.release",
+                "id": id,
+            }),
+        );
+        let mut failure = None;
+        if let Some(sharing) = self.sharing.as_ref() {
+            if let Err(error) = self.disable_sharing_transaction(sharing) {
+                // Full Desktop exit must close the exposure even if restoring
+                // the app origin failed. It is safer to leave the local stack
+                // stopped/misconfigured than to leave a public tunnel alive.
+                sharing.force_disable();
+                failure = Some(error.to_string());
+            }
+        }
+        if let Err(error) = self.local_ai.disable() {
+            failure
+                .get_or_insert_with(String::new)
+                .push_str(&format!("; MLX cleanup failed: {error}"));
+        }
+        match failure {
+            None => {
+                self.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "local-ai.changed",
+                    "id": id,
+                    "local_ai": self.local_ai.status(),
+                }));
+                self.send_direct(
+                    client,
+                    json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": "local-ai.release",
+                        "id": id,
+                        "ok": true,
+                    }),
+                );
+            }
+            Some(error) => self.send_direct(
+                client,
+                error_event(
+                    "local-ai-release-failed",
+                    format!(
+                        "could not stop sharing and release MLX memory before desktop exit: {error}"
+                    ),
+                    id,
+                ),
+            ),
+        }
+    }
+
+    fn restore_sharing_after_desktop_disconnect(self: &Arc<Self>) {
+        let Some(sharing) = self.sharing.as_ref() else {
+            return;
+        };
+        if sharing.active_mode() == SharingMode::ThisComputer {
+            return;
+        }
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let daemon = Arc::clone(self);
+        let sharing = Arc::clone(sharing);
+        thread::spawn(move || {
+            let result = daemon.disable_sharing_transaction(&sharing);
+            match result {
+                Ok(()) => daemon.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "sharing.changed",
+                    "reason": "desktop-disconnected",
+                    "sharing": sharing.snapshot(true),
+                })),
+                Err(error) => daemon.broadcast(scoped_error_event(
+                    "sharing",
+                    "sharing-disconnect-cleanup-failed",
+                    format!("Desktop disconnected and sharing cleanup failed: {error}"),
+                    None,
+                )),
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
+    }
+
     fn control_snapshot(&self, id: Option<&Value>) -> io::Result<Value> {
         let mut event = json!({
             "v": PROTOCOL_VERSION,
@@ -441,6 +691,8 @@ impl Daemon {
             "capabilities": self.host_processes.as_ref().and_then(|manager| manager.capabilities()),
             "release": self.host_processes.as_ref().map(|manager| manager.release()),
             "managed_runtime": self.managed_runtime.as_ref().and_then(|runtime| runtime.status()),
+            "local_ai": self.local_ai.status(),
+            "sharing": self.sharing.as_ref().map(|sharing| sharing.snapshot(true)),
             "paths": {
                 "locald": &self.paths.root,
                 "logs": self.paths.root.join("logs"),
@@ -450,6 +702,311 @@ impl Daemon {
             event["id"] = id.clone();
         }
         Ok(event)
+    }
+
+    fn sharing_preflight(&self, request: Value, client: &mpsc::Sender<String>) {
+        let id = request.get("id");
+        let provider = match request
+            .get("provider")
+            .cloned()
+            .map(serde_json::from_value::<TunnelProvider>)
+            .transpose()
+        {
+            Ok(provider) => provider,
+            Err(error) => {
+                self.send_direct(
+                    client,
+                    error_event("bad-input", format!("unknown tunnel provider: {error}"), id),
+                );
+                return;
+            }
+        };
+        match self.sharing.as_ref() {
+            Some(sharing) => self.send_direct(
+                client,
+                json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "sharing.preflight",
+                    "id": id,
+                    "preflight": sharing.preflight(provider),
+                    "sharing": sharing.snapshot(false),
+                }),
+            ),
+            None => self.send_direct(
+                client,
+                error_event(
+                    "sharing-unavailable",
+                    "sharing requires the managed local desktop runtime",
+                    id,
+                ),
+            ),
+        }
+    }
+
+    fn start_sharing_enable(self: &Arc<Self>, request: Value, client: mpsc::Sender<String>) {
+        let id = request.get("id").cloned();
+        let Some(sharing) = self.sharing.as_ref().cloned() else {
+            self.send_direct(
+                &client,
+                error_event(
+                    "sharing-unavailable",
+                    "sharing requires the managed local desktop runtime",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        };
+        let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        let enable: EnableSharingRequest = match serde_json::from_value(payload) {
+            Ok(enable) => enable,
+            Err(error) => {
+                self.send_direct(
+                    &client,
+                    error_event(
+                        "bad-input",
+                        format!("invalid sharing request: {error}"),
+                        id.as_ref(),
+                    ),
+                );
+                return;
+            }
+        };
+        let stack_ready = {
+            let state = self.state.lock().expect("state lock poisoned");
+            state.ready && state.running
+        };
+        if !stack_ready {
+            self.send_direct(
+                &client,
+                error_event(
+                    "sharing-stack-not-ready",
+                    "Start Lemma and wait until the local stack is healthy before enabling sharing.",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                &client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": "sharing.enable",
+                "id": id.as_ref(),
+            }),
+        );
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let (progress_stop, progress_receive) = mpsc::channel::<()>();
+            let progress_daemon = Arc::clone(&daemon);
+            let progress_sharing = Arc::clone(&sharing);
+            let progress_id = id.clone();
+            let progress_monitor = thread::spawn(move || loop {
+                match progress_receive.recv_timeout(std::time::Duration::from_millis(250)) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        progress_daemon.broadcast(json!({
+                            "v": PROTOCOL_VERSION,
+                            "event": "sharing.progress",
+                            "id": progress_id.as_ref(),
+                            "sharing": progress_sharing.snapshot(false),
+                        }));
+                    }
+                }
+            });
+            let result = daemon.enable_sharing_transaction(&sharing, &enable);
+            let _ = progress_stop.send(());
+            let _ = progress_monitor.join();
+            match result {
+                Ok(()) => daemon.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "sharing.changed",
+                    "id": id.as_ref(),
+                    "ok": true,
+                    "sharing": sharing.snapshot(true),
+                })),
+                Err(error) => daemon.broadcast(scoped_error_event(
+                    "sharing",
+                    "sharing-enable-failed",
+                    error.to_string(),
+                    id.as_ref(),
+                )),
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
+    }
+
+    fn enable_sharing_transaction(
+        &self,
+        sharing: &SharingController,
+        request: &EnableSharingRequest,
+    ) -> io::Result<()> {
+        let manager = self
+            .host_processes
+            .as_ref()
+            .ok_or_else(|| io::Error::other("host process manager is unavailable"))?;
+        let prepared = sharing.prepare_enable(request)?;
+        let previous_backend = manager.service_environment("backend");
+        let previous_frontend = manager.service_environment("frontend");
+        let (backend, frontend) = sharing_environment(&prepared.origin, prepared.mode);
+        manager.replace_service_environment("backend", backend);
+        manager.replace_service_environment("frontend", frontend);
+
+        let activate = manager
+            .restart_all()
+            .and_then(|_| validate_canonical_origin(&prepared.origin));
+        if let Err(error) = activate {
+            manager.replace_service_environment("backend", previous_backend);
+            manager.replace_service_environment("frontend", previous_frontend);
+            let rollback = manager.restart_all();
+            sharing.rollback_enable(error.to_string());
+            self.restore_local_canonical_state()?;
+            return match rollback {
+                Ok(()) => Err(io::Error::other(format!(
+                    "sharing could not be activated and was rolled back: {error}"
+                ))),
+                Err(rollback_error) => Err(io::Error::other(format!(
+                    "sharing could not be activated: {error}; rollback also failed: {rollback_error}"
+                ))),
+            };
+        }
+
+        {
+            let mut state = self.state.lock().expect("state lock poisoned");
+            state.url = prepared.origin.clone();
+            state.api_url = format!("{}/_lemma/api", prepared.origin.trim_end_matches('/'));
+            state.persist(&self.paths.state)?;
+        }
+        if let Err(error) = sharing.commit_enable(request) {
+            manager.replace_service_environment("backend", previous_backend);
+            manager.replace_service_environment("frontend", previous_frontend);
+            let rollback = manager.restart_all();
+            sharing.rollback_enable(error.to_string());
+            self.restore_local_canonical_state()?;
+            return match rollback {
+                Ok(()) => Err(io::Error::other(format!(
+                    "sharing preferences could not be saved and activation was rolled back: {error}"
+                ))),
+                Err(rollback_error) => Err(io::Error::other(format!(
+                    "sharing preferences could not be saved: {error}; rollback also failed: {rollback_error}"
+                ))),
+            };
+        }
+        Ok(())
+    }
+
+    fn start_sharing_disable(self: &Arc<Self>, id: Option<Value>, client: mpsc::Sender<String>) {
+        let Some(sharing) = self.sharing.as_ref().cloned() else {
+            self.send_direct(
+                &client,
+                error_event(
+                    "sharing-unavailable",
+                    "sharing requires the managed local desktop runtime",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        };
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                &client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": "sharing.disable",
+                "id": id.as_ref(),
+            }),
+        );
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let result = daemon.disable_sharing_transaction(&sharing);
+            match result {
+                Ok(()) => daemon.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "sharing.changed",
+                    "id": id.as_ref(),
+                    "ok": true,
+                    "sharing": sharing.snapshot(true),
+                })),
+                Err(error) => daemon.broadcast(scoped_error_event(
+                    "sharing",
+                    "sharing-disable-failed",
+                    error.to_string(),
+                    id.as_ref(),
+                )),
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
+    }
+
+    fn disable_sharing_transaction(&self, sharing: &SharingController) -> io::Result<()> {
+        if !sharing.begin_disable()? {
+            self.restore_local_canonical_state()?;
+            return Ok(());
+        }
+        let manager = self
+            .host_processes
+            .as_ref()
+            .ok_or_else(|| io::Error::other("host process manager is unavailable"))?;
+        let previous_backend = manager.replace_service_environment("backend", HashMap::new());
+        let previous_frontend = manager.replace_service_environment("frontend", HashMap::new());
+        if let Err(error) = manager.restart_all() {
+            manager.replace_service_environment("backend", previous_backend);
+            manager.replace_service_environment("frontend", previous_frontend);
+            let rollback = manager.restart_all();
+            sharing.abort_disable(error.to_string());
+            return match rollback {
+                Ok(()) => Err(io::Error::other(format!(
+                    "This computer mode could not be restored; sharing remains active: {error}"
+                ))),
+                Err(rollback_error) => Err(io::Error::other(format!(
+                    "This computer mode could not be restored: {error}; shared-origin rollback also failed: {rollback_error}"
+                ))),
+            };
+        }
+        self.restore_local_canonical_state()?;
+        sharing.commit_disable();
+        Ok(())
+    }
+
+    fn restore_local_canonical_state(&self) -> io::Result<()> {
+        let Some(sharing) = self.sharing.as_ref() else {
+            return Ok(());
+        };
+        let mut state = self.state.lock().expect("state lock poisoned");
+        state.url = sharing.local_origin().to_owned();
+        state.api_url = self
+            .host_processes
+            .as_ref()
+            .and_then(|manager| manager.application_ports())
+            .map(|(_, backend_port)| format!("http://app.lemma.localhost:{backend_port}"))
+            .unwrap_or_else(|| state.api_url.clone());
+        state.persist(&self.paths.state)
     }
 
     fn apply_operator_config(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
@@ -481,6 +1038,8 @@ impl Daemon {
                 return;
             }
         };
+        let switches_away_from_local_ai =
+            self.local_ai.enabled() && !self.local_ai.owns_base_url(&apply.config.ai.base_url);
         self.send_direct(
             client,
             json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.apply", "id": id.as_ref()}),
@@ -488,18 +1047,21 @@ impl Daemon {
         let daemon = Arc::clone(self);
         thread::spawn(move || {
             let previous = daemon.operator_config.capture_state();
-            let was_running = daemon
+            let backend_restart_available = daemon
                 .host_processes
                 .as_ref()
-                .is_some_and(|manager| manager.desired_running());
+                .is_some_and(|manager| manager.backend_restart_available());
             let result = previous.and_then(|previous| {
                 let snapshot = daemon.operator_config.apply(apply)?;
                 let activate: io::Result<Value> = (|| {
                     if let Some(manager) = daemon.host_processes.as_ref() {
-                        manager.set_backend_environment(daemon.backend_environment()?);
-                        if was_running {
+                        if backend_restart_available {
+                            manager.set_backend_environment(daemon.backend_environment()?);
                             manager.restart_backend()?;
                         }
+                    }
+                    if switches_away_from_local_ai {
+                        daemon.local_ai.disable()?;
                     }
                     Ok(snapshot)
                 })();
@@ -508,8 +1070,8 @@ impl Daemon {
                     Err(error) => {
                         let rollback = daemon.operator_config.restore_state(previous).and_then(|_| {
                             if let Some(manager) = daemon.host_processes.as_ref() {
-                                manager.set_backend_environment(daemon.backend_environment()?);
-                                if was_running {
+                                if backend_restart_available {
+                                    manager.set_backend_environment(daemon.backend_environment()?);
                                     manager.restart_backend()?;
                                 }
                             }
@@ -568,10 +1130,16 @@ impl Daemon {
         let daemon = Arc::clone(self);
         thread::spawn(move || {
             let mut failure = None;
+            if let Some(sharing) = daemon.sharing.as_ref() {
+                sharing.force_disable();
+            }
             if let Some(manager) = daemon.host_processes.as_ref() {
                 if let Err(error) = manager.stop_all() {
                     failure = Some(error.to_string());
                 }
+            }
+            if let Err(error) = daemon.local_ai.stop() {
+                failure.get_or_insert_with(|| error.to_string());
             }
             if let Some(runtime) = daemon.managed_runtime.as_ref() {
                 if let Err(error) = runtime.shutdown() {
@@ -644,7 +1212,7 @@ impl Daemon {
             let result = match command.as_str() {
                 "start" => daemon.start_host_packs(manager, id.as_ref()),
                 "stop" => {
-                    let result = manager.stop_all();
+                    let result = manager.stop_all().and_then(|_| daemon.local_ai.stop());
                     if result.is_ok() && request.get("infra").and_then(Value::as_bool) == Some(true)
                     {
                         daemon.stop_private_infra()
@@ -654,6 +1222,7 @@ impl Daemon {
                 }
                 "restart" => manager
                     .stop_all()
+                    .and_then(|_| daemon.local_ai.stop())
                     .and_then(|_| daemon.start_host_packs(manager, id.as_ref())),
                 _ => unreachable!(),
             };
@@ -784,6 +1353,204 @@ impl Daemon {
         });
     }
 
+    fn start_local_ai_operation(
+        self: &Arc<Self>,
+        command: String,
+        request: Value,
+        client: mpsc::Sender<String>,
+    ) {
+        let id = request.get("id").cloned();
+        let model_id = request
+            .get("model_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if command != "local-ai.stop" && model_id.is_empty() {
+            self.send_direct(
+                &client,
+                error_event(
+                    "local-ai-model-required",
+                    "choose a local AI model first",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
+        if !self.local_ai.supported() {
+            self.send_direct(
+                &client,
+                error_event(
+                    "local-ai-unsupported",
+                    "local MLX AI is available only on Apple Silicon Macs",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
+        if !self.local_ai.runtime_available() {
+            self.send_direct(
+                &client,
+                error_event(
+                    "local-ai-runtime-unavailable",
+                    "this Lemma runtime does not include the optional MLX packages",
+                    id.as_ref(),
+                ),
+            );
+            return;
+        }
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                &client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": command,
+                "id": id.as_ref(),
+            }),
+        );
+
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let emit_progress = |stage: &str, progress: u8, detail: &str| {
+                daemon.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "local-ai.phase",
+                    "id": id.as_ref(),
+                    "stage": stage,
+                    "progress": progress,
+                    "detail": detail,
+                    "local_ai": daemon.local_ai.status(),
+                }));
+            };
+            let result = match command.as_str() {
+                "local-ai.install" => daemon.local_ai.install(&model_id, emit_progress),
+                "local-ai.start" => match daemon.operator_config.capture_state() {
+                    Err(error) => Err(error),
+                    Ok(previous) => {
+                        let backend_restart_available = daemon
+                            .host_processes
+                            .as_ref()
+                            .is_some_and(|manager| manager.backend_restart_available());
+                        let activation: io::Result<()> = (|| {
+                            daemon.local_ai.start(&model_id, emit_progress)?;
+                            daemon.configure_local_ai_provider()?;
+                            if let Some(manager) = daemon.host_processes.as_ref() {
+                                if backend_restart_available {
+                                    manager.set_backend_environment(daemon.backend_environment()?);
+                                    manager.restart_backend()?;
+                                }
+                            }
+                            Ok(())
+                        })();
+                        match activation {
+                            Ok(()) => Ok(()),
+                            Err(error) => {
+                                let stopped = daemon.local_ai.disable();
+                                let rollback = daemon
+                                    .operator_config
+                                    .restore_state(previous)
+                                    .and_then(|_| {
+                                        if let Some(manager) = daemon.host_processes.as_ref() {
+                                            if backend_restart_available {
+                                                manager.set_backend_environment(
+                                                    daemon.backend_environment()?,
+                                                );
+                                                manager.restart_backend()?;
+                                            }
+                                        }
+                                        Ok(())
+                                    });
+                                match (stopped, rollback) {
+                                        (Ok(()), Ok(())) => Err(io::Error::other(format!(
+                                            "local AI could not be activated and was rolled back: {error}"
+                                        ))),
+                                        (stop, restore) => Err(io::Error::other(format!(
+                                            "local AI could not be activated: {error}; cleanup failed: {}; rollback failed: {}",
+                                            stop.err().map_or_else(
+                                                || "none".into(),
+                                                |error| error.to_string()
+                                            ),
+                                            restore.err().map_or_else(
+                                                || "none".into(),
+                                                |error| error.to_string()
+                                            ),
+                                        ))),
+                                    }
+                            }
+                        }
+                    }
+                },
+                "local-ai.stop" => daemon.local_ai.disable(),
+                "local-ai.delete" => {
+                    let selected = daemon.local_ai.is_selected(&model_id);
+                    let local_base_url = daemon.local_ai.base_url();
+                    daemon.local_ai.delete(&model_id).and_then(|_| {
+                        if selected {
+                            if let Some(base_url) = local_base_url {
+                                daemon
+                                    .operator_config
+                                    .clear_local_openai_if_base(&base_url)?;
+                            }
+                            if let Some(manager) = daemon.host_processes.as_ref() {
+                                if manager.backend_restart_available() {
+                                    manager.set_backend_environment(daemon.backend_environment()?);
+                                    manager.restart_backend()?;
+                                }
+                            }
+                        }
+                        Ok(())
+                    })
+                }
+                _ => unreachable!(),
+            };
+
+            match result {
+                Ok(()) => {
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "local-ai.changed",
+                        "id": id.as_ref(),
+                        "local_ai": daemon.local_ai.status(),
+                    }));
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": command,
+                        "id": id.as_ref(),
+                        "ok": true,
+                    }));
+                }
+                Err(error) => {
+                    daemon.broadcast(error_event(
+                        "local-ai-operation-failed",
+                        error.to_string(),
+                        id.as_ref(),
+                    ));
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "done",
+                        "cmd": command,
+                        "id": id.as_ref(),
+                        "ok": false,
+                    }));
+                }
+            }
+            daemon
+                .host_operation_running
+                .store(false, Ordering::Release);
+        });
+    }
+
     fn start_host_packs(
         self: &Arc<Self>,
         manager: &HostProcessManager,
@@ -792,6 +1559,19 @@ impl Daemon {
         let runtime_generation = manager.prepare_runtime_generation()?;
         self.prepare_private_infra(operation_id, &runtime_generation)?;
         manager.mark_dependency_ready();
+        if self.local_ai.enabled() {
+            self.local_ai.start_selected(|stage, progress, detail| {
+                self.broadcast(json!({
+                    "v": PROTOCOL_VERSION,
+                    "event": "local-ai.phase",
+                    "stage": stage,
+                    "progress": progress,
+                    "detail": detail,
+                    "local_ai": self.local_ai.status(),
+                }));
+            })?;
+            self.configure_local_ai_provider()?;
+        }
         manager.set_backend_environment(self.backend_environment()?);
         manager.start_all_with_progress(|component| {
             let (label, progress, detail, log_source) = match component {
@@ -867,6 +1647,10 @@ impl Daemon {
             .as_ref()
             .ok_or_else(|| io::Error::other("host process manager is unavailable"))?;
         runtime.start()?;
+        if self.local_ai.enabled() {
+            self.local_ai.start_selected(|_, _, _| {})?;
+            self.configure_local_ai_provider()?;
+        }
         manager.set_backend_environment(self.backend_environment()?);
         manager.restart_all()?;
         manager.mark_dependency_ready();
@@ -886,6 +1670,43 @@ impl Daemon {
             "api_url": state.api_url,
             "mode": "managed-local",
             "release": manager.release(),
+        }));
+        Ok(())
+    }
+
+    fn configure_local_ai_provider(&self) -> io::Result<()> {
+        let base_url = self
+            .local_ai
+            .base_url()
+            .ok_or_else(|| io::Error::other("local AI started without a loopback endpoint"))?;
+        let model = self.local_ai.model_name()?;
+        self.operator_config
+            .configure_local_openai(base_url, model)
+            .map(|_| ())
+    }
+
+    fn recover_local_ai_stack(self: &Arc<Self>) -> io::Result<()> {
+        self.local_ai.start_selected(|stage, progress, detail| {
+            self.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "local-ai.phase",
+                "stage": stage,
+                "progress": progress,
+                "detail": detail,
+                "local_ai": self.local_ai.status(),
+            }));
+        })?;
+        self.configure_local_ai_provider()?;
+        if let Some(manager) = self.host_processes.as_ref() {
+            if manager.backend_restart_available() {
+                manager.set_backend_environment(self.backend_environment()?);
+                manager.restart_backend()?;
+            }
+        }
+        self.broadcast(json!({
+            "v": PROTOCOL_VERSION,
+            "event": "local-ai.changed",
+            "local_ai": self.local_ai.status(),
         }));
         Ok(())
     }
@@ -1182,6 +2003,17 @@ impl Daemon {
     }
 }
 
+fn scoped_error_event(
+    scope: &str,
+    code: &str,
+    message: impl Into<String>,
+    id: Option<&Value>,
+) -> Value {
+    let mut event = error_event(code, message, id);
+    event["scope"] = Value::String(scope.to_owned());
+    event
+}
+
 fn compose_backend_environment(
     mut operator: HashMap<String, String>,
     infrastructure: Option<HashMap<String, String>>,
@@ -1194,6 +2026,98 @@ fn compose_backend_environment(
         operator.extend(infrastructure);
     }
     operator
+}
+
+fn sharing_environment(
+    origin: &str,
+    mode: SharingMode,
+) -> (HashMap<String, String>, HashMap<String, String>) {
+    let origin = origin.trim_end_matches('/');
+    let api_url = format!("{origin}/_lemma/api");
+    let auth_url = format!("{origin}/auth");
+    let secure = mode == SharingMode::Public;
+    let exact_origin = exact_origin_regex(origin);
+    let backend = HashMap::from([
+        ("API_URL".into(), api_url.clone()),
+        ("FRONTEND_URL".into(), origin.into()),
+        ("AUTH_FRONTEND_URL".into(), auth_url.clone()),
+        ("AUTH_WEBSITE_BASE_PATH".into(), "/auth".into()),
+        ("SUPERTOKENS_API_BASE_PATH".into(), "/auth".into()),
+        (
+            "SUPERTOKENS_API_GATEWAY_PATH".into(),
+            "/_lemma/api/st".into(),
+        ),
+        (
+            "SESSION_COOKIE_SECURE".into(),
+            if secure { "true" } else { "false" }.into(),
+        ),
+        ("SESSION_COOKIE_SAME_SITE".into(), "lax".into()),
+        ("SESSION_COOKIE_DOMAIN".into(), String::new()),
+        ("AUTH_EMAIL_VERIFICATION_REQUIRED".into(), "false".into()),
+        ("CORS_ORIGIN_REGEX".into(), exact_origin),
+    ]);
+    let frontend = HashMap::from([
+        ("NEXT_PUBLIC_API_URL".into(), api_url),
+        ("NEXT_PUBLIC_AUTH_URL".into(), auth_url),
+        ("NEXT_PUBLIC_SITE_URL".into(), origin.into()),
+        ("NEXT_PUBLIC_AUTH_WEBSITE_BASE_PATH".into(), "/auth".into()),
+        (
+            "NEXT_PUBLIC_SUPERTOKENS_API_BASE_PATH".into(),
+            "/auth".into(),
+        ),
+        (
+            "NEXT_PUBLIC_SUPERTOKENS_API_GATEWAY_PATH".into(),
+            "/_lemma/api/st".into(),
+        ),
+        (
+            "NEXT_PUBLIC_AUTH_DEFAULT_REDIRECT_URI".into(),
+            format!("{origin}/"),
+        ),
+        ("NEXT_PUBLIC_SESSION_TOKEN_DOMAIN".into(), String::new()),
+        (
+            "NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED".into(),
+            "false".into(),
+        ),
+    ]);
+    (backend, frontend)
+}
+
+fn exact_origin_regex(origin: &str) -> String {
+    let mut escaped = String::with_capacity(origin.len() + 2);
+    escaped.push('^');
+    for character in origin.chars() {
+        if matches!(
+            character,
+            '.' | '+' | '*' | '?' | '^' | '$' | '(' | ')' | '[' | ']' | '{' | '}' | '|' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped.push('$');
+    escaped
+}
+
+fn validate_canonical_origin(origin: &str) -> io::Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(io::Error::other)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+    let target = format!("{}/runtime-config.js", origin.trim_end_matches('/'));
+    let mut last_error = String::new();
+    while std::time::Instant::now() < deadline {
+        match client.get(&target).send() {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) => last_error = format!("HTTP {}", response.status()),
+            Err(error) => last_error = error.to_string(),
+        }
+        thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("the shared canonical origin did not become healthy: {last_error}"),
+    ))
 }
 
 fn runtime_operation_error_code(message: &str, fallback: &'static str) -> &'static str {
@@ -1281,6 +2205,12 @@ fn prepare_compatibility_host_manifest(
     paths: &LocalPaths,
     pack_root: &std::path::Path,
 ) -> io::Result<PathBuf> {
+    // Dev/compatibility daemons are often terminated with the Tauri process.
+    // Reclaim only the exact prior installation processes recorded in locald's
+    // verified ledger before rendering a new manifest, matching the packaged
+    // managed-runtime path. Otherwise an orphaned Next server can retain the
+    // fixed compatibility port and make every later launch fail at 80–90%.
+    crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
     let destination = paths.root.join("host-pack.json");
     let provider = transitional_provider(false);
     let mut command = supervisor_base_command()?;
@@ -1372,8 +2302,10 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        compose_backend_environment, error_diagnostic_source, runtime_operation_error_code,
+        compose_backend_environment, error_diagnostic_source, exact_origin_regex,
+        runtime_operation_error_code, sharing_environment,
     };
+    use crate::sharing::SharingMode;
 
     #[test]
     fn operator_updates_preserve_private_runtime_endpoints() {
@@ -1452,6 +2384,46 @@ mod tests {
         assert_eq!(
             error_diagnostic_source("registry DNS lookup failed"),
             ("infrastructure", "infrastructure")
+        );
+    }
+
+    #[test]
+    fn public_canonical_environment_uses_one_prefixed_secure_origin() {
+        let (backend, frontend) =
+            sharing_environment("https://lemma.example.com/", SharingMode::Public);
+        assert_eq!(backend["API_URL"], "https://lemma.example.com/_lemma/api");
+        assert_eq!(backend["FRONTEND_URL"], "https://lemma.example.com");
+        assert_eq!(backend["SUPERTOKENS_API_GATEWAY_PATH"], "/_lemma/api/st");
+        assert_eq!(backend["SESSION_COOKIE_SECURE"], "true");
+        assert_eq!(backend["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false");
+        assert_eq!(
+            backend["CORS_ORIGIN_REGEX"],
+            "^https://lemma\\.example\\.com$"
+        );
+        assert_eq!(
+            frontend["NEXT_PUBLIC_API_URL"],
+            "https://lemma.example.com/_lemma/api"
+        );
+        assert_eq!(
+            frontend["NEXT_PUBLIC_AUTH_URL"],
+            "https://lemma.example.com/auth"
+        );
+        assert_eq!(
+            frontend["NEXT_PUBLIC_AUTH_EMAIL_VERIFICATION_REQUIRED"],
+            "false"
+        );
+    }
+
+    #[test]
+    fn lan_canonical_environment_keeps_host_only_nonsecure_cookies() {
+        let (backend, frontend) =
+            sharing_environment("http://192.168.1.20:51234", SharingMode::LocalNetwork);
+        assert_eq!(backend["SESSION_COOKIE_SECURE"], "false");
+        assert_eq!(backend["SESSION_COOKIE_DOMAIN"], "");
+        assert_eq!(frontend["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"], "");
+        assert_eq!(
+            exact_origin_regex("http://192.168.1.20:51234"),
+            "^http://192\\.168\\.1\\.20:51234$"
         );
     }
 }

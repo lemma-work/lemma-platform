@@ -340,6 +340,7 @@ pub struct GuestService<E: Engine> {
     engine: E,
     state_root: PathBuf,
     endpoint_host: String,
+    dynamic_endpoint_host: bool,
     host_gateway: String,
     capability: Option<String>,
 }
@@ -349,9 +350,11 @@ impl GuestService<NerdctlEngine> {
         let state_root = std::env::var_os("LEMMA_GUEST_STATE_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/var/lib/lemma"));
-        let endpoint_host = std::env::var("LEMMA_GUEST_ENDPOINT_HOST")
+        let configured_endpoint_host = std::env::var("LEMMA_GUEST_ENDPOINT_HOST")
             .ok()
-            .filter(|value| valid_ip(value))
+            .filter(|value| valid_ip(value));
+        let dynamic_endpoint_host = configured_endpoint_host.is_none();
+        let endpoint_host = configured_endpoint_host
             .or_else(discover_guest_ip)
             .ok_or_else(|| GuestError::engine("could not discover the guest IPv4 address"))?;
         let host_gateway = std::env::var("LEMMA_HOST_GATEWAY")
@@ -360,13 +363,18 @@ impl GuestService<NerdctlEngine> {
             .or_else(discover_host_gateway)
             .ok_or_else(|| GuestError::engine("could not discover the private host gateway"))?;
         let capability = load_capability()?;
-        Self::new(
+        let mut service = Self::new(
             NerdctlEngine::discover(&state_root)?,
             state_root,
             endpoint_host,
             host_gateway,
             capability,
-        )
+        )?;
+        // DHCP may replace a lease after systemd first considers the network
+        // online. The host must always receive the address currently assigned
+        // to the guest, rather than the address observed when guestd started.
+        service.dynamic_endpoint_host = dynamic_endpoint_host;
+        Ok(service)
     }
 }
 
@@ -391,9 +399,18 @@ impl<E: Engine> GuestService<E> {
             engine,
             state_root,
             endpoint_host,
+            dynamic_endpoint_host: false,
             host_gateway,
             capability,
         })
+    }
+
+    fn current_endpoint_host(&self) -> String {
+        if self.dynamic_endpoint_host {
+            discover_guest_ip().unwrap_or_else(|| self.endpoint_host.clone())
+        } else {
+            self.endpoint_host.clone()
+        }
     }
 
     pub fn handle(&self, request: GuestRequest) -> GuestResponse {
@@ -639,9 +656,10 @@ impl<E: Engine> GuestService<E> {
         // cannot access its writable state; doing so only defers an appliance
         // layout failure until the first image pull.
         let active_sandboxes = self.running_sandbox_count()?;
+        let endpoint_host = self.current_endpoint_host();
         Ok(json!({
             "status": "ready", "engine": "containerd",
-            "endpoint_host": self.endpoint_host,
+            "endpoint_host": endpoint_host,
             "host_gateway": self.host_gateway,
             "active_sandboxes": active_sandboxes,
         }))
@@ -711,6 +729,7 @@ impl<E: Engine> GuestService<E> {
     }
 
     fn core_status(&self) -> Result<Value, GuestError> {
+        let endpoint_host = self.current_endpoint_host();
         let mut components = serde_json::Map::new();
         let mut ready = true;
         for (name, port) in [
@@ -742,13 +761,13 @@ impl<E: Engine> GuestService<E> {
                     "running": running,
                     "state": state_name,
                     "exit_code": exit_code,
-                    "endpoint": format!("{}:{port}", self.endpoint_host),
+                    "endpoint": format!("{endpoint_host}:{port}"),
                 }),
             );
         }
         Ok(json!({
             "ready": ready,
-            "endpoint_host": self.endpoint_host,
+            "endpoint_host": endpoint_host,
             "host_gateway": self.host_gateway,
             "components": components,
         }))
@@ -1049,8 +1068,9 @@ impl<E: Engine> GuestService<E> {
     fn wait_tcp(&self, port: u16, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
+            let endpoint_host = self.current_endpoint_host();
             if TcpStream::connect_timeout(
-                &format!("{}:{port}", self.endpoint_host)
+                &format!("{endpoint_host}:{port}")
                     .to_socket_addrs()
                     .map_err(|error| GuestError::engine(error.to_string()))?
                     .next()
@@ -1070,8 +1090,8 @@ impl<E: Engine> GuestService<E> {
 
     fn wait_http_port(&self, port: u16, path: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
-        let url = format!("http://{}:{port}{path}", self.endpoint_host);
         while Instant::now() < deadline {
+            let url = format!("http://{}:{port}{path}", self.current_endpoint_host());
             if probe_http(&url).is_ok() {
                 return Ok(());
             }
@@ -1085,7 +1105,7 @@ impl<E: Engine> GuestService<E> {
     fn wait_redis(&self, password: &str, timeout: u64) -> Result<(), GuestError> {
         let deadline = Instant::now() + Duration::from_secs(timeout);
         while Instant::now() < deadline {
-            if redis_stack_ready(&self.endpoint_host, password).is_ok() {
+            if redis_stack_ready(&self.current_endpoint_host(), password).is_ok() {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(250));
@@ -1393,7 +1413,7 @@ impl<E: Engine> GuestService<E> {
         Ok(Some(snapshot_from_inspect(
             sandbox_id,
             inspect,
-            &self.endpoint_host,
+            &self.current_endpoint_host(),
         )?))
     }
 

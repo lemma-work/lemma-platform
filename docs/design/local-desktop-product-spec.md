@@ -55,15 +55,41 @@ container sockets, PostgreSQL, Redis, SuperTokens, or fixed ports.
 - A missing AI profile does not block signup or non-AI workspace features.
 - Authenticated local pages show **Configure an AI provider** until validation
   succeeds.
-- The action opens Control Center directly to AI Providers.
+- The action opens the in-window **Local settings** surface directly to
+  **AI provider**.
 - Ollama, LM Studio, OpenAI-compatible, and Anthropic-compatible profiles can
   be validated.
+- Apple Silicon users may explicitly download and select an app-managed
+  Ternary Bonsai 8B or Qwen3 4B MLX profile. Both profiles support thinking
+  and structured tool calls. The model manager is hidden on other systems and
+  never downloads a model before consent.
 - Agents show an explicit unavailable reason until a profile is ready.
 - Integrations, custom OAuth apps, and agent surfaces are independently
   configurable.
 - Secrets are write-only and stored in the OS credential vault.
 
-### 3.4 Daily lifecycle
+### 3.4 Local settings and sharing
+
+- Local settings opens as a trusted child webview over the mounted workspace;
+  closing it reveals the untouched workspace.
+- Workspace footers show the entry only for a ready local Desktop stack.
+  Startup/error views and the tray retain access while unhealthy.
+- Three exclusive access modes are available: **This computer**, **Local
+  network**, and **Public link**.
+- LAN mode binds only the chosen private IPv4 interface and shows its URL, QR
+  code, interface identity, and trusted-Wi-Fi warning.
+- Public mode supports an authenticated ngrok installation or Cloudflare login.
+  After Cloudflare login, Lemma can create one installation-owned named tunnel
+  and DNS route automatically, storing only that generated tunnel credential
+  in private app storage. Existing named tunnels remain an advanced option.
+  Lemma never installs either CLI. Cloudflare Quick Tunnels are not offered.
+- Every public activation requires fresh confirmation that anyone with the URL
+  can create an account and use this installation.
+- Published pod apps remain local-only in this release because their routes
+  require wildcard subdomains.
+- LAN and Public modes never resume automatically.
+
+### 3.5 Daily lifecycle
 
 - Close hides to tray; schedules continue.
 - Start is single-flight and reconciles desired state.
@@ -75,7 +101,7 @@ container sockets, PostgreSQL, Redis, SuperTokens, or fixed ports.
 - A stable workspace is not navigated back to the installer for transient
   component recovery.
 
-### 3.5 Diagnose and repair
+### 3.6 Diagnose and repair
 
 - Every failure identifies component, stage, and log source.
 - A child exit fails immediately with status and recent redacted output.
@@ -151,9 +177,17 @@ AgentBox uses the explicit `host.lemma.internal` bridge. The backend does not
 rewrite localhost or infer Docker topology. Production React apps continue to
 use `<app-name>.apps.lemma.work`.
 
+LAN and public access use one `locald`-owned canonical-origin gateway. It
+routes `/_lemma/api/*` to the backend after stripping the prefix and everything
+else to the frontend. It supports streaming bodies, SSE, and WebSockets. LAN
+uses cleartext HTTP only on the selected trusted private interface. Public
+uses HTTPS at the tunnel edge while its gateway remains loopback-only.
+
 ## 6. Security and privacy
 
-- Native IPC is available only to trusted Desktop/control windows.
+- Privileged native IPC is available only to the `control` child webview at the
+  exact bundled asset URL. The remote workspace cannot mutate configuration,
+  models, runtime, sharing, tunnels, or diagnostics.
 - locald uses a per-user authenticated Unix socket or named pipe.
 - State directories and ledgers are private to the user.
 - Runtime artifacts and image references are digest pinned.
@@ -162,6 +196,8 @@ use `<app-name>.apps.lemma.work`.
 - Provider private-network access requires explicit trust.
 - Local auth relaxations cannot affect hosted production.
 - AgentBox remains isolated in the private Linux runtime.
+- The gateway replaces client-supplied forwarding headers with trusted values
+  and never exposes PostgreSQL, Redis, SuperTokens, VM, MLX, or model ports.
 
 ## 7. Performance and quality targets
 
@@ -185,6 +221,11 @@ Required automated gates:
 - WKWebView signup/session test;
 - built-app routing test;
 - AgentBox-to-dynamic-API CLI operation;
+- canonical gateway SSE, WebSocket, upload/download, prefix, cookie, and
+  forwarding-header tests;
+- LAN signup from a second browser plus ngrok/named-Cloudflare lifecycle tests;
+- tunnel crash, interface loss, rollback, full-Quit cleanup, and singleton
+  ownership tests;
 - rotated bounded diagnostics test.
 
 Before merge, a maintainer performs a clean PR-DMG install, local signup,
@@ -197,5 +238,5 @@ test.
 - native PostgreSQL/Valkey/auth;
 - Apple Containerization or alternate AgentBox providers;
 - Intel Mac, Windows Arm, and Desktop Linux releases;
-- automatic public tunnel/relay;
+- invite/share-code gating for public signup;
 - destructive managed-data uninstall UI.

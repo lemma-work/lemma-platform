@@ -1348,7 +1348,7 @@
     return Boolean(
       s &&
       s.mode === "local" &&
-      s.phaseKey === "boot" &&
+      (s.phaseKey === "boot" || s.phaseKey === "stopped") &&
       !s.error &&
       !s.running &&
       !s.ready

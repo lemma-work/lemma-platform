@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use lemma_runtime_manager::{ManagedRuntime, ManagedRuntimeConfig, ManagedRuntimeStatus};
 use serde::{Deserialize, Serialize};
@@ -154,7 +154,7 @@ impl ManagedRuntimeController {
             32,
             "booting the app-owned Linux appliance",
         );
-        let status = self.runtime.start().map_err(|error| {
+        self.runtime.start().map_err(|error| {
             let _ = self.runtime.capture_diagnostics();
             error
         })?;
@@ -198,6 +198,22 @@ impl ManagedRuntimeController {
                 let _ = self.runtime.stop();
                 return Err(error);
             }
+        }
+        let status = self.runtime.health().map_err(|error| {
+            let _ = self.runtime.capture_diagnostics();
+            let _ = self.runtime.stop();
+            error
+        })?;
+        progress(
+            "infrastructure-health",
+            "Checking private services",
+            66,
+            "waiting for the Mac-to-VM database, cache, and auth routes",
+        );
+        if let Err(error) = wait_for_private_services(&status, Duration::from_secs(90)) {
+            let _ = self.runtime.capture_diagnostics();
+            let _ = self.runtime.stop();
+            return Err(error);
         }
         if let Err(error) = self.ensure_forwarders(&status) {
             let _ = self.runtime.capture_diagnostics();
@@ -336,6 +352,58 @@ impl ManagedRuntimeController {
             .clear();
         *self.status.lock().expect("managed runtime status poisoned") = None;
     }
+}
+
+const PRIVATE_SERVICE_PORTS: [(&str, u16); 3] =
+    [("PostgreSQL", 5432), ("Redis", 6379), ("SuperTokens", 3567)];
+
+fn wait_for_private_services(status: &ManagedRuntimeStatus, timeout: Duration) -> io::Result<()> {
+    let host = private_ipv4(&status.endpoint_host, "guest endpoint")?;
+    wait_for_tcp_services(host, &PRIVATE_SERVICE_PORTS, timeout)
+}
+
+fn wait_for_tcp_services(
+    host: Ipv4Addr,
+    services: &[(&str, u16)],
+    timeout: Duration,
+) -> io::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let mut pending = services.to_vec();
+    let mut last_error = None;
+    while !pending.is_empty() {
+        pending.retain(|(_, port)| {
+            let address = SocketAddr::from((host, *port));
+            match TcpStream::connect_timeout(&address, Duration::from_millis(500)) {
+                Ok(_) => false,
+                Err(error) => {
+                    last_error = Some(error);
+                    true
+                }
+            }
+        });
+        if pending.is_empty() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            let pending = pending
+                .iter()
+                .map(|(label, port)| format!("{label} ({host}:{port})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "private runtime services did not become reachable within {} seconds: {pending}; last error: {}",
+                    timeout.as_secs(),
+                    last_error
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "connection timed out".into())
+                ),
+            ));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
 }
 
 fn runtime_path_value(path: &Path) -> io::Result<String> {
@@ -674,6 +742,18 @@ mod tests {
         assert!(private_ipv4("127.0.0.1", "guest").is_err());
         assert!(private_ipv4("8.8.8.8", "guest").is_err());
         assert!(private_ipv4("::1", "guest").is_err());
+    }
+
+    #[test]
+    fn private_service_gate_waits_for_every_endpoint() {
+        let first = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let second = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let services = [
+            ("first", first.local_addr().unwrap().port()),
+            ("second", second.local_addr().unwrap().port()),
+        ];
+
+        wait_for_tcp_services(Ipv4Addr::LOCALHOST, &services, Duration::from_millis(250)).unwrap();
     }
 
     #[test]

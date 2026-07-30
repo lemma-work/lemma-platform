@@ -15,6 +15,7 @@ private struct RuntimePaths {
     let disk: URL
     let dataDisk: URL
     let machineIdentifier: URL
+    let networkMACAddress: URL
     let consoleLog: URL
 
     init(release: String, state: String) throws {
@@ -31,6 +32,7 @@ private struct RuntimePaths {
         disk = self.release.appendingPathComponent("disk.raw")
         dataDisk = self.state.appendingPathComponent("data.raw")
         machineIdentifier = self.state.appendingPathComponent("machine-id")
+        networkMACAddress = self.state.appendingPathComponent("network-mac")
         consoleLog = self.state.appendingPathComponent("console.log")
         for (label, url) in [
             ("kernel", kernel),
@@ -75,6 +77,21 @@ private func machineIdentifier(at url: URL) throws -> VZGenericMachineIdentifier
         ofItemAtPath: url.path
     )
     return identifier
+}
+
+private func networkMACAddress(at url: URL) throws -> VZMACAddress {
+    if let value = try? String(contentsOf: url, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+       let address = VZMACAddress(string: value) {
+        return address
+    }
+    let address = VZMACAddress.randomLocallyAdministered()
+    try address.string.write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: NSNumber(value: 0o600)],
+        ofItemAtPath: url.path
+    )
+    return address
 }
 
 private func configuration(
@@ -129,6 +146,10 @@ private func configuration(
     ]
 
     let network = VZVirtioNetworkDeviceConfiguration()
+    // Virtualization.framework otherwise chooses a different address on every
+    // process launch. A persistent MAC gives macOS NAT/DHCP one stable lease
+    // and prevents the host from chasing a stale guest address after restart.
+    network.macAddress = try networkMACAddress(at: paths.networkMACAddress)
     network.attachment = VZNATNetworkDeviceAttachment()
     configuration.networkDevices = [network]
     configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "control-capability",
-  "description": "Bundled local Control Center with narrowly checked application commands",
-  "windows": ["control"],
+  "description": "Bundled Local settings child webview with narrowly checked application commands",
+  "webviews": ["control"],
   "permissions": ["core:default"]
 }

@@ -170,7 +170,13 @@ def build_manifest(
                 "env": render.host_frontend_env(config),
                 "dependencies": ["backend"],
                 "health": {
-                    "url": f"http://127.0.0.1:{store.port(config, 'frontend')}/",
+                    # locald binds every service health check to the current
+                    # runtime generation. The generated runtime-config payload
+                    # carries that identity; the HTML shell does not.
+                    "url": (
+                        f"http://127.0.0.1:{store.port(config, 'frontend')}"
+                        "/runtime-config.js"
+                    ),
                     "timeout_seconds": 120,
                 },
                 "restart": {

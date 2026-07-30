@@ -477,6 +477,55 @@ impl OperatorConfigStore {
         Ok(environment)
     }
 
+    pub(crate) fn configure_local_openai(
+        &self,
+        base_url: String,
+        model: String,
+    ) -> io::Result<Value> {
+        let mut config = self
+            .config
+            .lock()
+            .expect("operator config poisoned")
+            .clone();
+        config.ai = AiProfile {
+            protocol: "openai_compat".into(),
+            base_url,
+            default_model: model.clone(),
+            models: vec![model],
+            vision_models: Vec::new(),
+            allow_private_network: false,
+            last_validated_at_unix_ms: None,
+        };
+        self.apply(ApplyOperatorConfig {
+            config,
+            secrets: BTreeMap::from([("ai.api_key".into(), None)]),
+        })
+    }
+
+    pub(crate) fn clear_local_openai_if_base(&self, base_url: &str) -> io::Result<Value> {
+        let mut config = self
+            .config
+            .lock()
+            .expect("operator config poisoned")
+            .clone();
+        if !config
+            .ai
+            .base_url
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case(base_url.trim_end_matches('/'))
+        {
+            return self.snapshot();
+        }
+        config.ai = AiProfile {
+            protocol: "unconfigured".into(),
+            ..AiProfile::default()
+        };
+        self.apply(ApplyOperatorConfig {
+            config,
+            secrets: BTreeMap::from([("ai.api_key".into(), None)]),
+        })
+    }
+
     fn secret_presence(&self, config: &OperatorConfig) -> io::Result<BTreeMap<String, bool>> {
         SECRET_NAMES
             .iter()

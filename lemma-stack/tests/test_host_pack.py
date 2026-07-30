@@ -85,6 +85,7 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
     assert frontend["env"]["HOSTNAME"] == "127.0.0.1"
     assert frontend["env"]["PORT"] == "3711"
     assert frontend["env"]["NEXT_PUBLIC_SESSION_TOKEN_DOMAIN"] == ""
+    assert frontend["health"]["url"] == "http://127.0.0.1:3711/runtime-config.js"
 
 
 def test_user_environment_remains_last_wins(paths, tmp_path):

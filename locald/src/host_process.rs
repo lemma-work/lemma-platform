@@ -206,9 +206,9 @@ struct ProcessLedgerEntry {
     runtime_generation: String,
 }
 
-struct ProcessIdentity {
-    executable: String,
-    start_identity: String,
+pub(crate) struct ProcessIdentity {
+    pub(crate) executable: String,
+    pub(crate) start_identity: String,
 }
 
 #[derive(Default)]
@@ -236,6 +236,7 @@ pub struct HostProcessManager {
     by_id: HashMap<String, HostProcessSpec>,
     state: Mutex<ProcessState>,
     backend_environment: Mutex<HashMap<String, String>>,
+    service_environment: Mutex<HashMap<String, HashMap<String, String>>>,
     desired_running: AtomicBool,
     health_ready: AtomicBool,
     startup_in_progress: AtomicBool,
@@ -288,6 +289,7 @@ impl HostProcessManager {
             by_id,
             state: Mutex::new(ProcessState::default()),
             backend_environment: Mutex::new(HashMap::new()),
+            service_environment: Mutex::new(HashMap::new()),
             desired_running: AtomicBool::new(false),
             health_ready: AtomicBool::new(false),
             startup_in_progress: AtomicBool::new(false),
@@ -319,8 +321,37 @@ impl HostProcessManager {
         self.manifest.managed_runtime.as_ref()
     }
 
+    pub fn application_ports(&self) -> Option<(u16, u16)> {
+        if let Some(runtime) = self.manifest.managed_runtime.as_ref() {
+            return Some((runtime.ports.frontend, runtime.ports.backend));
+        }
+        let frontend = self
+            .by_id
+            .get("frontend")
+            .and_then(|service| service.health.as_ref())
+            .and_then(|health| loopback_http_port(&health.url));
+        let backend = self
+            .by_id
+            .get("backend")
+            .and_then(|service| service.health.as_ref())
+            .and_then(|health| loopback_http_port(&health.url));
+        frontend.zip(backend)
+    }
+
     pub fn desired_running(&self) -> bool {
         self.desired_running.load(Ordering::Acquire)
+    }
+
+    pub fn backend_restart_available(&self) -> bool {
+        self.inspect_exits();
+        self.dependency_ready.load(Ordering::Acquire)
+            && !self.startup_in_progress.load(Ordering::Acquire)
+            && self
+                .state
+                .lock()
+                .expect("host process lock poisoned")
+                .children
+                .contains_key("backend")
     }
 
     pub fn set_backend_environment(&self, environment: HashMap<String, String>) {
@@ -328,6 +359,33 @@ impl HostProcessManager {
             .backend_environment
             .lock()
             .expect("backend environment lock poisoned") = environment;
+    }
+
+    pub fn replace_service_environment(
+        &self,
+        service: &str,
+        environment: HashMap<String, String>,
+    ) -> HashMap<String, String> {
+        let mut overlays = self
+            .service_environment
+            .lock()
+            .expect("service environment lock poisoned");
+        if environment.is_empty() {
+            overlays.remove(service).unwrap_or_default()
+        } else {
+            overlays
+                .insert(service.to_owned(), environment)
+                .unwrap_or_default()
+        }
+    }
+
+    pub fn service_environment(&self, service: &str) -> HashMap<String, String> {
+        self.service_environment
+            .lock()
+            .expect("service environment lock poisoned")
+            .get(service)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn mark_dependency_ready(&self) {
@@ -478,8 +536,10 @@ impl HostProcessManager {
                     .expect("backend environment lock poisoned")
                     .clone(),
             );
+            environment.extend(self.service_environment("backend"));
             let deadline = Instant::now() + Duration::from_secs(setup.timeout_seconds);
             for attempt in 1..=setup.max_attempts {
+                wait_for_setup_dependency(setup, &environment, deadline)?;
                 let mut child = spawn_command(
                     &setup.command,
                     setup.cwd.as_deref(),
@@ -500,7 +560,9 @@ impl HostProcessManager {
                                 self.log_dir.join(format!("{}.log", setup.id)).display()
                             )));
                         }
-                        let backoff = Duration::from_secs(setup.retry_backoff_seconds);
+                        let backoff = Duration::from_secs(
+                            setup.retry_backoff_seconds.saturating_mul(attempt as u64),
+                        );
                         if Instant::now() + backoff >= deadline {
                             return Err(io::Error::other(format!(
                                 "{} setup exited with {status}; see {}",
@@ -740,6 +802,7 @@ impl HostProcessManager {
                     .clone(),
             );
         }
+        spec.env.extend(self.service_environment(id));
         let generation = self
             .runtime_generation
             .lock()
@@ -1060,6 +1123,15 @@ impl HostProcessManager {
     }
 }
 
+fn loopback_http_port(url: &str) -> Option<u16> {
+    let authority = url
+        .strip_prefix("http://127.0.0.1:")
+        .or_else(|| url.strip_prefix("http://localhost:"))?
+        .split(['/', '?', '#'])
+        .next()?;
+    authority.parse().ok()
+}
+
 pub(crate) fn reclaim_persisted_installation_processes(state_root: &Path) -> io::Result<()> {
     let manifest_path = state_root.join("host-pack.json");
     let raw = match fs::read_to_string(&manifest_path) {
@@ -1092,6 +1164,10 @@ fn load_or_create_installation_id(root: &Path) -> io::Result<String> {
     let value = random_generation()?;
     write_private_atomic(&path, format!("{value}\n").as_bytes())?;
     Ok(value)
+}
+
+pub(crate) fn installation_identity(root: &Path) -> io::Result<String> {
+    load_or_create_installation_id(root)
 }
 
 fn read_process_ledger(path: &Path) -> Option<ProcessLedger> {
@@ -1202,7 +1278,7 @@ fn reclaim_verified_processes(
 }
 
 #[cfg(unix)]
-fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
+pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
     let pid = pid.to_string();
     let executable = Command::new("/bin/ps")
         .args(["-p", &pid, "-o", "comm="])
@@ -1233,7 +1309,7 @@ fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
 }
 
 #[cfg(unix)]
-fn terminate_verified_process(pid: u32) -> io::Result<()> {
+pub(crate) fn terminate_verified_process(pid: u32) -> io::Result<()> {
     let pid = i32::try_from(pid).map_err(|_| io::Error::other("invalid process id"))?;
     // SAFETY: the caller has matched installation, executable and OS start identity.
     let result = unsafe { libc::kill(pid, libc::SIGTERM) };
@@ -1258,7 +1334,7 @@ fn terminate_verified_process(pid: u32) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
+pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
     use windows_sys::Win32::System::Threading::{
         GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -1299,7 +1375,7 @@ fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
 }
 
 #[cfg(windows)]
-fn terminate_verified_process(pid: u32) -> io::Result<()> {
+pub(crate) fn terminate_verified_process(pid: u32) -> io::Result<()> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
@@ -1721,6 +1797,62 @@ fn probe_http(spec: &HttpHealthSpec) -> io::Result<String> {
     Ok(body.to_owned())
 }
 
+fn wait_for_setup_dependency(
+    setup: &HostSetupSpec,
+    environment: &HashMap<String, String>,
+    setup_deadline: Instant,
+) -> io::Result<()> {
+    if setup.id != "migrations" {
+        return Ok(());
+    }
+    let Some(address) = environment
+        .get("DATABASE_URL")
+        .and_then(|url| database_socket_address(url))
+    else {
+        return Ok(());
+    };
+
+    // The VM readiness check runs before host setup, but a newly established
+    // macOS route can still flap during the few milliseconds before asyncpg
+    // opens its first connection. Gate every Alembic attempt on the exact
+    // database endpoint it will use. Keep this bounded so a broken route
+    // produces an actionable error instead of an apparent startup hang.
+    let deadline = std::cmp::min(setup_deadline, Instant::now() + Duration::from_secs(30));
+    loop {
+        let error = match TcpStream::connect_timeout(&address, Duration::from_millis(750)) {
+            Ok(_) => return Ok(()),
+            Err(error) => error,
+        };
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "migrations could not reach PostgreSQL at {address} before setup; last error: {}",
+                    error
+                ),
+            ));
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn database_socket_address(url: &str) -> Option<SocketAddr> {
+    let (_, remainder) = url.split_once("://")?;
+    let authority = remainder.split(['/', '?', '#']).next().unwrap_or_default();
+    let host_and_port = authority.rsplit('@').next().unwrap_or(authority);
+    let (host, port) = if let Some(bracketed) = host_and_port.strip_prefix('[') {
+        let (host, suffix) = bracketed.split_once(']')?;
+        let port = suffix.strip_prefix(':')?.parse::<u16>().ok()?;
+        (host, port)
+    } else if let Some((host, port)) = host_and_port.rsplit_once(':') {
+        (host, port.parse::<u16>().ok()?)
+    } else {
+        (host_and_port, 5432)
+    };
+    let ip = host.parse::<IpAddr>().ok()?;
+    Some(SocketAddr::new(ip, port))
+}
+
 fn tail_log(path: &Path, max_bytes: usize) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     let start = bytes.len().saturating_sub(max_bytes);
@@ -1828,6 +1960,31 @@ mod tests {
         ]);
         let order = validate_and_order(&manifest).unwrap();
         assert_eq!(order, vec!["backend", "frontend"]);
+    }
+
+    #[test]
+    fn compatibility_host_packs_expose_app_ports_for_the_sharing_gateway() {
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.health = Some(HttpHealthSpec {
+            url: "http://127.0.0.1:3711/runtime-config.js".into(),
+            timeout_seconds: 1,
+            expected_body: None,
+            stabilization_seconds: 0,
+        });
+        let mut backend = service("backend", &[]);
+        backend.health = Some(HttpHealthSpec {
+            url: "http://localhost:8711/health/ready".into(),
+            timeout_seconds: 1,
+            expected_body: None,
+            stabilization_seconds: 0,
+        });
+        let root = tempdir().unwrap();
+        let manager =
+            HostProcessManager::new(manifest(vec![frontend, backend]), root.path().into()).unwrap();
+
+        assert_eq!(manager.application_ports(), Some((3711, 8711)));
+        assert_eq!(loopback_http_port("https://127.0.0.1:3711/"), None);
+        assert_eq!(loopback_http_port("http://0.0.0.0:3711/"), None);
     }
 
     #[test]
@@ -1968,6 +2125,52 @@ mod tests {
         let log = std::fs::read_to_string(root.path().join("migrations.log")).unwrap();
         assert!(log.contains("setup attempt 1 exited"));
         assert!(marker.is_file());
+    }
+
+    #[test]
+    fn parses_only_literal_database_endpoints_for_the_private_route_gate() {
+        assert_eq!(
+            database_socket_address(
+                "postgresql+asyncpg://postgres:secret@192.168.64.10:5432/lemma"
+            ),
+            Some("192.168.64.10:5432".parse().unwrap())
+        );
+        assert_eq!(
+            database_socket_address("postgresql://postgres:secret@127.0.0.1/lemma"),
+            Some("127.0.0.1:5432".parse().unwrap())
+        );
+        assert_eq!(
+            database_socket_address("postgresql://private-guest/lemma"),
+            None
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_setup_waits_for_its_exact_database_route() {
+        let root = tempdir().unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let mut value = manifest(vec![
+            service("frontend", &["backend"]),
+            service("backend", &[]),
+        ]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        value.setup[0].timeout_seconds = 5;
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        manager.set_backend_environment(HashMap::from([(
+            "DATABASE_URL".into(),
+            format!("postgresql://postgres:secret@{address}/lemma"),
+        )]));
+
+        let route = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(150));
+            let listener = TcpListener::bind(address).unwrap();
+            let _ = listener.accept();
+        });
+        manager.run_setups().unwrap();
+        route.join().unwrap();
     }
 
     #[cfg(unix)]
@@ -2117,6 +2320,11 @@ mod tests {
         value.setup[0].command = vec!["/usr/bin/true".into()];
         let manager = HostProcessManager::new(value, root.path().into()).unwrap();
         manager.start_all().unwrap();
+        assert!(manager.backend_restart_available());
+        manager.mark_dependency_unavailable("private runtime is cold".into());
+        assert!(!manager.backend_restart_available());
+        manager.mark_dependency_ready();
+        assert!(manager.backend_restart_available());
         let before: HashMap<_, _> = manager
             .status()
             .into_iter()

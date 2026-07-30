@@ -714,6 +714,7 @@ export function useAssistantController({
     isStreaming: sessionIsStreaming,
     messages: sessionMessages,
     streamingText: sessionStreamingText,
+    streamingThinking: sessionStreamingThinking,
     streamingTool: sessionStreamingTool,
     status: sessionStatus,
   } = assistantSession;
@@ -1010,9 +1011,30 @@ export function useAssistantController({
 
     const normalized = sortMessagesByCreatedAt(runtimeMessages as AssistantApiConversationMessage[])
       .filter((message) => message.conversation_id === activeConversationId);
-    if (normalized.length === 0) return [];
+    if (
+      normalized.length === 0
+      && sessionStreamingText.trim().length === 0
+      && sessionStreamingThinking.trim().length === 0
+    ) return [];
 
     const nextMessages = mapConversationMessages(normalized);
+    const pendingThinking = sessionStreamingThinking.trim();
+    if (pendingThinking.length > 0) {
+      const streamingId = `streaming-thinking-${activeConversationId}`;
+      nextMessages.push({
+        id: streamingId,
+        role: "assistant",
+        content: "",
+        createdAt: new Date(),
+        parts: [{
+          id: `${streamingId}-reasoning`,
+          type: "reasoning",
+          text: pendingThinking,
+          state: "streaming",
+        }],
+        kind: "THINKING",
+      });
+    }
     const pendingText = sessionStreamingText.trim();
     if (pendingText.length > 0) {
       const streamingId = `streaming-${activeConversationId}`;
@@ -1026,7 +1048,7 @@ export function useAssistantController({
     }
 
     return nextMessages;
-  }, [activeConversationId, runtimeMessages, sessionStreamingText]);
+  }, [activeConversationId, runtimeMessages, sessionStreamingText, sessionStreamingThinking]);
 
   useEffect(() => {
     if (!sessionConversation || sessionConversation.id !== activeConversationId) return;

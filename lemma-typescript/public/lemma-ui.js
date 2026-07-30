@@ -417,10 +417,12 @@ var LemmaUI = (() => {
       __publicField(this, "listeners", /* @__PURE__ */ new Set());
       __publicField(this, "abort", null);
       __publicField(this, "streamingBuffer", "");
+      __publicField(this, "streamingThinkingBuffer", "");
       __publicField(this, "streamingToolToken", "");
       __publicField(this, "autoResumedKey", null);
       __publicField(this, "streamReconnectCount", 0);
       __publicField(this, "pendingFlush", null);
+      __publicField(this, "pendingThinkingFlush", null);
       // -- store ------------------------------------------------------------------
       __publicField(this, "subscribe", (listener) => {
         this.listeners.add(listener);
@@ -449,6 +451,10 @@ var LemmaUI = (() => {
           clearTimeout(this.pendingFlush);
           this.pendingFlush = null;
         }
+        if (this.pendingThinkingFlush) {
+          clearTimeout(this.pendingThinkingFlush);
+          this.pendingThinkingFlush = null;
+        }
         this.listeners.clear();
       });
       __publicField(this, "setConversationId", (nextConversationId) => {
@@ -460,11 +466,16 @@ var LemmaUI = (() => {
         }
         this.autoResumedKey = null;
         this.streamingBuffer = "";
+        this.streamingThinkingBuffer = "";
         this.streamingToolToken = "";
         this.streamReconnectCount = 0;
         if (this.pendingFlush) {
           clearTimeout(this.pendingFlush);
           this.pendingFlush = null;
+        }
+        if (this.pendingThinkingFlush) {
+          clearTimeout(this.pendingThinkingFlush);
+          this.pendingThinkingFlush = null;
         }
         this.patch({
           conversationId: nextConversationId,
@@ -472,6 +483,7 @@ var LemmaUI = (() => {
           status: void 0,
           messages: [],
           streamingText: "",
+          streamingThinking: "",
           streamingTool: null,
           isStreaming: false,
           error: null
@@ -525,15 +537,21 @@ var LemmaUI = (() => {
           if (input.setActive !== false) {
             this.autoResumedKey = null;
             this.streamingBuffer = "";
+            this.streamingThinkingBuffer = "";
             if (this.pendingFlush) {
               clearTimeout(this.pendingFlush);
               this.pendingFlush = null;
+            }
+            if (this.pendingThinkingFlush) {
+              clearTimeout(this.pendingThinkingFlush);
+              this.pendingThinkingFlush = null;
             }
             this.patch({
               conversationId: created.id,
               conversation: created,
               messages: [],
-              streamingText: ""
+              streamingText: "",
+              streamingThinking: ""
             });
             this.setConversationStatus((_p = created.status) != null ? _p : void 0);
           }
@@ -616,6 +634,7 @@ var LemmaUI = (() => {
         var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
         this.patch({ isStreaming: true, error: null });
         this.clearStreamingText();
+        this.clearStreamingThinking();
         let sawTerminalStatus = false;
         let streamFailure = null;
         try {
@@ -631,6 +650,7 @@ var LemmaUI = (() => {
               this.setConversationStatus((_e = parsed.status) != null ? _e : "FAILED");
               sawTerminalStatus = true;
               this.clearStreamingText();
+              this.clearStreamingThinking();
               this.clearStreamingTool();
               continue;
             }
@@ -652,6 +672,8 @@ var LemmaUI = (() => {
                 }
               } else if (!parsed.tokenKind || parsed.tokenKind === "text") {
                 this.appendStreamingToken(parsed.token);
+              } else if (parsed.tokenKind === "thinking") {
+                this.appendStreamingThinking(parsed.token);
               }
             }
             if (parsed.message) {
@@ -660,6 +682,7 @@ var LemmaUI = (() => {
               const role = typeof parsed.message.role === "string" ? parsed.message.role.toLowerCase() : "";
               if (role === "assistant" || role === "tool") {
                 this.clearStreamingText();
+                this.clearStreamingThinking();
                 this.clearStreamingTool();
               }
             }
@@ -668,6 +691,7 @@ var LemmaUI = (() => {
               if (!isConversationRunningStatus(parsed.status)) {
                 sawTerminalStatus = true;
                 this.clearStreamingText();
+                this.clearStreamingThinking();
                 this.clearStreamingTool();
               }
             }
@@ -728,6 +752,7 @@ var LemmaUI = (() => {
           }
         } finally {
           this.clearStreamingText();
+          this.clearStreamingThinking();
           this.clearStreamingTool();
           if (controller.signal.aborted) this.streamReconnectCount = 0;
           if (this.abort === controller) {
@@ -837,6 +862,7 @@ var LemmaUI = (() => {
           await scopedClient.conversations.stopRun(id, { pod_id: (_a = scope.podId) != null ? _a : void 0 });
           this.setConversationStatus("WAITING");
           this.clearStreamingText();
+          this.clearStreamingThinking();
         } catch (stopError) {
           const normalized = normalizeError(stopError, "Failed to stop conversation.");
           this.patch({ error: normalized });
@@ -852,6 +878,7 @@ var LemmaUI = (() => {
         status: void 0,
         messages: [],
         streamingText: "",
+        streamingThinking: "",
         streamingTool: null,
         isStreaming: false,
         error: null
@@ -897,6 +924,24 @@ var LemmaUI = (() => {
       }
       this.streamingBuffer = "";
       this.patch({ streamingText: "" });
+    }
+    appendStreamingThinking(token) {
+      if (!token) return;
+      this.streamingThinkingBuffer += token;
+      if (!this.pendingThinkingFlush) {
+        this.pendingThinkingFlush = setTimeout(() => {
+          this.pendingThinkingFlush = null;
+          this.patch({ streamingThinking: this.streamingThinkingBuffer });
+        }, 0);
+      }
+    }
+    clearStreamingThinking() {
+      if (this.pendingThinkingFlush) {
+        clearTimeout(this.pendingThinkingFlush);
+        this.pendingThinkingFlush = null;
+      }
+      this.streamingThinkingBuffer = "";
+      this.patch({ streamingThinking: "" });
     }
     clearStreamingTool() {
       this.streamingToolToken = "";

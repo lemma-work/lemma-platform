@@ -4,6 +4,7 @@ import {
   canCompleteAuthenticatedNavigation,
   clearVerificationEmailSent,
   getVerificationEmailSentAt,
+  hasBlockingInvalidClaims,
   isRateLimitError,
   markVerificationEmailSent,
   runVerificationAttempt,
@@ -11,6 +12,7 @@ import {
   refreshVerifiedSession,
   signOutForDifferentAccount,
   shouldFetchCurrentUser,
+  shouldShowEmailVerification,
   verificationCooldownSeconds,
   verificationDestination,
   verificationTokenFromSearch,
@@ -159,6 +161,44 @@ describe("verification controller", () => {
     expect(
       canCompleteAuthenticatedNavigation({ ...base, doesSessionExist: false }),
     ).toBe(false);
+  });
+
+  it("ignores only legacy email-verification claims when verification is disabled", () => {
+    const input = {
+      emailVerificationRequired: false,
+      emailVerificationClaimId: "st-ev",
+    };
+
+    expect(
+      hasBlockingInvalidClaims({ ...input, claimIds: ["st-ev"] }),
+    ).toBe(false);
+    expect(
+      hasBlockingInvalidClaims({ ...input, claimIds: ["st-ev", "custom"] }),
+    ).toBe(true);
+    expect(
+      hasBlockingInvalidClaims({
+        ...input,
+        emailVerificationRequired: true,
+        claimIds: ["st-ev"],
+      }),
+    ).toBe(true);
+  });
+
+  it("never opens the verification experience when the deployment disables it", () => {
+    expect(
+      shouldShowEmailVerification({
+        emailVerificationRequired: false,
+        isVerificationRoute: true,
+        hasVerificationClaim: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowEmailVerification({
+        emailVerificationRequired: true,
+        isVerificationRoute: false,
+        hasVerificationClaim: true,
+      }),
+    ).toBe(true);
   });
 
   it("refreshes the verified session and clears redirects after sign-out", async () => {

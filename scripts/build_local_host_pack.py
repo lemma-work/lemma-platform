@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -240,15 +241,70 @@ def prune_python_runtime(python_root: Path) -> None:
                 shutil.rmtree(tests, ignore_errors=True)
 
 
-def copy_backend_assets(output: Path) -> None:
-    backend = output / "backend"
-    browser = backend / "assets/browser-sdk"
+def install_mlx_runtime(output: Path, python: Path, wheels: Path) -> None:
+    """Install MLX-LM in an isolated package tree on Apple Silicon builds."""
+
+    if sys.platform != "darwin" or platform.machine() != "arm64":
+        return
+    project = REPO_ROOT / "desktop/mlx-runtime"
+    locked_requirements = wheels / "mlx-runtime-requirements.txt"
+    run(
+        "uv",
+        "export",
+        "--project",
+        project,
+        "--frozen",
+        "--no-dev",
+        "--no-emit-project",
+        "--no-hashes",
+        "--quiet",
+        "--output-file",
+        locked_requirements,
+    )
+    destination = output / "backend/mlx-runtime"
+    run(
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        python,
+        "--target",
+        destination,
+        "--requirements",
+        locked_requirements,
+    )
+    smoke_environment = os.environ.copy()
+    smoke_environment["PYTHONPATH"] = str(destination)
+    run(
+        python,
+        "-c",
+        (
+            "import importlib.metadata as metadata; "
+            "import huggingface_hub, mlx_lm; "
+            "assert metadata.version('mlx-lm') == '0.31.3'; "
+            "print('MLX runtime: import ok')"
+        ),
+        env=smoke_environment,
+    )
+    for cache in sorted(destination.rglob("__pycache__"), reverse=True):
+        shutil.rmtree(cache, ignore_errors=True)
+    for compiled in destination.rglob("*.py[co]"):
+        compiled.unlink(missing_ok=True)
+
+
+def copy_browser_assets(output: Path) -> None:
+    browser = output / "backend/assets/browser-sdk"
     browser.mkdir(parents=True, exist_ok=True)
     for name in ("lemma-client.js", "lemma-ui.js"):
         source = REPO_ROOT / f"lemma-typescript/public/{name}"
         if not source.is_file():
             raise SystemExit(f"browser bundle is missing: {source}")
         shutil.copy2(source, browser / name)
+
+
+def copy_backend_assets(output: Path) -> None:
+    backend = output / "backend"
+    copy_browser_assets(output)
     shutil.copytree(REPO_ROOT / "lemma-skills", backend / "assets/lemma-skills")
     shutil.copytree(REPO_ROOT / "lemma-backend/migrations", backend / "migrations")
     shutil.copy2(REPO_ROOT / "lemma-backend/alembic.ini", backend / "alembic.ini")
@@ -356,10 +412,14 @@ def size_breakdown(output: Path) -> dict[str, int]:
     node_bytes = tree_size(frontend / "node")
     frontend_bytes = tree_size(frontend)
     python_bytes = tree_size(output / "backend/python")
+    mlx_runtime_bytes = tree_size(output / "backend/mlx-runtime")
     backend_bytes = tree_size(output / "backend")
     return {
         "python_bytes": python_bytes,
-        "backend_assets_bytes": max(0, backend_bytes - python_bytes),
+        "mlx_runtime_bytes": mlx_runtime_bytes,
+        "backend_assets_bytes": max(
+            0, backend_bytes - python_bytes - mlx_runtime_bytes
+        ),
         "node_bytes": node_bytes,
         "next_bytes": max(0, frontend_bytes - node_bytes),
         "metadata_bytes": tree_size(output) - backend_bytes - frontend_bytes,
@@ -383,12 +443,47 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="archive an already-built output directory after platform signing",
     )
+    parser.add_argument(
+        "--refresh-frontend-existing",
+        action="store_true",
+        help="rebuild frontend and browser SDK assets in an existing host pack",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     output = args.output.resolve()
+    if args.archive_existing and args.refresh_frontend_existing:
+        raise SystemExit(
+            "--archive-existing and --refresh-frontend-existing are mutually exclusive"
+        )
+    if args.refresh_frontend_existing:
+        if not args.archive:
+            raise SystemExit("--refresh-frontend-existing requires --archive")
+        metadata_path = output / "pack.json"
+        if not metadata_path.is_file() or not (output / "release.json").is_file():
+            raise SystemExit(f"existing host pack is incomplete: {output}")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        shutil.rmtree(output / "frontend", ignore_errors=True)
+        build_frontend(output, args.node_root)
+        copy_browser_assets(output)
+        archive_pack(output, args.archive)
+        archive_metadata = {
+            **metadata,
+            "archive": str(args.archive),
+            "sha256": sha256(args.archive),
+            "size": args.archive.stat().st_size,
+            "expanded_size": sum(
+                path.stat().st_size for path in output.rglob("*") if path.is_file()
+            ),
+            "breakdown": size_breakdown(output),
+        }
+        args.archive.with_suffix(f"{args.archive.suffix}.json").write_text(
+            json.dumps(archive_metadata, indent=2) + "\n", encoding="utf-8"
+        )
+        print(json.dumps(archive_metadata))
+        return
     if args.archive_existing:
         if not args.archive:
             raise SystemExit("--archive-existing requires --archive")
@@ -428,7 +523,9 @@ def main() -> None:
         )
 
     with tempfile.TemporaryDirectory(prefix="lemma-host-wheels-") as wheel_dir:
-        install_python(output, args.python, Path(wheel_dir), args.python_root)
+        wheels = Path(wheel_dir)
+        python = install_python(output, args.python, wheels, args.python_root)
+        install_mlx_runtime(output, python, wheels)
     copy_backend_assets(output)
     build_frontend(output, args.node_root)
     shutil.copy2(release_manifest, output / "release.json")
