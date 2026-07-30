@@ -476,6 +476,22 @@ export function isInlineToolStatusAlreadyVisible({
   return false;
 }
 
+export function isStreamingReasoningAlreadyVisible({
+  rows,
+  latestUser,
+}: {
+  rows: DisplayMessageRow[];
+  latestUser: number;
+}): boolean {
+  return rows.some((row) => (
+    row.message.role === "assistant"
+    && rowIsAfterIndex(row, latestUser)
+    && row.message.parts?.some((part) => (
+      part.type === "reasoning" && part.state === "streaming"
+    ))
+  ));
+}
+
 export function getActiveToolBanner(messages: AssistantRenderableMessage[]): ActiveToolBanner | null {
   const displayMessages = prepareMessagesForDisplay(messages).map((entry) => entry.message);
 

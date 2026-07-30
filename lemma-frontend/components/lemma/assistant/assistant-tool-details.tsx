@@ -33,7 +33,7 @@ import {
   toolCallPrimaryLabel,
 } from "./assistant-format";
 import { DetailsWithCopy, contextualToolDetails } from "./assistant-tool-cards";
-import { ReasoningPartCard } from "./assistant-parts";
+import { ReasoningPartCard, ThinkingIndicator } from "./assistant-parts";
 import { SubagentActivityRollup } from "./assistant-subagent-activity";
 import { isSubagentLifecycleToolName } from "@/lib/assistant/subagent-activity";
 import {
@@ -618,7 +618,11 @@ export function ToolActivityRollup({
           aria-expanded={isTraceExpanded}
           aria-label={isTraceExpanded ? "Hide tool activity details" : "Show tool activity details"}
         >
-          <span className="truncate text-sm">{collapsedSummary}</span>
+          {isWorking ? (
+            <ThinkingIndicator label={collapsedSummary} shimmer />
+          ) : (
+            <span className="truncate text-sm">{collapsedSummary}</span>
+          )}
         </button>
       ) : null}
 
@@ -640,6 +644,7 @@ export function ToolActivityRollup({
                   text={part.text}
                   isStreaming={part.state === "streaming"}
                   durationMs={part.durationMs}
+                  showSummary={!shouldShowHeader}
                 />
               );
             }

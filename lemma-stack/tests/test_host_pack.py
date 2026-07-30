@@ -51,7 +51,10 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
         "backend",
         "frontend",
     ]
-    assert [setup["id"] for setup in manifest["setup"]] == ["migrations"]
+    assert [setup["id"] for setup in manifest["setup"]] == [
+        "migrations",
+        "agentbox-migrations",
+    ]
     assert manifest["setup"][0]["max_attempts"] == 3
     assert manifest["setup"][0]["retry_backoff_seconds"] == 2
     assert manifest["setup"][0]["command"][1:] == [
@@ -63,6 +66,17 @@ def test_builds_exact_backend_frontend_native_contract(paths, tmp_path):
         "head",
     ]
     assert manifest["setup"][0]["env"]["DATABASE_URL"].endswith(":55432/lemma")
+    assert manifest["setup"][1]["command"][1:] == [
+        "-m",
+        "alembic",
+        "-c",
+        "agentbox-alembic.ini",
+        "upgrade",
+        "head",
+    ]
+    assert manifest["setup"][1]["env"]["AGENTBOX_STATE_DATABASE_URL"].endswith(
+        ":55432/agentbox"
+    )
     backend, frontend = manifest["services"]
     assert backend["command"][1:4] == ["-m", "uvicorn", "local_app:app"]
     assert "--no-access-log" not in backend["command"]

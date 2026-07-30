@@ -3,6 +3,7 @@ import type { AssistantRenderableMessage, AssistantToolInvocation } from "lemma-
 import {
   currentToolStatusLabel,
   isInlineToolStatusAlreadyVisible,
+  isStreamingReasoningAlreadyVisible,
   type InlineToolStatus,
 } from "@/components/lemma/assistant/assistant-format";
 import type { DisplayMessageRow } from "@/components/lemma/assistant/assistant-experience";
@@ -124,5 +125,61 @@ describe("inline tool-status handoff", () => {
 
     expect(isInlineToolStatusAlreadyVisible({ rows: [activeRow], latestUser: 0, status: partialStatus })).toBe(true);
     expect(isInlineToolStatusAlreadyVisible({ rows: [completedRow], latestUser: 0, status: partialStatus })).toBe(false);
+  });
+});
+
+describe("streaming reasoning status handoff", () => {
+  it("suppresses the fallback Thinking status once reasoning is visible", () => {
+    const message: AssistantRenderableMessage = {
+      id: "reasoning-message",
+      role: "assistant",
+      content: "",
+      createdAt: new Date("2026-07-11T00:00:01.000Z"),
+      parts: [{
+        id: "reasoning-part",
+        type: "reasoning",
+        text: "Inspecting the workspace",
+        state: "streaming",
+      }],
+    };
+    const row: DisplayMessageRow = {
+      id: "reasoning-row",
+      message,
+      sourceIndexes: [1],
+    };
+
+    expect(isStreamingReasoningAlreadyVisible({
+      rows: [row],
+      latestUser: 0,
+    })).toBe(true);
+  });
+
+  it("does not suppress status for completed or prior-run reasoning", () => {
+    const message: AssistantRenderableMessage = {
+      id: "reasoning-message",
+      role: "assistant",
+      content: "",
+      createdAt: new Date("2026-07-11T00:00:01.000Z"),
+      parts: [{
+        id: "reasoning-part",
+        type: "reasoning",
+        text: "Inspected the workspace",
+        state: "done",
+      }],
+    };
+    const row: DisplayMessageRow = {
+      id: "reasoning-row",
+      message,
+      sourceIndexes: [1],
+    };
+
+    expect(isStreamingReasoningAlreadyVisible({
+      rows: [row],
+      latestUser: 0,
+    })).toBe(false);
+    expect(isStreamingReasoningAlreadyVisible({
+      rows: [row],
+      latestUser: 1,
+    })).toBe(false);
   });
 });

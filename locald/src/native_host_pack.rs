@@ -254,7 +254,10 @@ fn build(
                 material.postgres_password
             ),
         ),
-        ("AGENTBOX_AUTO_CREATE_SCHEMA", "true".to_owned()),
+        // AgentBox owns an independent Alembic history. The setup steps below
+        // migrate it before the embedded API starts; create_all cannot upgrade
+        // an existing Desktop database.
+        ("AGENTBOX_AUTO_CREATE_SCHEMA", "false".to_owned()),
         ("AGENTBOX_ADD_HOST_GATEWAY", "false".to_owned()),
         ("AGENTBOX_HOST_ALIAS", "host.lemma.internal".to_owned()),
         ("AGENTBOX_LOCAL_SCOPE", "lemma-local:managed".to_owned()),
@@ -396,15 +399,26 @@ fn build(
                 "frontend": frontend_port,
             },
         },
-        "setup": [{
-            "id": "migrations",
-            "command": [path_text(&python)?, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
-            "cwd": path_text(&backend_dir)?,
-            "env": backend_env,
-            "timeout_seconds": 300,
-            "max_attempts": 5,
-            "retry_backoff_seconds": 3,
-        }],
+        "setup": [
+            {
+                "id": "migrations",
+                "command": [path_text(&python)?, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+                "cwd": path_text(&backend_dir)?,
+                "env": backend_env,
+                "timeout_seconds": 300,
+                "max_attempts": 5,
+                "retry_backoff_seconds": 3,
+            },
+            {
+                "id": "agentbox-migrations",
+                "command": [path_text(&python)?, "-m", "alembic", "-c", "agentbox-alembic.ini", "upgrade", "head"],
+                "cwd": path_text(&backend_dir)?,
+                "env": backend_env,
+                "timeout_seconds": 300,
+                "max_attempts": 5,
+                "retry_backoff_seconds": 3,
+            }
+        ],
         "services": [
             {
                 "id": "backend",
@@ -655,6 +669,14 @@ mod tests {
 
         assert_eq!(manifest["release"], "6.2.0");
         assert_eq!(manifest["services"].as_array().unwrap().len(), 2);
+        assert_eq!(manifest["setup"].as_array().unwrap().len(), 2);
+        assert_eq!(manifest["setup"][0]["id"], "migrations");
+        assert_eq!(manifest["setup"][1]["id"], "agentbox-migrations");
+        assert_eq!(manifest["setup"][1]["command"][4], "agentbox-alembic.ini");
+        assert_eq!(
+            manifest["services"][0]["env"]["AGENTBOX_AUTO_CREATE_SCHEMA"],
+            "false"
+        );
         assert!(!manifest["services"][0]["command"]
             .as_array()
             .unwrap()

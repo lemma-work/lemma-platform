@@ -33,24 +33,21 @@ def upgrade() -> None:
     # applied before Container Apps rolls forward. A later contract migration
     # removes the ignored tables and their obsolete historical rows after this
     # revision has baked in production.
-    op.add_column(
-        "sandboxes",
-        sa.Column(
-            "resource_generation",
-            sa.BigInteger(),
-            nullable=False,
-            server_default="1",
-        ),
-    )
-    op.add_column(
-        "allocations",
-        sa.Column(
-            "resource_generation",
-            sa.BigInteger(),
-            nullable=False,
-            server_default="1",
-        ),
-    )
+    inspector = sa.inspect(op.get_bind())
+    for table_name in ("sandboxes", "allocations"):
+        columns = {
+            str(column["name"]) for column in inspector.get_columns(table_name)
+        }
+        if "resource_generation" not in columns:
+            op.add_column(
+                table_name,
+                sa.Column(
+                    "resource_generation",
+                    sa.BigInteger(),
+                    nullable=False,
+                    server_default="1",
+                ),
+            )
 
 
 def downgrade() -> None:

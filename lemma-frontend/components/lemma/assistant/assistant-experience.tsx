@@ -46,6 +46,7 @@ import {
 import {
   currentRunStatusLabel,
   currentToolStatusLabel,
+  isStreamingReasoningAlreadyVisible,
   isInlineToolStatusAlreadyVisible,
   stringifyAssistantError,
 } from "./assistant-format";
@@ -536,7 +537,15 @@ export function AssistantExperienceView({
     : "Assistant error";
   const headerTone: AssistantSurfaceTone = resolvedChromeStyle === "elevated" ? "default" : resolvedChromeStyle === "flat" ? "flat" : "subtle";
   const composerTone: AssistantSurfaceTone = resolvedChromeStyle === "flat" ? "flat" : resolvedChromeStyle === "subtle" ? "subtle" : "default";
-  const showThinkingStatus = !!inlineRunStatus && (inlineRunStatus.label !== "Thinking" || !lastAssistantTextHasContent);
+  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
+  const streamingReasoningAlreadyVisible = isStreamingReasoningAlreadyVisible({
+    rows: displayMessageRows,
+    latestUser: currentRunLatestUserIndex,
+  });
+  const showThinkingStatus = !!inlineRunStatus
+    && (inlineRunStatus.label !== "Thinking" || (
+      !lastAssistantTextHasContent && !streamingReasoningAlreadyVisible
+    ));
   const showInlineStatus = statusPlacement === "inline" && showThinkingStatus;
   const showComposerStatus = statusPlacement === "composer" && showThinkingStatus;
   const uploadStatusLabel = controller.isUploadingFiles
@@ -557,7 +566,6 @@ export function AssistantExperienceView({
       ) : null}
     </>
   );
-  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const inlineToolStatusAlreadyVisible = isInlineToolStatusAlreadyVisible({
     rows: displayMessageRows,
     latestUser: currentRunLatestUserIndex,

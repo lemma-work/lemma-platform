@@ -129,7 +129,24 @@ def build_manifest(
                 "timeout_seconds": 300,
                 "max_attempts": 3,
                 "retry_backoff_seconds": 2,
-            }
+            },
+            {
+                "id": "agentbox-migrations",
+                "command": [
+                    str(python),
+                    "-m",
+                    "alembic",
+                    "-c",
+                    "agentbox-alembic.ini",
+                    "upgrade",
+                    "head",
+                ],
+                "cwd": str(backend_dir),
+                "env": backend_env,
+                "timeout_seconds": 300,
+                "max_attempts": 3,
+                "retry_backoff_seconds": 2,
+            },
         ],
         "services": [
             {
