@@ -202,7 +202,14 @@ class RequestObserverMiddleware:
     REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
     SLOW_SECONDS = 2.0
     QUIET_PATHS = frozenset(
-        {"/health", "/health/live", "/health/ready", "/health/capabilities", "/livez"}
+        {
+            "/agent-host/poll",
+            "/health",
+            "/health/live",
+            "/health/ready",
+            "/health/capabilities",
+            "/livez",
+        }
     )
 
     def __init__(self, app):
@@ -270,20 +277,24 @@ class RequestObserverMiddleware:
                 finished_at = time.perf_counter()
                 duration_ms = round((finished_at - started_at) * 1000, 1)
                 route = self._route_template(scope)
-                attributes = {
-                    "http.request.method": str(scope.get("method", "UNKNOWN")),
-                    "http.route": route,
-                    "http.response.status_class": f"{status_code // 100}xx",
-                }
-                http_request_count.add(1, attributes)
-                http_request_duration.record(duration_ms, attributes)
+                state = scope.get("state") or {}
+                observed_by_embedded_app = bool(
+                    state.get("lemma_request_observer_owner")
+                )
+                if not observed_by_embedded_app:
+                    attributes = {
+                        "http.request.method": str(scope.get("method", "UNKNOWN")),
+                        "http.route": route,
+                        "http.response.status_class": f"{status_code // 100}xx",
+                    }
+                    http_request_count.add(1, attributes)
+                    http_request_duration.record(duration_ms, attributes)
 
-                if str(scope.get("path", "")) in self.QUIET_PATHS:
-                    continue_logging = False
-                else:
-                    continue_logging = True
+                continue_logging = (
+                    str(scope.get("path", "")) not in self.QUIET_PATHS
+                    and not observed_by_embedded_app
+                )
                 if continue_logging and not cancelled:
-                    state = scope.get("state") or {}
                     recorded = state.get("lemma_exception")
                     failure = caught or recorded
                     fields = {

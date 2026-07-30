@@ -7,6 +7,7 @@ import hmac
 import re
 import time
 import uuid
+from urllib.parse import parse_qs
 from uuid import UUID
 
 from fastapi import FastAPI, Request
@@ -88,6 +89,8 @@ class RequestContextMiddleware:
     REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
     JOB_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
     SLOW_SECONDS = 2.0
+    VERIFY_READY_SLOW_SECONDS = 10.0
+    VERIFY_READY_ROUTE = "/sandboxes/{workload_kind}/{logical_id}"
 
     def __init__(self, app):
         self.app = app
@@ -127,6 +130,7 @@ class RequestContextMiddleware:
         raw_job_id = header(b"x-lemma-job-id") if trusted else ""
         job_id = raw_job_id if self.JOB_ID_RE.fullmatch(raw_job_id) else None
         scope = dict(scope)
+        scope.setdefault("state", {})["lemma_request_observer_owner"] = "agentbox"
         scope["headers"] = [
             (key, value) for key, value in headers if key.lower() != b"x-request-id"
         ] + [(b"x-request-id", request_id.encode("ascii"))]
@@ -247,7 +251,8 @@ class RequestContextMiddleware:
                         method = str(scope.get("method", "UNKNOWN"))
                         route_name = str(route)
                         elapsed_ms = round(elapsed * 1000, 1)
-                        if elapsed >= self.SLOW_SECONDS:
+                        slow_seconds = self._slow_seconds(scope, route_name)
+                        if elapsed >= slow_seconds:
                             latency_kind = (
                                 "time_to_first_byte" if streaming else "total"
                             )
@@ -267,6 +272,19 @@ class RequestContextMiddleware:
                                 status_code=status_code,
                                 duration_ms=elapsed_ms,
                             )
+
+    def _slow_seconds(self, scope: dict, route: str) -> float:
+        query = parse_qs(
+            bytes(scope.get("query_string") or b"").decode("latin-1"),
+            keep_blank_values=True,
+        )
+        if (
+            scope.get("method") == "PUT"
+            and route == self.VERIFY_READY_ROUTE
+            and query.get("verify_ready") == ["true"]
+        ):
+            return self.VERIFY_READY_SLOW_SECONDS
+        return self.SLOW_SECONDS
 
 
 def _database_url() -> str:

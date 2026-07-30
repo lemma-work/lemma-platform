@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from uuid import UUID
 
 from app.app import RequestIdMiddleware
@@ -34,7 +35,9 @@ async def _run(inbound_headers):
     }
     await middleware(scope, receive, send)
 
-    start = next(message for message in sent if message["type"] == "http.response.start")
+    start = next(
+        message for message in sent if message["type"] == "http.response.start"
+    )
     return captured, dict(start["headers"])
 
 
@@ -120,6 +123,73 @@ async def test_response_contains_exactly_one_normalized_request_id() -> None:
         receive,
         send,
     )
-    start = next(message for message in sent if message["type"] == "http.response.start")
+    start = next(
+        message for message in sent if message["type"] == "http.response.start"
+    )
     ids = [value for key, value in start["headers"] if key == b"x-request-id"]
     assert ids == [b"ingress"]
+
+
+async def test_embedded_request_observer_owns_logging_without_outer_duplicate(
+    monkeypatch,
+    caplog,
+) -> None:
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    async def embedded_app(scope, _receive, _send):
+        scope["state"]["lemma_request_observer_owner"] = "agentbox"
+        await _send({"type": "http.response.start", "status": 200, "headers": []})
+        await _send({"type": "http.response.body", "body": b""})
+
+    middleware = RequestIdMiddleware(embedded_app)
+    monkeypatch.setattr(middleware, "SLOW_SECONDS", 0)
+    with caplog.at_level(logging.WARNING):
+        await middleware(
+            {
+                "type": "http",
+                "method": "PUT",
+                "path": "/internal/agentbox/sandboxes/workspace/id",
+                "headers": [],
+                "state": {},
+            },
+            receive,
+            send,
+        )
+
+    assert not any(record.msg == "http.request.slow" for record in caplog.records)
+
+
+async def test_agent_host_long_poll_is_not_reported_as_slow(
+    monkeypatch,
+    caplog,
+) -> None:
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    async def poll_app(_scope, _receive, _send):
+        await _send({"type": "http.response.start", "status": 200, "headers": []})
+        await _send({"type": "http.response.body", "body": b""})
+
+    middleware = RequestIdMiddleware(poll_app)
+    monkeypatch.setattr(middleware, "SLOW_SECONDS", 0)
+    with caplog.at_level(logging.WARNING):
+        await middleware(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/agent-host/poll",
+                "headers": [],
+                "state": {},
+            },
+            receive,
+            send,
+        )
+
+    assert not any(record.msg == "http.request.slow" for record in caplog.records)

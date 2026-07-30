@@ -157,9 +157,7 @@ async def test_repeated_429s_emit_one_degraded_and_one_recovered(caplog) -> None
         "method": "PUT",
         "path": "/sandboxes/function/id",
         "headers": [],
-        "route": SimpleNamespace(
-            path_format="/sandboxes/{workload_kind}/{logical_id}"
-        ),
+        "route": SimpleNamespace(path_format="/sandboxes/{workload_kind}/{logical_id}"),
     }
     with caplog.at_level(logging.INFO):
         for _ in range(5):
@@ -170,3 +168,82 @@ async def test_repeated_429s_emit_one_degraded_and_one_recovered(caplog) -> None
     events = [record.msg for record in caplog.records]
     assert events.count("dependency.degraded") == 1
     assert events.count("dependency.recovered") == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_ready_cold_start_uses_route_aware_slow_threshold(
+    monkeypatch,
+    caplog,
+) -> None:
+    observed_state: dict[str, str] = {}
+
+    async def downstream(scope, _receive, send):
+        observed_state.update(scope["state"])
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    times = iter((0.0, 0.1, 2.6))
+    monkeypatch.setattr(app_module.time, "perf_counter", lambda: next(times))
+    scope = {
+        "type": "http",
+        "method": "PUT",
+        "path": "/sandboxes/workspace/00000000-0000-0000-0000-000000000001",
+        "query_string": b"verify_ready=true",
+        "headers": [],
+        "state": {},
+        "route": SimpleNamespace(path_format="/sandboxes/{workload_kind}/{logical_id}"),
+    }
+    with caplog.at_level(logging.WARNING):
+        await app_module.RequestContextMiddleware(downstream)(
+            scope,
+            receive,
+            send,
+        )
+
+    assert observed_state["lemma_request_observer_owner"] == "agentbox"
+    assert not any(record.msg == "http.request.slow" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_regular_agentbox_request_still_warns_after_two_seconds(
+    monkeypatch,
+    caplog,
+) -> None:
+    async def downstream(_scope, _receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    times = iter((0.0, 0.1, 2.6))
+    monkeypatch.setattr(app_module.time, "perf_counter", lambda: next(times))
+    with caplog.at_level(logging.WARNING):
+        await app_module.RequestContextMiddleware(downstream)(
+            {
+                "type": "http",
+                "method": "PUT",
+                "path": "/sandboxes/workspace/id/files:content",
+                "query_string": b"",
+                "headers": [],
+                "state": {},
+                "route": SimpleNamespace(
+                    path_format=(
+                        "/sandboxes/{workload_kind}/{logical_id}/files:content"
+                    )
+                ),
+            },
+            receive,
+            send,
+        )
+
+    assert sum(record.msg == "http.request.slow" for record in caplog.records) == 1
