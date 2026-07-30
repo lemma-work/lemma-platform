@@ -563,7 +563,7 @@ async fn show_logs(path: &std::path::Path, lines: usize, follow: bool) -> anyhow
     let mut offset = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        let length = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        let length = path.metadata().map_or(0, |metadata| metadata.len());
         if length < offset {
             offset = 0;
         }

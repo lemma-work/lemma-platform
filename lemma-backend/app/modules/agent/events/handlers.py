@@ -294,7 +294,12 @@ async def cleanup_agent_host_retained_state() -> None:
         return
     logger.info(
         "agent.handlers.cleanup_agent_host_retained_state.completed",
-        **counts,
+        pairings=counts["pairings"],
+        auth_nonces=counts["auth_nonces"],
+        mcp_routes=counts["mcp_routes"],
+        events=counts["events"],
+        commands=counts["commands"],
+        leases=counts["leases"],
     )
 
 

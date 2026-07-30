@@ -125,11 +125,12 @@ class PodFileAgentHostArtifactWriter:
             except ValueError as exc:
                 warnings.append(str(exc))
             except (DomainError, OSError, SQLAlchemyError, TimeoutError):
-                logger.exception(
+                logger.error(
                     "agent_host.artifact.persist_failed",
                     agent_run_id=str(agent_run_id),
                     event_sequence=event_sequence,
                     harness_key=harness_key,
+                    exc_info=True,
                 )
                 warnings.append("An ACP image could not be saved to pod files.")
 
