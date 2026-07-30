@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::protocol::{
@@ -12,7 +12,7 @@ use crate::protocol::{
     RunCheckpoint, RunSpec, RunState,
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 1;
 
 type PendingControl = (Vec<Uuid>, Vec<RunCheckpoint>, Vec<CommandRejection>);
 
@@ -68,8 +68,6 @@ pub enum JournalError {
     InvalidEnum(String),
     #[error("event acknowledgement does not match an active run")]
     AckMismatch,
-    #[error("unsupported Agent Host journal schema: {0}")]
-    InvalidSchema(String),
 }
 
 impl Journal {
@@ -101,13 +99,6 @@ impl Journal {
     fn initialize(&self) -> Result<(), JournalError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing_version =
-            transaction.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))?;
-        if existing_version > SCHEMA_VERSION {
-            return Err(JournalError::InvalidSchema(format!(
-                "version {existing_version} is newer than supported version {SCHEMA_VERSION}"
-            )));
-        }
         transaction.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS targets (
@@ -182,7 +173,6 @@ impl Journal {
               ON runs(target_id, state, updated_at);
             "#,
         )?;
-        migrate_runs_harness_key(&transaction)?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         transaction.commit()?;
         self.integrity_check()?;
@@ -910,28 +900,6 @@ impl Journal {
     }
 }
 
-fn migrate_runs_harness_key(transaction: &Transaction<'_>) -> Result<(), JournalError> {
-    let mut statement = transaction.prepare("PRAGMA table_info(runs)")?;
-    let columns = statement
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?;
-    drop(statement);
-
-    let has_harness_key = columns.iter().any(|column| column == "harness_key");
-    let has_integration_key = columns.iter().any(|column| column == "integration_key");
-    if !has_harness_key && has_integration_key {
-        transaction
-            .execute_batch("ALTER TABLE runs RENAME COLUMN integration_key TO harness_key;")?;
-        return Ok(());
-    }
-    if !has_harness_key {
-        return Err(JournalError::InvalidSchema(
-            "runs is missing the harness_key column".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
 fn enum_json<T: serde::Serialize>(value: T) -> Result<String, serde_json::Error> {
     serde_json::to_string(&value).map(|value| value.trim_matches('"').to_owned())
 }
@@ -997,49 +965,6 @@ mod tests {
                 .unwrap(),
             AcceptOutcome::Duplicate
         );
-    }
-
-    #[test]
-    fn version_one_integration_key_is_migrated_without_losing_runs() {
-        let (directory, journal, target, command, spec) = fixture();
-        journal
-            .accept_start(target, &command, &spec, "codex", "1.0")
-            .unwrap();
-        drop(journal);
-
-        let path = directory.path().join("journal.db");
-        let connection = Connection::open(&path).unwrap();
-        connection
-            .execute_batch(
-                r#"
-                ALTER TABLE runs RENAME COLUMN harness_key TO integration_key;
-                PRAGMA user_version = 1;
-                "#,
-            )
-            .unwrap();
-        drop(connection);
-
-        let migrated = Journal::open(&path).unwrap();
-        let run = migrated
-            .get_run(target, spec.agent_run_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(run.harness_key, "codex");
-        let version: i64 = migrated
-            .connection()
-            .unwrap()
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
-        let connection = migrated.connection().unwrap();
-        let mut statement = connection.prepare("PRAGMA table_info(runs)").unwrap();
-        let columns = statement
-            .query_map([], |row| row.get::<_, String>(1))
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        assert!(columns.iter().any(|column| column == "harness_key"));
-        assert!(!columns.iter().any(|column| column == "integration_key"));
     }
 
     #[test]
