@@ -15,6 +15,10 @@ from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
 from app.core.authorization.scope import pod_context_scope
 from app.core.domain.errors import BadRequestError
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.infrastructure.jobs.streaq_job_queue import (
+    SharedStreaqJobQueue,
+    get_streaq_job_queue,
+)
 from app.core.log.log import get_logger
 from app.modules.agent.api.controllers.conversation_streaming import (
     load_authorized_agent_run,
@@ -57,7 +61,10 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.services.conversation_retry_service import (
     ConversationRetryService,
 )
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.conversation_service import (
+    ConversationService,
+    approval_reconcile_job_id,
+)
 from app.composition.authorization import create_authorization_service
 from app.composition.agent_usage import build_usage_service
 
@@ -361,6 +368,7 @@ async def resolve_approval(
     user: CurrentUser,
     service: ConversationServiceDep,
     ctx: PodContextDep,
+    job_queue: SharedStreaqJobQueue = Depends(get_streaq_job_queue),
 ) -> ApprovalDecisionResponse:
     _ = ctx
     # Idempotent + self-healing: resolving an already-recorded approval reconciles
@@ -373,7 +381,19 @@ async def resolve_approval(
         pod_id=pod_id,
         decision=data.decision,
         response=data.response,
+        defer_reconciliation=True,
     )
+    if resolution.status == "queued":
+        await job_queue.enqueue(
+            "reconcile_agent_approval",
+            context={
+                "conversation_id": str(conversation_id),
+                "approval_id": approval_id,
+                "user_id": str(user.id),
+                "pod_id": str(pod_id),
+            },
+            _job_id=approval_reconcile_job_id(conversation_id, approval_id),
+        )
     return ApprovalDecisionResponse(
         approval_id=approval_id,
         decision=resolution.decision,

@@ -5,10 +5,10 @@
   "scripts": {
     "prepare:lemma-sdk": "npm --prefix ../lemma-typescript run build",
     "predev": "npm run prepare:lemma-sdk && node scripts/gen-runtime-config.mjs",
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "gen:runtime-config": "node scripts/gen-runtime-config.mjs",
     "prebuild": "npm run prepare:lemma-sdk",
-    "build": "next build",
+    "build": "next build --webpack",
     "prelint": "npm run prepare:lemma-sdk",
     "start": "next start",
     "lint": "eslint",

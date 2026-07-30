@@ -264,6 +264,12 @@ class PydanticAIHarness:
             # A single invalid tool call must not kill the run: give the model room
             # to self-correct from validation feedback before giving up.
             "retries": DEFAULT_TOOL_RETRIES,
+            # A TASK conversation returns through the final_answer output tool.
+            # With pydantic-ai's v1 "early" strategy, a normal tool emitted in
+            # the same model response (notably request_approval) is skipped once
+            # final_answer validates. Graceful executes that sibling tool, so the
+            # approval is persisted and the run correctly becomes WAITING.
+            "end_strategy": "graceful",
         }
         if options.toolsets:
             agent_kwargs["toolsets"] = options.toolsets

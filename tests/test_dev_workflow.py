@@ -67,6 +67,10 @@ class DevWorkflowTests(unittest.TestCase):
             self.assertEqual(backend_env["AUTH_EMAIL_VERIFICATION_REQUIRED"], "false")
             self.assertEqual(backend_env["API_URL"], "http://localhost:8710")
             self.assertEqual(backend_env["FRONTEND_URL"], "http://localhost:3710")
+            self.assertEqual(
+                backend_env["FUNCTION_RUNTIME_GATEWAY_URL"],
+                "http://host.lemma.internal:8710",
+            )
 
             agentbox_text = (agentbox / ".env").read_text()
             self.assertIn("AgentBox local overrides", agentbox_text)
@@ -186,6 +190,10 @@ class DevWorkflowTests(unittest.TestCase):
 
             self.assertIn(
                 "AGENTBOX_STATE_DATABASE_URL=postgresql+psycopg://",
+                result.stdout,
+            )
+            self.assertIn(
+                "FUNCTION_RUNTIME_GATEWAY_URL=http://host.lemma.internal:8710",
                 result.stdout,
             )
             self.assertIn("AGENTBOX_WORKSPACE_IMAGE=agentbox-workspace:dev", result.stdout)

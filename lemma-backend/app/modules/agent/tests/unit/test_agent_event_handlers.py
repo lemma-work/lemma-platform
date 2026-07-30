@@ -134,6 +134,7 @@ def test_title_task_is_registered_on_worker() -> None:
 
     assert "generate_conversation_title" in streaq_worker.registry
     assert "process_agent_run" in streaq_worker.registry
+    assert "reconcile_agent_approval" in streaq_worker.registry
 
 
 @pytest.mark.asyncio

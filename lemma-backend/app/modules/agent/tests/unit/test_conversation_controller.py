@@ -14,16 +14,23 @@ from starlette.datastructures import QueryParams
 from app.modules.agent.api.controllers import conversation_controller
 from app.modules.agent.api.controllers.conversation_controller import (
     _parse_metadata_filters,
+    resolve_approval,
     retry_failed_run,
     send_message,
     stream_conversation,
 )
+from app.modules.agent.api.schemas import ResolveUserApprovalRequest
 from app.modules.agent.domain.entities import AgentRun
 from app.modules.agent.domain.value_objects import (
+    AgentRunApprovalDecision,
     AgentRunStartResult,
     AgentRunStatus,
     AgentRuntimeConfig,
     ConversationAgentScope,
+)
+from app.modules.agent.services.conversation_service import (
+    ApprovalResolution,
+    approval_reconcile_job_id,
 )
 from app.modules.test_support.authz import allow_all_context
 from app.modules.usage.domain.errors import UsageLimitExceededError
@@ -67,6 +74,57 @@ def test_parse_metadata_filters_returns_none_without_metadata_filters() -> None:
     )
 
     assert filters is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_approval_acknowledges_before_worker_execution() -> None:
+    conversation_id = uuid4()
+    pod_id = uuid4()
+    user_id = uuid4()
+    approval_id = "call_slow_command"
+    service = SimpleNamespace(
+        resolve_user_approval=AsyncMock(
+            return_value=ApprovalResolution(
+                status="queued",
+                decision=AgentRunApprovalDecision.APPROVE_ONCE,
+            )
+        )
+    )
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value=object()))
+
+    response = await resolve_approval(
+        pod_id=pod_id,
+        conversation_id=conversation_id,
+        approval_id=approval_id,
+        data=ResolveUserApprovalRequest(
+            decision=AgentRunApprovalDecision.APPROVE_ONCE
+        ),
+        user=SimpleNamespace(id=user_id),
+        service=service,
+        ctx=SimpleNamespace(),
+        job_queue=queue,
+    )
+
+    assert response.status == "queued"
+    service.resolve_user_approval.assert_awaited_once_with(
+        conversation_id=conversation_id,
+        approval_id=approval_id,
+        user_id=user_id,
+        pod_id=pod_id,
+        decision=AgentRunApprovalDecision.APPROVE_ONCE,
+        response=None,
+        defer_reconciliation=True,
+    )
+    queue.enqueue.assert_awaited_once_with(
+        "reconcile_agent_approval",
+        context={
+            "conversation_id": str(conversation_id),
+            "approval_id": approval_id,
+            "user_id": str(user_id),
+            "pod_id": str(pod_id),
+        },
+        _job_id=approval_reconcile_job_id(conversation_id, approval_id),
+    )
 
 
 class _ConversationService:

@@ -23,6 +23,7 @@ from app.modules.agent.services.agent_runner_service import (
     FULL_HISTORY_AGENT_RUN_COUNT,
     AgentRunnerService,
 )
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.pod import pod_toolset
@@ -603,6 +604,54 @@ async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_approved_tool_releases_db_connection_and_preserves_tool_failure(
+    monkeypatch,
+):
+    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+
+    class _Uow:
+        committed = False
+
+        async def commit(self):
+            self.committed = True
+
+    uow = _Uow()
+    service = ConversationService(
+        uow=uow,  # type: ignore[arg-type]
+        conversation_repository=SimpleNamespace(),
+        agent_repository=SimpleNamespace(),
+        authorization_service=SimpleNamespace(),
+    )
+
+    async def fake_context(**kwargs):
+        del kwargs
+        assert uow.committed is False
+        return SimpleNamespace()
+
+    async def fake_execute(self, *, deps, tool_name, args):
+        del self, deps, tool_name, args
+        assert uow.committed is True
+        return {
+            "success": False,
+            "error": "workspace connection failed",
+        }
+
+    monkeypatch.setattr(service, "_build_resume_context", fake_context)
+    monkeypatch.setattr(ApprovalExecutor, "execute_as_user", fake_execute)
+
+    result = await service._execute_approved_tool_as_user(
+        conversation=Conversation(pod_id=uuid4(), user_id=uuid4()),
+        user_id=uuid4(),
+        agent_run_id=uuid4(),
+        tool_name="exec_command",
+        args={"cmd": "sleep 60"},
+    )
+
+    assert uow.committed is True
+    assert result == {"ok": False, "error": "workspace connection failed"}
+
+
+@pytest.mark.asyncio
 async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness_harness():
     """On remote-harness/MCP runs (no pause signal) the tools never raise or block; they
     return guidance so the model falls back to a conversational ask."""
@@ -753,6 +802,8 @@ def test_runtime_context_brief_is_appended_to_agent_prompt():
     assert "# Tool Execution Discipline" in prompt
     assert "no more than ten tools in one response" in prompt
     assert "Never issue identical tool calls" in prompt
+    assert "Call `request_approval` exactly once" in prompt
+    assert "`final_answer` must be the only call in its response" in prompt
     # Always appended after the agent instructions.
     assert prompt.index("Answer briefly.") < prompt.index("# Runtime Context")
 
@@ -847,6 +898,7 @@ def test_pod_assistant_prompt_states_working_directory():
     )
     assert "# Working Directory" in prompt
     assert "/workspace/conversations/xyz" in prompt
+    assert "Never create a parallel project root directly under `/workspace`" in prompt
 
 
 def test_non_workspace_agent_prompt_omits_working_directory():
@@ -1506,7 +1558,7 @@ def test_conversation_instructions_are_appended_to_agent_prompt():
     assert "lemma-user" in prompt
     assert "private code sandbox" in prompt
     assert "/me/<descriptive-folder>/" in prompt
-    assert "lemma files cat /pod/knowledge/policy.pdf --pages 3-7" in prompt
+    assert "lemma files cat /knowledge/policy.pdf --pages 3-7" in prompt
     assert 'lit parse input.pdf --target-pages "1-5,10"' in prompt
     assert "# Agent Instructions\nAnswer briefly." in prompt
     assert (

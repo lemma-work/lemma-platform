@@ -48,10 +48,14 @@ from app.modules.agent.infrastructure.harnesses.agent_host_artifacts import (
     PodFileAgentHostArtifactWriter,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories import AgentRepository
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostDispatchRepository,
 )
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.conversation_service import ConversationService
+from app.composition.authorization import create_authorization_service
+from app.composition.agent_usage import build_usage_service
 from app.modules.agent.services.realtime import (
     completed_payload,
     publish_conversation_event,
@@ -268,6 +272,60 @@ async def process_conversation_title(
     await ConversationTitleService(
         uow_factory=worker_ctx.uow_factory
     ).generate_title_if_absent(conversation_id)
+
+
+@streaq_task(name="reconcile_agent_approval")
+async def reconcile_agent_approval(
+    context: dict[str, str | None],
+) -> None:
+    """Execute a durable approval decision outside the HTTP request deadline."""
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    await reconcile_agent_approval_now(
+        context,
+        uow_factory=worker_ctx.uow_factory,
+    )
+
+
+async def reconcile_agent_approval_now(
+    context: dict[str, str | None],
+    *,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """Reconcile one recorded decision; split out for focused integration tests."""
+    conversation_id = UUID(str(context["conversation_id"]))
+    approval_id = str(context["approval_id"])
+    user_id = UUID(str(context["user_id"]))
+    pod_id = UUID(str(context["pod_id"]))
+
+    async with uow_factory() as uow:
+        conversation_repository = ConversationRepository(uow)
+        conversation = await conversation_repository.get_conversation(
+            conversation_id
+        )
+        if conversation is None:
+            return
+        recorded = await conversation_repository.get_approval_decision(
+            conversation_id=conversation_id,
+            approval_id=approval_id,
+        )
+        if recorded is None:
+            return
+        decision, response = recorded
+        service = ConversationService(
+            uow=uow,
+            conversation_repository=conversation_repository,
+            agent_repository=AgentRepository(uow),
+            authorization_service=create_authorization_service(uow),
+            usage_service=build_usage_service(uow),
+        )
+        await service.resolve_user_approval_internal(
+            conversation=conversation,
+            approval_id=approval_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            decision=decision,
+            response=response,
+        )
 
 
 # Sweep stale runs only well after the streaq task timeout, so a legitimately

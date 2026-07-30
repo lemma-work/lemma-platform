@@ -70,6 +70,11 @@ _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 _PAUSING_TOOL_NAMES = ("ask_user", "request_approval")
 
 
+def approval_reconcile_job_id(conversation_id: UUID, approval_id: str) -> str:
+    """Return the deterministic worker job id for one approval decision."""
+    return f"agent-approval:{conversation_id}:{approval_id}"
+
+
 class ApprovalResolution(NamedTuple):
     """Outcome of resolving an approval.
 
@@ -430,19 +435,26 @@ class ConversationService:
             agent_name=agent_name,
             action=Permissions.AGENT_READ,
         )
-        resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
-            conversation_id=conversation.id
-        )
         messages, _ = await self.conversation_repository.list_messages(
             conversation_id=conversation.id,
             limit=500,
         )
+        # A decision is not fully resolved until its synthesized tool return has
+        # been persisted. Approved tools now execute asynchronously, so keeping
+        # the card visible during that short processing window lets a repeated
+        # click safely re-enqueue the deterministic job if a worker crashes.
+        returned_ids = {
+            message.tool_call_id
+            for message in messages
+            if message.kind == MessageKind.TOOL_RETURN
+            and message.tool_call_id is not None
+        }
         return [
             message
             for message in messages
             if message.kind == MessageKind.TOOL_CALL
             and message.tool_name in _PAUSING_TOOL_NAMES
-            and message.tool_call_id not in resolved_ids
+            and message.tool_call_id not in returned_ids
         ]
 
     async def resolve_user_approval(
@@ -455,6 +467,7 @@ class ConversationService:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
+        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Record the user's decision and resume the paused agent run.
 
@@ -484,6 +497,7 @@ class ConversationService:
             decision=decision,
             response=response,
             agent_name=agent_name,
+            defer_reconciliation=defer_reconciliation,
         )
 
     async def resolve_user_approval_internal(
@@ -496,6 +510,7 @@ class ConversationService:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
+        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Resume a paused run for an already-authorized + loaded conversation.
 
@@ -578,6 +593,32 @@ class ConversationService:
             # prior attempt left undone.
             effective_decision, effective_response = decision_row
             status = "reconciled"
+
+        existing_return = (
+            await self.conversation_repository.get_tool_return(
+                conversation_id=conversation.id,
+                tool_call_id=approval_id,
+            )
+            if defer_reconciliation
+            else None
+        )
+        should_defer = (
+            defer_reconciliation
+            and kind == "request_approval"
+            and effective_decision != AgentRunApprovalDecision.DENY
+            and existing_return is None
+        )
+        if should_defer:
+            # HTTP callers acknowledge the durable decision immediately and hand
+            # the potentially slow approved tool (commands can legitimately run
+            # for minutes) to a worker job. Keeping that work in the request made
+            # the browser's 30-second timeout cancel reconciliation after the
+            # decision had already committed. ask_user, denials, and already-run
+            # approvals stay inline because they perform no external work.
+            return ApprovalResolution(
+                status="queued",
+                decision=effective_decision,
+            )
 
         await self._reconcile_approval_resume(
             conversation=conversation,
@@ -894,13 +935,27 @@ class ConversationService:
                 user_id=user_id,
                 agent_run_id=agent_run_id,
             )
+            # The approved action may run for minutes. Release the request/job's
+            # checked-out DB connection before crossing that external boundary;
+            # otherwise a command timeout can leave us trying to append its tool
+            # return through a connection the server closed while it sat idle.
+            # The repository session safely checks out a fresh connection for the
+            # subsequent append/resume transaction.
+            await self.uow.commit()
             executor = ApprovalExecutor(SessionUnitOfWorkFactory(async_session_maker))
             result = await executor.execute_as_user(
                 deps=deps,
                 tool_name=tool_name,
                 args=args,
             )
-            return {"ok": True, "value": to_json_value(result)}
+            value = to_json_value(result)
+            if isinstance(value, dict) and value.get("success") is False:
+                error = value.get("error") or value.get("message")
+                return {
+                    "ok": False,
+                    "error": str(error or f"{tool_name} did not complete"),
+                }
+            return {"ok": True, "value": value}
         except Exception as exc:  # noqa: BLE001 - reported back to the model, not fatal
             return {"ok": False, "error": str(exc)}
 

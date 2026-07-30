@@ -161,6 +161,7 @@ async def _seed_paused_interactions(
     fixed_test_org,
     *,
     interactions: list[tuple[str, dict]],
+    toolsets: list[str] | None = None,
 ):
     """Seed one paused run with MULTIPLE pausing tool calls (the multi-pause case)."""
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
@@ -169,7 +170,7 @@ async def _seed_paused_interactions(
         json={
             "name": "Interaction Agent",
             "instruction": "Ask the user when needed.",
-            "toolsets": ["USER_INTERACTION"],
+            "toolsets": toolsets or ["USER_INTERACTION"],
             "agent_runtime": DEFAULT_AGENT_RUNTIME,
         },
     )
@@ -1157,6 +1158,108 @@ class TestPodAgentLifecycle:
         assert duplicate.status_code == 200, duplicate.text
         assert duplicate.json()["status"] == "reconciled"
         assert captured["calls"] == 1
+
+    @pytest.mark.worker
+    @pytest.mark.workspace
+    @pytest.mark.approval_worker
+    async def test_slow_approved_command_is_acknowledged_then_run_by_worker(
+        self,
+        authenticated_client,
+        fixed_test_org,
+        worker,
+        local_agentbox_server,
+        workspace_image,
+    ):
+        """The approval HTTP request must not inherit a slow command's runtime.
+
+        Keep a sibling ask_user unresolved so this test exercises the approval
+        worker and workspace command without dispatching a provider-backed
+        resume turn afterward.
+        """
+        del worker, local_agentbox_server, workspace_image
+        (
+            pod_id,
+            conversation_id,
+            _agent,
+            paused_run,
+            approval_ids,
+        ) = await _seed_paused_interactions(
+            authenticated_client,
+            fixed_test_org,
+            toolsets=["USER_INTERACTION", "WORKSPACE_CLI"],
+            interactions=[
+                (
+                    "request_approval",
+                    {
+                        "tool_name": "exec_command",
+                        "args": {
+                            "cmd": (
+                                "python -c \"import time; time.sleep(12); "
+                                "print('approval-worker-ok')\""
+                            ),
+                            "timeout_seconds": 20,
+                        },
+                        "title": "Run the slow verification command?",
+                        "reason": "Exercise the asynchronous approval worker.",
+                    },
+                ),
+                (
+                    "ask_user",
+                    {
+                        "questions": [
+                            {
+                                "question": "Keep this run paused?",
+                                "header": "Pause",
+                                "options": [{"label": "Yes"}],
+                            }
+                        ]
+                    },
+                ),
+            ],
+        )
+        approval_id = approval_ids[0]
+
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        decision = await authenticated_client.post(
+            f"/pods/{pod_id}/conversations/{conversation_id}"
+            f"/approvals/{approval_id}/decision",
+            json={"decision": "APPROVE_ONCE", "response": {}},
+        )
+        elapsed = loop.time() - started
+
+        assert decision.status_code == 200, decision.text
+        assert decision.json()["status"] == "queued"
+        assert elapsed < 5
+
+        # The decision alone must not hide the card. Until a TOOL_RETURN exists,
+        # retrying this same approval is the safe recovery path after a worker
+        # crash (the deterministic job id and return guard make it idempotent).
+        pending = await authenticated_client.get(
+            f"/pods/{pod_id}/conversations/{conversation_id}/approvals"
+        )
+        assert pending.status_code == 200, pending.text
+        assert approval_id in {
+            item["tool_call_id"] for item in pending.json()["items"]
+        }
+
+        tool_return = None
+        for _ in range(150):
+            _resume_run, tool_return = await _resume_run_and_tool_return(
+                conversation_id,
+                paused_run.id,
+                approval_id,
+            )
+            if tool_return is not None:
+                break
+            await asyncio.sleep(0.2)
+
+        assert tool_return is not None
+        assert tool_return.tool_result["success"] is True
+        assert tool_return.tool_result["executed"] is True
+        result = tool_return.tool_result["result"]
+        assert result["success"] is True
+        assert "approval-worker-ok" in result["stdout"]
 
     async def test_multiple_pending_interactions_resume_only_after_all_resolved(
         self,

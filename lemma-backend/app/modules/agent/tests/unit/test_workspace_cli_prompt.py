@@ -34,3 +34,13 @@ def test_prompt_frames_liteparse_as_local_file_fallback():
     # The old steering that pushed every pod file through download + parse is gone.
     assert "Download pod files into the workspace before parsing" not in prompt
     assert "Download a pod file with `lemma files download` before parsing it." not in prompt
+
+
+def test_prompt_uses_current_cli_and_shared_file_contracts():
+    prompt = load_workspace_cli_prompt()
+    assert "lemma agents chat" in prompt
+    assert "files url" in prompt
+    assert "files share" in prompt
+    assert "There is no `/pod` path prefix" in prompt
+    assert "/pod/knowledge" not in prompt
+    assert "Never create a parallel project root directly under `/workspace`" in prompt

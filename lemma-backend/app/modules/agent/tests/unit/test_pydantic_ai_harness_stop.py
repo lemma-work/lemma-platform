@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
 import pytest
@@ -13,7 +13,14 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from app.modules.agent.domain.value_objects import AgentEventType, MessageKind
+from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.value_objects import (
+    AgentEventType,
+    HarnessOptions,
+    MessageKind,
+)
+from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.infrastructure.harnesses.tool_batch import (
     BoundedToolExecutionCapability,
@@ -89,6 +96,84 @@ class _HangingToolNode:
 
     def stream(self, ctx):
         return self.stream_instance
+
+
+class _EmptyAgentRun:
+    usage = SimpleNamespace(
+        input_tokens=0,
+        output_tokens=0,
+        requests=0,
+        tool_calls=0,
+    )
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+@pytest.mark.asyncio
+async def test_harness_uses_graceful_end_strategy_for_sibling_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Agent:
+        def __init__(self, model, **kwargs):
+            del model
+            captured.update(kwargs)
+
+        def iter(self, *args, **kwargs):
+            del args, kwargs
+            return _EmptyAgentRun()
+
+    monkeypatch.setattr(harness_module, "PydanticAIAgent", _Agent)
+    monkeypatch.setattr(
+        harness_module,
+        "_runtime_profile_model",
+        lambda options: object(),
+    )
+    pod_id = uuid4()
+    conversation = Conversation(pod_id=pod_id, user_id=uuid4())
+    agent = Agent(
+        pod_id=pod_id,
+        user_id=conversation.user_id,
+        name="assistant",
+        instruction="",
+    )
+    ctx = AgentContext(
+        user_id=conversation.user_id,
+        pod_id=pod_id,
+        conversation_id=conversation.id,
+    )
+
+    events = [
+        event
+        async for event in PydanticAIHarness()._execute(
+            agent=agent,
+            conversation=conversation,
+            messages=[],
+            ctx=ctx,
+            options=HarnessOptions(
+                model_name="test-model",
+                history_summarization_enabled=False,
+            ),
+            agent_run_id=uuid4(),
+            malformed_tool_call_ids=set(),
+            emitted_tool_response_ids=set(),
+            should_stop=None,
+        )
+    ]
+
+    assert captured["end_strategy"] == "graceful"
+    assert [event.type for event in events] == [AgentEventType.USAGE]
 
 
 @pytest.mark.asyncio
