@@ -20,12 +20,10 @@ use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use crate::adapters::{AdapterManifest, ResolvedAdapter};
 use crate::api::{PublishedHarness, TargetClient};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
-use crate::crypto::SecretVault;
-use crate::journal::{AcceptOutcome, Journal};
+use crate::journal::{AcceptOutcome, Checkpoint, Journal};
 use crate::protocol::{
-    Checkpoint, Command, CommandKind, CommandRejection, EventType, HarnessCapabilities,
-    HarnessHealth, HarnessSnapshot, HostCapacity, HostStatus, JsonMap, RejectionCode, RunSpec,
-    RunState,
+    Command, CommandKind, CommandRejection, EventType, HarnessCapabilities, HarnessHealth,
+    HarnessSnapshot, HostCapacity, HostStatus, JsonMap, RejectionCode, RunSpec, RunState,
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -42,18 +40,12 @@ pub struct HostRuntime {
     paths: HostPaths,
     journal: Journal,
     manifest: AdapterManifest,
-    vault: Arc<dyn SecretVault>,
     driver: Arc<dyn AgentDriver>,
     mcp_bridge_executable: PathBuf,
-    instance_id: Uuid,
 }
 
 impl HostRuntime {
-    pub fn new(
-        config: HostConfig,
-        paths: HostPaths,
-        vault: Arc<dyn SecretVault>,
-    ) -> anyhow::Result<Self> {
+    pub fn new(config: HostConfig, paths: HostPaths) -> anyhow::Result<Self> {
         config.validate()?;
         let journal = Journal::open(&paths.journal)?;
         let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
@@ -62,10 +54,8 @@ impl HostRuntime {
             paths,
             journal,
             manifest,
-            vault,
             driver: Arc::new(AcpDriver),
             mcp_bridge_executable: std::env::current_exe()?,
-            instance_id: Uuid::new_v4(),
         })
     }
 
@@ -160,11 +150,9 @@ impl HostRuntime {
                         let worker = TargetWorker::new(
                             target.clone(),
                             current.installation_id.clone(),
-                            self.instance_id,
                             self.paths.clone(),
                             self.journal.clone(),
                             self.manifest.clone(),
-                            self.vault.as_ref(),
                             Arc::clone(&self.driver),
                             self.mcp_bridge_executable.clone(),
                             Arc::clone(&global_capacity),
@@ -229,24 +217,16 @@ impl TargetWorker {
     fn new(
         target: TargetConfig,
         installation_id: String,
-        instance_id: Uuid,
         paths: HostPaths,
         journal: Journal,
         manifest: AdapterManifest,
-        vault: &dyn SecretVault,
         driver: Arc<dyn AgentDriver>,
         mcp_bridge_executable: PathBuf,
         global_capacity: Arc<Semaphore>,
         max_runs: u16,
         shutdown: watch::Receiver<bool>,
     ) -> anyhow::Result<Self> {
-        let client = TargetClient::new(
-            target.clone(),
-            installation_id,
-            instance_id,
-            &manifest,
-            vault,
-        )?;
+        let client = TargetClient::new(target.clone(), installation_id)?;
         journal.register_target(target.target_id)?;
         let draining = target.draining;
         Ok(Self {
@@ -381,38 +361,9 @@ impl TargetWorker {
 
     fn handle_command(&mut self, command: &Command) -> anyhow::Result<()> {
         anyhow::ensure!(command.expires_at >= Utc::now(), "command is expired");
-        command.verify_payload()?;
         match command.kind {
             CommandKind::StartRun => self.handle_start(command),
             CommandKind::CancelRun => self.handle_cancel(command),
-            CommandKind::Drain => {
-                self.journal
-                    .record_simple_command(self.target.target_id, command)?;
-                self.draining = true;
-                Ok(())
-            }
-            CommandKind::Resume => {
-                self.journal
-                    .record_simple_command(self.target.target_id, command)?;
-                self.draining = false;
-                Ok(())
-            }
-            CommandKind::RefreshHarness => {
-                self.journal
-                    .record_simple_command(self.target.target_id, command)?;
-                self.refresh_due = std::time::Instant::now();
-                Ok(())
-            }
-            CommandKind::CloseSession => {
-                self.journal
-                    .record_simple_command(self.target.target_id, command)?;
-                Ok(())
-            }
-            CommandKind::RotateDeviceKey => {
-                self.journal
-                    .record_simple_command(self.target.target_id, command)?;
-                anyhow::bail!("device-key rotation requires a new user-authorized pairing")
-            }
         }
     }
 
@@ -466,7 +417,6 @@ impl TargetWorker {
 
     fn spawn_run(&mut self, spec: RunSpec, adapter: ResolvedAdapter, permit: OwnedSemaphorePermit) {
         let target_id = self.target.target_id;
-        let client = self.client.clone();
         let journal = self.journal.clone();
         let driver = Arc::clone(&self.driver);
         let mcp_bridge_executable = self.mcp_bridge_executable.clone();
@@ -482,28 +432,20 @@ impl TargetWorker {
                 target_id,
                 run_id,
                 lease_epoch,
-                Checkpoint::Accepted,
                 RunState::Accepted,
                 &JsonMap::new(),
             )?;
-            let route = match client.resolve_mcp_route(spec.mcp_route_id).await {
-                Ok(route) => route,
-                Err(error) => {
-                    terminal_failure(
-                        &journal,
-                        target_id,
-                        run_id,
-                        lease_epoch,
-                        RunState::Failed,
-                        &format!("could not obtain the run-scoped MCP route: {error}"),
-                    )?;
-                    return Ok(());
-                }
-            };
-            anyhow::ensure!(
-                route.run_id == run_id && route.lease_epoch == lease_epoch,
-                "MCP route lease does not match the run"
-            );
+            if !spec.mcp.is_object() {
+                terminal_failure(
+                    &journal,
+                    target_id,
+                    run_id,
+                    lease_epoch,
+                    RunState::Failed,
+                    "the start command did not carry a run-scoped MCP configuration",
+                )?;
+                return Ok(());
+            }
             let scratch = scratch_directory(&paths, target_id, run_id);
             std::fs::create_dir_all(&scratch)?;
             let mcp_server = McpServer::Stdio(
@@ -514,8 +456,8 @@ impl TargetWorker {
                         "mcp-bridge".to_owned(),
                         "--target-id".to_owned(),
                         target_id.to_string(),
-                        "--route-id".to_owned(),
-                        spec.mcp_route_id.to_string(),
+                        "--run-id".to_owned(),
+                        run_id.to_string(),
                     ])
                     .env(vec![EnvVariable::new("LEMMA_AGENT_HOST_BRIDGE", "1")]),
             );
@@ -525,6 +467,7 @@ impl TargetWorker {
                 run_id,
                 lease_epoch,
                 provider_seen: AtomicBool::new(false),
+                stream_segments: std::sync::Mutex::new(StreamSegments::default()),
             });
             let remaining = (spec.run_deadline - Utc::now())
                 .to_std()
@@ -564,7 +507,6 @@ impl TargetWorker {
                         target_id,
                         run_id,
                         lease_epoch,
-                        Checkpoint::Terminal,
                         outcome.state,
                         &JsonMap::new(),
                     )?;
@@ -669,9 +611,6 @@ impl TargetWorker {
                     snapshot.config_options = probe.config_options;
                     snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
                     snapshot.config_revision = snapshot_revision(snapshot);
-                    snapshot
-                        .metadata
-                        .insert("acp_capabilities".into(), probe.capabilities);
                 }
                 Ok(Err(error)) => {
                     snapshot.health = HarnessHealth::ProbeFailed;
@@ -845,6 +784,60 @@ struct JournalCallbacks {
     run_id: Uuid,
     lease_epoch: u32,
     provider_seen: AtomicBool,
+    stream_segments: std::sync::Mutex<StreamSegments>,
+}
+
+/// Accumulated per-kind streamed text awaiting a full-text upsert.
+///
+/// Chunks are the cosmetic live lane (the server publishes them without
+/// journaling); the upserts synthesized here are the durable, authoritative
+/// text records. A segment is sealed and emitted before any event that is not
+/// a text chunk of the same kind, so replaying only durable events rebuilds
+/// the exact final text.
+#[derive(Default)]
+struct StreamSegments {
+    message: String,
+    thought: String,
+}
+
+impl JournalCallbacks {
+    fn flush_stream_segment(&self, message: bool) -> anyhow::Result<()> {
+        let text = {
+            let mut segments = self
+                .stream_segments
+                .lock()
+                .expect("stream segments poisoned");
+            let segment = if message {
+                &mut segments.message
+            } else {
+                &mut segments.thought
+            };
+            std::mem::take(segment)
+        };
+        if text.is_empty() {
+            return Ok(());
+        }
+        let mut payload = JsonMap::new();
+        payload.insert("text".to_owned(), Value::String(text));
+        self.journal.append_event(
+            self.target_id,
+            self.run_id,
+            self.lease_epoch,
+            if message {
+                EventType::AgentMessageUpsert
+            } else {
+                EventType::AgentThoughtUpsert
+            },
+            None,
+            payload,
+        )?;
+        Ok(())
+    }
+
+    fn flush_stream_segments(&self) -> anyhow::Result<()> {
+        self.flush_stream_segment(true)?;
+        self.flush_stream_segment(false)
+    }
 }
 
 impl AcpCallbacks for JournalCallbacks {
@@ -869,20 +862,70 @@ impl AcpCallbacks for JournalCallbacks {
                 self.target_id,
                 self.run_id,
                 self.lease_epoch,
-                Checkpoint::ProviderAccepted,
                 RunState::Running,
                 &JsonMap::new(),
             )?;
         }
-        self.journal.append_event(
-            self.target_id,
-            self.run_id,
-            self.lease_epoch,
-            event_type,
-            object_id,
-            payload,
-        )?;
+        match event_type {
+            EventType::AgentMessageChunk | EventType::AgentThoughtChunk => {
+                let is_message = event_type == EventType::AgentMessageChunk;
+                let text = chunk_text(&payload);
+                if text.is_empty() && !payload.is_empty() {
+                    // Rich content (e.g. an image block) is durable and seals
+                    // the current text segment ahead of itself.
+                    self.flush_stream_segment(is_message)?;
+                } else {
+                    let mut segments = self
+                        .stream_segments
+                        .lock()
+                        .expect("stream segments poisoned");
+                    let segment = if is_message {
+                        &mut segments.message
+                    } else {
+                        &mut segments.thought
+                    };
+                    segment.push_str(&text);
+                }
+                self.journal.append_event(
+                    self.target_id,
+                    self.run_id,
+                    self.lease_epoch,
+                    event_type,
+                    object_id,
+                    payload,
+                )?;
+            }
+            _ => {
+                self.flush_stream_segments()?;
+                self.journal.append_event(
+                    self.target_id,
+                    self.run_id,
+                    self.lease_epoch,
+                    event_type,
+                    object_id,
+                    payload,
+                )?;
+            }
+        }
         Ok(())
+    }
+}
+
+/// Extract streamed text the same way the backend normalizer does.
+fn chunk_text(payload: &JsonMap) -> String {
+    for key in ["text", "delta"] {
+        if let Some(text) = payload.get(key).and_then(Value::as_str) {
+            return text.to_owned();
+        }
+    }
+    match payload.get("content") {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Object(content)) => content
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        _ => String::new(),
     }
 }
 
@@ -905,14 +948,7 @@ fn terminal_failure(
         None,
         payload,
     )?;
-    journal.checkpoint(
-        target_id,
-        run_id,
-        lease_epoch,
-        Checkpoint::Terminal,
-        state,
-        &JsonMap::new(),
-    )?;
+    journal.checkpoint(target_id, run_id, lease_epoch, state, &JsonMap::new())?;
     Ok(())
 }
 
@@ -1050,6 +1086,206 @@ fn redact_error(value: &str) -> String {
         }
     }
     redacted.chars().take(2048).collect()
+}
+
+#[cfg(test)]
+mod stream_upsert_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use super::{JournalCallbacks, StreamSegments, chunk_text};
+    use crate::acp::AcpCallbacks;
+    use crate::journal::Journal;
+    use crate::protocol::{Command, CommandKind, EventType, JsonMap, RunSpec};
+    use chrono::Utc;
+    use serde_json::Value;
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    fn payload(text: &str) -> JsonMap {
+        let mut payload = JsonMap::new();
+        payload.insert("text".to_owned(), Value::String(text.to_owned()));
+        payload
+    }
+
+    fn fixture() -> (TempDir, JournalCallbacks, Uuid) {
+        let directory = TempDir::new().unwrap();
+        let journal = Journal::open(directory.path().join("journal.db")).unwrap();
+        let target_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let spec = RunSpec {
+            agent_run_id: run_id,
+            conversation_id: Uuid::new_v4(),
+            harness_id: Uuid::new_v4(),
+            profile_revision: "revision".into(),
+            model_name: None,
+            config_selections: JsonMap::new(),
+            system_prompt: String::new(),
+            prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+            context: JsonMap::new(),
+            mcp: Value::Null,
+            run_deadline: Utc::now() + chrono::Duration::minutes(5),
+        };
+        let command = Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::StartRun,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::minutes(1),
+            run_id: Some(run_id),
+            lease_epoch: Some(1),
+            payload: serde_json::to_value(&spec).unwrap(),
+        };
+        journal
+            .accept_start(target_id, &command, &spec, "codex", "1.0")
+            .unwrap();
+        let callbacks = JournalCallbacks {
+            journal,
+            target_id,
+            run_id,
+            lease_epoch: 1,
+            provider_seen: AtomicBool::new(true),
+            stream_segments: std::sync::Mutex::new(StreamSegments::default()),
+        };
+        (directory, callbacks, run_id)
+    }
+
+    fn journaled_events(callbacks: &JournalCallbacks) -> Vec<(u64, EventType, JsonMap)> {
+        callbacks
+            .journal
+            .pending_events(callbacks.target_id, 256)
+            .unwrap()
+            .into_iter()
+            .flat_map(|batch| batch.events)
+            .map(|event| (event.sequence, event.event_type, event.payload))
+            .collect()
+    }
+
+    #[test]
+    fn text_chunks_flush_as_one_upsert_before_the_next_durable_event() {
+        let (_directory, callbacks, _run_id) = fixture();
+        let callbacks = Arc::new(callbacks);
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("hello "))
+            .unwrap();
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("world"))
+            .unwrap();
+        // Only chunks are journaled so far; no upsert yet.
+        let events = journaled_events(&callbacks);
+        assert_eq!(
+            events.iter().map(|(_, kind, _)| *kind).collect::<Vec<_>>(),
+            vec![EventType::AgentMessageChunk, EventType::AgentMessageChunk]
+        );
+
+        callbacks
+            .event(
+                EventType::ToolCallUpsert,
+                Some("call-1".into()),
+                JsonMap::new(),
+            )
+            .unwrap();
+        let events = journaled_events(&callbacks);
+        let kinds = events.iter().map(|(_, kind, _)| *kind).collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                EventType::AgentMessageChunk,
+                EventType::AgentMessageChunk,
+                EventType::AgentMessageUpsert,
+                EventType::ToolCallUpsert,
+            ]
+        );
+        assert_eq!(
+            events[2].2.get("text"),
+            Some(&Value::String("hello world".into()))
+        );
+
+        // A durable-only replay (skipping chunks) still yields the full text.
+        let durable_text = events
+            .iter()
+            .filter(|(_, kind, _)| *kind == EventType::AgentMessageUpsert)
+            .filter_map(|(_, _, payload)| payload.get("text").and_then(Value::as_str))
+            .collect::<String>();
+        assert_eq!(durable_text, "hello world");
+    }
+
+    #[test]
+    fn rich_content_seals_the_segment_without_touching_it() {
+        let (_directory, callbacks, _run_id) = fixture();
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("before "))
+            .unwrap();
+        let mut image = JsonMap::new();
+        image.insert(
+            "content".to_owned(),
+            serde_json::json!({"type": "image", "data": "...", "mimeType": "image/png"}),
+        );
+        callbacks
+            .event(EventType::AgentMessageChunk, None, image)
+            .unwrap();
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("after"))
+            .unwrap();
+        callbacks
+            .event(EventType::Terminal, None, JsonMap::new())
+            .unwrap();
+
+        let upserts = journaled_events(&callbacks)
+            .into_iter()
+            .filter(|(_, kind, _)| *kind == EventType::AgentMessageUpsert)
+            .map(|(_, _, payload)| payload)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            upserts
+                .iter()
+                .filter_map(|payload| payload.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>(),
+            vec!["before ", "after"]
+        );
+    }
+
+    #[test]
+    fn thought_and_message_segments_flush_independently() {
+        let (_directory, callbacks, _run_id) = fixture();
+        callbacks
+            .event(EventType::AgentThoughtChunk, None, payload("thinking"))
+            .unwrap();
+        callbacks
+            .event(EventType::AgentMessageChunk, None, payload("answer"))
+            .unwrap();
+        callbacks
+            .event(EventType::Terminal, None, JsonMap::new())
+            .unwrap();
+        let events = journaled_events(&callbacks);
+        let kinds = events.iter().map(|(_, kind, _)| *kind).collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![
+                EventType::AgentThoughtChunk,
+                EventType::AgentMessageChunk,
+                EventType::AgentMessageUpsert,
+                EventType::AgentThoughtUpsert,
+                EventType::Terminal,
+            ]
+        );
+    }
+
+    #[test]
+    fn chunk_text_mirrors_the_backend_extraction() {
+        assert_eq!(chunk_text(&payload("plain")), "plain");
+        let mut content = JsonMap::new();
+        content.insert(
+            "content".to_owned(),
+            serde_json::json!({"type": "text", "text": "block"}),
+        );
+        assert_eq!(chunk_text(&content), "block");
+        let mut image = JsonMap::new();
+        image.insert(
+            "content".to_owned(),
+            serde_json::json!({"type": "image", "data": "..."}),
+        );
+        assert_eq!(chunk_text(&image), "");
+    }
 }
 
 #[cfg(test)]

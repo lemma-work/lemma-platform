@@ -64,10 +64,8 @@ class AgentHostModel(UUIDAuditBase):
             postgresql_nulls_not_distinct=True,
         ),
         UniqueConstraint(
-            "organization_id",
-            "public_key_fingerprint",
-            name="uq_agent_host_org_public_key_fingerprint",
-            postgresql_nulls_not_distinct=True,
+            "host_secret_hash",
+            name="uq_agent_host_secret_hash",
         ),
         Index("ix_agent_host_user_status", "user_id", "status"),
     )
@@ -83,18 +81,13 @@ class AgentHostModel(UUIDAuditBase):
         nullable=True,
     )
     installation_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    public_key: Mapped[str] = mapped_column(Text, nullable=False)
-    public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    host_secret_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="OFFLINE", index=True
     )
-    protocol_min: Mapped[int] = mapped_column(nullable=False)
-    protocol_max: Mapped[int] = mapped_column(nullable=False)
     protocol_version: Mapped[int | None] = mapped_column(nullable=True)
     host_release: Mapped[str] = mapped_column(String(128), nullable=False)
-    adapter_manifest_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    instance_id: Mapped[UUID | None] = mapped_column(nullable=True)
     capacity: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -119,7 +112,6 @@ class AgentHostHarnessModel(UUIDAuditBase):
             "harness_key",
             name="uq_agent_host_harness_key",
         ),
-        Index("ix_agent_host_harness_host_health", "host_id", "health"),
     )
 
     host_id: Mapped[UUID] = mapped_column(
@@ -129,25 +121,16 @@ class AgentHostHarnessModel(UUIDAuditBase):
     )
     harness_key: Mapped[str] = mapped_column(String(128), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    adapter_protocol: Mapped[str] = mapped_column(String(32), nullable=False)
-    adapter_protocol_version: Mapped[int] = mapped_column(nullable=False, default=1)
     adapter_version: Mapped[str] = mapped_column(String(128), nullable=False)
     upstream_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    auth_state: Mapped[str] = mapped_column(String(64), nullable=False)
-    health: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    health: Mapped[str] = mapped_column(String(64), nullable=False)
     capabilities: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     config_revision: Mapped[str] = mapped_column(String(255), nullable=False)
     config_options: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    fetched_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
     stale_after: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
     stale_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    harness_metadata: Mapped[dict] = mapped_column(
-        JSONB, nullable=False, default=dict
-    )
 
     host: Mapped[AgentHostModel] = relationship(
         "AgentHostModel", foreign_keys=[host_id]
@@ -165,19 +148,16 @@ class AgentHostCommandModel(UUIDCreatedBase):
 
     host_id: Mapped[UUID] = mapped_column(
         ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
         nullable=False,
     )
     run_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        index=True,
         nullable=True,
     )
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
     lease_epoch: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -187,12 +167,7 @@ class AgentHostCommandModel(UUIDCreatedBase):
     acknowledged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    rejection_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    rejection_retryable: Mapped[bool | None] = mapped_column(nullable=True)
-    rejection_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    rejected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    rejection: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class AgentHostRunLeaseModel(Base):
@@ -230,7 +205,9 @@ class AgentHostRunLeaseModel(Base):
     )
     lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    checkpoint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     lease_expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
@@ -256,7 +233,12 @@ class AgentHostRunLeaseModel(Base):
 
 
 class AgentHostEventModel(UUIDCreatedBase):
-    """Idempotently appended canonical external-agent event."""
+    """Idempotently appended durable external-agent event.
+
+    Only durable event types are journaled here; cosmetic chunk events travel
+    the run's realtime channel and are never stored. Rows are transient
+    transport: they are deleted once the run terminalizes.
+    """
 
     __tablename__ = "agent_host_events"
     __table_args__ = (
@@ -272,7 +254,6 @@ class AgentHostEventModel(UUIDCreatedBase):
 
     run_id: Mapped[UUID] = mapped_column(
         ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        index=True,
         nullable=False,
     )
     lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -284,58 +265,3 @@ class AgentHostEventModel(UUIDCreatedBase):
     type: Mapped[str] = mapped_column(String(64), nullable=False)
     object_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    harness_key: Mapped[str] = mapped_column(String(128), nullable=False)
-    adapter_version: Mapped[str] = mapped_column(String(128), nullable=False)
-
-
-class AgentHostMcpRouteModel(UUIDCreatedBase):
-    """Encrypted, lease-fenced MCP credentials resolved by the paired host."""
-
-    __tablename__ = "agent_host_mcp_routes"
-    __table_args__ = (
-        UniqueConstraint("run_id", name="uq_agent_host_mcp_route_run"),
-        Index("ix_agent_host_mcp_route_host_expiry", "host_id", "expires_at"),
-    )
-
-    host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    run_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_runs.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    encrypted_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    last_resolved_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    revoked_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-
-
-class AgentHostAuthNonceModel(UUIDCreatedBase):
-    """Replay-prevention record for a signed host token exchange."""
-
-    __tablename__ = "agent_host_auth_nonces"
-    __table_args__ = (
-        UniqueConstraint("host_id", "nonce_hash", name="uq_agent_host_auth_nonce"),
-        Index("ix_agent_host_auth_nonce_expires", "expires_at"),
-    )
-
-    host_id: Mapped[UUID] = mapped_column(
-        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    nonce_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )

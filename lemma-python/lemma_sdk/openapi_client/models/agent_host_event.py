@@ -23,9 +23,7 @@ T = TypeVar("T", bound="AgentHostEvent")
 class AgentHostEvent:
     """
     Attributes:
-        adapter_version (str):
         event_id (UUID):
-        harness_key (str):
         lease_epoch (int):
         occurred_at (datetime.datetime):
         run_id (UUID):
@@ -35,9 +33,7 @@ class AgentHostEvent:
         payload (AgentHostEventPayload | Unset):
     """
 
-    adapter_version: str
     event_id: UUID
-    harness_key: str
     lease_epoch: int
     occurred_at: datetime.datetime
     run_id: UUID
@@ -48,11 +44,7 @@ class AgentHostEvent:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        adapter_version = self.adapter_version
-
         event_id = str(self.event_id)
-
-        harness_key = self.harness_key
 
         lease_epoch = self.lease_epoch
 
@@ -78,9 +70,7 @@ class AgentHostEvent:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "adapter_version": adapter_version,
                 "event_id": event_id,
-                "harness_key": harness_key,
                 "lease_epoch": lease_epoch,
                 "occurred_at": occurred_at,
                 "run_id": run_id,
@@ -100,11 +90,7 @@ class AgentHostEvent:
         from ..models.agent_host_event_payload import AgentHostEventPayload
 
         d = dict(src_dict)
-        adapter_version = d.pop("adapter_version")
-
         event_id = UUID(d.pop("event_id"))
-
-        harness_key = d.pop("harness_key")
 
         lease_epoch = d.pop("lease_epoch")
 
@@ -133,9 +119,7 @@ class AgentHostEvent:
             payload = AgentHostEventPayload.from_dict(_payload)
 
         agent_host_event = cls(
-            adapter_version=adapter_version,
             event_id=event_id,
-            harness_key=harness_key,
             lease_epoch=lease_epoch,
             occurred_at=occurred_at,
             run_id=run_id,

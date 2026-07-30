@@ -21,7 +21,7 @@ from .base import Resource, as_uuid
 class AgentHosts(Resource):
     """Authenticated management surface for user-owned Agent Hosts.
 
-    Device polling, event append, token exchange, and MCP-route operations are
+    Device polling, event append, and harness publish operations are
     intentionally reserved for the native Agent Host binary.
     """
 

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import asyncio
-import time
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -10,8 +8,6 @@ import pytest
 import psycopg
 from alembic import command
 from alembic.config import Config
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from psycopg import sql
 from sqlalchemy import inspect, select
 from sqlalchemy.engine import make_url
@@ -39,31 +35,20 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostProtocolViolation,
 )
 from app.modules.agent.infrastructure.runtime_models import (
-    AgentHostMcpRouteModel,
+    AgentHostCommandModel,
     AgentHostRunLeaseModel,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
-from app.modules.agent.services.agent_host_auth import (
-    host_signature_payload,
-    pairing_signature_payload,
-)
 
 
 pytestmark = pytest.mark.e2e
 
 
-def _b64(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def _hello(*, installation_id: str, instance_id: str | None = None) -> dict:
+def _hello(*, installation_id: str) -> dict:
     return {
-        "protocol_min": 2,
-        "protocol_max": 2,
-        "host_release": "0.1.0-test",
-        "adapter_manifest_id": "sha256:test-manifest",
         "installation_id": installation_id,
-        "instance_id": instance_id or str(uuid4()),
+        "host_release": "0.1.0-test",
+        "protocol_version": 2,
     }
 
 
@@ -108,13 +93,15 @@ def test_agent_host_migration_round_trip(
             _database_shape(migration_database_url)
         )
         assert {
+            "agent_host_pairings",
             "agent_hosts",
             "agent_host_harnesses",
             "agent_host_commands",
             "agent_host_run_leases",
             "agent_host_events",
-            "agent_host_mcp_routes",
         } <= tables
+        assert "agent_host_mcp_routes" not in tables
+        assert "agent_host_auth_nonces" not in tables
         assert "harness_id" in profile_columns
 
         command.downgrade(config, "0008_function_execution")
@@ -122,7 +109,6 @@ def test_agent_host_migration_round_trip(
             _database_shape(migration_database_url)
         )
         assert "agent_hosts" not in tables
-        assert "agent_host_mcp_routes" not in tables
         assert "harness_id" not in profile_columns
 
         command.upgrade(config, "head")
@@ -157,13 +143,6 @@ async def _pair_host(
     authenticated_client,
     org_id: str,
 ) -> tuple[UUID, str, dict]:
-    private_key = Ed25519PrivateKey.generate()
-    public_key = _b64(
-        private_key.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw,
-        )
-    )
     installation_id = f"test-installation-{uuid4()}"
     hello = _hello(installation_id=installation_id)
     pairing = await authenticated_client.post(
@@ -174,55 +153,19 @@ async def _pair_host(
         },
     )
     assert pairing.status_code == 201, pairing.text
-    pairing_code = pairing.json()["pairing_code"]
-    pairing_nonce = f"pairing-nonce-{uuid4()}"
-    pairing_timestamp = int(time.time())
-    pairing_signature = _b64(
-        private_key.sign(
-            pairing_signature_payload(
-                pairing_code=pairing_code,
-                installation_id=installation_id,
-                nonce=pairing_nonce,
-                timestamp=pairing_timestamp,
-            )
-        )
-    )
     completed = await authenticated_client.post(
         "/agent-host/pairings:complete",
         json={
-            "pairing_code": pairing_code,
-            "public_key": public_key,
+            "pairing_code": pairing.json()["pairing_code"],
             "display_name": "Agent Host E2E",
             "hello": hello,
-            "nonce": pairing_nonce,
-            "timestamp": pairing_timestamp,
-            "signature": pairing_signature,
         },
     )
     assert completed.status_code == 200, completed.text
     host_id = UUID(completed.json()["host_id"])
-    nonce = f"nonce-{uuid4()}"
-    timestamp = int(time.time())
-    signature = _b64(
-        private_key.sign(
-            host_signature_payload(
-                host_id=host_id,
-                nonce=nonce,
-                timestamp=timestamp,
-            )
-        )
-    )
-    token_response = await authenticated_client.post(
-        "/agent-host/token:exchange",
-        json={
-            "host_id": str(host_id),
-            "nonce": nonce,
-            "timestamp": timestamp,
-            "signature": signature,
-        },
-    )
-    assert token_response.status_code == 200, token_response.text
-    return host_id, token_response.json()["access_token"], hello
+    host_secret = completed.json()["host_secret"]
+    assert len(host_secret) >= 32
+    return host_id, host_secret, hello
 
 
 async def _create_run(
@@ -310,7 +253,6 @@ async def _enqueue_timeout_run(
             system_prompt="Timeout test",
             prompt=[{"type": "text", "text": "Do not duplicate"}],
             context={},
-            mcp_route_id=str(uuid4()),
             run_deadline=now + timedelta(minutes=10),
         ),
         encrypted_mcp_payload=encrypted_mcp,
@@ -321,17 +263,45 @@ async def _enqueue_timeout_run(
     return dispatch, run_id
 
 
+def _harness_snapshot(now: datetime, *, revision: str, models: list[str]) -> dict:
+    return {
+        "harness_key": "codex",
+        "display_name": "Codex",
+        "adapter_version": "1.0.0-test",
+        "upstream_version": "0.144.5",
+        "health": "READY",
+        "capabilities": {
+            "load_session": True,
+            "usage": True,
+        },
+        "config_revision": revision,
+        "config_options": [
+            {
+                "id": "model",
+                "category": "model",
+                "name": "Model",
+                "current_value": models[0],
+                "options": [
+                    {"value": model, "name": model.replace("-", " ").title()}
+                    for model in models
+                ],
+            }
+        ],
+        "stale_after": (now + timedelta(hours=1)).isoformat(),
+    }
+
+
 async def test_agent_host_is_durable_fenced_and_idempotent(
     authenticated_client,
     fixed_test_user,
     fixed_test_org,
     db_session,
 ) -> None:
-    host_id, device_token, hello = await _pair_host(
+    host_id, host_secret, hello = await _pair_host(
         authenticated_client=authenticated_client,
         org_id=fixed_test_org["id"],
     )
-    device_headers = {"Authorization": f"Bearer {device_token}"}
+    device_headers = {"Authorization": f"Bearer {host_secret}"}
     now = datetime.now(timezone.utc)
     repository_uow = SqlAlchemyUnitOfWork(db_session)
     await AgentHostRepository(repository_uow).mark_seen(
@@ -346,35 +316,11 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
         headers=device_headers,
         json={
             "harnesses": [
-                {
-                    "harness_key": "codex",
-                    "display_name": "Codex",
-                    "adapter_protocol": "ACP",
-                    "adapter_protocol_version": 1,
-                    "adapter_version": "1.0.0-test",
-                    "upstream_version": "0.144.5",
-                    "auth_state": "READY",
-                    "health": "READY",
-                    "capabilities": {
-                        "load_session": True,
-                        "usage": True,
-                    },
-                    "config_revision": "codex-config-revision-1",
-                    "config_options": [
-                        {
-                            "id": "model",
-                            "category": "model",
-                            "name": "Model",
-                            "current_value": "gpt-test",
-                            "options": [
-                                {"value": "gpt-test", "name": "GPT Test"},
-                                {"value": "gpt-new", "name": "GPT New"},
-                            ],
-                        }
-                    ],
-                    "fetched_at": now.isoformat(),
-                    "stale_after": (now + timedelta(hours=1)).isoformat(),
-                }
+                _harness_snapshot(
+                    now,
+                    revision="codex-config-revision-1",
+                    models=["gpt-test", "gpt-new"],
+                )
             ]
         },
     )
@@ -404,36 +350,11 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
         headers=device_headers,
         json={
             "harnesses": [
-                {
-                    "harness_key": "codex",
-                    "display_name": "Codex",
-                    "adapter_protocol": "ACP",
-                    "adapter_protocol_version": 1,
-                    "adapter_version": "1.0.0-test",
-                    "upstream_version": "0.144.5",
-                    "auth_state": "READY",
-                    "health": "READY",
-                    "capabilities": {
-                        "load_session": True,
-                        "usage": True,
-                    },
-                    "config_revision": "codex-config-revision-2",
-                    "config_options": [
-                        {
-                            "id": "model",
-                            "category": "model",
-                            "name": "Model",
-                            "current_value": "gpt-test",
-                            "options": [
-                                {"value": "gpt-test", "name": "GPT Test"},
-                                {"value": "gpt-new", "name": "GPT New"},
-                                {"value": "gpt-future", "name": "GPT Future"},
-                            ],
-                        }
-                    ],
-                    "fetched_at": refreshed_at.isoformat(),
-                    "stale_after": (refreshed_at + timedelta(hours=1)).isoformat(),
-                }
+                _harness_snapshot(
+                    refreshed_at,
+                    revision="codex-config-revision-2",
+                    models=["gpt-test", "gpt-new", "gpt-future"],
+                )
             ]
         },
     )
@@ -463,7 +384,6 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
         db_session=db_session,
         profile_id=profile_id,
     )
-    route_id = uuid4()
     mcp_secret = {
         "server_name": "lemma_tools",
         "url": "https://lemma.test/mcp",
@@ -485,7 +405,6 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
             system_prompt="System test prompt",
             prompt=[{"type": "text", "text": "Say hello"}],
             context={},
-            mcp_route_id=str(route_id),
             run_deadline=now + timedelta(minutes=10),
         ),
         encrypted_mcp_payload=encrypted_mcp,
@@ -522,22 +441,19 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
     assert len(commands) == 1
     command = commands[0]
     assert command["kind"] == "START_RUN"
-    assert command["payload"]["mcp_route_id"] == str(route_id)
-    assert "authorization" not in str(command["payload"]).lower()
-    assert "secret-workspace-capability" not in str(command["payload"])
-    stored_route = (
+    # The MCP configuration travels inside the delivered command; at rest it
+    # stays encrypted in the command payload.
+    assert command["payload"]["mcp"] == mcp_secret
+    assert "encrypted_mcp" not in command["payload"]
+    stored_command = (
         await db_session.execute(
-            select(AgentHostMcpRouteModel).where(AgentHostMcpRouteModel.id == route_id)
+            select(AgentHostCommandModel).where(
+                AgentHostCommandModel.id == UUID(command["command_id"])
+            )
         )
     ).scalar_one()
-    assert "secret-workspace-capability" not in str(stored_route.encrypted_payload)
-
-    route = await authenticated_client.get(
-        f"/agent-host/mcp-routes/{route_id}",
-        headers=device_headers,
-    )
-    assert route.status_code == 200, route.text
-    assert route.json()["mcp"] == mcp_secret
+    assert "encrypted_mcp" in stored_command.payload
+    assert "secret-workspace-capability" not in str(stored_command.payload)
 
     # Capacity can disappear between polling and process reservation. The
     # durable rejection atomically returns the same fenced command to the queue.
@@ -600,7 +516,6 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
                 {
                     "run_id": str(run_id),
                     "lease_epoch": 1,
-                    "checkpoint": "ACCEPTED",
                     "state": "ACCEPTED",
                 }
             ],
@@ -636,16 +551,12 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
     accepted_lease = await db_session.get(AgentHostRunLeaseModel, run_id)
     await db_session.refresh(accepted_lease)
     assert accepted_lease.state == "ACCEPTED"
+    assert accepted_lease.accepted_at is not None
 
     lease = await db_session.get(AgentHostRunLeaseModel, run_id)
     assert lease is not None
     lease.lease_expires_at = now - timedelta(seconds=1)
     await db_session.commit()
-    expired_route = await authenticated_client.get(
-        f"/agent-host/mcp-routes/{route_id}",
-        headers=device_headers,
-    )
-    assert expired_route.status_code == 409, expired_route.text
 
     recovering = await dispatch.reconcile_expired_run(
         run_id=run_id,
@@ -668,7 +579,6 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
                 {
                     "run_id": str(run_id),
                     "lease_epoch": 1,
-                    "checkpoint": "RUNNING",
                     "state": "RUNNING",
                 }
             ],
@@ -687,8 +597,6 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
         type=AgentHostEventType.AGENT_MESSAGE_UPSERT,
         object_id="message-1",
         payload={"text": "hello from Codex"},
-        harness_key="codex",
-        adapter_version="1.0.0-test",
     )
     batch = AgentHostEventBatch(events=[first_event]).model_dump(mode="json")
     first_append = await authenticated_client.post(
@@ -735,9 +643,26 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
         )
     await db_session.rollback()
 
-    terminal_event = first_event.model_copy(
+    # Cosmetic chunks are acknowledged but never journaled in PostgreSQL.
+    chunk_event = first_event.model_copy(
         update={
             "sequence": 2,
+            "event_id": uuid4(),
+            "type": AgentHostEventType.AGENT_MESSAGE_CHUNK,
+            "payload": {"text": "hello from Codex (streamed)"},
+        }
+    )
+    chunk_append = await authenticated_client.post(
+        "/agent-host/events:append",
+        headers=device_headers,
+        json=AgentHostEventBatch(events=[chunk_event]).model_dump(mode="json"),
+    )
+    assert chunk_append.status_code == 200, chunk_append.text
+    assert chunk_append.json()["acked_through"] == 2
+
+    terminal_event = first_event.model_copy(
+        update={
+            "sequence": 3,
             "event_id": uuid4(),
             "type": AgentHostEventType.TERMINAL,
             "object_id": None,
@@ -750,7 +675,7 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
         json=AgentHostEventBatch(events=[terminal_event]).model_dump(mode="json"),
     )
     assert terminal_append.status_code == 200, terminal_append.text
-    assert terminal_append.json()["acked_through"] == 2
+    assert terminal_append.json()["acked_through"] == 3
 
     terminal_checkpoint = await authenticated_client.post(
         "/agent-host/poll",
@@ -766,7 +691,6 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
                 {
                     "run_id": str(run_id),
                     "lease_epoch": 1,
-                    "checkpoint": "TERMINAL",
                     "state": "SUCCEEDED",
                 }
             ],
@@ -780,9 +704,9 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
         json=AgentHostEventBatch(events=[terminal_event]).model_dump(mode="json"),
     )
     assert terminal_replay.status_code == 200, terminal_replay.text
-    assert terminal_replay.json()["acked_through"] == 2
+    assert terminal_replay.json()["acked_through"] == 3
 
-    after_terminal = first_event.model_copy(update={"sequence": 3, "event_id": uuid4()})
+    after_terminal = first_event.model_copy(update={"sequence": 4, "event_id": uuid4()})
     after_terminal_append = await authenticated_client.post(
         "/agent-host/events:append",
         headers=device_headers,
@@ -794,7 +718,7 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
     stale_event = first_event.model_copy(
         update={
             "lease_epoch": 2,
-            "sequence": 3,
+            "sequence": 4,
             "event_id": uuid4(),
         }
     )
@@ -806,18 +730,14 @@ async def test_agent_host_is_durable_fenced_and_idempotent(
     assert stale.status_code == 409, stale.text
     assert "stale run lease epoch" in stale.text
 
-    fenced_route = await authenticated_client.get(
-        f"/agent-host/mcp-routes/{route_id}",
-        headers=device_headers,
-    )
-    assert fenced_route.status_code == 409, fenced_route.text
-
     rows = await AgentHostDispatchRepository(
         SqlAlchemyUnitOfWork(db_session)
     ).events_after(run_id=run_id, sequence=0)
+    # The durable journal holds only the upsert and terminal events; the chunk
+    # at sequence 2 was acknowledged without ever touching PostgreSQL.
     assert [(row.sequence, row.type) for row in rows] == [
         (1, "agent_message_upsert"),
-        (2, "terminal"),
+        (3, "terminal"),
     ]
     assert fixed_test_user["id"] == profile_response.json()["owner_user_id"]
 

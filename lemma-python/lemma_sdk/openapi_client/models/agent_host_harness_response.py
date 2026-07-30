@@ -13,9 +13,6 @@ if TYPE_CHECKING:
     from ..models.agent_host_harness_response_capabilities import (
         AgentHostHarnessResponseCapabilities,
     )
-    from ..models.agent_host_harness_response_metadata import (
-        AgentHostHarnessResponseMetadata,
-    )
 
 
 T = TypeVar("T", bound="AgentHostHarnessResponse")
@@ -25,52 +22,36 @@ T = TypeVar("T", bound="AgentHostHarnessResponse")
 class AgentHostHarnessResponse:
     """
     Attributes:
-        adapter_protocol (str):
-        adapter_protocol_version (int):
         adapter_version (str):
-        auth_state (str):
         capabilities (AgentHostHarnessResponseCapabilities):
         config_options (list[Any]):
         config_revision (str):
         display_name (str):
-        fetched_at (datetime.datetime):
         harness_key (str):
         health (str):
         host_id (UUID):
         id (UUID):
-        metadata (AgentHostHarnessResponseMetadata):
         stale_after (datetime.datetime):
         stale_reason (None | str):
         upstream_version (None | str):
     """
 
-    adapter_protocol: str
-    adapter_protocol_version: int
     adapter_version: str
-    auth_state: str
     capabilities: AgentHostHarnessResponseCapabilities
     config_options: list[Any]
     config_revision: str
     display_name: str
-    fetched_at: datetime.datetime
     harness_key: str
     health: str
     host_id: UUID
     id: UUID
-    metadata: AgentHostHarnessResponseMetadata
     stale_after: datetime.datetime
     stale_reason: None | str
     upstream_version: None | str
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        adapter_protocol = self.adapter_protocol
-
-        adapter_protocol_version = self.adapter_protocol_version
-
         adapter_version = self.adapter_version
-
-        auth_state = self.auth_state
 
         capabilities = self.capabilities.to_dict()
 
@@ -80,8 +61,6 @@ class AgentHostHarnessResponse:
 
         display_name = self.display_name
 
-        fetched_at = self.fetched_at.isoformat()
-
         harness_key = self.harness_key
 
         health = self.health
@@ -89,8 +68,6 @@ class AgentHostHarnessResponse:
         host_id = str(self.host_id)
 
         id = str(self.id)
-
-        metadata = self.metadata.to_dict()
 
         stale_after = self.stale_after.isoformat()
 
@@ -104,20 +81,15 @@ class AgentHostHarnessResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "adapter_protocol": adapter_protocol,
-                "adapter_protocol_version": adapter_protocol_version,
                 "adapter_version": adapter_version,
-                "auth_state": auth_state,
                 "capabilities": capabilities,
                 "config_options": config_options,
                 "config_revision": config_revision,
                 "display_name": display_name,
-                "fetched_at": fetched_at,
                 "harness_key": harness_key,
                 "health": health,
                 "host_id": host_id,
                 "id": id,
-                "metadata": metadata,
                 "stale_after": stale_after,
                 "stale_reason": stale_reason,
                 "upstream_version": upstream_version,
@@ -131,18 +103,9 @@ class AgentHostHarnessResponse:
         from ..models.agent_host_harness_response_capabilities import (
             AgentHostHarnessResponseCapabilities,
         )
-        from ..models.agent_host_harness_response_metadata import (
-            AgentHostHarnessResponseMetadata,
-        )
 
         d = dict(src_dict)
-        adapter_protocol = d.pop("adapter_protocol")
-
-        adapter_protocol_version = d.pop("adapter_protocol_version")
-
         adapter_version = d.pop("adapter_version")
-
-        auth_state = d.pop("auth_state")
 
         capabilities = AgentHostHarnessResponseCapabilities.from_dict(
             d.pop("capabilities")
@@ -154,8 +117,6 @@ class AgentHostHarnessResponse:
 
         display_name = d.pop("display_name")
 
-        fetched_at = isoparse(d.pop("fetched_at"))
-
         harness_key = d.pop("harness_key")
 
         health = d.pop("health")
@@ -163,8 +124,6 @@ class AgentHostHarnessResponse:
         host_id = UUID(d.pop("host_id"))
 
         id = UUID(d.pop("id"))
-
-        metadata = AgentHostHarnessResponseMetadata.from_dict(d.pop("metadata"))
 
         stale_after = isoparse(d.pop("stale_after"))
 
@@ -183,20 +142,15 @@ class AgentHostHarnessResponse:
         upstream_version = _parse_upstream_version(d.pop("upstream_version"))
 
         agent_host_harness_response = cls(
-            adapter_protocol=adapter_protocol,
-            adapter_protocol_version=adapter_protocol_version,
             adapter_version=adapter_version,
-            auth_state=auth_state,
             capabilities=capabilities,
             config_options=config_options,
             config_revision=config_revision,
             display_name=display_name,
-            fetched_at=fetched_at,
             harness_key=harness_key,
             health=health,
             host_id=host_id,
             id=id,
-            metadata=metadata,
             stale_after=stale_after,
             stale_reason=stale_reason,
             upstream_version=upstream_version,

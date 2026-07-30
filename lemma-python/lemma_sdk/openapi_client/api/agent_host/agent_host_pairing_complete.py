@@ -67,6 +67,8 @@ def sync_detailed(
 ) -> Response[AgentHostPairingCompleted | ErrorResponse]:
     """Complete Agent Host Pairing
 
+     Consume a pairing code and issue the host secret, shown exactly once.
+
     Args:
         body (AgentHostPairingComplete):
 
@@ -96,6 +98,8 @@ def sync(
 ) -> AgentHostPairingCompleted | ErrorResponse | None:
     """Complete Agent Host Pairing
 
+     Consume a pairing code and issue the host secret, shown exactly once.
+
     Args:
         body (AgentHostPairingComplete):
 
@@ -119,6 +123,8 @@ async def asyncio_detailed(
     body: AgentHostPairingComplete,
 ) -> Response[AgentHostPairingCompleted | ErrorResponse]:
     """Complete Agent Host Pairing
+
+     Consume a pairing code and issue the host secret, shown exactly once.
 
     Args:
         body (AgentHostPairingComplete):
@@ -146,6 +152,8 @@ async def asyncio(
     body: AgentHostPairingComplete,
 ) -> AgentHostPairingCompleted | ErrorResponse | None:
     """Complete Agent Host Pairing
+
+     Consume a pairing code and issue the host secret, shown exactly once.
 
     Args:
         body (AgentHostPairingComplete):

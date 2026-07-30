@@ -8,13 +8,44 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use uuid::Uuid;
 
 use crate::protocol::{
-    Checkpoint, Command, CommandRejection, Event, EventAck, EventBatch, EventType, JsonMap,
-    RunCheckpoint, RunSpec, RunState,
+    Command, CommandRejection, Event, EventAck, EventBatch, EventType, JsonMap, RunCheckpoint,
+    RunSpec, RunState,
 };
 
 const SCHEMA_VERSION: i64 = 1;
 
 type PendingControl = (Vec<Uuid>, Vec<RunCheckpoint>, Vec<CommandRejection>);
+
+/// Local dispatch-progress bookkeeping for a journaled run.
+///
+/// This is host-internal only (crash recovery and replay deduplication); the
+/// server tracks run progress through the reported run state alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Checkpoint {
+    Accepted,
+    DispatchIntent,
+    ProviderAccepted,
+    Running,
+    Recovering,
+    Terminal,
+}
+
+impl Checkpoint {
+    fn for_state(state: RunState) -> Self {
+        match state {
+            RunState::Dispatching => Self::DispatchIntent,
+            RunState::Running => Self::ProviderAccepted,
+            RunState::Recovering => Self::Recovering,
+            RunState::WaitingInput
+            | RunState::Succeeded
+            | RunState::Failed
+            | RunState::Cancelled
+            | RunState::DispatchUnknown => Self::Terminal,
+            RunState::QueuedForHost | RunState::Leased | RunState::Accepted => Self::Accepted,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Journal {
@@ -249,9 +280,6 @@ impl Journal {
         adapter_version: &str,
     ) -> Result<AcceptOutcome, JournalError> {
         self.register_target(target_id)?;
-        command
-            .verify_payload()
-            .map_err(|_| JournalError::CommandConflict(command.command_id))?;
         let run_id = command
             .run_id
             .ok_or(JournalError::RunMissing(spec.agent_run_id))?;
@@ -263,17 +291,12 @@ impl Journal {
         }
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(String, String)> = transaction
-            .query_row(
-                "SELECT payload_digest, state FROM command_receipts WHERE target_id=?1 AND command_id=?2",
-                params![target_id.to_string(), command.command_id.to_string()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        if let Some((digest, _)) = existing {
-            if digest != command.payload_sha256 {
-                return Err(JournalError::CommandConflict(command.command_id));
-            }
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM command_receipts WHERE target_id=?1 AND command_id=?2)",
+            params![target_id.to_string(), command.command_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if exists {
             transaction.commit()?;
             return Ok(AcceptOutcome::Duplicate);
         }
@@ -295,14 +318,9 @@ impl Journal {
             INSERT INTO command_receipts(
                 target_id, command_id, kind, payload_digest, state,
                 ack_pending, received_at, updated_at
-            ) VALUES (?1, ?2, 'START_RUN', ?3, 'ACCEPTED', 1, ?4, ?4)
+            ) VALUES (?1, ?2, 'START_RUN', '', 'ACCEPTED', 1, ?3, ?3)
             "#,
-            params![
-                target_id.to_string(),
-                command.command_id.to_string(),
-                command.payload_sha256,
-                now
-            ],
+            params![target_id.to_string(), command.command_id.to_string(), now],
         )?;
         transaction.execute(
             r#"
@@ -333,9 +351,6 @@ impl Journal {
         command: &Command,
     ) -> Result<AcceptOutcome, JournalError> {
         self.register_target(target_id)?;
-        command
-            .verify_payload()
-            .map_err(|_| JournalError::CommandConflict(command.command_id))?;
         let connection = self.connection()?;
         let now = Utc::now().to_rfc3339();
         let changed = connection.execute(
@@ -343,30 +358,20 @@ impl Journal {
             INSERT INTO command_receipts(
                 target_id, command_id, kind, payload_digest, state,
                 ack_pending, received_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, 'ACCEPTED', 1, ?5, ?5)
+            ) VALUES (?1, ?2, ?3, '', 'ACCEPTED', 1, ?4, ?4)
             ON CONFLICT(target_id, command_id) DO NOTHING
             "#,
             params![
                 target_id.to_string(),
                 command.command_id.to_string(),
                 format!("{:?}", command.kind).to_uppercase(),
-                command.payload_sha256,
                 now
             ],
         )?;
         if changed == 1 {
             return Ok(AcceptOutcome::New);
         }
-        let digest: String = connection.query_row(
-            "SELECT payload_digest FROM command_receipts WHERE target_id=?1 AND command_id=?2",
-            params![target_id.to_string(), command.command_id.to_string()],
-            |row| row.get(0),
-        )?;
-        if digest == command.payload_sha256 {
-            Ok(AcceptOutcome::Duplicate)
-        } else {
-            Err(JournalError::CommandConflict(command.command_id))
-        }
+        Ok(AcceptOutcome::Duplicate)
     }
 
     pub fn checkpoint(
@@ -374,7 +379,6 @@ impl Journal {
         target_id: Uuid,
         run_id: Uuid,
         lease_epoch: u32,
-        checkpoint: Checkpoint,
         state: RunState,
         detail: &JsonMap,
     ) -> Result<(), JournalError> {
@@ -389,7 +393,7 @@ impl Journal {
                 target_id.to_string(),
                 run_id.to_string(),
                 i64::from(lease_epoch),
-                enum_json(checkpoint)?,
+                enum_json(Checkpoint::for_state(state))?,
                 enum_json(state)?,
                 serde_json::to_string(detail)?,
                 Utc::now().to_rfc3339()
@@ -451,10 +455,10 @@ impl Journal {
     ) -> Result<Event, JournalError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let (sequence, harness_key, adapter_version): (i64, String, String) = transaction
+        let sequence: i64 = transaction
             .query_row(
                 r#"
-                SELECT next_sequence, harness_key, adapter_version
+                SELECT next_sequence
                   FROM runs WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
                 "#,
                 params![
@@ -462,7 +466,7 @@ impl Journal {
                     run_id.to_string(),
                     i64::from(lease_epoch)
                 ],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| row.get(0),
             )
             .optional()?
             .ok_or(JournalError::RunMissing(run_id))?;
@@ -476,8 +480,6 @@ impl Journal {
             event_type,
             object_id,
             payload,
-            harness_key,
-            adapter_version,
         };
         transaction.execute(
             r#"
@@ -656,8 +658,7 @@ impl Journal {
         // even though the Agent Host remains connected and healthy.
         let mut checkpoint_statement = connection.prepare(
             r#"
-            SELECT runs.run_id, runs.lease_epoch, runs.checkpoint,
-                   runs.state, runs.checkpoint_detail
+            SELECT runs.run_id, runs.lease_epoch, runs.state, runs.checkpoint_detail
               FROM runs
              WHERE runs.target_id=?1
                AND (
@@ -691,13 +692,12 @@ impl Journal {
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let checkpoints = encoded
             .into_iter()
-            .map(|(run_id, lease_epoch, checkpoint, state, detail)| {
+            .map(|(run_id, lease_epoch, state, detail)| {
                 Ok(RunCheckpoint {
                     run_id: Uuid::parse_str(&run_id).map_err(|_| {
                         JournalError::InvalidEnum(format!("invalid run UUID {run_id}"))
@@ -705,7 +705,6 @@ impl Journal {
                     lease_epoch: u32::try_from(lease_epoch).map_err(|_| {
                         JournalError::InvalidEnum(format!("invalid lease epoch {lease_epoch}"))
                     })?,
-                    checkpoint: enum_parse(&checkpoint)?,
                     state: enum_parse(&state)?,
                     detail: serde_json::from_str(&detail)?,
                 })
@@ -773,13 +772,12 @@ impl Journal {
                 r#"
                 UPDATE runs SET checkpoint_pending=0
                  WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
-                       AND checkpoint=?4 AND state=?5
+                       AND state=?4
                 "#,
                 params![
                     target_id.to_string(),
                     checkpoint.run_id.to_string(),
                     i64::from(checkpoint.lease_epoch),
-                    enum_json(checkpoint.checkpoint)?,
                     enum_json(checkpoint.state)?
                 ],
             )?;
@@ -930,8 +928,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::protocol::{CommandKind, canonical_json};
-    use sha2::{Digest, Sha256};
+    use crate::protocol::CommandKind;
 
     fn fixture() -> (TempDir, Journal, Uuid, Command, RunSpec) {
         let directory = TempDir::new().unwrap();
@@ -948,7 +945,10 @@ mod tests {
             system_prompt: "system".into(),
             prompt: vec![serde_json::json!({"role": "user", "content": "hello"})],
             context: JsonMap::new(),
-            mcp_route_id: Uuid::new_v4(),
+            mcp: serde_json::json!({
+                "url": "https://lemma.test/mcp",
+                "authorization": "Bearer test"
+            }),
             run_deadline: Utc::now() + ChronoDuration::minutes(5),
         };
         let payload = serde_json::to_value(&spec).unwrap();
@@ -959,7 +959,6 @@ mod tests {
             expires_at: Utc::now() + ChronoDuration::minutes(1),
             run_id: Some(run_id),
             lease_epoch: Some(1),
-            payload_sha256: hex::encode(Sha256::digest(canonical_json(&payload).unwrap())),
             payload,
         };
         (directory, journal, target_id, command, spec)
@@ -1078,14 +1077,13 @@ mod tests {
         assert!(commands.is_empty());
         assert!(rejections.is_empty());
         assert_eq!(checkpoints.len(), 1);
-        assert_eq!(checkpoints[0].checkpoint, Checkpoint::Accepted);
+        assert_eq!(checkpoints[0].state, RunState::Accepted);
 
         journal
             .checkpoint(
                 target,
                 spec.agent_run_id,
                 1,
-                Checkpoint::Terminal,
                 RunState::Succeeded,
                 &JsonMap::new(),
             )
@@ -1121,7 +1119,6 @@ mod tests {
                 target,
                 spec.agent_run_id,
                 1,
-                Checkpoint::Terminal,
                 RunState::Succeeded,
                 &JsonMap::new(),
             )
@@ -1145,7 +1142,6 @@ mod tests {
             .unwrap();
         let (_, checkpoints, _) = journal.pending_control(target).unwrap();
         assert_eq!(checkpoints.len(), 1);
-        assert_eq!(checkpoints[0].checkpoint, Checkpoint::Terminal);
         assert_eq!(checkpoints[0].state, RunState::Succeeded);
     }
 
@@ -1160,7 +1156,6 @@ mod tests {
                 target,
                 spec.agent_run_id,
                 1,
-                Checkpoint::Terminal,
                 RunState::Succeeded,
                 &JsonMap::new(),
             )

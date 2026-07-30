@@ -550,14 +550,6 @@
         "title": "AgentDetailResponse",
         "type": "object"
       },
-      "AgentHostAdapterProtocol": {
-        "enum": [
-          "ACP",
-          "NATIVE"
-        ],
-        "title": "AgentHostAdapterProtocol",
-        "type": "string"
-      },
       "AgentHostCapacity": {
         "properties": {
           "active_runs": {
@@ -584,18 +576,6 @@
         },
         "title": "AgentHostCapacity",
         "type": "object"
-      },
-      "AgentHostCheckpoint": {
-        "enum": [
-          "ACCEPTED",
-          "DISPATCH_INTENT",
-          "PROVIDER_ACCEPTED",
-          "RUNNING",
-          "RECOVERING",
-          "TERMINAL"
-        ],
-        "title": "AgentHostCheckpoint",
-        "type": "string"
       },
       "AgentHostCommand": {
         "properties": {
@@ -634,11 +614,6 @@
             "title": "Payload",
             "type": "object"
           },
-          "payload_sha256": {
-            "pattern": "^[a-f0-9]{64}$",
-            "title": "Payload Sha256",
-            "type": "string"
-          },
           "run_id": {
             "anyOf": [
               {
@@ -656,8 +631,7 @@
           "command_id",
           "kind",
           "created_at",
-          "expires_at",
-          "payload_sha256"
+          "expires_at"
         ],
         "title": "AgentHostCommand",
         "type": "object"
@@ -665,12 +639,7 @@
       "AgentHostCommandKind": {
         "enum": [
           "START_RUN",
-          "CANCEL_RUN",
-          "DRAIN",
-          "RESUME",
-          "REFRESH_HARNESS",
-          "CLOSE_SESSION",
-          "ROTATE_DEVICE_KEY"
+          "CANCEL_RUN"
         ],
         "title": "AgentHostCommandKind",
         "type": "string"
@@ -780,21 +749,9 @@
       },
       "AgentHostEvent": {
         "properties": {
-          "adapter_version": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Adapter Version",
-            "type": "string"
-          },
           "event_id": {
             "format": "uuid",
             "title": "Event Id",
-            "type": "string"
-          },
-          "harness_key": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Harness Key",
             "type": "string"
           },
           "lease_epoch": {
@@ -844,9 +801,7 @@
           "sequence",
           "event_id",
           "occurred_at",
-          "type",
-          "harness_key",
-          "adapter_version"
+          "type"
         ],
         "title": "AgentHostEvent",
         "type": "object"
@@ -1022,20 +977,8 @@
       },
       "AgentHostHarnessResponse": {
         "properties": {
-          "adapter_protocol": {
-            "title": "Adapter Protocol",
-            "type": "string"
-          },
-          "adapter_protocol_version": {
-            "title": "Adapter Protocol Version",
-            "type": "integer"
-          },
           "adapter_version": {
             "title": "Adapter Version",
-            "type": "string"
-          },
-          "auth_state": {
-            "title": "Auth State",
             "type": "string"
           },
           "capabilities": {
@@ -1056,11 +999,6 @@
             "title": "Display Name",
             "type": "string"
           },
-          "fetched_at": {
-            "format": "date-time",
-            "title": "Fetched At",
-            "type": "string"
-          },
           "harness_key": {
             "title": "Harness Key",
             "type": "string"
@@ -1078,11 +1016,6 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
           },
           "stale_after": {
             "format": "date-time",
@@ -1117,44 +1050,24 @@
           "host_id",
           "harness_key",
           "display_name",
-          "adapter_protocol",
-          "adapter_protocol_version",
           "adapter_version",
           "upstream_version",
-          "auth_state",
           "health",
           "capabilities",
           "config_revision",
           "config_options",
-          "fetched_at",
           "stale_after",
-          "stale_reason",
-          "metadata"
+          "stale_reason"
         ],
         "title": "AgentHostHarnessResponse",
         "type": "object"
       },
       "AgentHostHarnessSnapshot": {
         "properties": {
-          "adapter_protocol": {
-            "$ref": "#/components/schemas/AgentHostAdapterProtocol"
-          },
-          "adapter_protocol_version": {
-            "default": 1,
-            "minimum": 1.0,
-            "title": "Adapter Protocol Version",
-            "type": "integer"
-          },
           "adapter_version": {
             "maxLength": 128,
             "minLength": 1,
             "title": "Adapter Version",
-            "type": "string"
-          },
-          "auth_state": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Auth State",
             "type": "string"
           },
           "capabilities": {
@@ -1179,11 +1092,6 @@
             "title": "Display Name",
             "type": "string"
           },
-          "fetched_at": {
-            "format": "date-time",
-            "title": "Fetched At",
-            "type": "string"
-          },
           "harness_key": {
             "maxLength": 128,
             "minLength": 1,
@@ -1192,11 +1100,6 @@
           },
           "health": {
             "$ref": "#/components/schemas/AgentHostHarnessHealth"
-          },
-          "metadata": {
-            "additionalProperties": true,
-            "title": "Metadata",
-            "type": "object"
           },
           "stale_after": {
             "format": "date-time",
@@ -1230,12 +1133,9 @@
         "required": [
           "harness_key",
           "display_name",
-          "adapter_protocol",
           "adapter_version",
-          "auth_state",
           "health",
           "config_revision",
-          "fetched_at",
           "stale_after"
         ],
         "title": "AgentHostHarnessSnapshot",
@@ -1257,44 +1157,6 @@
         "title": "AgentHostListResponse",
         "type": "object"
       },
-      "AgentHostMcpRouteResponse": {
-        "properties": {
-          "expires_at": {
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          },
-          "lease_epoch": {
-            "minimum": 1.0,
-            "title": "Lease Epoch",
-            "type": "integer"
-          },
-          "mcp": {
-            "additionalProperties": true,
-            "title": "Mcp",
-            "type": "object"
-          },
-          "route_id": {
-            "format": "uuid",
-            "title": "Route Id",
-            "type": "string"
-          },
-          "run_id": {
-            "format": "uuid",
-            "title": "Run Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "route_id",
-          "run_id",
-          "lease_epoch",
-          "expires_at",
-          "mcp"
-        ],
-        "title": "AgentHostMcpRouteResponse",
-        "type": "object"
-      },
       "AgentHostPairingComplete": {
         "properties": {
           "display_name": {
@@ -1306,44 +1168,17 @@
           "hello": {
             "$ref": "#/components/schemas/HostHello"
           },
-          "nonce": {
-            "maxLength": 255,
-            "minLength": 16,
-            "title": "Nonce",
-            "type": "string"
-          },
           "pairing_code": {
             "maxLength": 512,
             "minLength": 16,
             "title": "Pairing Code",
             "type": "string"
-          },
-          "public_key": {
-            "maxLength": 512,
-            "minLength": 32,
-            "title": "Public Key",
-            "type": "string"
-          },
-          "signature": {
-            "maxLength": 512,
-            "minLength": 32,
-            "title": "Signature",
-            "type": "string"
-          },
-          "timestamp": {
-            "exclusiveMinimum": 0.0,
-            "title": "Timestamp",
-            "type": "integer"
           }
         },
         "required": [
           "pairing_code",
-          "public_key",
           "display_name",
-          "hello",
-          "nonce",
-          "timestamp",
-          "signature"
+          "hello"
         ],
         "title": "AgentHostPairingComplete",
         "type": "object"
@@ -1353,6 +1188,10 @@
           "host_id": {
             "format": "uuid",
             "title": "Host Id",
+            "type": "string"
+          },
+          "host_secret": {
+            "title": "Host Secret",
             "type": "string"
           },
           "organization_id": {
@@ -1367,10 +1206,6 @@
             ],
             "title": "Organization Id"
           },
-          "public_key_fingerprint": {
-            "title": "Public Key Fingerprint",
-            "type": "string"
-          },
           "user_id": {
             "format": "uuid",
             "title": "User Id",
@@ -1381,7 +1216,7 @@
           "host_id",
           "user_id",
           "organization_id",
-          "public_key_fingerprint"
+          "host_secret"
         ],
         "title": "AgentHostPairingCompleted",
         "type": "object"
@@ -1490,10 +1325,6 @@
           "host_status": {
             "$ref": "#/components/schemas/AgentHostStatus"
           },
-          "policy_revision": {
-            "title": "Policy Revision",
-            "type": "string"
-          },
           "poll_after_ms": {
             "default": 0,
             "maximum": 60000.0,
@@ -1508,7 +1339,6 @@
           }
         },
         "required": [
-          "policy_revision",
           "host_status"
         ],
         "title": "AgentHostPollResponse",
@@ -1530,10 +1360,6 @@
       },
       "AgentHostResponse": {
         "properties": {
-          "adapter_manifest_id": {
-            "title": "Adapter Manifest Id",
-            "type": "string"
-          },
           "capacity": {
             "additionalProperties": true,
             "title": "Capacity",
@@ -1561,18 +1387,6 @@
             "title": "Installation Id",
             "type": "string"
           },
-          "instance_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Instance Id"
-          },
           "last_seen_at": {
             "anyOf": [
               {
@@ -1597,14 +1411,6 @@
             ],
             "title": "Organization Id"
           },
-          "protocol_max": {
-            "title": "Protocol Max",
-            "type": "integer"
-          },
-          "protocol_min": {
-            "title": "Protocol Min",
-            "type": "integer"
-          },
           "protocol_version": {
             "anyOf": [
               {
@@ -1615,10 +1421,6 @@
               }
             ],
             "title": "Protocol Version"
-          },
-          "public_key_fingerprint": {
-            "title": "Public Key Fingerprint",
-            "type": "string"
           },
           "revoked_at": {
             "anyOf": [
@@ -1651,15 +1453,10 @@
           "user_id",
           "organization_id",
           "installation_id",
-          "public_key_fingerprint",
           "display_name",
           "status",
-          "protocol_min",
-          "protocol_max",
           "protocol_version",
           "host_release",
-          "adapter_manifest_id",
-          "instance_id",
           "capacity",
           "last_seen_at",
           "revoked_at",
@@ -1671,9 +1468,6 @@
       },
       "AgentHostRunCheckpoint": {
         "properties": {
-          "checkpoint": {
-            "$ref": "#/components/schemas/AgentHostCheckpoint"
-          },
           "detail": {
             "additionalProperties": true,
             "title": "Detail",
@@ -1696,7 +1490,6 @@
         "required": [
           "run_id",
           "lease_epoch",
-          "checkpoint",
           "state"
         ],
         "title": "AgentHostRunCheckpoint",
@@ -1724,65 +1517,11 @@
           "ONLINE",
           "OFFLINE",
           "DRAINING",
-          "DEGRADED",
           "UPGRADE_REQUIRED",
           "REVOKED"
         ],
         "title": "AgentHostStatus",
         "type": "string"
-      },
-      "AgentHostTokenExchange": {
-        "properties": {
-          "host_id": {
-            "format": "uuid",
-            "title": "Host Id",
-            "type": "string"
-          },
-          "nonce": {
-            "maxLength": 255,
-            "minLength": 16,
-            "title": "Nonce",
-            "type": "string"
-          },
-          "signature": {
-            "maxLength": 512,
-            "minLength": 32,
-            "title": "Signature",
-            "type": "string"
-          },
-          "timestamp": {
-            "exclusiveMinimum": 0.0,
-            "title": "Timestamp",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "host_id",
-          "nonce",
-          "timestamp",
-          "signature"
-        ],
-        "title": "AgentHostTokenExchange",
-        "type": "object"
-      },
-      "AgentHostTokenResponse": {
-        "properties": {
-          "access_token": {
-            "title": "Access Token",
-            "type": "string"
-          },
-          "expires_at": {
-            "format": "date-time",
-            "title": "Expires At",
-            "type": "string"
-          }
-        },
-        "required": [
-          "access_token",
-          "expires_at"
-        ],
-        "title": "AgentHostTokenResponse",
-        "type": "object"
       },
       "AgentListResponse": {
         "properties": {
@@ -8520,12 +8259,6 @@
       },
       "HostHello": {
         "properties": {
-          "adapter_manifest_id": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Adapter Manifest Id",
-            "type": "string"
-          },
           "host_release": {
             "maxLength": 128,
             "minLength": 1,
@@ -8538,29 +8271,16 @@
             "title": "Installation Id",
             "type": "string"
           },
-          "instance_id": {
-            "format": "uuid",
-            "title": "Instance Id",
-            "type": "string"
-          },
-          "protocol_max": {
+          "protocol_version": {
             "minimum": 1.0,
-            "title": "Protocol Max",
-            "type": "integer"
-          },
-          "protocol_min": {
-            "minimum": 1.0,
-            "title": "Protocol Min",
+            "title": "Protocol Version",
             "type": "integer"
           }
         },
         "required": [
-          "protocol_min",
-          "protocol_max",
-          "host_release",
-          "adapter_manifest_id",
           "installation_id",
-          "instance_id"
+          "host_release",
+          "protocol_version"
         ],
         "title": "HostHello",
         "type": "object"
@@ -17419,74 +17139,9 @@
         }
       }
     },
-    "/agent-host/mcp-routes/{route_id}": {
-      "get": {
-        "operationId": "agent.host.mcp_route.resolve",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "route_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Route Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentHostMcpRouteResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Resolve Agent Host Mcp Route",
-        "tags": [
-          "agent_host"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.host.mcp_route",
-          "result": "entity",
-          "verb": "resolve"
-        }
-      }
-    },
     "/agent-host/pairings:complete": {
       "post": {
+        "description": "Consume a pairing code and issue the host secret, shown exactly once.",
         "operationId": "agent.host.pairing.complete",
         "requestBody": {
           "content": {
@@ -17655,57 +17310,6 @@
           "resource": "agent.host",
           "result": "entity",
           "verb": "self_revoke"
-        }
-      }
-    },
-    "/agent-host/token:exchange": {
-      "post": {
-        "operationId": "agent.host.token.exchange",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentHostTokenExchange"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentHostTokenResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Exchange Agent Host Token",
-        "tags": [
-          "agent_host"
-        ],
-        "x-lemma": {
-          "invalidates": [
-            "agent.host.token"
-          ],
-          "kind": "mutation",
-          "paginates": false,
-          "resource": "agent.host.token",
-          "result": "entity",
-          "verb": "exchange"
         }
       }
     },

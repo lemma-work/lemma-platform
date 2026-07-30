@@ -73,16 +73,11 @@ def upgrade() -> None:
         sa.Column("user_id", UUID, nullable=False),
         sa.Column("organization_id", UUID, nullable=True),
         sa.Column("installation_id", sa.String(length=255), nullable=False),
-        sa.Column("public_key", sa.Text(), nullable=False),
-        sa.Column("public_key_fingerprint", sa.String(length=64), nullable=False),
+        sa.Column("host_secret_hash", sa.String(length=64), nullable=False),
         sa.Column("display_name", sa.String(length=255), nullable=False),
         sa.Column("status", sa.String(length=32), nullable=False),
-        sa.Column("protocol_min", sa.Integer(), nullable=False),
-        sa.Column("protocol_max", sa.Integer(), nullable=False),
         sa.Column("protocol_version", sa.Integer(), nullable=True),
         sa.Column("host_release", sa.String(length=128), nullable=False),
-        sa.Column("adapter_manifest_id", sa.String(length=255), nullable=False),
-        sa.Column("instance_id", UUID, nullable=True),
         sa.Column("capacity", JSONB, nullable=False),
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
@@ -99,10 +94,8 @@ def upgrade() -> None:
             postgresql_nulls_not_distinct=True,
         ),
         sa.UniqueConstraint(
-            "organization_id",
-            "public_key_fingerprint",
-            name="uq_agent_host_org_public_key_fingerprint",
-            postgresql_nulls_not_distinct=True,
+            "host_secret_hash",
+            name="uq_agent_host_secret_hash",
         ),
     )
     op.create_index("ix_agent_hosts_user_id", "agent_hosts", ["user_id"])
@@ -118,24 +111,14 @@ def upgrade() -> None:
         sa.Column("host_id", UUID, nullable=False),
         sa.Column("harness_key", sa.String(length=128), nullable=False),
         sa.Column("display_name", sa.String(length=255), nullable=False),
-        sa.Column("adapter_protocol", sa.String(length=32), nullable=False),
-        sa.Column(
-            "adapter_protocol_version",
-            sa.Integer(),
-            nullable=False,
-            server_default="1",
-        ),
         sa.Column("adapter_version", sa.String(length=128), nullable=False),
         sa.Column("upstream_version", sa.String(length=128), nullable=True),
-        sa.Column("auth_state", sa.String(length=64), nullable=False),
         sa.Column("health", sa.String(length=64), nullable=False),
         sa.Column("capabilities", JSONB, nullable=False),
         sa.Column("config_revision", sa.String(length=255), nullable=False),
         sa.Column("config_options", JSONB, nullable=False),
-        sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("stale_after", sa.DateTime(timezone=True), nullable=False),
         sa.Column("stale_reason", sa.Text(), nullable=True),
-        sa.Column("harness_metadata", JSONB, nullable=False),
         sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -148,16 +131,6 @@ def upgrade() -> None:
         "ix_agent_host_harnesses_host_id",
         "agent_host_harnesses",
         ["host_id"],
-    )
-    op.create_index(
-        "ix_agent_host_harnesses_health",
-        "agent_host_harnesses",
-        ["health"],
-    )
-    op.create_index(
-        "ix_agent_host_harness_host_health",
-        "agent_host_harnesses",
-        ["host_id", "health"],
     )
 
     op.add_column(
@@ -366,25 +339,16 @@ def upgrade() -> None:
         sa.Column("run_id", UUID, nullable=True),
         sa.Column("kind", sa.String(length=64), nullable=False),
         sa.Column("lease_epoch", sa.BigInteger(), nullable=True),
-        sa.Column("payload_digest", sa.String(length=64), nullable=False),
         sa.Column("payload", JSONB, nullable=False),
         sa.Column("state", sa.String(length=32), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("delivered_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("acknowledged_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("rejection_code", sa.String(length=64), nullable=True),
-        sa.Column("rejection_retryable", sa.Boolean(), nullable=True),
-        sa.Column("rejection_detail", sa.Text(), nullable=True),
-        sa.Column("rejected_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("rejection", JSONB, nullable=True),
         sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_agent_host_commands_host_id", "agent_host_commands", ["host_id"]
-    )
-    op.create_index("ix_agent_host_commands_run_id", "agent_host_commands", ["run_id"])
-    op.create_index("ix_agent_host_commands_state", "agent_host_commands", ["state"])
     op.create_index(
         "ix_agent_host_command_poll",
         "agent_host_commands",
@@ -404,7 +368,7 @@ def upgrade() -> None:
         sa.Column("runtime_profile_id", UUID, nullable=True),
         sa.Column("lease_epoch", sa.BigInteger(), nullable=False),
         sa.Column("state", sa.String(length=32), nullable=False),
-        sa.Column("checkpoint", sa.String(length=32), nullable=True),
+        sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column(
             "acked_event_sequence",
@@ -454,6 +418,9 @@ def upgrade() -> None:
         ),
     )
 
+    # Only durable event types are journaled in this table; cosmetic chunk
+    # events travel the run's realtime channel. Rows are transient transport
+    # and are deleted when the run terminalizes.
     op.create_table(
         "agent_host_events",
         *_created_columns(),
@@ -465,9 +432,6 @@ def upgrade() -> None:
         sa.Column("type", sa.String(length=64), nullable=False),
         sa.Column("object_id", sa.String(length=255), nullable=True),
         sa.Column("payload", JSONB, nullable=False),
-        sa.Column("payload_digest", sa.String(length=64), nullable=False),
-        sa.Column("harness_key", sa.String(length=128), nullable=False),
-        sa.Column("adapter_version", sa.String(length=128), nullable=False),
         sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -478,69 +442,14 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("event_id", name="uq_agent_host_event_id"),
     )
-    op.create_index("ix_agent_host_events_run_id", "agent_host_events", ["run_id"])
     op.create_index(
         "ix_agent_host_event_consume",
         "agent_host_events",
         ["run_id", "sequence"],
     )
 
-    op.create_table(
-        "agent_host_auth_nonces",
-        *_created_columns(),
-        sa.Column("host_id", UUID, nullable=False),
-        sa.Column("nonce_hash", sa.String(length=64), nullable=False),
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("host_id", "nonce_hash", name="uq_agent_host_auth_nonce"),
-    )
-    op.create_index(
-        "ix_agent_host_auth_nonces_host_id",
-        "agent_host_auth_nonces",
-        ["host_id"],
-    )
-    op.create_index(
-        "ix_agent_host_auth_nonce_expires",
-        "agent_host_auth_nonces",
-        ["expires_at"],
-    )
-
-    op.create_table(
-        "agent_host_mcp_routes",
-        *_created_columns(),
-        sa.Column("host_id", UUID, nullable=False),
-        sa.Column("run_id", UUID, nullable=False),
-        sa.Column("lease_epoch", sa.BigInteger(), nullable=False),
-        sa.Column("encrypted_payload", JSONB, nullable=False),
-        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("last_resolved_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.ForeignKeyConstraint(["host_id"], ["agent_hosts.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("run_id", name="uq_agent_host_mcp_route_run"),
-    )
-    op.create_index(
-        "ix_agent_host_mcp_routes_host_id",
-        "agent_host_mcp_routes",
-        ["host_id"],
-    )
-    op.create_index(
-        "ix_agent_host_mcp_routes_run_id",
-        "agent_host_mcp_routes",
-        ["run_id"],
-    )
-    op.create_index(
-        "ix_agent_host_mcp_route_host_expiry",
-        "agent_host_mcp_routes",
-        ["host_id", "expires_at"],
-    )
-
 
 def downgrade() -> None:
-    op.drop_table("agent_host_mcp_routes")
-    op.drop_table("agent_host_auth_nonces")
     op.drop_table("agent_host_events")
     op.drop_table("agent_host_run_leases")
     op.drop_table("agent_host_commands")

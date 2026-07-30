@@ -11,9 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::protocol::{
-    AdapterProtocol, ConfigOption, HarnessCapabilities, HarnessHealth, HarnessSnapshot, JsonMap,
-};
+use crate::protocol::{ConfigOption, HarnessCapabilities, HarnessHealth, HarnessSnapshot};
 
 const BUILTIN_MANIFEST: &str = include_str!("../agent-adapters.lock.json");
 const SNAPSHOT_TTL: ChronoDuration = ChronoDuration::hours(24);
@@ -404,23 +402,11 @@ fn snapshot_ready(adapter: &ResolvedAdapter) -> HarnessSnapshot {
     let config_revision = hex::encode(Sha256::digest(
         serde_json::to_vec(&revision_input).expect("snapshot serialization"),
     ));
-    let mut metadata = JsonMap::new();
-    metadata.insert(
-        "distribution".to_owned(),
-        Value::String(adapter.spec.distribution.clone()),
-    );
-    metadata.insert(
-        "license".to_owned(),
-        Value::String(adapter.spec.license.clone()),
-    );
     HarnessSnapshot {
         harness_key: adapter.spec.key.clone(),
         display_name: adapter.spec.display_name.clone(),
-        adapter_protocol: AdapterProtocol::Acp,
-        adapter_protocol_version: 1,
         adapter_version: adapter.spec.adapter_version.clone(),
         upstream_version: adapter.upstream_version.clone(),
-        auth_state: "LOCAL_CREDENTIALS".to_owned(),
         health: HarnessHealth::Ready,
         capabilities: HarnessCapabilities {
             plans: true,
@@ -429,10 +415,8 @@ fn snapshot_ready(adapter: &ResolvedAdapter) -> HarnessSnapshot {
         },
         config_revision,
         config_options,
-        fetched_at: now,
         stale_after: now + SNAPSHOT_TTL,
         stale_reason: None,
-        metadata,
     }
 }
 
@@ -441,19 +425,14 @@ fn snapshot_unavailable(spec: &AdapterSpec, reason: &str) -> HarnessSnapshot {
     HarnessSnapshot {
         harness_key: spec.key.clone(),
         display_name: spec.display_name.clone(),
-        adapter_protocol: AdapterProtocol::Acp,
-        adapter_protocol_version: 1,
         adapter_version: spec.adapter_version.clone(),
         upstream_version: None,
-        auth_state: "UNKNOWN".to_owned(),
         health: HarnessHealth::ProbeFailed,
         capabilities: HarnessCapabilities::default(),
         config_revision: hex::encode(Sha256::digest(reason.as_bytes())),
         config_options: Vec::new(),
-        fetched_at: now,
         stale_after: now + ChronoDuration::minutes(5),
         stale_reason: Some(reason.to_owned()),
-        metadata: JsonMap::new(),
     }
 }
 

@@ -44,6 +44,17 @@ async def profile_responses_with_runtime_status(
     uow: SqlAlchemyUnitOfWork,
 ) -> list[AgentRuntimeProfileResponse]:
     host_repo = AgentHostRepository(uow)
+    harness_ids = {
+        profile.harness_id
+        for profile in profiles
+        if profile.runtime_type is RuntimeProfileType.HARNESS
+        and profile.harness_id is not None
+    }
+    harnesses = await host_repo.get_harnesses(harness_ids)
+    hosts = await host_repo.get_many(
+        {harness.host_id for harness in harnesses.values()}
+    )
+    membership_cache: dict[tuple[UUID, UUID], bool] = {}
     responses: list[AgentRuntimeProfileResponse] = []
     for profile in profiles:
         payload = profile.public_dict()
@@ -51,7 +62,9 @@ async def profile_responses_with_runtime_status(
             payload.update(
                 await _harness_status_payload(
                     profile,
-                    host_repo=host_repo,
+                    harnesses=harnesses,
+                    hosts=hosts,
+                    membership_cache=membership_cache,
                     user_id=user_id,
                     uow=uow,
                 )
@@ -67,19 +80,21 @@ async def profile_responses_with_runtime_status(
 async def _harness_status_payload(
     profile: AgentRuntimeProfile,
     *,
-    host_repo: AgentHostRepository,
+    harnesses: dict[UUID, AgentHostHarnessModel],
+    hosts: dict[UUID, AgentHostModel],
+    membership_cache: dict[tuple[UUID, UUID], bool],
     user_id: UUID,
     uow: SqlAlchemyUnitOfWork,
 ) -> dict[str, object]:
     if profile.harness_id is None:
         return {"availability_status": "UNAVAILABLE"}
-    harness = await host_repo.get_harness(harness_id=profile.harness_id)
+    harness = harnesses.get(profile.harness_id)
     if harness is None:
         return {"availability_status": "UNAVAILABLE"}
     host = await _visible_host(
         profile,
-        host_id=harness.host_id,
-        host_repo=host_repo,
+        host=hosts.get(harness.host_id),
+        membership_cache=membership_cache,
         user_id=user_id,
         uow=uow,
     )
@@ -113,28 +128,32 @@ async def _harness_status_payload(
 async def _visible_host(
     profile: AgentRuntimeProfile,
     *,
-    host_id: UUID,
-    host_repo: AgentHostRepository,
+    host: AgentHostModel | None,
+    membership_cache: dict[tuple[UUID, UUID], bool],
     user_id: UUID,
     uow: SqlAlchemyUnitOfWork,
 ) -> AgentHostModel | None:
     if profile.scope is RuntimeProfileScope.PERSONAL:
         if profile.owner_user_id != user_id:
             return None
-        return await host_repo.get_for_user(host_id=host_id, user_id=user_id)
+        if host is None or host.user_id != user_id:
+            return None
+        return host
 
-    host = await host_repo.get(host_id)
     if host is None or host.organization_id != profile.organization_id:
         return None
     if profile.organization_id is None:
         return None
-    if not await user_is_organization_member(
-        uow,
-        user_id=host.user_id,
-        organization_id=profile.organization_id,
-    ):
-        return None
-    return host
+    cache_key = (host.user_id, profile.organization_id)
+    member = membership_cache.get(cache_key)
+    if member is None:
+        member = await user_is_organization_member(
+            uow,
+            user_id=host.user_id,
+            organization_id=profile.organization_id,
+        )
+        membership_cache[cache_key] = member
+    return host if member else None
 
 
 def _harness_availability(

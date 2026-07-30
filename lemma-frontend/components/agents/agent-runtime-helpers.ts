@@ -55,10 +55,7 @@ export function firstRuntime(catalog?: AgentRuntimeProfileListResponse): AgentRu
     return catalog?.default_runtime ?? null;
 }
 
-export function runtimeModels(
-    profile?: RuntimeProfile,
-    _unusedLegacyCatalog?: unknown,
-): RuntimeModelOption[] {
+export function runtimeModels(profile?: RuntimeProfile): RuntimeModelOption[] {
     if (!profile) return [];
     const models = profile.model_catalog ?? [];
     if (models.length > 0) return models as RuntimeModelOption[];
@@ -85,7 +82,6 @@ export function findProfileByRuntime(
 
 export function defaultAgentRuntimeFromProfile(
     profile?: RuntimeProfile | null,
-    _unusedLegacyCatalog?: unknown,
 ): AgentRuntimeConfig | null {
     if (!profile) return null;
     return {
@@ -97,7 +93,6 @@ export function defaultAgentRuntimeFromProfile(
 export function resolveDefaultAgentRuntime(
     catalog?: AgentRuntimeProfileListResponse,
     profileId?: string | null,
-    _unusedLegacyCatalog?: unknown,
 ): AgentRuntimeConfig | null {
     const profile = profileId
         ? catalog?.items.find((item) => item.id === profileId)
@@ -169,7 +164,6 @@ export function runtimeAvailabilityLabel(profile: RuntimeProfile): string | null
 
 export function runtimeCatalogToModelOptions(
     catalog?: AgentRuntimeProfileListResponse,
-    _unusedLegacyCatalog?: unknown,
 ): AvailableModelInfo[] {
     if (!catalog?.items?.length) return [];
     const options: AvailableModelInfo[] = [];

@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.agent.domain.agent_host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
+    AgentHostEventType,
     AgentHostRunSpec,
     AgentHostRunState,
 )
@@ -24,6 +30,10 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     JsonObject,
 )
+from app.modules.agent.infrastructure.agent_host_channels import (
+    poke_host,
+    run_stream_channel,
+)
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostDispatchRepository,
 )
@@ -34,6 +44,7 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostRepositoryError,
 )
 from app.modules.agent.infrastructure.harnesses.agent_host_events import (
+    AgentHostEventEnvelope,
     AgentHostEventNormalizer,
     error_event,
     event_text,
@@ -51,8 +62,10 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentHostRunLeaseModel,
 )
 
+logger = get_logger(__name__)
+
 DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS = 7200.0
-DEFAULT_AGENT_HOST_POLL_INTERVAL_SECONDS = 0.5
+DEFAULT_AGENT_HOST_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
 _AGENT_HOST_RUNTIME_INSTRUCTIONS = (
     "# Runtime\n"
@@ -146,7 +159,7 @@ class RemoteHarness:
             return
 
         try:
-            await self._enqueue_run(
+            harness_key = await self._enqueue_run(
                 agent=agent,
                 conversation=conversation,
                 messages=messages,
@@ -162,6 +175,7 @@ class RemoteHarness:
         normalizer = AgentHostEventNormalizer(
             agent_run_id=agent_run_id,
             model_name=options.model_name,
+            harness_key=harness_key,
         )
         sequence = 0
         stop_sent = False
@@ -169,104 +183,166 @@ class RemoteHarness:
         deadline = loop.time() + self.event_timeout_seconds
         accept_deadline = loop.time() + run_config.wait_timeout_seconds
         terminal_checkpoint_seen_at: float | None = None
-        while True:
-            stop_sent = await self._cancel_if_requested(
-                agent_run_id=agent_run_id,
-                options=options,
-                stop_sent=stop_sent,
+        poll_due_at = loop.time()
+        stream_queue: asyncio.Queue[JsonObject] = asyncio.Queue()
+        channel_service = await get_channel_service()
+        async with channel_service.subscribe(
+            [run_stream_channel(agent_run_id)]
+        ) as messages_stream:
+            forwarder = create_inherited_task(
+                _forward_stream(messages_stream, stream_queue)
             )
+            try:
+                while True:
+                    now = loop.time()
+                    if now >= poll_due_at:
+                        poll_due_at = now + self.poll_interval_seconds
+                        stop_sent = await self._cancel_if_requested(
+                            agent_run_id=agent_run_id,
+                            options=options,
+                            stop_sent=stop_sent,
+                        )
 
+                        async with self.uow_factory() as uow:
+                            repo = AgentHostDispatchRepository(uow)
+                            await repo.reconcile_expired_run(run_id=agent_run_id)
+                            rows = await repo.events_after(
+                                run_id=agent_run_id,
+                                sequence=sequence,
+                            )
+                            lease = await repo.get_run_lease(run_id=agent_run_id)
+
+                        sequence, events = await _normalize_rows(
+                            normalizer,
+                            rows,
+                            sequence,
+                            artifact_writer=self.artifact_writer,
+                            ctx=ctx,
+                            conversation=conversation,
+                            agent_run_id=agent_run_id,
+                        )
+                        for event in events:
+                            yield event
+                            if is_terminal_event(event):
+                                return
+
+                        if (
+                            lease is not None
+                            and lease.accepted_at is None
+                            and lease.state == AgentHostRunState.FAILED.value
+                        ):
+                            if _can_fallback(
+                                AgentHostRunState.FAILED, run_config, options
+                            ):
+                                assert run_config.fallback_profile_id is not None
+                                assert options.fallback_run is not None
+                                async for event in options.fallback_run(
+                                    run_config.fallback_profile_id
+                                ):
+                                    yield event
+                                return
+                            yield error_event(
+                                agent_run_id,
+                                lease.error_detail
+                                or "Agent Host rejected the run before provider dispatch",
+                            )
+                            return
+
+                        (
+                            terminal_checkpoint_seen_at,
+                            terminal_state,
+                        ) = _terminal_checkpoint_state(
+                            lease=lease,
+                            seen_at=terminal_checkpoint_seen_at,
+                            now=loop.time(),
+                            grace_seconds=self.terminal_event_grace_seconds,
+                        )
+                        if terminal_state is not None:
+                            for event in normalizer.finish_without_terminal(
+                                state=terminal_state
+                            ):
+                                yield event
+                            return
+
+                        expired_state = await self._expire_if_unaccepted(
+                            lease=lease,
+                            now=loop.time(),
+                            accept_deadline=accept_deadline,
+                            agent_run_id=agent_run_id,
+                        )
+                        if expired_state is not None:
+                            if _can_fallback(expired_state, run_config, options):
+                                assert run_config.fallback_profile_id is not None
+                                assert options.fallback_run is not None
+                                async for event in options.fallback_run(
+                                    run_config.fallback_profile_id
+                                ):
+                                    yield event
+                                return
+                            message = (
+                                "No Agent Host received the run before its wait deadline"
+                                if expired_state is AgentHostRunState.FAILED
+                                else (
+                                    "Agent Host delivery could not be confirmed; "
+                                    "the run was not repeated through a fallback"
+                                )
+                            )
+                            yield error_event(agent_run_id, message)
+                            return
+
+                    # Cosmetic chunks from the realtime lane; drained eagerly
+                    # and then awaited until the next durable poll is due.
+                    while True:
+                        try:
+                            message = stream_queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        for event in _normalize_stream_message(
+                            normalizer, message
+                        ):
+                            yield event
+
+                    now = loop.time()
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        terminal = error_event(
+                            agent_run_id,
+                            "Agent Host did not emit a terminal event before the run deadline",
+                        )
+                        for event in normalizer.close_outstanding(terminal):
+                            yield event
+                        yield terminal
+                        return
+                    timeout = min(max(poll_due_at - now, 0.0), remaining)
+                    if timeout > 0:
+                        with contextlib.suppress(TimeoutError):
+                            message = await asyncio.wait_for(
+                                stream_queue.get(), timeout=timeout
+                            )
+                            for event in _normalize_stream_message(
+                                normalizer, message
+                            ):
+                                yield event
+            finally:
+                forwarder.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await forwarder
+                await self._delete_run_events(agent_run_id)
+
+    async def _delete_run_events(self, agent_run_id: UUID) -> None:
+        """Best-effort cleanup of the run's transient durable event journal."""
+        try:
             async with self.uow_factory() as uow:
-                repo = AgentHostDispatchRepository(uow)
-                await repo.reconcile_expired_run(run_id=agent_run_id)
-                rows = await repo.events_after(
-                    run_id=agent_run_id,
-                    sequence=sequence,
+                await AgentHostDispatchRepository(uow).delete_run_events(
+                    run_id=agent_run_id
                 )
-                lease = await repo.get_run_lease(run_id=agent_run_id)
-
-            sequence, events = await _normalize_rows(
-                normalizer,
-                rows,
-                sequence,
-                artifact_writer=self.artifact_writer,
-                ctx=ctx,
-                conversation=conversation,
-                agent_run_id=agent_run_id,
+                await uow.commit()
+        except Exception:
+            logger.debug(
+                "agent.infrastructure.harnesses.agent_host.event_cleanup_failed",
+                agent_run_id=str(agent_run_id),
+                exc_info=True,
             )
-            for event in events:
-                yield event
-                if is_terminal_event(event):
-                    return
-
-            if (
-                lease is not None
-                and lease.checkpoint is None
-                and lease.state == AgentHostRunState.FAILED.value
-            ):
-                if _can_fallback(AgentHostRunState.FAILED, run_config, options):
-                    assert run_config.fallback_profile_id is not None
-                    assert options.fallback_run is not None
-                    async for event in options.fallback_run(
-                        run_config.fallback_profile_id
-                    ):
-                        yield event
-                    return
-                yield error_event(
-                    agent_run_id,
-                    lease.error_detail
-                    or "Agent Host rejected the run before provider dispatch",
-                )
-                return
-
-            terminal_checkpoint_seen_at, terminal_state = _terminal_checkpoint_state(
-                lease=lease,
-                seen_at=terminal_checkpoint_seen_at,
-                now=loop.time(),
-                grace_seconds=self.terminal_event_grace_seconds,
-            )
-            if terminal_state is not None:
-                for event in normalizer.finish_without_terminal(state=terminal_state):
-                    yield event
-                return
-
-            expired_state = await self._expire_if_unaccepted(
-                lease=lease,
-                now=loop.time(),
-                accept_deadline=accept_deadline,
-                agent_run_id=agent_run_id,
-            )
-            if expired_state is not None:
-                if _can_fallback(expired_state, run_config, options):
-                    assert run_config.fallback_profile_id is not None
-                    assert options.fallback_run is not None
-                    async for event in options.fallback_run(
-                        run_config.fallback_profile_id
-                    ):
-                        yield event
-                    return
-                message = (
-                    "No Agent Host received the run before its wait deadline"
-                    if expired_state is AgentHostRunState.FAILED
-                    else (
-                        "Agent Host delivery could not be confirmed; "
-                        "the run was not repeated through a fallback"
-                    )
-                )
-                yield error_event(agent_run_id, message)
-                return
-
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                terminal = error_event(
-                    agent_run_id,
-                    "Agent Host did not emit a terminal event before the run deadline",
-                )
-                for event in normalizer.close_outstanding(terminal):
-                    yield event
-                yield terminal
-                return
-            await asyncio.sleep(min(self.poll_interval_seconds, remaining))
 
     async def _cancel_if_requested(
         self,
@@ -280,7 +356,11 @@ class RemoteHarness:
         if not await options.should_stop():
             return False
         async with self.uow_factory() as uow:
-            await AgentHostDispatchRepository(uow).enqueue_cancel(run_id=agent_run_id)
+            command = await AgentHostDispatchRepository(uow).enqueue_cancel(
+                run_id=agent_run_id
+            )
+        if command is not None:
+            await poke_host(command.host_id)
         return True
 
     async def _expire_if_unaccepted(
@@ -291,7 +371,7 @@ class RemoteHarness:
         accept_deadline: float,
         agent_run_id: UUID,
     ) -> AgentHostRunState | None:
-        if lease is None or lease.checkpoint is not None or now < accept_deadline:
+        if lease is None or lease.accepted_at is not None or now < accept_deadline:
             return None
         async with self.uow_factory() as uow:
             return await AgentHostDispatchRepository(uow).expire_unaccepted_run(
@@ -308,7 +388,7 @@ class RemoteHarness:
         options: HarnessOptions,
         agent_run_id: UUID,
         run_config: _AgentHostRunConfig,
-    ) -> None:
+    ) -> str:
         payload = run_start_payload(
             agent=agent,
             conversation=conversation,
@@ -329,7 +409,7 @@ class RemoteHarness:
         )
         encrypted_mcp = await get_secret_cipher().encrypt_json_async(mcp)
         if encrypted_mcp is None:
-            raise RuntimeError("could not create MCP route")
+            raise RuntimeError("could not encrypt MCP configuration")
         async with self.uow_factory() as uow:
             harness = await AgentHostRepository(uow).get_harness(
                 harness_id=run_config.harness_id
@@ -360,7 +440,6 @@ class RemoteHarness:
                     "lemma": payload.get("context"),
                     "session_id": prompt.get("session_id"),
                 },
-                mcp_route_id=str(uuid4()),
                 run_deadline=datetime.now(timezone.utc)
                 + timedelta(seconds=self.event_timeout_seconds),
             )
@@ -372,6 +451,44 @@ class RemoteHarness:
                 encrypted_mcp_payload=encrypted_mcp,
                 command_ttl_seconds=run_config.wait_timeout_seconds,
             )
+            host_id = harness.host_id
+            harness_key = harness.harness_key
+        await poke_host(host_id)
+        return harness_key
+
+
+async def _forward_stream(
+    messages: AsyncIterator[str | bytes],
+    queue: asyncio.Queue[JsonObject],
+) -> None:
+    async for raw in messages:
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(data, dict):
+            queue.put_nowait(data)
+
+
+def _normalize_stream_message(
+    normalizer: AgentHostEventNormalizer,
+    message: JsonObject,
+) -> list[AgentEvent]:
+    """Normalize one cosmetic chunk from the realtime lane; drop malformed."""
+    try:
+        event_type = AgentHostEventType(str(message.get("type") or ""))
+        sequence = int(message.get("sequence") or 0)
+    except (TypeError, ValueError):
+        return []
+    payload = message.get("payload")
+    return normalizer.normalize_stream(
+        sequence=sequence,
+        event_type=event_type,
+        object_id=(
+            str(message["object_id"]) if message.get("object_id") is not None else None
+        ),
+        payload=dict(payload) if isinstance(payload, dict) else {},
+    )
 
 
 async def _normalize_rows(
@@ -387,6 +504,7 @@ async def _normalize_rows(
     events: list[AgentEvent] = []
     for row in rows:
         sequence = row.sequence
+        envelope = AgentHostEventEnvelope.from_model(row)
         payload_override: JsonObject | None = None
         if artifact_writer is not None:
             from app.modules.agent.services.workspace_location import resolve_pod_cwd
@@ -398,7 +516,7 @@ async def _normalize_rows(
                 directory_path=f"{resolve_pod_cwd(conversation)}/agent-output",
                 agent_run_id=agent_run_id,
                 event_sequence=row.sequence,
-                harness_key=row.harness_key,
+                harness_key=normalizer.harness_key,
             )
             if materialized.markdown:
                 payload_override = _json_object(row.payload)
@@ -421,8 +539,12 @@ async def _normalize_rows(
                         sequence=row.sequence,
                     )
                 )
-        events.extend(normalizer.normalize(row, payload_override=payload_override))
+        events.extend(
+            normalizer.normalize(envelope, payload_override=payload_override)
+        )
     return sequence, events
+
+
 def _terminal_checkpoint_state(
     *,
     lease: AgentHostRunLeaseModel | None,

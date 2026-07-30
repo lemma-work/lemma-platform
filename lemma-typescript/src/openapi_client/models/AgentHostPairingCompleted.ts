@@ -4,7 +4,7 @@
 /* eslint-disable */
 export type AgentHostPairingCompleted = {
     host_id: string;
+    host_secret: string;
     organization_id: (string | null);
-    public_key_fingerprint: string;
     user_id: string;
 };

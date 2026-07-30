@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+import contextlib
 from typing import Annotated
 from uuid import UUID, uuid7
 
 from fastapi import APIRouter, Header, HTTPException, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
-from app.core.crypto import get_secret_cipher
+from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.api.agent_host_schemas import (
     AgentHostHarnessListResponse,
@@ -25,7 +26,6 @@ from app.modules.agent.domain.agent_host import (
     AGENT_HOST_PROTOCOL_VERSION,
     AgentHostEventAck,
     AgentHostEventBatch,
-    AgentHostMcpRouteResponse,
     AgentHostPairingComplete,
     AgentHostPairingCompleted,
     AgentHostPairingCreate,
@@ -33,16 +33,17 @@ from app.modules.agent.domain.agent_host import (
     AgentHostPollRequest,
     AgentHostPollResponse,
     AgentHostStatus,
-    AgentHostTokenClaims,
-    AgentHostTokenExchange,
-    AgentHostTokenResponse,
     effective_agent_host_status,
 )
-from app.modules.agent.infrastructure.agent_host_repository import (
-    AgentHostDispatchRepository,
+from app.modules.agent.infrastructure.agent_host_channels import (
+    host_poke_channel,
+    publish_run_stream_event,
 )
 from app.modules.agent.infrastructure.agent_host_management_repository import (
     AgentHostRepository,
+)
+from app.modules.agent.infrastructure.agent_host_repository import (
+    AgentHostDispatchRepository,
 )
 from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostNotFound,
@@ -56,21 +57,19 @@ from app.modules.agent.infrastructure.runtime_models import (
 )
 from app.modules.agent.services.agent_host_auth import (
     InvalidAgentHostCredential,
+    generate_host_secret,
     generate_pairing_code,
-    mint_agent_host_token,
-    nonce_hash,
+    host_secret_hash,
     pairing_code_hash,
-    public_key_fingerprint,
-    verify_agent_host_token,
-    verify_host_signature,
-    verify_pairing_signature,
 )
 
 
 router = APIRouter(tags=["agent_host"])
 _uow_factory = SessionUnitOfWorkFactory(async_session_maker)
 _LONG_POLL_SECONDS = 25.0
-_LONG_POLL_INTERVAL_SECONDS = 1.0
+# Safety re-query interval while long-polling idle; a poke on the host's
+# realtime channel is the fast path, this bounds a missed poke.
+_IDLE_REPOLL_SECONDS = 5.0
 _MAX_COMMANDS_PER_POLL = 16
 _CONTROL_UPDATE_BACKOFF_MS = 1_000
 
@@ -84,37 +83,31 @@ def _bearer_token(authorization: str | None) -> str:
     return token.strip()
 
 
-async def _device_claims(
+async def _authenticated_host(
     *,
     authorization: str | None,
-    capability: str,
-) -> AgentHostTokenClaims:
+    uow: SqlAlchemyUnitOfWork,
+) -> AgentHostModel:
+    """Resolve the calling host from its bearer secret in one lookup."""
     try:
-        claims = verify_agent_host_token(
-            _bearer_token(authorization),
-            required_capability=capability,
-        )
+        secret = _bearer_token(authorization)
     except InvalidAgentHostCredential as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "INVALID_AGENT_HOST_TOKEN", "message": str(exc)},
+            detail={"code": "INVALID_AGENT_HOST_CREDENTIAL", "message": str(exc)},
         ) from exc
-    async with _uow_factory() as uow:
-        host = await AgentHostRepository(uow).get(claims.host_id)
-        if (
-            host is None
-            or host.user_id != claims.user_id
-            or host.organization_id != claims.organization_id
-            or host.revoked_at is not None
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={
-                    "code": "AGENT_HOST_REVOKED_OR_MISSING",
-                    "message": "Agent Host is unavailable",
-                },
-            )
-    return claims
+    host = await AgentHostRepository(uow).get_by_secret_hash(
+        host_secret_hash(secret)
+    )
+    if host is None or host.revoked_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={
+                "code": "AGENT_HOST_REVOKED_OR_MISSING",
+                "message": "Agent Host is unavailable",
+            },
+        )
+    return host
 
 
 async def _require_org_membership(
@@ -144,15 +137,10 @@ def _host_response(host: AgentHostModel) -> AgentHostResponse:
         user_id=host.user_id,
         organization_id=host.organization_id,
         installation_id=host.installation_id,
-        public_key_fingerprint=host.public_key_fingerprint,
         display_name=host.display_name,
         status=effective_agent_host_status(host.status, host.last_seen_at),
-        protocol_min=host.protocol_min,
-        protocol_max=host.protocol_max,
         protocol_version=host.protocol_version,
         host_release=host.host_release,
-        adapter_manifest_id=host.adapter_manifest_id,
-        instance_id=host.instance_id,
         capacity=host.capacity or {},
         last_seen_at=host.last_seen_at,
         revoked_at=host.revoked_at,
@@ -169,19 +157,14 @@ def _harness_response(
         host_id=harness.host_id,
         harness_key=harness.harness_key,
         display_name=harness.display_name,
-        adapter_protocol=harness.adapter_protocol,
-        adapter_protocol_version=harness.adapter_protocol_version,
         adapter_version=harness.adapter_version,
         upstream_version=harness.upstream_version,
-        auth_state=harness.auth_state,
         health=harness.health,
         capabilities=harness.capabilities or {},
         config_revision=harness.config_revision,
         config_options=harness.config_options or [],
-        fetched_at=harness.fetched_at,
         stale_after=harness.stale_after,
         stale_reason=harness.stale_reason,
-        metadata=harness.harness_metadata or {},
     )
 
 
@@ -194,7 +177,7 @@ def _repository_error(exc: AgentHostRepositoryError) -> HTTPException:
         code = status.HTTP_400_BAD_REQUEST
     return HTTPException(
         status_code=code,
-        detail={"code": type(exc).__name__.upper(), "message": str(exc)},
+        detail={"code": exc.code, "message": str(exc)},
     )
 
 
@@ -239,20 +222,12 @@ async def complete_agent_host_pairing(
     request: AgentHostPairingComplete,
     uow: UoWDep,
 ) -> AgentHostPairingCompleted:
+    """Consume a pairing code and issue the host secret, shown exactly once."""
+    secret = generate_host_secret()
     try:
-        verify_pairing_signature(
-            public_key=request.public_key,
-            pairing_code=request.pairing_code,
-            installation_id=request.hello.installation_id,
-            nonce=request.nonce,
-            timestamp=request.timestamp,
-            signature=request.signature,
-        )
-        fingerprint = public_key_fingerprint(request.public_key)
         host = await AgentHostRepository(uow).consume_pairing(
             code_hash=pairing_code_hash(request.pairing_code),
-            public_key=request.public_key,
-            public_key_fingerprint=fingerprint,
+            host_secret_hash=host_secret_hash(secret),
             display_name=request.display_name,
             hello=request.hello,
         )
@@ -261,58 +236,10 @@ async def complete_agent_host_pairing(
             host_id=host.id,
             user_id=host.user_id,
             organization_id=host.organization_id,
-            public_key_fingerprint=fingerprint,
+            host_secret=secret,
         )
-    except (AgentHostRepositoryError, InvalidAgentHostCredential) as exc:
-        if isinstance(exc, AgentHostRepositoryError):
-            raise _repository_error(exc) from exc
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_PUBLIC_KEY", "message": str(exc)},
-        ) from exc
-
-
-@router.post(
-    "/agent-host/token:exchange",
-    response_model=AgentHostTokenResponse,
-    operation_id="agent.host.token.exchange",
-)
-async def exchange_agent_host_token(
-    request: AgentHostTokenExchange,
-    uow: UoWDep,
-) -> AgentHostTokenResponse:
-    repo = AgentHostRepository(uow)
-    host = await repo.get(request.host_id, for_update=True)
-    if host is None or host.revoked_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Agent Host is unavailable",
-        )
-    try:
-        verify_host_signature(
-            public_key=host.public_key,
-            host_id=host.id,
-            nonce=request.nonce,
-            timestamp=request.timestamp,
-            signature=request.signature,
-        )
-        await repo.record_nonce(
-            host_id=host.id,
-            nonce_hash=nonce_hash(request.nonce),
-            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
-        )
-        token, expires_at = mint_agent_host_token(
-            host_id=host.id,
-            user_id=host.user_id,
-            organization_id=host.organization_id,
-        )
-        await uow.commit()
-        return AgentHostTokenResponse(access_token=token, expires_at=expires_at)
-    except (InvalidAgentHostCredential, AgentHostRepositoryError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "INVALID_AGENT_HOST_PROOF", "message": str(exc)},
-        ) from exc
+    except AgentHostRepositoryError as exc:
+        raise _repository_error(exc) from exc
 
 
 @router.post(
@@ -324,66 +251,82 @@ async def poll_agent_host_commands(
     request: AgentHostPollRequest,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AgentHostPollResponse:
-    claims = await _device_claims(
-        authorization=authorization,
-        capability="control",
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _LONG_POLL_SECONDS
+
+    # First pass: authenticate, record the heartbeat (write-on-change), and
+    # apply the host's control updates.
+    async with _uow_factory() as uow:
+        host = await _authenticated_host(authorization=authorization, uow=uow)
+        host = await AgentHostRepository(uow).mark_seen(
+            host_id=host.id,
+            hello=request.hello,
+            capacity=request.capacity.model_dump(mode="json"),
+        )
+        negotiated_protocol = host.protocol_version or AGENT_HOST_PROTOCOL_VERSION
+        host_status = AgentHostStatus(host.status)
+        commands = await AgentHostDispatchRepository(uow).poll_commands(
+            host_id=host.id,
+            limit=_MAX_COMMANDS_PER_POLL,
+            acknowledged_command_ids=request.acknowledged_command_ids,
+            checkpoints=request.checkpoints,
+            rejections=request.rejections,
+            available_run_slots=request.capacity.available_runs,
+        )
+        await uow.commit()
+    control_update_applied = bool(
+        request.acknowledged_command_ids or request.checkpoints or request.rejections
     )
-    deadline = asyncio.get_running_loop().time() + _LONG_POLL_SECONDS
-    first = True
-    negotiated_protocol = AGENT_HOST_PROTOCOL_VERSION
-    host_status = AgentHostStatus.ONLINE
-    while True:
-        async with _uow_factory() as uow:
-            if first:
-                host = await AgentHostRepository(uow).mark_seen(
-                host_id=claims.host_id,
-                hello=request.hello,
-                capacity=request.capacity.model_dump(mode="json"),
-            )
-                negotiated_protocol = (
-                    host.protocol_version or AGENT_HOST_PROTOCOL_VERSION
-                )
-                host_status = AgentHostStatus(host.status)
-            commands = await AgentHostDispatchRepository(uow).poll_commands(
-                host_id=claims.host_id,
-                limit=_MAX_COMMANDS_PER_POLL,
-                acknowledged_command_ids=(
-                    request.acknowledged_command_ids if first else []
-                ),
-                checkpoints=request.checkpoints if first else [],
-                rejections=request.rejections if first else [],
-                available_run_slots=request.capacity.available_runs,
-            )
-            await uow.commit()
-            control_update_applied = first and bool(
-                request.acknowledged_command_ids or request.checkpoints
-                or request.rejections
-            )
-            if (
-                commands
-                or control_update_applied
-                or (first and request.capacity.available_runs == 0)
-                or host_status is AgentHostStatus.UPGRADE_REQUIRED
-            ):
+    if (
+        commands
+        or control_update_applied
+        or request.capacity.available_runs == 0
+        or host_status is AgentHostStatus.UPGRADE_REQUIRED
+    ):
+        return AgentHostPollResponse(
+            protocol_version=negotiated_protocol,
+            host_status=host_status,
+            commands=commands,
+            poll_after_ms=(
+                _CONTROL_UPDATE_BACKOFF_MS if control_update_applied else 0
+            ),
+        )
+
+    # Idle path: wait for a poke on the host's channel, falling back to a
+    # slow re-query so a missed poke only delays delivery by a few seconds.
+    channel_service = await get_channel_service()
+    async with channel_service.subscribe([host_poke_channel(host.id)]) as pokes:
+        poke = aiter(pokes)
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 return AgentHostPollResponse(
                     protocol_version=negotiated_protocol,
-                    policy_revision="agent-host-policy-v1",
+                    host_status=host_status,
+                    commands=[],
+                )
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    anext(poke), timeout=min(_IDLE_REPOLL_SECONDS, remaining)
+                )
+            if loop.time() >= deadline:
+                continue
+            async with _uow_factory() as uow:
+                commands = await AgentHostDispatchRepository(uow).poll_commands(
+                    host_id=host.id,
+                    limit=_MAX_COMMANDS_PER_POLL,
+                    acknowledged_command_ids=[],
+                    checkpoints=[],
+                    rejections=[],
+                    available_run_slots=request.capacity.available_runs,
+                )
+                await uow.commit()
+            if commands:
+                return AgentHostPollResponse(
+                    protocol_version=negotiated_protocol,
                     host_status=host_status,
                     commands=commands,
-                    poll_after_ms=(
-                        _CONTROL_UPDATE_BACKOFF_MS if control_update_applied else 0
-                    ),
                 )
-        first = False
-        remaining = deadline - asyncio.get_running_loop().time()
-        if remaining <= 0:
-            return AgentHostPollResponse(
-                protocol_version=negotiated_protocol,
-                policy_revision="agent-host-policy-v1",
-                host_status=host_status,
-                commands=[],
-            )
-        await asyncio.sleep(min(_LONG_POLL_INTERVAL_SECONDS, remaining))
 
 
 @router.post(
@@ -396,53 +339,26 @@ async def append_agent_host_events(
     uow: UoWDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AgentHostEventAck:
-    claims = await _device_claims(
-        authorization=authorization,
-        capability="events",
-    )
+    host = await _authenticated_host(authorization=authorization, uow=uow)
     try:
-        ack = await AgentHostDispatchRepository(uow).append_events(
-            host_id=claims.host_id,
+        ack, stream_events = await AgentHostDispatchRepository(uow).append_events(
+            host_id=host.id,
             batch=request,
         )
         await uow.commit()
-        return ack
     except AgentHostRepositoryError as exc:
         raise _repository_error(exc) from exc
-
-
-@router.get(
-    "/agent-host/mcp-routes/{route_id}",
-    response_model=AgentHostMcpRouteResponse,
-    operation_id="agent.host.mcp_route.resolve",
-)
-async def resolve_agent_host_mcp_route(
-    route_id: UUID,
-    uow: UoWDep,
-    authorization: Annotated[str | None, Header()] = None,
-) -> AgentHostMcpRouteResponse:
-    claims = await _device_claims(
-        authorization=authorization,
-        capability="mcp",
-    )
-    try:
-        route = await AgentHostDispatchRepository(uow).resolve_mcp_route(
-            route_id=route_id,
-            host_id=claims.host_id,
+    for event in stream_events:
+        await publish_run_stream_event(
+            event.run_id,
+            {
+                "sequence": event.sequence,
+                "type": event.type.value,
+                "object_id": event.object_id,
+                "payload": event.payload,
+            },
         )
-        payload = await get_secret_cipher().decrypt_json_async(route.encrypted_payload)
-        if payload is None:
-            raise AgentHostProtocolViolation("MCP route payload is unavailable")
-        await uow.commit()
-        return AgentHostMcpRouteResponse(
-            route_id=route.id,
-            run_id=route.run_id,
-            lease_epoch=route.lease_epoch,
-            expires_at=route.expires_at,
-            mcp=payload,
-        )
-    except AgentHostRepositoryError as exc:
-        raise _repository_error(exc) from exc
+    return ack
 
 
 @router.put(
@@ -455,15 +371,12 @@ async def publish_agent_host_harnesses(
     uow: UoWDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> AgentHostHarnessPublishResponse:
-    claims = await _device_claims(
-        authorization=authorization,
-        capability="harnesses",
-    )
+    host = await _authenticated_host(authorization=authorization, uow=uow)
     repo = AgentHostRepository(uow)
     try:
         harnesses = [
             await repo.publish_harness(
-                host_id=claims.host_id,
+                host_id=host.id,
                 snapshot=snapshot,
             )
             for snapshot in request.harnesses
@@ -487,14 +400,11 @@ async def self_revoke_agent_host(
 ) -> None:
     """Revoke the calling device before its local identity is removed."""
 
-    claims = await _device_claims(
-        authorization=authorization,
-        capability="control",
-    )
+    host = await _authenticated_host(authorization=authorization, uow=uow)
     try:
         await AgentHostRepository(uow).revoke(
-            host_id=claims.host_id,
-            user_id=claims.user_id,
+            host_id=host.id,
+            user_id=host.user_id,
         )
         await uow.commit()
     except AgentHostRepositoryError as exc:

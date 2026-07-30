@@ -1,44 +1,27 @@
 //! Adapter-private stdio bridge to a run-scoped Lemma MCP endpoint.
 
-use std::sync::Arc;
-
 use anyhow::Context;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use uuid::Uuid;
 
-use crate::adapters::AdapterManifest;
-use crate::api::TargetClient;
-use crate::config::{HostConfig, HostPaths};
-use crate::crypto::SecretVault;
-use crate::protocol::McpRoute;
+use crate::config::HostPaths;
+use crate::journal::Journal;
 
 const MAX_MCP_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_MCP_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
-pub async fn run_bridge(
-    paths: &HostPaths,
-    target_id: Uuid,
-    route_id: Uuid,
-    vault: Arc<dyn SecretVault>,
-) -> anyhow::Result<()> {
-    let config = HostConfig::load_or_create(paths)?;
-    config.validate()?;
-    let target = config
-        .targets
-        .iter()
-        .find(|target| target.target_id == target_id && target.enabled)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("MCP bridge target is missing or disabled"))?;
-    let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
-    let target_client = TargetClient::new(
-        target,
-        config.installation_id,
-        Uuid::new_v4(),
-        &manifest,
-        vault.as_ref(),
-    )?;
+pub async fn run_bridge(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> anyhow::Result<()> {
+    // The run's MCP configuration was delivered inline with the start command
+    // and journaled durably before dispatch, so the bridge is fully local.
+    // Cancellation reaches it through the supervised process tree, and the
+    // Lemma MCP endpoint re-validates the run-scoped token on every request.
+    let journal = Journal::open(&paths.journal)?;
+    let run = journal
+        .get_run(target_id, run_id)?
+        .ok_or_else(|| anyhow::anyhow!("MCP bridge run is missing from the journal"))?;
+    let endpoint = endpoint_from_mcp(run_id, &run.spec.mcp)?;
     let http = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(10))
         .timeout(std::time::Duration::from_secs(90))
@@ -61,10 +44,6 @@ pub async fn run_bridge(
         {
             version.clone_into(&mut protocol_version);
         }
-        // Resolve on every JSON-RPC request. The control plane performs the
-        // run/epoch/expiry/revocation checks, so a credential cached at process
-        // startup cannot outlive its lease.
-        let endpoint = resolve_endpoint(&target_client, route_id).await?;
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -131,9 +110,7 @@ pub async fn run_bridge(
         }
         stdout.flush().await?;
     }
-    if let Some(session_id) = session_id
-        && let Ok(endpoint) = resolve_endpoint(&target_client, route_id).await
-    {
+    if let Some(session_id) = session_id {
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
@@ -155,35 +132,25 @@ struct ResolvedEndpoint {
     run_id: Uuid,
 }
 
-async fn resolve_endpoint(
-    target_client: &TargetClient,
-    route_id: Uuid,
-) -> anyhow::Result<ResolvedEndpoint> {
-    let route = target_client.resolve_mcp_route(route_id).await?;
-    endpoint_from_route(route_id, &route)
-}
-
-fn endpoint_from_route(route_id: Uuid, route: &McpRoute) -> anyhow::Result<ResolvedEndpoint> {
-    anyhow::ensure!(route.route_id == route_id, "MCP route ID does not match");
-    let object = route
-        .mcp
+fn endpoint_from_mcp(run_id: Uuid, mcp: &Value) -> anyhow::Result<ResolvedEndpoint> {
+    let object = mcp
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("MCP route configuration is not an object"))?;
+        .ok_or_else(|| anyhow::anyhow!("run MCP configuration is not an object"))?;
     let url = object
         .get("url")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("MCP route is missing url"))?
+        .ok_or_else(|| anyhow::anyhow!("run MCP configuration is missing url"))?
         .to_owned();
     let authorization = object
         .get("authorization")
         .and_then(Value::as_str)
         .or_else(|| object.get("token").and_then(Value::as_str))
-        .ok_or_else(|| anyhow::anyhow!("MCP route is missing authorization"))?
+        .ok_or_else(|| anyhow::anyhow!("run MCP configuration is missing authorization"))?
         .to_owned();
     Ok(ResolvedEndpoint {
         url,
         authorization,
-        run_id: route.run_id,
+        run_id,
     })
 }
 
@@ -197,27 +164,19 @@ fn normalize_authorization(value: &str) -> anyhow::Result<&str> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use serde_json::json;
 
     use super::*;
 
     #[test]
-    fn route_resolution_keeps_the_run_fence() {
-        let route_id = Uuid::new_v4();
+    fn endpoint_uses_the_run_scoped_configuration() {
         let run_id = Uuid::new_v4();
-        let endpoint = endpoint_from_route(
-            route_id,
-            &McpRoute {
-                route_id,
-                run_id,
-                lease_epoch: 2,
-                expires_at: Utc::now(),
-                mcp: json!({
-                    "url": "https://lemma.example/mcp",
-                    "authorization": "Bearer secret"
-                }),
-            },
+        let endpoint = endpoint_from_mcp(
+            run_id,
+            &json!({
+                "url": "https://lemma.example/mcp",
+                "authorization": "Bearer secret"
+            }),
         )
         .unwrap();
         assert_eq!(endpoint.run_id, run_id);
@@ -225,20 +184,9 @@ mod tests {
     }
 
     #[test]
-    fn route_resolution_rejects_a_mismatched_route() {
-        let result = endpoint_from_route(
-            Uuid::new_v4(),
-            &McpRoute {
-                route_id: Uuid::new_v4(),
-                run_id: Uuid::new_v4(),
-                lease_epoch: 1,
-                expires_at: Utc::now(),
-                mcp: json!({
-                    "url": "https://lemma.example/mcp",
-                    "authorization": "Bearer secret"
-                }),
-            },
-        );
+    fn endpoint_rejects_a_missing_credential() {
+        let result =
+            endpoint_from_mcp(Uuid::new_v4(), &json!({"url": "https://lemma.example/mcp"}));
         assert!(result.is_err());
     }
 }

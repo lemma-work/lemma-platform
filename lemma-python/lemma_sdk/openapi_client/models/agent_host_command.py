@@ -27,7 +27,6 @@ class AgentHostCommand:
         created_at (datetime.datetime):
         expires_at (datetime.datetime):
         kind (AgentHostCommandKind):
-        payload_sha256 (str):
         lease_epoch (int | None | Unset):
         payload (AgentHostCommandPayload | Unset):
         run_id (None | Unset | UUID):
@@ -37,7 +36,6 @@ class AgentHostCommand:
     created_at: datetime.datetime
     expires_at: datetime.datetime
     kind: AgentHostCommandKind
-    payload_sha256: str
     lease_epoch: int | None | Unset = UNSET
     payload: AgentHostCommandPayload | Unset = UNSET
     run_id: None | Unset | UUID = UNSET
@@ -51,8 +49,6 @@ class AgentHostCommand:
         expires_at = self.expires_at.isoformat()
 
         kind = self.kind.value
-
-        payload_sha256 = self.payload_sha256
 
         lease_epoch: int | None | Unset
         if isinstance(self.lease_epoch, Unset):
@@ -80,7 +76,6 @@ class AgentHostCommand:
                 "created_at": created_at,
                 "expires_at": expires_at,
                 "kind": kind,
-                "payload_sha256": payload_sha256,
             }
         )
         if lease_epoch is not UNSET:
@@ -104,8 +99,6 @@ class AgentHostCommand:
         expires_at = isoparse(d.pop("expires_at"))
 
         kind = AgentHostCommandKind(d.pop("kind"))
-
-        payload_sha256 = d.pop("payload_sha256")
 
         def _parse_lease_epoch(data: object) -> int | None | Unset:
             if data is None:
@@ -145,7 +138,6 @@ class AgentHostCommand:
             created_at=created_at,
             expires_at=expires_at,
             kind=kind,
-            payload_sha256=payload_sha256,
             lease_epoch=lease_epoch,
             payload=payload,
             run_id=run_id,

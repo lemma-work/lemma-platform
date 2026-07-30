@@ -6,7 +6,6 @@ export enum AgentHostStatus {
     ONLINE = 'ONLINE',
     OFFLINE = 'OFFLINE',
     DRAINING = 'DRAINING',
-    DEGRADED = 'DEGRADED',
     UPGRADE_REQUIRED = 'UPGRADE_REQUIRED',
     REVOKED = 'REVOKED',
 }

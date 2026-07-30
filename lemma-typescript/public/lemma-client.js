@@ -10812,29 +10812,8 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Resolve Agent Host Mcp Route
-     * @param routeId
-     * @param authorization
-     * @returns AgentHostMcpRouteResponse Successful Response
-     * @throws ApiError
-     */
-    static agentHostMcpRouteResolve(routeId, authorization) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/agent-host/mcp-routes/{route_id}",
-        path: {
-          "route_id": routeId
-        },
-        headers: {
-          "authorization": authorization
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
      * Complete Agent Host Pairing
+     * Consume a pairing code and issue the host secret, shown exactly once.
      * @param requestBody
      * @returns AgentHostPairingCompleted Successful Response
      * @throws ApiError
@@ -10885,23 +10864,6 @@ var LemmaClient = (() => {
         headers: {
           "authorization": authorization
         },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Exchange Agent Host Token
-     * @param requestBody
-     * @returns AgentHostTokenResponse Successful Response
-     * @throws ApiError
-     */
-    static agentHostTokenExchange(requestBody) {
-      return request(OpenAPI, {
-        method: "POST",
-        url: "/agent-host/token:exchange",
-        body: requestBody,
-        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }

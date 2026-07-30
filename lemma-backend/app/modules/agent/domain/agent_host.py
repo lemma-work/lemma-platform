@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.modules.agent.domain.value_objects import JsonObject
 
@@ -21,7 +19,6 @@ class AgentHostStatus(str, Enum):
     ONLINE = "ONLINE"
     OFFLINE = "OFFLINE"
     DRAINING = "DRAINING"
-    DEGRADED = "DEGRADED"
     UPGRADE_REQUIRED = "UPGRADE_REQUIRED"
     REVOKED = "REVOKED"
 
@@ -60,19 +57,9 @@ class AgentHostHarnessHealth(str, Enum):
     DISABLED = "DISABLED"
 
 
-class AgentHostAdapterProtocol(str, Enum):
-    ACP = "ACP"
-    NATIVE = "NATIVE"
-
-
 class AgentHostCommandKind(str, Enum):
     START_RUN = "START_RUN"
     CANCEL_RUN = "CANCEL_RUN"
-    DRAIN = "DRAIN"
-    RESUME = "RESUME"
-    REFRESH_HARNESS = "REFRESH_HARNESS"
-    CLOSE_SESSION = "CLOSE_SESSION"
-    ROTATE_DEVICE_KEY = "ROTATE_DEVICE_KEY"
 
 
 class AgentHostCommandState(str, Enum):
@@ -108,6 +95,17 @@ class AgentHostRunState(str, Enum):
     DISPATCH_UNKNOWN = "DISPATCH_UNKNOWN"
 
 
+# States from which the host has not yet durably accepted the run; a
+# pre-dispatch rejection or timeout here may safely fall back to a provider.
+PRE_DISPATCH_AGENT_HOST_RUN_STATES = frozenset(
+    {
+        AgentHostRunState.QUEUED_FOR_HOST,
+        AgentHostRunState.LEASED,
+    }
+)
+
+# States (including WAITING_INPUT, which ends the host's turn while the
+# conversation waits on a human) after which a lease no longer advances.
 TERMINAL_AGENT_HOST_RUN_STATES = frozenset(
     {
         AgentHostRunState.WAITING_INPUT,
@@ -119,23 +117,35 @@ TERMINAL_AGENT_HOST_RUN_STATES = frozenset(
 )
 
 
-class AgentHostCheckpoint(str, Enum):
-    ACCEPTED = "ACCEPTED"
-    DISPATCH_INTENT = "DISPATCH_INTENT"
-    PROVIDER_ACCEPTED = "PROVIDER_ACCEPTED"
-    RUNNING = "RUNNING"
-    RECOVERING = "RECOVERING"
-    TERMINAL = "TERMINAL"
-
-
-_CHECKPOINT_ORDER = {
-    AgentHostCheckpoint.ACCEPTED: 1,
-    AgentHostCheckpoint.DISPATCH_INTENT: 2,
-    AgentHostCheckpoint.PROVIDER_ACCEPTED: 3,
-    AgentHostCheckpoint.RUNNING: 4,
-    AgentHostCheckpoint.RECOVERING: 5,
-    AgentHostCheckpoint.TERMINAL: 6,
+_RUN_STATE_ORDER = {
+    AgentHostRunState.QUEUED_FOR_HOST: 0,
+    AgentHostRunState.LEASED: 1,
+    AgentHostRunState.ACCEPTED: 2,
+    AgentHostRunState.DISPATCHING: 3,
+    AgentHostRunState.RUNNING: 4,
+    AgentHostRunState.RECOVERING: 5,
+    AgentHostRunState.WAITING_INPUT: 6,
+    AgentHostRunState.SUCCEEDED: 7,
+    AgentHostRunState.FAILED: 7,
+    AgentHostRunState.CANCELLED: 7,
+    AgentHostRunState.DISPATCH_UNKNOWN: 7,
 }
+
+
+def run_state_progresses(
+    current: AgentHostRunState,
+    reported: AgentHostRunState,
+) -> bool:
+    """Validate a host-reported state transition is not a regression."""
+
+    if current in PRE_DISPATCH_AGENT_HOST_RUN_STATES:
+        return reported not in PRE_DISPATCH_AGENT_HOST_RUN_STATES
+    if current in {
+        AgentHostRunState.RECOVERING,
+        AgentHostRunState.WAITING_INPUT,
+    } and reported is AgentHostRunState.RUNNING:
+        return True
+    return _RUN_STATE_ORDER[reported] >= _RUN_STATE_ORDER[current]
 
 
 class AgentHostEventType(str, Enum):
@@ -156,26 +166,28 @@ class AgentHostEventType(str, Enum):
     TERMINAL = "terminal"
 
 
-class HostHello(BaseModel):
-    protocol_min: int = Field(ge=1)
-    protocol_max: int = Field(ge=1)
-    host_release: str = Field(min_length=1, max_length=128)
-    adapter_manifest_id: str = Field(min_length=1, max_length=255)
-    installation_id: str = Field(min_length=1, max_length=255)
-    instance_id: UUID
+# Cosmetic live-typing events. These are published on the run's realtime
+# channel instead of being journaled in PostgreSQL; full-text upserts carry
+# the durable content.
+AGENT_HOST_STREAM_EVENT_TYPES = frozenset(
+    {
+        AgentHostEventType.AGENT_MESSAGE_CHUNK,
+        AgentHostEventType.AGENT_THOUGHT_CHUNK,
+    }
+)
 
-    @model_validator(mode="after")
-    def validate_protocol_range(self) -> "HostHello":
-        if self.protocol_min > self.protocol_max:
-            raise ValueError("protocol_min cannot exceed protocol_max")
-        return self
+
+class HostHello(BaseModel):
+    installation_id: str = Field(min_length=1, max_length=255)
+    host_release: str = Field(min_length=1, max_length=128)
+    protocol_version: int = Field(ge=1)
 
     def negotiate(self, supported: int = AGENT_HOST_PROTOCOL_VERSION) -> int:
-        if self.protocol_min <= supported <= self.protocol_max:
+        if self.protocol_version == supported:
             return supported
         raise ValueError(
-            f"Agent Host protocol range {self.protocol_min}-{self.protocol_max} "
-            f"does not include server protocol {supported}"
+            f"Agent Host protocol {self.protocol_version} does not match "
+            f"server protocol {supported}"
         )
 
 
@@ -202,7 +214,7 @@ class AgentHostHarnessCapabilities(BaseModel):
     usage: bool = False
     durable_session_recovery: bool = False
 
-    model_config = ConfigDict(extra="allow")
+    model_config = {"extra": "allow"}
 
 
 class AgentHostConfigOption(BaseModel):
@@ -218,21 +230,16 @@ class AgentHostConfigOption(BaseModel):
 class AgentHostHarnessSnapshot(BaseModel):
     harness_key: str = Field(min_length=1, max_length=128)
     display_name: str = Field(min_length=1, max_length=255)
-    adapter_protocol: AgentHostAdapterProtocol
-    adapter_protocol_version: int = Field(default=1, ge=1)
     adapter_version: str = Field(min_length=1, max_length=128)
     upstream_version: str | None = Field(default=None, max_length=128)
-    auth_state: str = Field(min_length=1, max_length=64)
     health: AgentHostHarnessHealth
     capabilities: AgentHostHarnessCapabilities = Field(
         default_factory=AgentHostHarnessCapabilities
     )
     config_revision: str = Field(min_length=1, max_length=255)
     config_options: list[AgentHostConfigOption] = Field(default_factory=list)
-    fetched_at: datetime
     stale_after: datetime
     stale_reason: str | None = None
-    metadata: JsonObject = Field(default_factory=dict)
 
     @field_validator("harness_key")
     @classmethod
@@ -246,7 +253,6 @@ class AgentHostHarnessSnapshot(BaseModel):
 class AgentHostRunCheckpoint(BaseModel):
     run_id: UUID
     lease_epoch: int = Field(ge=1)
-    checkpoint: AgentHostCheckpoint
     state: AgentHostRunState
     detail: JsonObject = Field(default_factory=dict)
 
@@ -281,7 +287,6 @@ class AgentHostRunSpec(BaseModel):
     system_prompt: str
     prompt: list[JsonObject] = Field(min_length=1)
     context: JsonObject = Field(default_factory=dict)
-    mcp_route_id: str = Field(min_length=1, max_length=255)
     run_deadline: datetime
 
 
@@ -292,24 +297,20 @@ class AgentHostCommand(BaseModel):
     expires_at: datetime
     run_id: UUID | None = None
     lease_epoch: int | None = Field(default=None, ge=1)
-    payload_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     payload: JsonObject = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_run_fencing(self) -> "AgentHostCommand":
-        run_command = self.kind in {
+        if self.kind in {
             AgentHostCommandKind.START_RUN,
             AgentHostCommandKind.CANCEL_RUN,
-            AgentHostCommandKind.RESUME,
-        }
-        if run_command and (self.run_id is None or self.lease_epoch is None):
+        } and (self.run_id is None or self.lease_epoch is None):
             raise ValueError(f"{self.kind.value} requires run_id and lease_epoch")
         return self
 
 
 class AgentHostPollResponse(BaseModel):
     protocol_version: int = AGENT_HOST_PROTOCOL_VERSION
-    policy_revision: str
     host_status: AgentHostStatus
     commands: list[AgentHostCommand] = Field(default_factory=list)
     poll_after_ms: int = Field(default=0, ge=0, le=60_000)
@@ -324,12 +325,6 @@ class AgentHostEvent(BaseModel):
     type: AgentHostEventType
     object_id: str | None = Field(default=None, max_length=255)
     payload: JsonObject = Field(default_factory=dict)
-    harness_key: str = Field(min_length=1, max_length=128)
-    adapter_version: str = Field(min_length=1, max_length=128)
-
-    @property
-    def payload_digest(self) -> str:
-        return canonical_json_sha256(self.model_dump(mode="json"))
 
 
 class AgentHostEventBatch(BaseModel):
@@ -367,63 +362,15 @@ class AgentHostPairingCreated(BaseModel):
 
 class AgentHostPairingComplete(BaseModel):
     pairing_code: str = Field(min_length=16, max_length=512)
-    public_key: str = Field(min_length=32, max_length=512)
     display_name: str = Field(min_length=1, max_length=255)
     hello: HostHello
-    nonce: str = Field(min_length=16, max_length=255)
-    timestamp: int = Field(gt=0)
-    signature: str = Field(min_length=32, max_length=512)
 
 
 class AgentHostPairingCompleted(BaseModel):
     host_id: UUID
     user_id: UUID
     organization_id: UUID | None
-    public_key_fingerprint: str
-
-
-class AgentHostTokenExchange(BaseModel):
-    host_id: UUID
-    nonce: str = Field(min_length=16, max_length=255)
-    timestamp: int = Field(gt=0)
-    signature: str = Field(min_length=32, max_length=512)
-
-
-class AgentHostTokenResponse(BaseModel):
-    access_token: str
-    expires_at: datetime
-
-
-class AgentHostTokenClaims(BaseModel):
-    host_id: UUID
-    user_id: UUID
-    organization_id: UUID | None
-    expires_at_epoch: int
-    capabilities: tuple[
-        Literal["control", "events", "harnesses", "mcp"],
-        ...,
-    ]
-
-
-class AgentHostMcpRouteResponse(BaseModel):
-    route_id: UUID
-    run_id: UUID
-    lease_epoch: int = Field(ge=1)
-    expires_at: datetime
-    mcp: JsonObject
-
-
-def canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-
-
-def canonical_json_sha256(value: object) -> str:
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+    host_secret: str
 
 
 def validate_agent_host_selections(
@@ -497,17 +444,3 @@ def _agent_host_option_values(raw_options: object) -> list[object]:
         elif "id" in item:
             values.append(item["id"])
     return values
-
-
-def checkpoint_advances(
-    previous: AgentHostCheckpoint | None,
-    requested: AgentHostCheckpoint,
-) -> bool:
-    if previous is None:
-        return requested is AgentHostCheckpoint.ACCEPTED
-    if (
-        previous is AgentHostCheckpoint.RECOVERING
-        and requested is AgentHostCheckpoint.RUNNING
-    ):
-        return True
-    return _CHECKPOINT_ORDER[requested] >= _CHECKPOINT_ORDER[previous]

@@ -4,9 +4,7 @@
 /* eslint-disable */
 import type { AgentHostEventType } from './AgentHostEventType.js';
 export type AgentHostEvent = {
-    adapter_version: string;
     event_id: string;
-    harness_key: string;
     lease_epoch: number;
     object_id?: (string | null);
     occurred_at: string;

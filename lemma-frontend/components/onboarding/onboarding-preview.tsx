@@ -3,7 +3,6 @@ import {
   BookOpen,
   Boxes,
   Bug,
-  Check,
   Database,
   FolderOpen,
   Handshake,

@@ -13,19 +13,6 @@ from app.modules.agent.domain.runtime_profiles import (
 )
 
 
-class HostRepository:
-    def __init__(self, host):
-        self.host = host
-
-    async def get(self, host_id):
-        return self.host if self.host.id == host_id else None
-
-    async def get_for_user(self, *, host_id, user_id):
-        if self.host.id == host_id and self.host.user_id == user_id:
-            return self.host
-        return None
-
-
 def profile(*, organization_id, owner_user_id, scope, harness_id=None):
     return AgentRuntimeProfile(
         id=str(uuid4()),
@@ -65,8 +52,8 @@ async def test_workspace_profile_exposes_owner_host_to_other_member(
             owner_user_id=None,
             scope=RuntimeProfileScope.ORGANIZATION,
         ),
-        host_id=host.id,
-        host_repo=HostRepository(host),
+        host=host,
+        membership_cache={},
         user_id=uuid4(),
         uow=SimpleNamespace(),
     )
@@ -94,8 +81,8 @@ async def test_workspace_profile_is_unavailable_after_owner_membership_removal(
             owner_user_id=None,
             scope=RuntimeProfileScope.ORGANIZATION,
         ),
-        host_id=host.id,
-        host_repo=HostRepository(host),
+        host=host,
+        membership_cache={},
         user_id=uuid4(),
         uow=SimpleNamespace(),
     )
@@ -117,8 +104,8 @@ async def test_personal_profile_hides_host_from_other_member() -> None:
             owner_user_id=owner_user_id,
             scope=RuntimeProfileScope.PERSONAL,
         ),
-        host_id=host.id,
-        host_repo=HostRepository(host),
+        host=host,
+        membership_cache={},
         user_id=uuid4(),
         uow=SimpleNamespace(),
     )

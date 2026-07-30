@@ -15,27 +15,27 @@ class AgentHostPairingCompleted:
     """
     Attributes:
         host_id (UUID):
+        host_secret (str):
         organization_id (None | UUID):
-        public_key_fingerprint (str):
         user_id (UUID):
     """
 
     host_id: UUID
+    host_secret: str
     organization_id: None | UUID
-    public_key_fingerprint: str
     user_id: UUID
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         host_id = str(self.host_id)
 
+        host_secret = self.host_secret
+
         organization_id: None | str
         if isinstance(self.organization_id, UUID):
             organization_id = str(self.organization_id)
         else:
             organization_id = self.organization_id
-
-        public_key_fingerprint = self.public_key_fingerprint
 
         user_id = str(self.user_id)
 
@@ -44,8 +44,8 @@ class AgentHostPairingCompleted:
         field_dict.update(
             {
                 "host_id": host_id,
+                "host_secret": host_secret,
                 "organization_id": organization_id,
-                "public_key_fingerprint": public_key_fingerprint,
                 "user_id": user_id,
             }
         )
@@ -56,6 +56,8 @@ class AgentHostPairingCompleted:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
         host_id = UUID(d.pop("host_id"))
+
+        host_secret = d.pop("host_secret")
 
         def _parse_organization_id(data: object) -> None | UUID:
             if data is None:
@@ -72,14 +74,12 @@ class AgentHostPairingCompleted:
 
         organization_id = _parse_organization_id(d.pop("organization_id"))
 
-        public_key_fingerprint = d.pop("public_key_fingerprint")
-
         user_id = UUID(d.pop("user_id"))
 
         agent_host_pairing_completed = cls(
             host_id=host_id,
+            host_secret=host_secret,
             organization_id=organization_id,
-            public_key_fingerprint=public_key_fingerprint,
             user_id=user_id,
         )
 

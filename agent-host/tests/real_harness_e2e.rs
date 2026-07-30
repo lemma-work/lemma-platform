@@ -10,26 +10,23 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{get, post, put};
+use axum::routing::{post, put};
 use axum::{Json, Router};
-use base64::Engine;
 use chrono::Utc;
 use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use lemma_agent_host::adapters::AdapterManifest;
 use lemma_agent_host::api::TargetClient;
 use lemma_agent_host::config::{HostConfig, HostPaths};
-use lemma_agent_host::crypto::{KeyringVault, MemoryVault, SecretVault, identity_vault_key};
-use lemma_agent_host::protocol::{
-    Event, EventBatch, EventType, JsonMap, RunSpec, RunState, canonical_json,
-};
+use lemma_agent_host::protocol::{Event, EventBatch, EventType, JsonMap, RunSpec, RunState};
 use lemma_agent_host::runtime::HostRuntime;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use uuid::Uuid;
+
+const HOST_SECRET: &str = "real-control-e2e-host-secret";
 
 #[derive(Default)]
 struct StreamCapture {
@@ -112,7 +109,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                                 "text": format!("Reply with exactly: {marker}"),
                             })],
                             context: BTreeMap::new(),
-                            mcp_route_id: Uuid::nil(),
+                            mcp: Value::Null,
                             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
                         },
                         scratch_directory: paths
@@ -198,7 +195,7 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                     ),
                 })],
                 context: JsonMap::new(),
-                mcp_route_id: Uuid::nil(),
+                mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
             },
             scratch_directory: scratch.path().to_path_buf(),
@@ -230,27 +227,18 @@ struct ControlServerState {
     host_id: Uuid,
     user_id: Uuid,
     run_id: Uuid,
-    route_id: Uuid,
     selected_agent: String,
     published: Arc<Mutex<Option<(Uuid, String)>>>,
     command_sent: Arc<AtomicBool>,
     events: Arc<Mutex<Vec<Event>>>,
 }
 
-async fn pairing(State(state): State<ControlServerState>, Json(body): Json<Value>) -> Json<Value> {
+async fn pairing(State(state): State<ControlServerState>, Json(_body): Json<Value>) -> Json<Value> {
     Json(json!({
         "host_id": state.host_id,
         "user_id": state.user_id,
         "organization_id": null,
-        "public_key_fingerprint": fingerprint(body["public_key"].as_str().unwrap()),
-    }))
-}
-
-async fn token(State(state): State<ControlServerState>, Json(body): Json<Value>) -> Json<Value> {
-    assert_eq!(body["host_id"], state.host_id.to_string());
-    Json(json!({
-        "access_token": "real-control-e2e-token",
-        "expires_at": Utc::now() + chrono::Duration::minutes(10),
+        "host_secret": HOST_SECRET,
     }))
 }
 
@@ -302,11 +290,14 @@ async fn poll(
                 "text": "Reply with exactly: LEMMA_PAIRED_AGENT_HOST_STREAM_OK",
             })],
             context: JsonMap::new(),
-            mcp_route_id: state.route_id,
+            mcp: json!({
+                "server_name": "lemma",
+                "url": "https://unused.invalid/mcp",
+                "authorization": "Bearer unused-real-control-e2e-secret",
+            }),
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
         })
         .unwrap();
-        let payload_sha256 = hex::encode(Sha256::digest(canonical_json(&payload).unwrap()));
         vec![json!({
             "command_id": Uuid::new_v4(),
             "kind": "START_RUN",
@@ -314,7 +305,6 @@ async fn poll(
             "expires_at": Utc::now() + chrono::Duration::minutes(2),
             "run_id": state.run_id,
             "lease_epoch": 1,
-            "payload_sha256": payload_sha256,
             "payload": payload,
         })]
     } else {
@@ -322,30 +312,9 @@ async fn poll(
     };
     Ok(Json(json!({
         "protocol_version": 2,
-        "policy_revision": "real-control-e2e",
         "host_status": "ONLINE",
         "commands": commands,
         "poll_after_ms": 25,
-    })))
-}
-
-async fn mcp_route(
-    State(state): State<ControlServerState>,
-    headers: HeaderMap,
-    AxumPath(route_id): AxumPath<Uuid>,
-) -> Result<Json<Value>, StatusCode> {
-    require_auth(&headers)?;
-    assert_eq!(route_id, state.route_id);
-    Ok(Json(json!({
-        "route_id": route_id,
-        "run_id": state.run_id,
-        "lease_epoch": 1,
-        "expires_at": Utc::now() + chrono::Duration::minutes(5),
-        "mcp": {
-            "server_name": "lemma",
-            "url": "https://unused.invalid/mcp",
-            "authorization": "Bearer unused-real-control-e2e-secret",
-        },
     })))
 }
 
@@ -370,24 +339,9 @@ fn require_auth(headers: &HeaderMap) -> Result<(), StatusCode> {
     (headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
-        == Some("Bearer real-control-e2e-token"))
+        == Some(format!("Bearer {HOST_SECRET}").as_str()))
     .then_some(())
     .ok_or(StatusCode::UNAUTHORIZED)
-}
-
-fn fingerprint(public_key: &str) -> String {
-    let key = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(public_key)
-        .unwrap();
-    hex::encode(Sha256::digest(key))
-}
-
-struct KeyringCleanup(Uuid);
-
-impl Drop for KeyringCleanup {
-    fn drop(&mut self) {
-        let _ = KeyringVault.delete(&identity_vault_key(self.0));
-    }
 }
 
 async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
@@ -395,7 +349,6 @@ async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
         host_id: Uuid::new_v4(),
         user_id: Uuid::new_v4(),
         run_id: Uuid::new_v4(),
-        route_id: Uuid::new_v4(),
         selected_agent: agent.to_owned(),
         published: Arc::new(Mutex::new(None)),
         command_sent: Arc::new(AtomicBool::new(false)),
@@ -403,11 +356,9 @@ async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
     };
     let app = Router::new()
         .route("/agent-host/pairings:complete", post(pairing))
-        .route("/agent-host/token:exchange", post(token))
         .route("/agent-host/harnesses", put(publish))
         .route("/agent-host/poll", post(poll))
         .route("/agent-host/events:append", post(append_events))
-        .route("/agent-host/mcp-routes/{route_id}", get(mcp_route))
         .with_state(state.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -419,27 +370,15 @@ async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&source_paths.adapters, &paths.adapters).unwrap();
     let installation_id = Uuid::new_v4().to_string();
-    let manifest = AdapterManifest::builtin().unwrap();
-    let memory_vault = MemoryVault::default();
     let target = TargetClient::pair(
         url::Url::parse(&format!("http://{address}/")).unwrap(),
         "real-control-e2e-pairing-code",
         "Real control E2E",
         &installation_id,
-        &manifest,
-        &memory_vault,
         true,
     )
     .await
     .unwrap();
-    let _cleanup = KeyringCleanup(target.target_id);
-    let identity_key = identity_vault_key(target.target_id);
-    KeyringVault
-        .set(
-            &identity_key,
-            &memory_vault.get(&identity_key).unwrap().unwrap(),
-        )
-        .unwrap();
     let config = HostConfig {
         installation_id,
         targets: vec![target],
@@ -447,7 +386,7 @@ async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
     };
     config.save(&paths).unwrap();
 
-    let runtime = HostRuntime::new(config, paths.clone(), Arc::new(memory_vault)).unwrap();
+    let runtime = HostRuntime::new(config, paths.clone()).unwrap();
     let runtime =
         runtime.with_mcp_bridge_executable(PathBuf::from(env!("CARGO_BIN_EXE_lemma-agent-host")));
     let runtime_handle = tokio::spawn(runtime.serve());

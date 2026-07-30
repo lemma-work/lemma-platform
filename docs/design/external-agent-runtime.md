@@ -86,8 +86,28 @@ DELETE /me/runtime/agent-hosts/{host_id}
 GET    /me/runtime/agent-hosts/{host_id}/harnesses
 ```
 
-The device protocol uses stable routes under `/agent-host/*`. Protocol
-negotiation is numeric and occurs in the handshake rather than in URLs.
+The device protocol uses five stable routes under `/agent-host/*`:
+
+```text
+POST   /agent-host/pairings:complete
+POST   /agent-host/poll
+POST   /agent-host/events:append
+PUT    /agent-host/harnesses
+POST   /agent-host/revoke
+```
+
+Protocol negotiation is numeric and occurs in the handshake rather than in
+URLs.
+
+## Device authentication
+
+Pairing issues one opaque 256-bit host secret per installation, returned
+exactly once from `pairings:complete` and stored server-side only as a SHA-256
+hash. The host sends it as a bearer credential on every device request;
+verification is a single indexed lookup plus the revocation check. Re-pairing
+the same installation rotates the secret; revoking a host invalidates it
+immediately. A database leak therefore exposes no usable credentials, and the
+local secret lives only in the host's owner-only `config.json`.
 
 Workspace reservation:
 
@@ -106,11 +126,11 @@ supports multiple workspaces per user.
 An Agent Host publishes revisioned harness snapshots containing:
 
 - harness ID, host ID, stable harness key, and display name;
-- adapter protocol `ACP` and a separate numeric protocol version;
 - adapter and upstream versions;
 - capabilities and configuration options;
 - configuration revision;
-- health, freshness, and a bounded failure reason.
+- health, freshness (`stale_after`, owned by the host), and a bounded failure
+  reason.
 
 Native ACP harnesses run direct executables after minimum-version validation.
 Packaged adapters are installed into a verified cache from exact lockfile
@@ -119,9 +139,13 @@ never downloads code.
 
 ## Dispatch reliability
 
-The server queues a command with a lease. Before local process dispatch, Agent
-Host either durably accepts it or writes a durable rejection receipt containing
-command, run, and lease identity, a bounded code, and retryability.
+The server queues a command with a lease; the START_RUN payload carries the
+run-scoped Lemma MCP configuration, encrypted at rest and decrypted only when
+the command is delivered. Before local process dispatch, Agent Host either
+durably accepts it or writes a durable rejection receipt containing command,
+run, and lease identity, a bounded code, and retryability. The lease's
+`accepted_at` timestamp is the single fence between pre-dispatch (safe to
+retry or fall back) and accepted (never repeated).
 
 Retryable pre-dispatch rejection atomically returns the command to the queue.
 Permanent pre-dispatch rejection may invoke a configured provider fallback.
@@ -142,16 +166,62 @@ ACP session loading may support future cross-turn continuity, but it does not
 make in-flight recovery safe. Agent Host reports
 `durable_session_recovery=false`.
 
+## Event delivery
+
+Host events travel in two lanes. Cosmetic message/thought chunks are
+acknowledged but never journaled in PostgreSQL; the API publishes them on the
+run's Redis channel and the run worker renders them as live typing. Every
+other event type (state changes, plans, tool calls, usage, input and
+permission requests, warnings, full-text upserts, terminal) is journaled in
+`agent_host_events` and consumed on a one-second poll.
+
+The host synthesizes full-text upserts at every segment boundary (any event
+that is not a text chunk of the same kind) and before the terminal event, so
+the durable lane alone rebuilds the exact final transcript. Upserts are
+authoritative per segment: late or replayed chunks older than the segment's
+upsert are dropped by sequence, and text sealed by an upsert or a rich-content
+block is never replaced.
+
+The PostgreSQL journal is transient transport, not history: the run worker
+deletes a run's events when the run terminalizes, and the daily sweep removes
+any orphans older than 24 hours. Final messages, artifacts, and usage persist
+in Lemma's own run storage as before.
+
 ## Retention
 
 Daily cleanup removes:
 
 - expired pairing artifacts after 24 hours;
-- expired terminal-run MCP routes after 24 hours;
-- terminal commands, events, leases, and local journal records after 30 days;
-- acknowledged event-outbox rows immediately.
+- orphaned terminal-run event rows after 24 hours;
+- terminal commands and leases, and local journal records, after 30 days.
 
 Active runs are never collected.
+
+## Alternatives considered
+
+Device authentication weighed three options:
+
+1. **Normal CLI auth** (the retired daemon's model): the host would use the
+   user's CLI session. Rejected because a CLI session is a full-user
+   credential (a compromised host could call any user API), per-machine
+   revocation is impossible without killing the user's other sessions, and a
+   background OS service should not die when a user runs `lemma auth logout`.
+2. **Pairing + opaque host secret** (chosen): enrollment stays a short
+   user-authorized code, while the credential is scoped to the five device
+   endpoints, revocable per machine, and independent of interactive login.
+   Every request already hits the database for the revocation check, so a
+   signed-token design would add no performance advantage.
+3. **Ed25519 proof-of-possession with signed-nonce token exchange**: adds a
+   keypair, a nonce replay table, clock-skew failure modes, and a custom token
+   format for a marginal gain over TLS plus a hashed opaque secret, since key
+   and token would sit on the same disk. Not worth the moving parts.
+
+For event delivery, per-chunk PostgreSQL journaling was rejected: a chatty run
+writes thousands of rows that are immediately coalesced and never read again,
+and the run consumer never resumes after a worker crash (the orphaned-run
+sweeper fails the run), so chunk durability buys nothing. The host journals
+everything locally until acknowledged; the server journals only durable event
+types and treats them as transient transport.
 
 ## Breaking migration
 

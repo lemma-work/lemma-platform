@@ -11,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
-    AgentHostCheckpoint,
     AgentHostCommandState,
     AgentHostHarnessSnapshot,
     AgentHostRunState,
@@ -26,14 +25,17 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
     utcnow,
 )
 from app.modules.agent.infrastructure.runtime_models import (
-    AgentHostAuthNonceModel,
     AgentHostCommandModel,
     AgentHostHarnessModel,
-    AgentHostMcpRouteModel,
     AgentHostModel,
     AgentHostPairingModel,
     AgentHostRunLeaseModel,
 )
+
+
+# Heartbeat rows are rewritten at most this often; the 90s offline threshold
+# leaves ample slack for a host polling on a 25s long-poll deadline.
+_SEEN_WRITE_INTERVAL_SECONDS = 20
 
 
 class AgentHostRepository:
@@ -74,12 +76,12 @@ class AgentHostRepository:
         self,
         *,
         code_hash: str,
-        public_key: str,
-        public_key_fingerprint: str,
+        host_secret_hash: str,
         display_name: str,
         hello: HostHello,
         now: datetime | None = None,
     ) -> AgentHostModel:
+        """Create or re-pair a host; re-pairing rotates the host secret."""
         timestamp = now or utcnow()
         pairing = (
             await self.session.execute(
@@ -120,32 +122,22 @@ class AgentHostRepository:
                 user_id=pairing.user_id,
                 organization_id=pairing.organization_id,
                 installation_id=hello.installation_id,
-                public_key=public_key,
-                public_key_fingerprint=public_key_fingerprint,
+                host_secret_hash=host_secret_hash,
                 display_name=display_name.strip() or pairing.display_name,
                 status=status.value,
-                protocol_min=hello.protocol_min,
-                protocol_max=hello.protocol_max,
                 protocol_version=selected_protocol,
                 host_release=hello.host_release,
-                adapter_manifest_id=hello.adapter_manifest_id,
-                instance_id=hello.instance_id,
                 capacity={},
                 last_seen_at=None,
                 revoked_at=None,
             )
             self.session.add(host)
         else:
-            host.public_key = public_key
-            host.public_key_fingerprint = public_key_fingerprint
+            host.host_secret_hash = host_secret_hash
             host.display_name = display_name.strip() or pairing.display_name
             host.status = status.value
-            host.protocol_min = hello.protocol_min
-            host.protocol_max = hello.protocol_max
             host.protocol_version = selected_protocol
             host.host_release = hello.host_release
-            host.adapter_manifest_id = hello.adapter_manifest_id
-            host.instance_id = hello.instance_id
             host.revoked_at = None
 
         pairing.consumed_at = timestamp
@@ -153,7 +145,7 @@ class AgentHostRepository:
             await self.session.flush()
         except IntegrityError as exc:
             raise AgentHostPairingRejected(
-                "public key is already paired to another Agent Host"
+                "host installation is already paired"
             ) from exc
         return host
 
@@ -164,6 +156,25 @@ class AgentHostRepository:
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_many(self, host_ids: set[UUID]) -> dict[UUID, AgentHostModel]:
+        if not host_ids:
+            return {}
+        result = await self.session.execute(
+            select(AgentHostModel).where(AgentHostModel.id.in_(host_ids))
+        )
+        return {host.id: host for host in result.scalars()}
+
+    async def get_by_secret_hash(
+        self, secret_hash: str
+    ) -> AgentHostModel | None:
+        return (
+            await self.session.execute(
+                select(AgentHostModel).where(
+                    AgentHostModel.host_secret_hash == secret_hash
+                )
+            )
+        ).scalar_one_or_none()
 
     async def require(
         self, host_id: UUID, *, for_update: bool = False
@@ -200,30 +211,6 @@ class AgentHostRepository:
         )
         return list(result.scalars())
 
-    async def record_nonce(
-        self,
-        *,
-        host_id: UUID,
-        nonce_hash: str,
-        expires_at: datetime,
-    ) -> None:
-        await self.session.execute(
-            delete(AgentHostAuthNonceModel).where(
-                AgentHostAuthNonceModel.expires_at < utcnow()
-            )
-        )
-        self.session.add(
-            AgentHostAuthNonceModel(
-                host_id=host_id,
-                nonce_hash=nonce_hash,
-                expires_at=expires_at,
-            )
-        )
-        try:
-            await self.session.flush()
-        except IntegrityError as exc:
-            raise AgentHostProtocolViolation("host nonce was already used") from exc
-
     async def mark_seen(
         self,
         *,
@@ -232,32 +219,52 @@ class AgentHostRepository:
         capacity: dict,
         now: datetime | None = None,
     ) -> AgentHostModel:
+        """Record one heartbeat, rewriting the row only when something changed.
+
+        Polls arrive at least every 25s; skipping no-op writes keeps an idle
+        host from producing a locked row update on every request.
+        """
         timestamp = now or utcnow()
-        host = await self.require(host_id, for_update=True)
+        host = await self.require(host_id)
         if host.revoked_at is not None:
-            host.status = AgentHostStatus.REVOKED.value
             raise AgentHostProtocolViolation("Agent Host is revoked")
         if host.installation_id != hello.installation_id:
             raise AgentHostProtocolViolation("installation identity changed")
-        host.protocol_min = hello.protocol_min
-        host.protocol_max = hello.protocol_max
-        host.host_release = hello.host_release
-        host.adapter_manifest_id = hello.adapter_manifest_id
-        host.instance_id = hello.instance_id
-        host.capacity = capacity
-        host.last_seen_at = timestamp
+
         try:
-            host.protocol_version = hello.negotiate()
+            protocol = hello.negotiate()
             explicitly_draining = capacity.get("available_runs") == 0 and capacity.get(
                 "active_runs", 0
             ) < capacity.get("max_runs", 0)
-            if explicitly_draining:
-                host.status = AgentHostStatus.DRAINING.value
-            elif host.status != AgentHostStatus.DEGRADED.value:
-                host.status = AgentHostStatus.ONLINE.value
+            status = (
+                AgentHostStatus.DRAINING
+                if explicitly_draining
+                else AgentHostStatus.ONLINE
+            )
         except ValueError:
-            host.protocol_version = None
-            host.status = AgentHostStatus.UPGRADE_REQUIRED.value
+            protocol = None
+            status = AgentHostStatus.UPGRADE_REQUIRED
+
+        recently_seen = host.last_seen_at is not None and host.last_seen_at > (
+            timestamp - timedelta(seconds=_SEEN_WRITE_INTERVAL_SECONDS)
+        )
+        unchanged = (
+            host.protocol_version == protocol
+            and host.host_release == hello.host_release
+            and host.status == status.value
+            and (host.capacity or {}) == capacity
+        )
+        if recently_seen and unchanged:
+            return host
+
+        host = await self.require(host_id, for_update=True)
+        if host.revoked_at is not None:
+            raise AgentHostProtocolViolation("Agent Host is revoked")
+        host.protocol_version = protocol
+        host.host_release = hello.host_release
+        host.capacity = capacity
+        host.status = status.value
+        host.last_seen_at = timestamp
         await self.session.flush()
         return host
 
@@ -298,22 +305,11 @@ class AgentHostRepository:
             if AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES:
                 continue
             lease.state = AgentHostRunState.CANCELLED.value
-            lease.checkpoint = AgentHostCheckpoint.TERMINAL.value
             lease.error_code = "HOST_REVOKED"
             lease.error_detail = "The Agent Host was revoked by its owner"
             lease.terminal_at = timestamp
             lease.lease_expires_at = timestamp
             lease.updated_at = timestamp
-        route_rows = await self.session.execute(
-            select(AgentHostMcpRouteModel)
-            .where(
-                AgentHostMcpRouteModel.host_id == host_id,
-                AgentHostMcpRouteModel.revoked_at.is_(None),
-            )
-            .with_for_update()
-        )
-        for route in route_rows.scalars():
-            route.revoked_at = timestamp
         await self.session.flush()
         return host
 
@@ -339,21 +335,16 @@ class AgentHostRepository:
         ).scalar_one_or_none()
         values = {
             "display_name": snapshot.display_name,
-            "adapter_protocol": snapshot.adapter_protocol.value,
-            "adapter_protocol_version": snapshot.adapter_protocol_version,
             "adapter_version": snapshot.adapter_version,
             "upstream_version": snapshot.upstream_version,
-            "auth_state": snapshot.auth_state,
             "health": snapshot.health.value,
             "capabilities": snapshot.capabilities.model_dump(mode="json"),
             "config_revision": snapshot.config_revision,
             "config_options": [
                 option.model_dump(mode="json") for option in snapshot.config_options
             ],
-            "fetched_at": snapshot.fetched_at,
             "stale_after": snapshot.stale_after,
             "stale_reason": snapshot.stale_reason,
-            "harness_metadata": snapshot.metadata,
         }
         if harness is None:
             harness = AgentHostHarnessModel(
@@ -380,6 +371,19 @@ class AgentHostRepository:
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def get_harnesses(
+        self,
+        harness_ids: set[UUID],
+    ) -> dict[UUID, AgentHostHarnessModel]:
+        if not harness_ids:
+            return {}
+        result = await self.session.execute(
+            select(AgentHostHarnessModel).where(
+                AgentHostHarnessModel.id.in_(harness_ids)
+            )
+        )
+        return {harness.id: harness for harness in result.scalars()}
 
     async def list_harnesses(
         self,

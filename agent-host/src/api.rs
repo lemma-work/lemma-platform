@@ -1,22 +1,16 @@
 //! Authenticated HTTPS client for a single Lemma target.
 
-use std::sync::Arc;
-
-use chrono::{Duration as ChronoDuration, Utc};
 use reqwest::{Client, Method, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
 
-use crate::adapters::AdapterManifest;
 use crate::config::TargetConfig;
-use crate::crypto::{DeviceIdentity, SecretVault, random_nonce};
 use crate::protocol::{
     CommandRejection, EventAck, EventBatch, HarnessPublishRequest, HarnessSnapshot, HostCapacity,
-    HostHello, McpRoute, PairingCompleteRequest, PairingCompleteResponse, PollRequest,
-    PollResponse, RunCheckpoint, TokenExchangeRequest, TokenResponse,
+    HostHello, PairingCompleteRequest, PairingCompleteResponse, PollRequest, PollResponse,
+    RunCheckpoint,
 };
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -36,11 +30,7 @@ struct HarnessPublishResponse {
 pub struct TargetClient {
     target: TargetConfig,
     installation_id: String,
-    instance_id: Uuid,
-    manifest_id: String,
-    identity: DeviceIdentity,
     http: Client,
-    token: Arc<Mutex<Option<TokenResponse>>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -69,19 +59,7 @@ impl ApiError {
 }
 
 impl TargetClient {
-    pub fn new(
-        target: TargetConfig,
-        installation_id: impl Into<String>,
-        instance_id: Uuid,
-        manifest: &AdapterManifest,
-        vault: &dyn SecretVault,
-    ) -> anyhow::Result<Self> {
-        let identity = DeviceIdentity::load_or_create(vault, target.target_id)?;
-        anyhow::ensure!(
-            identity.fingerprint() == target.public_key_fingerprint,
-            "stored device identity does not match target {}",
-            target.name
-        );
+    pub fn new(target: TargetConfig, installation_id: impl Into<String>) -> anyhow::Result<Self> {
         let http = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .timeout(std::time::Duration::from_secs(35))
@@ -90,37 +68,23 @@ impl TargetClient {
         Ok(Self {
             target,
             installation_id: installation_id.into(),
-            instance_id,
-            manifest_id: manifest.manifest_id.clone(),
-            identity,
             http,
-            token: Arc::new(Mutex::new(None)),
         })
     }
 
+    /// Consume a one-time pairing code and persist the issued host secret.
     pub async fn pair(
         base_url: Url,
         pairing_code: &str,
         display_name: &str,
         installation_id: &str,
-        manifest: &AdapterManifest,
-        vault: &dyn SecretVault,
         allow_insecure_http: bool,
     ) -> anyhow::Result<TargetConfig> {
         validate_target_url(&base_url, allow_insecure_http)?;
-        let target_id = Uuid::new_v4();
-        let identity = DeviceIdentity::load_or_create(vault, target_id)?;
-        let nonce = random_nonce();
-        let timestamp = Utc::now().timestamp();
-        let hello = HostHello::current(&manifest.manifest_id, installation_id, Uuid::new_v4());
         let request = PairingCompleteRequest {
             pairing_code: pairing_code.to_owned(),
-            public_key: identity.public_key(),
             display_name: display_name.to_owned(),
-            hello,
-            nonce: nonce.clone(),
-            timestamp,
-            signature: identity.sign_pairing(pairing_code, installation_id, timestamp, &nonce),
+            hello: HostHello::current(installation_id),
         };
         let client = Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -131,17 +95,17 @@ impl TargetClient {
         let response = client.post(endpoint).json(&request).send().await?;
         let response: PairingCompleteResponse = decode(response).await?;
         anyhow::ensure!(
-            response.public_key_fingerprint == identity.fingerprint(),
-            "server returned a different device-key fingerprint"
+            !response.host_secret.is_empty(),
+            "server returned an empty host secret"
         );
         Ok(TargetConfig {
-            target_id,
+            target_id: Uuid::new_v4(),
             name: display_name.to_owned(),
             base_url,
             host_id: response.host_id,
             user_id: response.user_id,
             organization_id: response.organization_id,
-            public_key_fingerprint: response.public_key_fingerprint,
+            host_secret: response.host_secret,
             enabled: true,
             allow_insecure_http,
             draining: false,
@@ -156,7 +120,7 @@ impl TargetClient {
 
     #[must_use]
     pub fn hello(&self) -> HostHello {
-        HostHello::current(&self.manifest_id, &self.installation_id, self.instance_id)
+        HostHello::current(&self.installation_id)
     }
 
     pub async fn poll(
@@ -190,12 +154,6 @@ impl TargetClient {
         decode(response).await
     }
 
-    pub async fn resolve_mcp_route(&self, route_id: Uuid) -> Result<McpRoute, ApiError> {
-        let path = format!("agent-host/mcp-routes/{route_id}");
-        let response = self.authenticated::<()>(Method::GET, &path, None).await?;
-        decode(response).await
-    }
-
     pub async fn publish_harnesses(
         &self,
         snapshots: Vec<HarnessSnapshot>,
@@ -226,53 +184,15 @@ impl TargetClient {
         path: &str,
         body: Option<&T>,
     ) -> Result<reqwest::Response, ApiError> {
-        let access_token = self.access_token().await?;
         let url = endpoint(&self.target.base_url, path)?;
         let mut request = self
             .http
-            .request(method.clone(), url)
-            .bearer_auth(&access_token);
+            .request(method, url)
+            .bearer_auth(&self.target.host_secret);
         if let Some(body) = body {
             request = request.json(body);
         }
-        let response = request.send().await?;
-        if response.status() != StatusCode::UNAUTHORIZED {
-            return Ok(response);
-        }
-
-        *self.token.lock().await = None;
-        let access_token = self.access_token().await?;
-        let url = endpoint(&self.target.base_url, path)?;
-        let mut retry = self.http.request(method, url).bearer_auth(access_token);
-        if let Some(body) = body {
-            retry = retry.json(body);
-        }
-        Ok(retry.send().await?)
-    }
-
-    async fn access_token(&self) -> Result<String, ApiError> {
-        let mut cache = self.token.lock().await;
-        if let Some(token) = cache.as_ref()
-            && token.expires_at > Utc::now() + ChronoDuration::seconds(30)
-        {
-            return Ok(token.access_token.clone());
-        }
-        let nonce = random_nonce();
-        let timestamp = Utc::now().timestamp();
-        let request = TokenExchangeRequest {
-            host_id: self.target.host_id,
-            nonce: nonce.clone(),
-            timestamp,
-            signature: self
-                .identity
-                .sign_token_exchange(self.target.host_id, timestamp, &nonce),
-        };
-        let url = endpoint(&self.target.base_url, "agent-host/token:exchange")?;
-        let response = self.http.post(url).json(&request).send().await?;
-        let token: TokenResponse = decode(response).await?;
-        let access_token = token.access_token.clone();
-        *cache = Some(token);
-        Ok(access_token)
+        Ok(request.send().await?)
     }
 }
 

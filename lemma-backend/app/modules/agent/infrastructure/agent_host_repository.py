@@ -1,8 +1,8 @@
 """PostgreSQL repositories for Agent Host.
 
 Transport delivery is intentionally at-least-once. These repositories enforce
-the durable fencing, checkpoint, and event-deduplication rules that make replay
-safe across API and host restarts.
+the durable fencing, acceptance, and event-deduplication rules that make
+replay safe across API and host restarts.
 """
 
 from __future__ import annotations
@@ -13,10 +13,11 @@ from uuid import UUID
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
+from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.agent_host import (
+    AGENT_HOST_STREAM_EVENT_TYPES,
     TERMINAL_AGENT_HOST_RUN_STATES,
-    AgentHostCheckpoint,
     AgentHostCommand,
     AgentHostCommandKind,
     AgentHostCommandRejection,
@@ -28,8 +29,7 @@ from app.modules.agent.domain.agent_host import (
     AgentHostRunCheckpoint,
     AgentHostRunSpec,
     AgentHostRunState,
-    canonical_json_sha256,
-    checkpoint_advances,
+    run_state_progresses,
     validate_agent_host_selections,
 )
 from app.modules.agent.infrastructure.agent_host_management_repository import (
@@ -47,13 +47,18 @@ from app.modules.agent.infrastructure.agent_host_repository_common import (
     utcnow,
 )
 from app.modules.agent.infrastructure.runtime_models import (
-    AgentHostAuthNonceModel,
     AgentHostCommandModel,
     AgentHostEventModel,
-    AgentHostMcpRouteModel,
     AgentHostPairingModel,
     AgentHostRunLeaseModel,
 )
+
+
+# Transient authorization records and durable-lane event rows are diagnostic
+# only once a run terminalizes; they are never needed beyond a day. Commands
+# and leases document dispatch history and are retained longer.
+_TRANSIENT_RETENTION = timedelta(hours=24)
+_DISPATCH_RETENTION = timedelta(days=30)
 
 
 class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
@@ -68,16 +73,13 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
     ) -> dict[str, int]:
         """Remove expired protocol records without touching active runs.
 
-        Short-lived authorization records remain available for 24 hours after
-        expiry for diagnostics. Durable dispatch records remain for 30 days
-        after a run terminalizes. The terminal-run subquery is deliberately
-        shared by every run-scoped deletion so a clock anomaly can never sweep
-        an active run merely because a command or route timestamp is old.
+        The terminal-run subquery is deliberately shared by every run-scoped
+        deletion so a clock anomaly can never sweep an active run merely
+        because a command or event timestamp is old.
         """
         timestamp = now or utcnow()
-        authorization_cutoff = timestamp - timedelta(hours=24)
-        route_cutoff = timestamp - timedelta(hours=24)
-        durable_cutoff = timestamp - timedelta(days=30)
+        transient_cutoff = timestamp - _TRANSIENT_RETENTION
+        durable_cutoff = timestamp - _DISPATCH_RETENTION
         terminal_runs = select(AgentHostRunLeaseModel.run_id).where(
             AgentHostRunLeaseModel.terminal_at.is_not(None)
         )
@@ -91,27 +93,13 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             (
                 "pairings",
                 delete(AgentHostPairingModel).where(
-                    AgentHostPairingModel.expires_at < authorization_cutoff
-                ),
-            ),
-            (
-                "auth_nonces",
-                delete(AgentHostAuthNonceModel).where(
-                    AgentHostAuthNonceModel.expires_at < authorization_cutoff
-                ),
-            ),
-            (
-                "mcp_routes",
-                delete(AgentHostMcpRouteModel).where(
-                    AgentHostMcpRouteModel.expires_at < route_cutoff,
-                    AgentHostMcpRouteModel.run_id.in_(terminal_runs),
+                    AgentHostPairingModel.expires_at < transient_cutoff
                 ),
             ),
             (
                 "events",
                 delete(AgentHostEventModel).where(
-                    AgentHostEventModel.created_at < durable_cutoff,
-                    AgentHostEventModel.run_id.in_(old_terminal_runs),
+                    AgentHostEventModel.run_id.in_(terminal_runs)
                 ),
             ),
             (
@@ -134,6 +122,14 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             counts[label] = result.rowcount or 0
         await self.session.flush()
         return counts
+
+    async def delete_run_events(self, *, run_id: UUID) -> int:
+        """Drop the durable event journal for one run (transient transport)."""
+        result = await self.session.execute(
+            delete(AgentHostEventModel).where(AgentHostEventModel.run_id == run_id)
+        )
+        await self.session.flush()
+        return result.rowcount or 0
 
     async def enqueue_run(
         self,
@@ -209,74 +205,29 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             runtime_profile_id=runtime_profile_id,
             lease_epoch=1,
             state=AgentHostRunState.QUEUED_FOR_HOST.value,
-            checkpoint=None,
+            accepted_at=None,
             lease_expires_at=timestamp + timedelta(seconds=command_ttl_seconds),
             acked_event_sequence=0,
             created_at=timestamp,
             updated_at=timestamp,
         )
         payload = run_spec.model_dump(mode="json")
+        # The MCP configuration carries run-scoped credentials, so it rests
+        # encrypted inside the command and is decrypted only when the command
+        # is delivered to the host.
+        payload["encrypted_mcp"] = encrypted_mcp_payload
         command = AgentHostCommandModel(
             host_id=host_id,
             run_id=run_spec.agent_run_id,
             kind=AgentHostCommandKind.START_RUN.value,
             lease_epoch=lease.lease_epoch,
-            payload_digest=canonical_json_sha256(payload),
             payload=payload,
             state=AgentHostCommandState.QUEUED.value,
             expires_at=timestamp + timedelta(seconds=command_ttl_seconds),
         )
         self.session.add_all([lease, command])
-        try:
-            route_id = UUID(run_spec.mcp_route_id)
-        except ValueError as exc:
-            raise AgentHostProtocolViolation("MCP route ID must be a UUID") from exc
-        self.session.add(
-            AgentHostMcpRouteModel(
-                id=route_id,
-                host_id=host_id,
-                run_id=run_spec.agent_run_id,
-                lease_epoch=lease.lease_epoch,
-                encrypted_payload=encrypted_mcp_payload,
-                expires_at=run_spec.run_deadline,
-            )
-        )
         await self.session.flush()
         return command
-
-    async def resolve_mcp_route(
-        self,
-        *,
-        route_id: UUID,
-        host_id: UUID,
-        now: datetime | None = None,
-    ) -> AgentHostMcpRouteModel:
-        timestamp = now or utcnow()
-        route = await self.session.get(
-            AgentHostMcpRouteModel,
-            route_id,
-            with_for_update=True,
-        )
-        if route is None or route.host_id != host_id:
-            raise AgentHostNotFound("MCP route was not found")
-        if route.revoked_at is not None or route.expires_at < timestamp:
-            raise AgentHostProtocolViolation("MCP route is expired or revoked")
-        lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            route.run_id,
-            with_for_update=True,
-        )
-        if (
-            lease is None
-            or lease.host_id != host_id
-            or lease.lease_epoch != route.lease_epoch
-            or lease.lease_expires_at < timestamp
-            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-        ):
-            raise AgentHostProtocolViolation("MCP route lease is no longer active")
-        route.last_resolved_at = timestamp
-        await self.session.flush()
-        return route
 
     async def poll_commands(
         self,
@@ -358,7 +309,7 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
                 lease.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
                 lease.updated_at = timestamp
                 remaining_run_slots -= 1
-            wire_commands.append(self._wire_command(command))
+            wire_commands.append(await self._wire_command(command))
         await self.session.flush()
         return wire_commands
 
@@ -403,16 +354,18 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         ):
             return
         if (
-            lease.checkpoint is not None
+            lease.accepted_at is not None
             or command.state == AgentHostCommandState.ACKNOWLEDGED.value
             or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
         ):
             return
 
-        command.rejection_code = rejection.code.value
-        command.rejection_retryable = rejection.retryable
-        command.rejection_detail = rejection.detail
-        command.rejected_at = timestamp
+        command.rejection = {
+            "code": rejection.code.value,
+            "retryable": rejection.retryable,
+            "detail": rejection.detail,
+            "rejected_at": timestamp.isoformat(),
+        }
         if rejection.retryable:
             command.state = AgentHostCommandState.QUEUED.value
             command.delivered_at = None
@@ -477,22 +430,19 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             raise AgentHostNotFound("run lease does not belong to this host")
         if lease.lease_epoch != checkpoint.lease_epoch:
             raise AgentHostProtocolViolation("stale run lease epoch")
-        previous = (
-            AgentHostCheckpoint(lease.checkpoint)
-            if lease.checkpoint is not None
-            else None
-        )
-        if not checkpoint_advances(previous, checkpoint.checkpoint):
-            raise AgentHostProtocolViolation("run checkpoint regressed")
         current_state = AgentHostRunState(lease.state)
+        reported = checkpoint.state
         if current_state in TERMINAL_AGENT_HOST_RUN_STATES:
-            if checkpoint.state is not current_state:
+            if reported is not current_state:
                 raise AgentHostProtocolViolation("terminal run state cannot change")
             return lease
-        if checkpoint.state in TERMINAL_AGENT_HOST_RUN_STATES:
+        if not run_state_progresses(current_state, reported):
+            raise AgentHostProtocolViolation("run state regressed")
+        if lease.accepted_at is None:
+            lease.accepted_at = timestamp
+        if reported in TERMINAL_AGENT_HOST_RUN_STATES:
             lease.terminal_at = timestamp
-        lease.checkpoint = checkpoint.checkpoint.value
-        lease.state = checkpoint.state.value
+        lease.state = reported.value
         lease.lease_expires_at = timestamp + timedelta(seconds=lease_seconds)
         lease.updated_at = timestamp
         await self.session.flush()
@@ -504,7 +454,14 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         host_id: UUID,
         batch: AgentHostEventBatch,
         now: datetime | None = None,
-    ) -> AgentHostEventAck:
+    ) -> tuple[AgentHostEventAck, list[AgentHostEvent]]:
+        """Append one ordered batch, splitting durable and stream lanes.
+
+        Durable event types are journaled idempotently; cosmetic chunk events
+        are only acknowledged and returned so the caller can publish them on
+        the run's realtime channel after commit. Already-acknowledged replays
+        are skipped (first write wins on the sequence fence).
+        """
         timestamp = now or utcnow()
         first = batch.events[0]
         lease = await self.session.get(
@@ -523,23 +480,9 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             raise AgentHostProtocolViolation("event batch spans multiple run leases")
         expected = lease.acked_event_sequence + 1
         terminal = AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
+        stream_events: list[AgentHostEvent] = []
         for event in batch.events:
             if event.sequence < expected:
-                existing = (
-                    await self.session.execute(
-                        select(AgentHostEventModel)
-                        .where(
-                            AgentHostEventModel.run_id == event.run_id,
-                            AgentHostEventModel.lease_epoch == event.lease_epoch,
-                            AgentHostEventModel.sequence == event.sequence,
-                        )
-                        .limit(1)
-                    )
-                ).scalar_one_or_none()
-                if existing is None or existing.payload_digest != event.payload_digest:
-                    raise AgentHostProtocolViolation(
-                        "replayed event sequence has a different digest"
-                    )
                 continue
             if terminal:
                 raise AgentHostProtocolViolation("terminal run cannot accept events")
@@ -547,7 +490,10 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
                 raise AgentHostProtocolViolation(
                     f"event sequence gap: expected {expected}, got {event.sequence}"
                 )
-            self.session.add(self._event_model(event))
+            if event.type in AGENT_HOST_STREAM_EVENT_TYPES:
+                stream_events.append(event)
+            else:
+                self.session.add(self._event_model(event))
             expected += 1
 
         try:
@@ -563,10 +509,13 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         lease.lease_expires_at = max(lease.lease_expires_at, timestamp)
         lease.updated_at = timestamp
         await self.session.flush()
-        return AgentHostEventAck(
-            run_id=lease.run_id,
-            lease_epoch=lease.lease_epoch,
-            acked_through=lease.acked_event_sequence,
+        return (
+            AgentHostEventAck(
+                run_id=lease.run_id,
+                lease_epoch=lease.lease_epoch,
+                acked_through=lease.acked_event_sequence,
+            ),
+            stream_events,
         )
 
     async def events_after(
@@ -611,14 +560,12 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
         ):
             return None
-        payload = {"agent_run_id": str(run_id)}
         command = AgentHostCommandModel(
             host_id=lease.host_id,
             run_id=run_id,
             kind=AgentHostCommandKind.CANCEL_RUN.value,
             lease_epoch=lease.lease_epoch,
-            payload_digest=canonical_json_sha256(payload),
-            payload=payload,
+            payload={"agent_run_id": str(run_id)},
             state=AgentHostCommandState.QUEUED.value,
             expires_at=timestamp + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
         )
@@ -627,7 +574,14 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
         return command
 
     @staticmethod
-    def _wire_command(command: AgentHostCommandModel) -> AgentHostCommand:
+    async def _wire_command(command: AgentHostCommandModel) -> AgentHostCommand:
+        payload = dict(command.payload or {})
+        encrypted_mcp = payload.pop("encrypted_mcp", None)
+        if encrypted_mcp is not None:
+            mcp = await get_secret_cipher().decrypt_json_async(encrypted_mcp)
+            if mcp is None:
+                raise AgentHostProtocolViolation("MCP payload is unavailable")
+            payload["mcp"] = mcp
         return AgentHostCommand(
             command_id=command.id,
             kind=AgentHostCommandKind(command.kind),
@@ -635,8 +589,7 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             expires_at=command.expires_at,
             run_id=command.run_id,
             lease_epoch=command.lease_epoch,
-            payload_sha256=command.payload_digest,
-            payload=command.payload or {},
+            payload=payload,
         )
 
     @staticmethod
@@ -650,7 +603,4 @@ class AgentHostDispatchRepository(AgentHostRecoveryRepositoryMixin):
             type=event.type.value,
             object_id=event.object_id,
             payload=event.payload,
-            payload_digest=event.payload_digest,
-            harness_key=event.harness_key,
-            adapter_version=event.adapter_version,
         )

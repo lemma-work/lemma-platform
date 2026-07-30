@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.modules.agent.domain.agent_host import AgentHostEventType
 from app.modules.agent.domain.value_objects import (
     AgentEventType,
     MessageDraft,
@@ -315,6 +316,115 @@ def test_normalizer_maps_acp_execute_to_terminal_command() -> None:
         "exit_code": 0,
         "formatted_output": "42\n",
     }
+
+
+def test_upsert_supersedes_late_chunks_but_not_new_segment_chunks() -> None:
+    normalizer = AgentHostEventNormalizer(
+        agent_run_id=uuid4(),
+        model_name="gpt-test",
+    )
+    # Live chunks stream ahead of the durable upsert for the same segment.
+    normalizer.normalize_stream(
+        sequence=5,
+        event_type=AgentHostEventType.AGENT_MESSAGE_CHUNK,
+        object_id="m-1",
+        payload={"text": "partial"},
+    )
+    applied = normalizer.normalize(
+        _row(
+            sequence=7,
+            event_type="agent_message_upsert",
+            object_id="m-1",
+            payload={"text": "partial answer"},
+        )
+    )
+    # A stale chunk replayed after its segment's upsert is dropped entirely.
+    stale = normalizer.normalize_stream(
+        sequence=6,
+        event_type=AgentHostEventType.AGENT_MESSAGE_CHUNK,
+        object_id="m-1",
+        payload={"text": " STALE"},
+    )
+    # A chunk from the next segment still streams.
+    fresh = normalizer.normalize_stream(
+        sequence=8,
+        event_type=AgentHostEventType.AGENT_MESSAGE_CHUNK,
+        object_id="m-2",
+        payload={"text": " next"},
+    )
+    terminal = normalizer.normalize(
+        _row(
+            sequence=9,
+            event_type="terminal",
+            object_id=None,
+            payload={"state": "SUCCEEDED"},
+        )
+    )
+
+    assert applied == []
+    assert stale == []
+    assert fresh == []
+    final_messages = [
+        event.data
+        for event in terminal
+        if event.type is AgentEventType.MESSAGE and getattr(event.data, "text", None)
+    ]
+    assert len(final_messages) == 1
+    assert final_messages[0].text == "partial answer next"
+
+
+def test_rich_content_chunk_seals_the_segment_before_the_next_upsert() -> None:
+    normalizer = AgentHostEventNormalizer(
+        agent_run_id=uuid4(),
+        model_name="gpt-test",
+    )
+    normalizer.normalize(
+        _row(
+            sequence=1,
+            event_type="agent_message_upsert",
+            object_id="m-1",
+            payload={"text": "before"},
+        )
+    )
+    normalizer.normalize(
+        _row(
+            sequence=2,
+            event_type="agent_message_chunk",
+            object_id="image-1",
+            payload={
+                "content": {
+                    "type": "image",
+                    "data": "base64",
+                    "mimeType": "image/png",
+                }
+            },
+        ),
+        payload_override={"text": "\n\n![poster](/files/poster.png)"},
+    )
+    normalizer.normalize(
+        _row(
+            sequence=3,
+            event_type="agent_message_upsert",
+            object_id="m-2",
+            payload={"text": "after"},
+        )
+    )
+    terminal = normalizer.normalize(
+        _row(
+            sequence=4,
+            event_type="terminal",
+            object_id=None,
+            payload={"state": "SUCCEEDED"},
+        )
+    )
+
+    final_messages = [
+        event.data
+        for event in terminal
+        if event.type is AgentEventType.MESSAGE and getattr(event.data, "text", None)
+    ]
+    assert len(final_messages) == 1
+    assert final_messages[0].text == "before\n\n![poster](/files/poster.png)after"
 
 
 def test_normalizer_maps_usage_totals() -> None:

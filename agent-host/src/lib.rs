@@ -8,7 +8,6 @@ pub mod acp;
 pub mod adapters;
 pub mod api;
 pub mod config;
-pub mod crypto;
 pub mod journal;
 pub mod mcp_bridge;
 pub mod protocol;

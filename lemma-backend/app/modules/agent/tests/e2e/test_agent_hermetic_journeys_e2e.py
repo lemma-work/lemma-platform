@@ -1318,10 +1318,8 @@ async def {function_name}(
         for item in messages.json()["items"]
         if item["kind"] == "TOOL_RETURN"
     }
-    assert returns["dynamic-function"] == {
-        "echo": {"value": "function input"},
-        "function": function_name,
-    }
+    # Dynamic function tools return the function's own output schema directly.
+    assert returns["dynamic-function"] == {"value": "function input"}
     assert "delegated child input" in str(returns["dynamic-agent"])
 
     children = await authenticated_client.get(

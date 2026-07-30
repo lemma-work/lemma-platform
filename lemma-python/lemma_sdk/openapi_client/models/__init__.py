@@ -24,9 +24,7 @@ _NAME_TO_MODULE = {
     'AgentDetailResponseInputSchemaType0': 'agent_detail_response_input_schema_type_0',
     'AgentDetailResponseMetadataType0': 'agent_detail_response_metadata_type_0',
     'AgentDetailResponseOutputSchemaType0': 'agent_detail_response_output_schema_type_0',
-    'AgentHostAdapterProtocol': 'agent_host_adapter_protocol',
     'AgentHostCapacity': 'agent_host_capacity',
-    'AgentHostCheckpoint': 'agent_host_checkpoint',
     'AgentHostCommand': 'agent_host_command',
     'AgentHostCommandKind': 'agent_host_command_kind',
     'AgentHostCommandPayload': 'agent_host_command_payload',
@@ -46,12 +44,8 @@ _NAME_TO_MODULE = {
     'AgentHostHarnessPublishResponse': 'agent_host_harness_publish_response',
     'AgentHostHarnessResponse': 'agent_host_harness_response',
     'AgentHostHarnessResponseCapabilities': 'agent_host_harness_response_capabilities',
-    'AgentHostHarnessResponseMetadata': 'agent_host_harness_response_metadata',
     'AgentHostHarnessSnapshot': 'agent_host_harness_snapshot',
-    'AgentHostHarnessSnapshotMetadata': 'agent_host_harness_snapshot_metadata',
     'AgentHostListResponse': 'agent_host_list_response',
-    'AgentHostMcpRouteResponse': 'agent_host_mcp_route_response',
-    'AgentHostMcpRouteResponseMcp': 'agent_host_mcp_route_response_mcp',
     'AgentHostPairingComplete': 'agent_host_pairing_complete',
     'AgentHostPairingCompleted': 'agent_host_pairing_completed',
     'AgentHostPairingCreate': 'agent_host_pairing_create',
@@ -65,8 +59,6 @@ _NAME_TO_MODULE = {
     'AgentHostRunCheckpointDetail': 'agent_host_run_checkpoint_detail',
     'AgentHostRunState': 'agent_host_run_state',
     'AgentHostStatus': 'agent_host_status',
-    'AgentHostTokenExchange': 'agent_host_token_exchange',
-    'AgentHostTokenResponse': 'agent_host_token_response',
     'AgentListResponse': 'agent_list_response',
     'AgentMessageResponse': 'agent_message_response',
     'AgentNode': 'agent_node',
@@ -536,9 +528,7 @@ if TYPE_CHECKING:
     from .agent_detail_response_input_schema_type_0 import AgentDetailResponseInputSchemaType0
     from .agent_detail_response_metadata_type_0 import AgentDetailResponseMetadataType0
     from .agent_detail_response_output_schema_type_0 import AgentDetailResponseOutputSchemaType0
-    from .agent_host_adapter_protocol import AgentHostAdapterProtocol
     from .agent_host_capacity import AgentHostCapacity
-    from .agent_host_checkpoint import AgentHostCheckpoint
     from .agent_host_command import AgentHostCommand
     from .agent_host_command_kind import AgentHostCommandKind
     from .agent_host_command_payload import AgentHostCommandPayload
@@ -558,12 +548,8 @@ if TYPE_CHECKING:
     from .agent_host_harness_publish_response import AgentHostHarnessPublishResponse
     from .agent_host_harness_response import AgentHostHarnessResponse
     from .agent_host_harness_response_capabilities import AgentHostHarnessResponseCapabilities
-    from .agent_host_harness_response_metadata import AgentHostHarnessResponseMetadata
     from .agent_host_harness_snapshot import AgentHostHarnessSnapshot
-    from .agent_host_harness_snapshot_metadata import AgentHostHarnessSnapshotMetadata
     from .agent_host_list_response import AgentHostListResponse
-    from .agent_host_mcp_route_response import AgentHostMcpRouteResponse
-    from .agent_host_mcp_route_response_mcp import AgentHostMcpRouteResponseMcp
     from .agent_host_pairing_complete import AgentHostPairingComplete
     from .agent_host_pairing_completed import AgentHostPairingCompleted
     from .agent_host_pairing_create import AgentHostPairingCreate
@@ -577,8 +563,6 @@ if TYPE_CHECKING:
     from .agent_host_run_checkpoint_detail import AgentHostRunCheckpointDetail
     from .agent_host_run_state import AgentHostRunState
     from .agent_host_status import AgentHostStatus
-    from .agent_host_token_exchange import AgentHostTokenExchange
-    from .agent_host_token_response import AgentHostTokenResponse
     from .agent_list_response import AgentListResponse
     from .agent_message_response import AgentMessageResponse
     from .agent_node import AgentNode
@@ -1061,9 +1045,7 @@ __all__ = [
     'AgentDetailResponseInputSchemaType0',
     'AgentDetailResponseMetadataType0',
     'AgentDetailResponseOutputSchemaType0',
-    'AgentHostAdapterProtocol',
     'AgentHostCapacity',
-    'AgentHostCheckpoint',
     'AgentHostCommand',
     'AgentHostCommandKind',
     'AgentHostCommandPayload',
@@ -1083,12 +1065,8 @@ __all__ = [
     'AgentHostHarnessPublishResponse',
     'AgentHostHarnessResponse',
     'AgentHostHarnessResponseCapabilities',
-    'AgentHostHarnessResponseMetadata',
     'AgentHostHarnessSnapshot',
-    'AgentHostHarnessSnapshotMetadata',
     'AgentHostListResponse',
-    'AgentHostMcpRouteResponse',
-    'AgentHostMcpRouteResponseMcp',
     'AgentHostPairingComplete',
     'AgentHostPairingCompleted',
     'AgentHostPairingCreate',
@@ -1102,8 +1080,6 @@ __all__ = [
     'AgentHostRunCheckpointDetail',
     'AgentHostRunState',
     'AgentHostStatus',
-    'AgentHostTokenExchange',
-    'AgentHostTokenResponse',
     'AgentListResponse',
     'AgentMessageResponse',
     'AgentNode',

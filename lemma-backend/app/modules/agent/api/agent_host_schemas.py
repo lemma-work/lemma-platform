@@ -18,19 +18,14 @@ class AgentHostHarnessResponse(BaseModel):
     host_id: UUID
     harness_key: str
     display_name: str
-    adapter_protocol: str
-    adapter_protocol_version: int
     adapter_version: str
     upstream_version: str | None
-    auth_state: str
     health: str
     capabilities: dict
     config_revision: str
     config_options: list
-    fetched_at: datetime
     stale_after: datetime
     stale_reason: str | None
-    metadata: dict
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -40,15 +35,10 @@ class AgentHostResponse(BaseModel):
     user_id: UUID
     organization_id: UUID | None
     installation_id: str
-    public_key_fingerprint: str
     display_name: str
     status: AgentHostStatus
-    protocol_min: int
-    protocol_max: int
     protocol_version: int | None
     host_release: str
-    adapter_manifest_id: str
-    instance_id: UUID | None
     capacity: dict
     last_seen_at: datetime | None
     revoked_at: datetime | None

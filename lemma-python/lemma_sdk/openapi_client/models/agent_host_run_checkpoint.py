@@ -7,7 +7,6 @@ from uuid import UUID
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-from ..models.agent_host_checkpoint import AgentHostCheckpoint
 from ..models.agent_host_run_state import AgentHostRunState
 from ..types import UNSET, Unset
 
@@ -22,14 +21,12 @@ T = TypeVar("T", bound="AgentHostRunCheckpoint")
 class AgentHostRunCheckpoint:
     """
     Attributes:
-        checkpoint (AgentHostCheckpoint):
         lease_epoch (int):
         run_id (UUID):
         state (AgentHostRunState):
         detail (AgentHostRunCheckpointDetail | Unset):
     """
 
-    checkpoint: AgentHostCheckpoint
     lease_epoch: int
     run_id: UUID
     state: AgentHostRunState
@@ -37,8 +34,6 @@ class AgentHostRunCheckpoint:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        checkpoint = self.checkpoint.value
-
         lease_epoch = self.lease_epoch
 
         run_id = str(self.run_id)
@@ -53,7 +48,6 @@ class AgentHostRunCheckpoint:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "checkpoint": checkpoint,
                 "lease_epoch": lease_epoch,
                 "run_id": run_id,
                 "state": state,
@@ -71,8 +65,6 @@ class AgentHostRunCheckpoint:
         )
 
         d = dict(src_dict)
-        checkpoint = AgentHostCheckpoint(d.pop("checkpoint"))
-
         lease_epoch = d.pop("lease_epoch")
 
         run_id = UUID(d.pop("run_id"))
@@ -87,7 +79,6 @@ class AgentHostRunCheckpoint:
             detail = AgentHostRunCheckpointDetail.from_dict(_detail)
 
         agent_host_run_checkpoint = cls(
-            checkpoint=checkpoint,
             lease_epoch=lease_epoch,
             run_id=run_id,
             state=state,

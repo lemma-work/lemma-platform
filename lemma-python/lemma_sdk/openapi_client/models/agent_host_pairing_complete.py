@@ -19,20 +19,12 @@ class AgentHostPairingComplete:
     Attributes:
         display_name (str):
         hello (HostHello):
-        nonce (str):
         pairing_code (str):
-        public_key (str):
-        signature (str):
-        timestamp (int):
     """
 
     display_name: str
     hello: HostHello
-    nonce: str
     pairing_code: str
-    public_key: str
-    signature: str
-    timestamp: int
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,15 +32,7 @@ class AgentHostPairingComplete:
 
         hello = self.hello.to_dict()
 
-        nonce = self.nonce
-
         pairing_code = self.pairing_code
-
-        public_key = self.public_key
-
-        signature = self.signature
-
-        timestamp = self.timestamp
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
@@ -56,11 +40,7 @@ class AgentHostPairingComplete:
             {
                 "display_name": display_name,
                 "hello": hello,
-                "nonce": nonce,
                 "pairing_code": pairing_code,
-                "public_key": public_key,
-                "signature": signature,
-                "timestamp": timestamp,
             }
         )
 
@@ -75,24 +55,12 @@ class AgentHostPairingComplete:
 
         hello = HostHello.from_dict(d.pop("hello"))
 
-        nonce = d.pop("nonce")
-
         pairing_code = d.pop("pairing_code")
-
-        public_key = d.pop("public_key")
-
-        signature = d.pop("signature")
-
-        timestamp = d.pop("timestamp")
 
         agent_host_pairing_complete = cls(
             display_name=display_name,
             hello=hello,
-            nonce=nonce,
             pairing_code=pairing_code,
-            public_key=public_key,
-            signature=signature,
-            timestamp=timestamp,
         )
 
         agent_host_pairing_complete.additional_properties = d

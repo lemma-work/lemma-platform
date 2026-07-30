@@ -1,7 +1,8 @@
-"""Normalize durable Agent Host events into Lemma runtime events."""
+"""Normalize durable and realtime Agent Host events into runtime events."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
@@ -20,22 +21,85 @@ from app.modules.agent.infrastructure.runtime_models import AgentHostEventModel
 from app.modules.usage.contracts import AgentRunUsage
 
 
-class AgentHostEventNormalizer:
-    """Convert durable canonical host events to the existing runtime stream."""
+@dataclass(frozen=True, slots=True)
+class AgentHostEventEnvelope:
+    """One canonical host event from either lane (journal row or stream)."""
 
-    def __init__(self, *, agent_run_id: UUID, model_name: str) -> None:
+    sequence: int
+    type: str
+    object_id: str | None
+    payload: JsonObject
+
+    @classmethod
+    def from_model(cls, row: AgentHostEventModel) -> "AgentHostEventEnvelope":
+        return cls(
+            sequence=row.sequence,
+            type=row.type,
+            object_id=row.object_id,
+            payload=_json_object(row.payload),
+        )
+
+
+class AgentHostEventNormalizer:
+    """Convert canonical host events to the existing runtime stream.
+
+    Full-text upserts are authoritative: once an upsert lands for a stream,
+    older chunk events (which travel the lossy realtime lane) are dropped so
+    out-of-order delivery can never corrupt the accumulated text.
+    """
+
+    def __init__(
+        self,
+        *,
+        agent_run_id: UUID,
+        model_name: str,
+        harness_key: str = "unknown",
+    ) -> None:
         self.agent_run_id = agent_run_id
         self.model_name = model_name
+        self.harness_key = harness_key
         self.message_text: dict[str, str] = {}
         self.thought_text: dict[str, str] = {}
         self.token_buffer = TextStreamBuffer()
         self.token_buffer_key: tuple[str, str] | None = None
         self.tool_calls: dict[str, str] = {}
         self.closed_tool_calls: set[str] = set()
+        self._authoritative_sequence: dict[str, int] = {}
+        # Per-stream length of the text sealed by upserts or rich content;
+        # only the unsealed tail of a stream may be replaced by an upsert.
+        self._sealed_length: dict[str, int] = {}
+
+    def normalize_stream(
+        self,
+        *,
+        sequence: int,
+        event_type: AgentHostEventType,
+        object_id: str | None,
+        payload: JsonObject,
+    ) -> list[AgentEvent]:
+        """Normalize one cosmetic chunk from the realtime lane.
+
+        Only chunk events travel here; anything else is ignored. Chunks that
+        predate the latest full-text upsert for their stream are stale.
+        """
+        if event_type is AgentHostEventType.AGENT_MESSAGE_CHUNK:
+            storage, stream_key, kind = self.message_text, "agent-message", "text"
+        elif event_type is AgentHostEventType.AGENT_THOUGHT_CHUNK:
+            storage, stream_key, kind = self.thought_text, "agent-thought", "thinking"
+        else:
+            return []
+        if sequence <= self._authoritative_sequence.get(stream_key, 0):
+            return []
+        return self._append_chunk(
+            payload,
+            storage,
+            stream_key=stream_key,
+            kind=kind,
+        )
 
     def normalize(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         *,
         payload_override: JsonObject | None = None,
     ) -> list[AgentEvent]:
@@ -49,31 +113,35 @@ class AgentHostEventNormalizer:
         metadata = {
             "agent_host_object_id": object_id,
             "agent_host_sequence": row.sequence,
-            "harness_key": row.harness_key,
-            "adapter_version": row.adapter_version,
+            "harness_key": self.harness_key,
         }
         if event_type is AgentHostEventType.AGENT_MESSAGE_CHUNK:
-            return self._append_chunk(
+            return self._durable_chunk(
+                row,
                 payload,
-                self.message_text,
+                storage=self.message_text,
                 stream_key="agent-message",
+                kind="text",
             )
         if event_type is AgentHostEventType.AGENT_MESSAGE_UPSERT:
-            return self._upsert_text(
+            self._authoritative_sequence["agent-message"] = row.sequence
+            return self._upsert_segment(
                 payload=payload,
                 storage=self.message_text,
                 stream_key="agent-message",
                 kind="text",
             )
         if event_type is AgentHostEventType.AGENT_THOUGHT_CHUNK:
-            return self._append_chunk(
+            return self._durable_chunk(
+                row,
                 payload,
-                self.thought_text,
+                storage=self.thought_text,
                 stream_key="agent-thought",
                 kind="thinking",
             )
         if event_type is AgentHostEventType.AGENT_THOUGHT_UPSERT:
-            return self._upsert_text(
+            self._authoritative_sequence["agent-thought"] = row.sequence
+            return self._upsert_segment(
                 payload=payload,
                 storage=self.thought_text,
                 stream_key="agent-thought",
@@ -103,6 +171,28 @@ class AgentHostEventNormalizer:
             return self._terminal(row, payload)
         return []
 
+    def _durable_chunk(
+        self,
+        row: AgentHostEventEnvelope,
+        payload: JsonObject,
+        *,
+        storage: dict[str, str],
+        stream_key: str,
+        kind: str,
+    ) -> list[AgentEvent]:
+        if row.sequence <= self._authoritative_sequence.get(stream_key, 0):
+            return []
+        original = _json_object(row.payload)
+        if not event_text(original) and original:
+            # Rich content (e.g. an image block) is durable: append any
+            # rendered markdown, then seal the segment so a later upsert
+            # cannot replace it.
+            rendered = event_text(payload)
+            storage[stream_key] = storage.get(stream_key, "") + rendered
+            self._sealed_length[stream_key] = len(storage[stream_key])
+            return self._stream_delta(rendered, kind=kind)
+        return self._append_chunk(payload, storage, stream_key=stream_key, kind=kind)
+
     def _append_chunk(
         self,
         payload: JsonObject,
@@ -117,7 +207,7 @@ class AgentHostEventNormalizer:
 
     def _tool_call_upsert(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         object_id: str,
         payload: JsonObject,
         metadata: JsonObject,
@@ -145,7 +235,7 @@ class AgentHostEventNormalizer:
 
     def _tool_call_update(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         object_id: str,
         payload: JsonObject,
         metadata: JsonObject,
@@ -186,7 +276,7 @@ class AgentHostEventNormalizer:
 
     def _usage_update(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         payload: JsonObject,
         metadata: JsonObject,
     ) -> AgentEvent:
@@ -208,7 +298,7 @@ class AgentHostEventNormalizer:
 
     def _status(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         status_value: str,
         payload: JsonObject,
         metadata: JsonObject,
@@ -222,7 +312,7 @@ class AgentHostEventNormalizer:
 
     def _permission_denied(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         payload: JsonObject,
         metadata: JsonObject,
     ) -> list[AgentEvent]:
@@ -232,7 +322,7 @@ class AgentHostEventNormalizer:
 
     def _input_request(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         payload: JsonObject,
         metadata: JsonObject,
     ) -> list[AgentEvent]:
@@ -264,7 +354,7 @@ class AgentHostEventNormalizer:
 
     def _terminal(
         self,
-        row: AgentHostEventModel,
+        row: AgentHostEventEnvelope,
         payload: JsonObject,
     ) -> list[AgentEvent]:
         events = self._flush_messages()
@@ -278,7 +368,7 @@ class AgentHostEventNormalizer:
         events.append(terminal)
         return events
 
-    def _upsert_text(
+    def _upsert_segment(
         self,
         *,
         payload: JsonObject,
@@ -286,15 +376,24 @@ class AgentHostEventNormalizer:
         stream_key: str,
         kind: str,
     ) -> list[AgentEvent]:
+        """Apply an authoritative full-text upsert to the current segment.
+
+        Text sealed by earlier upserts or rich content is never replaced, so
+        replaying only durable events rebuilds the exact transcript; the
+        unsealed tail is superseded by the upsert (deduplicating live chunks
+        that already streamed for the same segment).
+        """
         full_text = event_text(payload)
-        previous = storage.get(stream_key, "")
-        storage[stream_key] = full_text
-        if full_text.startswith(previous):
-            delta = full_text[len(previous) :]
-        elif full_text != previous:
-            delta = full_text
+        current = storage.get(stream_key, "")
+        sealed = self._sealed_length.get(stream_key, 0)
+        prefix = current[:sealed]
+        segment = current[sealed:]
+        if full_text.startswith(segment):
+            delta = full_text[len(segment) :]
         else:
-            delta = ""
+            delta = full_text
+        storage[stream_key] = prefix + full_text
+        self._sealed_length[stream_key] = sealed + len(full_text)
         return self._stream_delta(delta, kind=kind)
 
     def _token(self, text: str, *, kind: str = "text") -> AgentEvent:

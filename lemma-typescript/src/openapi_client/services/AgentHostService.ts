@@ -8,7 +8,6 @@ import type { AgentHostHarnessListResponse } from '../models/AgentHostHarnessLis
 import type { AgentHostHarnessPublishRequest } from '../models/AgentHostHarnessPublishRequest.js';
 import type { AgentHostHarnessPublishResponse } from '../models/AgentHostHarnessPublishResponse.js';
 import type { AgentHostListResponse } from '../models/AgentHostListResponse.js';
-import type { AgentHostMcpRouteResponse } from '../models/AgentHostMcpRouteResponse.js';
 import type { AgentHostPairingComplete } from '../models/AgentHostPairingComplete.js';
 import type { AgentHostPairingCompleted } from '../models/AgentHostPairingCompleted.js';
 import type { AgentHostPairingCreate } from '../models/AgentHostPairingCreate.js';
@@ -16,8 +15,6 @@ import type { AgentHostPairingCreated } from '../models/AgentHostPairingCreated.
 import type { AgentHostPollRequest } from '../models/AgentHostPollRequest.js';
 import type { AgentHostPollResponse } from '../models/AgentHostPollResponse.js';
 import type { AgentHostResponse } from '../models/AgentHostResponse.js';
-import type { AgentHostTokenExchange } from '../models/AgentHostTokenExchange.js';
-import type { AgentHostTokenResponse } from '../models/AgentHostTokenResponse.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
@@ -71,32 +68,8 @@ export class AgentHostService {
         });
     }
     /**
-     * Resolve Agent Host Mcp Route
-     * @param routeId
-     * @param authorization
-     * @returns AgentHostMcpRouteResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentHostMcpRouteResolve(
-        routeId: string,
-        authorization?: (string | null),
-    ): CancelablePromise<AgentHostMcpRouteResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/agent-host/mcp-routes/{route_id}',
-            path: {
-                'route_id': routeId,
-            },
-            headers: {
-                'authorization': authorization,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
      * Complete Agent Host Pairing
+     * Consume a pairing code and issue the host secret, shown exactly once.
      * @param requestBody
      * @returns AgentHostPairingCompleted Successful Response
      * @throws ApiError
@@ -154,25 +127,6 @@ export class AgentHostService {
             headers: {
                 'authorization': authorization,
             },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Exchange Agent Host Token
-     * @param requestBody
-     * @returns AgentHostTokenResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentHostTokenExchange(
-        requestBody: AgentHostTokenExchange,
-    ): CancelablePromise<AgentHostTokenResponse> {
-        return __request(OpenAPI, {
-            method: 'POST',
-            url: '/agent-host/token:exchange',
-            body: requestBody,
-            mediaType: 'application/json',
             errors: {
                 422: `Validation Error`,
             },

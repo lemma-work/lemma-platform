@@ -606,7 +606,7 @@ mod tests {
             system_prompt: "Be exact.".into(),
             prompt: vec![serde_json::json!({"type": "text", "text": "Hello"})],
             context: JsonMap::new(),
-            mcp_route_id: uuid::Uuid::new_v4(),
+            mcp: serde_json::Value::Null,
             run_deadline: chrono::Utc::now(),
         };
         assert_eq!(

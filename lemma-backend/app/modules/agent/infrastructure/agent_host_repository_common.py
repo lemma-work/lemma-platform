@@ -11,21 +11,23 @@ DEFAULT_RUN_LEASE_SECONDS = 90
 class AgentHostRepositoryError(RuntimeError):
     """Base typed failure for the Agent Host persistence contract."""
 
+    code = "AGENT_HOST_ERROR"
+
 
 class AgentHostNotFound(AgentHostRepositoryError):
-    pass
+    code = "AGENT_HOST_NOT_FOUND"
 
 
 class AgentHostPairingRejected(AgentHostRepositoryError):
-    pass
+    code = "AGENT_HOST_PAIRING_REJECTED"
 
 
 class AgentHostProtocolViolation(AgentHostRepositoryError):
-    pass
+    code = "AGENT_HOST_PROTOCOL_VIOLATION"
 
 
 class AgentHostRunConflict(AgentHostRepositoryError):
-    pass
+    code = "AGENT_HOST_RUN_CONFLICT"
 
 
 def utcnow() -> datetime:

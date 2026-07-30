@@ -3,10 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 export type HostHello = {
-    adapter_manifest_id: string;
     host_release: string;
     installation_id: string;
-    instance_id: string;
-    protocol_max: number;
-    protocol_min: number;
+    protocol_version: number;
 };

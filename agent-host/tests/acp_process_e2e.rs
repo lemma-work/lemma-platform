@@ -114,7 +114,7 @@ async fn official_sdk_negotiates_probes_config_and_streams_a_prompt() {
                     system_prompt: "Be concise.".into(),
                     prompt: vec![serde_json::json!({"type": "text", "text": "Say hello"})],
                     context: BTreeMap::new(),
-                    mcp_route_id: Uuid::nil(),
+                    mcp: Value::Null,
                     run_deadline: chrono::Utc::now() + chrono::Duration::minutes(1),
                 },
                 scratch_directory: directory.path().join("run"),

@@ -10,42 +10,35 @@ from pydantic import ValidationError
 
 from app.modules.agent.domain.agent_host import (
     AGENT_HOST_PROTOCOL_VERSION,
-    AgentHostAdapterProtocol,
     AgentHostCommand,
     AgentHostCommandKind,
     AgentHostEvent,
     AgentHostEventBatch,
     AgentHostEventType,
-    AgentHostCheckpoint,
     AgentHostHarnessHealth,
     AgentHostHarnessSnapshot,
+    AgentHostRunState,
     AgentHostStatus,
     HostHello,
-    canonical_json_sha256,
-    checkpoint_advances,
     effective_agent_host_status,
+    run_state_progresses,
 )
 
 
 NOW = datetime.now(timezone.utc)
 
 
-def test_hello_negotiates_only_an_overlapping_protocol() -> None:
+def test_hello_negotiates_only_the_matching_protocol() -> None:
     hello = HostHello(
-        protocol_min=AGENT_HOST_PROTOCOL_VERSION,
-        protocol_max=AGENT_HOST_PROTOCOL_VERSION,
-        host_release="2026.8.0",
-        adapter_manifest_id="sha256:test",
         installation_id="installation",
-        instance_id=uuid4(),
+        host_release="2026.8.0",
+        protocol_version=AGENT_HOST_PROTOCOL_VERSION,
     )
 
     assert hello.negotiate() == AGENT_HOST_PROTOCOL_VERSION
 
-    incompatible = hello.model_copy(
-        update={"protocol_min": 10, "protocol_max": 12}
-    )
-    with pytest.raises(ValueError, match="does not include"):
+    incompatible = hello.model_copy(update={"protocol_version": 99})
+    with pytest.raises(ValueError, match="does not match"):
         incompatible.negotiate()
 
 
@@ -56,7 +49,6 @@ def test_command_requires_run_fencing_for_run_commands() -> None:
             kind=AgentHostCommandKind.START_RUN,
             created_at=NOW,
             expires_at=NOW,
-            payload_sha256="0" * 64,
             payload={},
         )
 
@@ -71,8 +63,6 @@ def _event(sequence: int, *, run_id=None, lease_epoch: int = 1) -> AgentHostEven
         type=AgentHostEventType.AGENT_MESSAGE_CHUNK,
         object_id="message-1",
         payload={"text": "hello"},
-        harness_key="codex",
-        adapter_version="1.0.0",
     )
 
 
@@ -92,33 +82,43 @@ def test_event_batch_is_one_contiguous_run_epoch() -> None:
         AgentHostEventBatch(events=[_event(1), _event(2)])
 
 
-def test_event_digest_is_canonical_and_stable() -> None:
-    assert canonical_json_sha256({"b": 2, "a": 1}) == canonical_json_sha256(
-        {"a": 1, "b": 2}
-    )
-
-
 def test_harness_key_is_normalized() -> None:
     snapshot = AgentHostHarnessSnapshot(
         harness_key="Claude_Code",
         display_name="Claude Code",
-        adapter_protocol=AgentHostAdapterProtocol.ACP,
-        adapter_protocol_version=1,
         adapter_version="1",
         upstream_version="2",
-        auth_state="READY",
         health=AgentHostHarnessHealth.READY,
         config_revision="revision",
-        fetched_at=NOW,
         stale_after=NOW,
     )
     assert snapshot.harness_key == "claude-code"
 
 
-def test_recovered_run_can_return_to_running_checkpoint() -> None:
-    assert checkpoint_advances(
-        AgentHostCheckpoint.RECOVERING,
-        AgentHostCheckpoint.RUNNING,
+def test_run_state_progression_rules() -> None:
+    assert run_state_progresses(
+        AgentHostRunState.LEASED,
+        AgentHostRunState.ACCEPTED,
+    )
+    assert run_state_progresses(
+        AgentHostRunState.QUEUED_FOR_HOST,
+        AgentHostRunState.RUNNING,
+    )
+    assert not run_state_progresses(
+        AgentHostRunState.LEASED,
+        AgentHostRunState.LEASED,
+    )
+    assert not run_state_progresses(
+        AgentHostRunState.RUNNING,
+        AgentHostRunState.ACCEPTED,
+    )
+    assert run_state_progresses(
+        AgentHostRunState.RUNNING,
+        AgentHostRunState.RECOVERING,
+    )
+    assert run_state_progresses(
+        AgentHostRunState.RECOVERING,
+        AgentHostRunState.RUNNING,
     )
 
 

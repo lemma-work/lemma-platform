@@ -31,6 +31,8 @@ cancellation.
 | `agents` | Named prompt, schemas, toolsets, runtime selection, visibility |
 | `agent_runtime_profiles` | Organization/user/system model provider configuration and encrypted credentials |
 | `agent_hosts`, `agent_host_harnesses` | Paired machines and their discovered local harnesses |
+| `agent_host_commands`, `agent_host_run_leases` | Durable at-least-once dispatch queue and fenced run acceptance state |
+| `agent_host_events` | Transient durable-lane run events (deleted at run terminalization; chunks travel the realtime channel instead) |
 | `agent_conversations` | Pod thread, named/default agent, parent/subagent and workspace metadata |
 | `agent_messages` | User/assistant/tool messages and structured parts |
 | `agent_runs` | One execution attempt, status, usage, errors, stop state, harness metadata |
@@ -66,8 +68,12 @@ executor, builds only the allowed toolsets, creates short UoWs for
 message/status transitions, performs model/tool I/O outside them, publishes
 realtime frames, and records usage. Tool calls receive a delegated workload
 context; destructive operations require a standing grant or session approval.
-Agent Host commands, leases, receipts, and events are durable in PostgreSQL;
-acceptance and rejection fencing prevents ambiguous work from being replayed.
+Agent Host commands, leases, and receipts are durable in PostgreSQL, and
+acceptance (`accepted_at`) plus rejection fencing prevents ambiguous work from
+being replayed. Durable run event types are journaled only as transient
+transport (deleted when the run ends); cosmetic chunks publish straight to the
+run's realtime channel, with host-synthesized full-text upserts as the
+authoritative text record.
 
 Subagents are child conversations with inherited workspace context and reduced
 toolsets. Widgets are tool outputs stored in conversation context and served

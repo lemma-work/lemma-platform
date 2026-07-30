@@ -21,14 +21,12 @@ class AgentHostPollResponse:
     """
     Attributes:
         host_status (AgentHostStatus):
-        policy_revision (str):
         commands (list[AgentHostCommand] | Unset):
         poll_after_ms (int | Unset):  Default: 0.
         protocol_version (int | Unset):  Default: 2.
     """
 
     host_status: AgentHostStatus
-    policy_revision: str
     commands: list[AgentHostCommand] | Unset = UNSET
     poll_after_ms: int | Unset = 0
     protocol_version: int | Unset = 2
@@ -36,8 +34,6 @@ class AgentHostPollResponse:
 
     def to_dict(self) -> dict[str, Any]:
         host_status = self.host_status.value
-
-        policy_revision = self.policy_revision
 
         commands: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.commands, Unset):
@@ -55,7 +51,6 @@ class AgentHostPollResponse:
         field_dict.update(
             {
                 "host_status": host_status,
-                "policy_revision": policy_revision,
             }
         )
         if commands is not UNSET:
@@ -74,8 +69,6 @@ class AgentHostPollResponse:
         d = dict(src_dict)
         host_status = AgentHostStatus(d.pop("host_status"))
 
-        policy_revision = d.pop("policy_revision")
-
         _commands = d.pop("commands", UNSET)
         commands: list[AgentHostCommand] | Unset = UNSET
         if _commands is not UNSET:
@@ -91,7 +84,6 @@ class AgentHostPollResponse:
 
         agent_host_poll_response = cls(
             host_status=host_status,
-            policy_revision=policy_revision,
             commands=commands,
             poll_after_ms=poll_after_ms,
             protocol_version=protocol_version,

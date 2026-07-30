@@ -22,40 +22,30 @@ T = TypeVar("T", bound="AgentHostResponse")
 class AgentHostResponse:
     """
     Attributes:
-        adapter_manifest_id (str):
         capacity (AgentHostResponseCapacity):
         created_at (datetime.datetime):
         display_name (str):
         host_release (str):
         id (UUID):
         installation_id (str):
-        instance_id (None | UUID):
         last_seen_at (datetime.datetime | None):
         organization_id (None | UUID):
-        protocol_max (int):
-        protocol_min (int):
         protocol_version (int | None):
-        public_key_fingerprint (str):
         revoked_at (datetime.datetime | None):
         status (AgentHostStatus):
         updated_at (datetime.datetime):
         user_id (UUID):
     """
 
-    adapter_manifest_id: str
     capacity: AgentHostResponseCapacity
     created_at: datetime.datetime
     display_name: str
     host_release: str
     id: UUID
     installation_id: str
-    instance_id: None | UUID
     last_seen_at: datetime.datetime | None
     organization_id: None | UUID
-    protocol_max: int
-    protocol_min: int
     protocol_version: int | None
-    public_key_fingerprint: str
     revoked_at: datetime.datetime | None
     status: AgentHostStatus
     updated_at: datetime.datetime
@@ -63,8 +53,6 @@ class AgentHostResponse:
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        adapter_manifest_id = self.adapter_manifest_id
-
         capacity = self.capacity.to_dict()
 
         created_at = self.created_at.isoformat()
@@ -76,12 +64,6 @@ class AgentHostResponse:
         id = str(self.id)
 
         installation_id = self.installation_id
-
-        instance_id: None | str
-        if isinstance(self.instance_id, UUID):
-            instance_id = str(self.instance_id)
-        else:
-            instance_id = self.instance_id
 
         last_seen_at: None | str
         if isinstance(self.last_seen_at, datetime.datetime):
@@ -95,14 +77,8 @@ class AgentHostResponse:
         else:
             organization_id = self.organization_id
 
-        protocol_max = self.protocol_max
-
-        protocol_min = self.protocol_min
-
         protocol_version: int | None
         protocol_version = self.protocol_version
-
-        public_key_fingerprint = self.public_key_fingerprint
 
         revoked_at: None | str
         if isinstance(self.revoked_at, datetime.datetime):
@@ -120,20 +96,15 @@ class AgentHostResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "adapter_manifest_id": adapter_manifest_id,
                 "capacity": capacity,
                 "created_at": created_at,
                 "display_name": display_name,
                 "host_release": host_release,
                 "id": id,
                 "installation_id": installation_id,
-                "instance_id": instance_id,
                 "last_seen_at": last_seen_at,
                 "organization_id": organization_id,
-                "protocol_max": protocol_max,
-                "protocol_min": protocol_min,
                 "protocol_version": protocol_version,
-                "public_key_fingerprint": public_key_fingerprint,
                 "revoked_at": revoked_at,
                 "status": status,
                 "updated_at": updated_at,
@@ -148,8 +119,6 @@ class AgentHostResponse:
         from ..models.agent_host_response_capacity import AgentHostResponseCapacity
 
         d = dict(src_dict)
-        adapter_manifest_id = d.pop("adapter_manifest_id")
-
         capacity = AgentHostResponseCapacity.from_dict(d.pop("capacity"))
 
         created_at = isoparse(d.pop("created_at"))
@@ -161,21 +130,6 @@ class AgentHostResponse:
         id = UUID(d.pop("id"))
 
         installation_id = d.pop("installation_id")
-
-        def _parse_instance_id(data: object) -> None | UUID:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                instance_id_type_0 = UUID(data)
-
-                return instance_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | UUID, data)
-
-        instance_id = _parse_instance_id(d.pop("instance_id"))
 
         def _parse_last_seen_at(data: object) -> datetime.datetime | None:
             if data is None:
@@ -207,18 +161,12 @@ class AgentHostResponse:
 
         organization_id = _parse_organization_id(d.pop("organization_id"))
 
-        protocol_max = d.pop("protocol_max")
-
-        protocol_min = d.pop("protocol_min")
-
         def _parse_protocol_version(data: object) -> int | None:
             if data is None:
                 return data
             return cast(int | None, data)
 
         protocol_version = _parse_protocol_version(d.pop("protocol_version"))
-
-        public_key_fingerprint = d.pop("public_key_fingerprint")
 
         def _parse_revoked_at(data: object) -> datetime.datetime | None:
             if data is None:
@@ -242,20 +190,15 @@ class AgentHostResponse:
         user_id = UUID(d.pop("user_id"))
 
         agent_host_response = cls(
-            adapter_manifest_id=adapter_manifest_id,
             capacity=capacity,
             created_at=created_at,
             display_name=display_name,
             host_release=host_release,
             id=id,
             installation_id=installation_id,
-            instance_id=instance_id,
             last_seen_at=last_seen_at,
             organization_id=organization_id,
-            protocol_max=protocol_max,
-            protocol_min=protocol_min,
             protocol_version=protocol_version,
-            public_key_fingerprint=public_key_fingerprint,
             revoked_at=revoked_at,
             status=status,
             updated_at=updated_at,

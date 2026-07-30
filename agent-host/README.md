@@ -56,10 +56,14 @@ somewhere else.
 
 ## Security properties
 
-- A distinct Ed25519 device identity is generated for every Lemma target and
-  stored in the platform credential vault.
-- Pairing uses a short-lived, single-use code plus signed proof of key
-  possession. Routine requests use 10-minute capability-scoped access tokens.
+- Every Lemma target pairing issues an independent opaque host secret,
+  rotatable by re-pairing and revocable per host from the web UI or the host
+  itself. The server stores only the SHA-256 hash, so a database leak exposes
+  no usable credentials; locally the secret lives only in the owner-only
+  `config.json` (mode 0600 on Unix).
+- Pairing uses a short-lived, single-use code; the issued secret is returned
+  exactly once at enrollment and all device traffic is scoped to the five
+  Agent Host device endpoints.
 - Target URLs require HTTPS. Plain HTTP is accepted only for an explicitly
   opted-in loopback development target.
 - Provider OAuth/API credentials remain inside the provider's own local
@@ -73,7 +77,7 @@ somewhere else.
   as a process tree during cancellation or shutdown. ACP is not an operating
   system sandbox; deployments needing stronger isolation should run Agent Host
   under a dedicated OS account or sandbox policy.
-- Logs contain redacted operational metadata, never device private keys,
+- Logs contain redacted operational metadata, never host secrets, run-scoped
   bearer tokens, or MCP authorization values.
 
 See the design document for trust boundaries, replay defenses, SSRF controls,
@@ -113,7 +117,7 @@ lemma-agent-host connect \
 ```
 
 One process can connect to multiple local, self-hosted, or Lemma Cloud targets.
-Each connection has an independent key, token, journal state, and revocation
+Each connection has an independent secret, journal state, and revocation
 boundary.
 
 ## Lifecycle and diagnostics
@@ -183,20 +187,22 @@ Default data locations:
 | Linux | `$XDG_STATE_HOME/lemma/agent-host` |
 | Windows | `%LOCALAPPDATA%\Lemma\agent-host` |
 
-`config.json` contains non-secret target metadata. `journal.sqlite3` contains
-durable commands, checkpoints, and the event outbox. Device private keys live in
-Keychain, Secret Service, or Windows Credential Manager, not in either file.
-Set `LEMMA_AGENT_HOST_DATA_DIR` only for development or isolated test runs.
+`config.json` contains target metadata and the per-target host secret (the
+file is owner-only). `journal.sqlite3` contains durable commands, run states,
+and the event outbox; run-scoped MCP configurations are journaled with their
+runs until the backend acknowledges delivery. Set
+`LEMMA_AGENT_HOST_DATA_DIR` only for development or isolated test runs.
 
 ## Testing
 
 The crate has:
 
-- unit tests for canonical JSON, signatures, manifest pinning, version gates,
-  configuration, lease heartbeats, journal replay, and service definitions;
+- unit tests for manifest pinning, version gates, configuration, lease
+  heartbeats, journal replay, stream upsert synthesis, and service
+  definitions;
 - a fake-process ACP end-to-end test using the official Rust ACP SDK;
-- a loopback HTTP end-to-end test covering pairing, token refresh, polling,
-  harness publication, event replay, MCP resolution, and self-revocation;
+- a loopback HTTP end-to-end test covering pairing, polling, harness
+  publication, event replay, and self-revocation;
 - backend PostgreSQL migration and full protocol tests; and
 - Desktop/locald supervision tests that verify restart and full process-tree
   cleanup.
@@ -205,7 +211,7 @@ The ignored real-harness test runs the same ACP driver against authenticated
 Codex, Claude Code, and OpenCode installations, then pairs a complete
 `HostRuntime` with an isolated loopback control plane and dispatches one durable
 Codex command through polling, the journal, event append/ack, and terminal
-checkpointing. It asserts that expected answers arrive in assistant-message
+state reporting. It asserts that expected answers arrive in assistant-message
 stream events rather than thought events:
 
 ```bash

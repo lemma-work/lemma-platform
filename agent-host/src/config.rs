@@ -82,7 +82,8 @@ pub struct TargetConfig {
     pub host_id: Uuid,
     pub user_id: Uuid,
     pub organization_id: Option<Uuid>,
-    pub public_key_fingerprint: String,
+    /// Bearer credential issued once at pairing; rotatable by re-pairing.
+    pub host_secret: String,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
@@ -123,6 +124,12 @@ impl HostConfig {
         let mut bytes = serde_json::to_vec_pretty(self)?;
         bytes.push(b'\n');
         std::fs::write(&temporary, bytes)?;
+        // The config carries host secrets; keep it owner-only.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o600))?;
+        }
         std::fs::rename(temporary, &paths.config)?;
         Ok(())
     }
@@ -172,7 +179,7 @@ mod tests {
                 host_id: Uuid::new_v4(),
                 user_id: Uuid::new_v4(),
                 organization_id: None,
-                public_key_fingerprint: "fingerprint".into(),
+                host_secret: "test-secret".into(),
                 enabled: true,
                 allow_insecure_http: true,
                 draining: false,

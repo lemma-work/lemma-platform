@@ -10,7 +10,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | DELETE | `/me/runtime/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
 | DELETE | `/organizations/{org_id}/runtime/profiles/{profile_id}` | `runtime.profiles.delete` | Disable a runtime profile |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
-| GET | `/agent-host/mcp-routes/{route_id}` | `agent.host.mcp_route.resolve` | Resolve Agent Host Mcp Route |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
 | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
 | GET | `/organizations/{org_id}/runtime/profiles` | `runtime.profiles.list` | List runtime profiles |
@@ -30,7 +29,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/agent-host/pairings:complete` | `agent.host.pairing.complete` | Complete Agent Host Pairing |
 | POST | `/agent-host/poll` | `agent.host.poll` | Poll Agent Host Commands |
 | POST | `/agent-host/revoke` | `agent.host.self_revoke` | Self Revoke Agent Host |
-| POST | `/agent-host/token:exchange` | `agent.host.token.exchange` | Exchange Agent Host Token |
 | POST | `/me/runtime/agent-host-pairings` | `agent.host.pairing.create` | Create Agent Host Pairing |
 | POST | `/organizations/{org_id}/runtime/profiles` | `runtime.profiles.create` | Create a runtime profile |
 | POST | `/organizations/{org_id}/runtime/profiles/{profile_id}/refresh` | `runtime.profiles.refresh` | Refresh a runtime profile |

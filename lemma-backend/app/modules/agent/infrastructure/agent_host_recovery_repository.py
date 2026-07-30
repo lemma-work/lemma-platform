@@ -10,7 +10,6 @@ from sqlalchemy import select
 
 from app.modules.agent.domain.agent_host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
-    AgentHostCheckpoint,
     AgentHostCommandKind,
     AgentHostCommandState,
     AgentHostRunState,
@@ -39,7 +38,7 @@ class AgentHostRecoveryRepositoryMixin:
         )
         if (
             lease is None
-            or lease.checkpoint is not None
+            or lease.accepted_at is not None
             or lease.lease_expires_at > timestamp
         ):
             return None
@@ -51,7 +50,6 @@ class AgentHostRecoveryRepositoryMixin:
             return None
         terminal_state, error_code, error_detail = _unaccepted_timeout(current_state)
         lease.state = terminal_state.value
-        lease.checkpoint = AgentHostCheckpoint.TERMINAL.value
         lease.error_code = error_code
         lease.error_detail = error_detail
         lease.terminal_at = timestamp
@@ -94,13 +92,12 @@ class AgentHostRecoveryRepositoryMixin:
             lease is None
             or lease.lease_expires_at >= timestamp
             or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-            or lease.checkpoint is None
+            or lease.accepted_at is None
         ):
             return lease
 
         if AgentHostRunState(lease.state) is AgentHostRunState.RECOVERING:
             lease.state = AgentHostRunState.DISPATCH_UNKNOWN.value
-            lease.checkpoint = AgentHostCheckpoint.TERMINAL.value
             lease.error_code = "HOST_LEASE_EXPIRED"
             lease.error_detail = (
                 "The Agent Host disconnected after accepting the run; "
@@ -111,7 +108,6 @@ class AgentHostRecoveryRepositoryMixin:
             lease.lease_expires_at = timestamp
         else:
             lease.state = AgentHostRunState.RECOVERING.value
-            lease.checkpoint = AgentHostCheckpoint.RECOVERING.value
             lease.error_code = "HOST_RECOVERING"
             lease.error_detail = "Waiting for the Agent Host to reconnect"
             lease.lease_expires_at = timestamp + timedelta(

@@ -10,6 +10,5 @@ export type AgentHostCommand = {
     kind: AgentHostCommandKind;
     lease_epoch?: (number | null);
     payload?: Record<string, any>;
-    payload_sha256: string;
     run_id?: (string | null);
 };

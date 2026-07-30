@@ -6,7 +6,6 @@ use clap::{Parser, Subcommand};
 use lemma_agent_host::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use lemma_agent_host::adapters::AdapterManifest;
 use lemma_agent_host::config::{HostConfig, HostPaths, TargetConfig};
-use lemma_agent_host::crypto::{KeyringVault, SecretVault, identity_vault_key};
 use lemma_agent_host::journal::Journal;
 use lemma_agent_host::protocol::{EventType, JsonMap, RunSpec};
 use lemma_agent_host::runtime::HostRuntime;
@@ -122,7 +121,7 @@ enum Command {
         #[arg(long)]
         target_id: Uuid,
         #[arg(long)]
-        route_id: Uuid,
+        run_id: Uuid,
     },
 }
 
@@ -134,12 +133,10 @@ async fn main() -> anyhow::Result<()> {
         .data_dir
         .map(HostPaths::under)
         .map_or_else(HostPaths::platform_default, Ok)?;
-    let vault: Arc<dyn SecretVault> = Arc::new(KeyringVault);
-
     match cli.command {
         Command::Serve => {
             let config = HostConfig::load_or_create(&paths)?;
-            HostRuntime::new(config, paths, vault)?.serve().await
+            HostRuntime::new(config, paths)?.serve().await
         }
         Command::Connect {
             url,
@@ -155,8 +152,6 @@ async fn main() -> anyhow::Result<()> {
                 &pairing_code,
                 &name,
                 &config.installation_id,
-                &manifest,
-                vault.as_ref(),
                 allow_insecure_http,
             )
             .await?;
@@ -206,13 +201,9 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let mut config = HostConfig::load_or_create(&paths)?;
             let selected = select_one_target(&config, target.as_deref())?.clone();
-            let manifest = AdapterManifest::builtin()?.with_cache_root(paths.adapters.clone());
             let client = lemma_agent_host::api::TargetClient::new(
                 selected.clone(),
                 config.installation_id.clone(),
-                Uuid::new_v4(),
-                &manifest,
-                vault.as_ref(),
             )?;
             if let Err(error) = client.revoke().await {
                 if !force_local {
@@ -227,9 +218,8 @@ async fn main() -> anyhow::Result<()> {
                 .retain(|item| item.target_id != selected.target_id);
             config.save(&paths)?;
             Journal::open(&paths.journal)?.remove_target(selected.target_id)?;
-            vault.delete(&identity_vault_key(selected.target_id))?;
             println!(
-                "Disconnected {} ({}) and removed its local device identity.",
+                "Disconnected {} ({}) and removed its local credential.",
                 selected.name, selected.host_id
             );
             Ok(())
@@ -383,7 +373,7 @@ async fn main() -> anyhow::Result<()> {
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": prompt})],
                 context: JsonMap::new(),
-                mcp_route_id: Uuid::nil(),
+                mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(10),
             };
             let outcome = AcpDriver
@@ -415,10 +405,9 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Command::McpBridge {
-            target_id,
-            route_id,
-        } => lemma_agent_host::mcp_bridge::run_bridge(&paths, target_id, route_id, vault).await,
+        Command::McpBridge { target_id, run_id } => {
+            lemma_agent_host::mcp_bridge::run_bridge(&paths, target_id, run_id).await
+        }
     }
 }
 
