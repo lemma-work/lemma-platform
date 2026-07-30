@@ -10,6 +10,7 @@ import pytest
 from fastapi import status
 
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
+from app.modules.agent.domain.run_limits import MAX_AGENT_TOOL_CALLS_PER_RESPONSE
 from app.modules.test_support.e2e.scripted_model import (
     script_model_error,
     script_text,
@@ -179,6 +180,82 @@ async def _wait_for_usage(
             return event
         await asyncio.sleep(0.1)
     raise AssertionError(f"Usage for agent run {run_id} was not persisted")
+
+
+@pytest.mark.asyncio
+async def test_public_sse_rejects_runaway_tool_batch_before_execution_or_persistence(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    worker,
+):
+    """One pathological model response cannot fan out into dozens of commands."""
+    del worker
+    runtime = await _create_runtime_profile(
+        authenticated_client,
+        fixed_test_org,
+        e2e_settings,
+    )
+    pod = await _create_pod(authenticated_client, fixed_test_org)
+    agent = await _create_mock_agent(
+        authenticated_client,
+        pod_id=pod["id"],
+        runtime_profile_id=runtime["id"],
+        name_prefix="runaway_batch",
+    )
+    conversation = await authenticated_client.post(
+        f"/pods/{pod['id']}/conversations",
+        json={
+            "agent_name": agent["name"],
+            "metadata": {
+                "mock_llm_script": [
+                    {
+                        "tool_calls": [
+                            {
+                                "tool_name": "write_todos",
+                                "args": {
+                                    "todos": [
+                                        {
+                                            "content": f"must not execute {index}",
+                                            "status": "pending",
+                                        }
+                                    ]
+                                },
+                                "tool_call_id": f"runaway-{index}",
+                            }
+                            for index in range(MAX_AGENT_TOOL_CALLS_PER_RESPONSE + 1)
+                        ]
+                    }
+                ]
+            },
+        },
+    )
+    assert conversation.status_code == status.HTTP_201_CREATED, conversation.text
+    conversation_id = conversation.json()["id"]
+
+    events = await _send_message(
+        authenticated_client,
+        pod["id"],
+        conversation_id,
+        "Attempt an unsafe parallel tool batch.",
+    )
+
+    assert events[-1]["type"] == "error", events
+    assert "usage limit" in str(events[-1]["data"]).lower()
+    assert not any(
+        event["type"] == "token"
+        and isinstance(event.get("data"), dict)
+        and event["data"].get("kind") == "tool"
+        for event in events
+    )
+    messages = await authenticated_client.get(
+        f"/pods/{pod['id']}/conversations/{conversation_id}/messages"
+    )
+    assert messages.status_code == status.HTTP_200_OK, messages.text
+    assert all(
+        item["kind"] not in {"TOOL_CALL", "TOOL_RETURN"}
+        for item in messages.json()["items"]
+    )
 
 
 @pytest.mark.asyncio

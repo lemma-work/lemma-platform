@@ -10,7 +10,11 @@ from pydantic_ai.exceptions import (
     UsageLimitExceeded,
 )
 
-from app.modules.agent.domain.value_objects import AgentEventType
+from app.modules.agent.domain.value_objects import (
+    AgentEvent,
+    AgentEventType,
+    MessageDraft,
+)
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 
 
@@ -124,6 +128,50 @@ async def test_usage_limit_exceeded_emits_sanitized_ui_message(monkeypatch) -> N
     assert events[0].type == AgentEventType.ERROR
     assert "abc123" not in events[0].data
     assert "Please check the agent runtime configuration." in events[0].data
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_closes_every_persisted_tool_call(monkeypatch) -> None:
+    harness = PydanticAIHarness()
+    agent_run_id = UUID("00000000-0000-0000-0000-000000000005")
+
+    async def fake_execute(**_kwargs):
+        yield AgentEvent(
+            type=AgentEventType.MESSAGE,
+            data=MessageDraft.of_tool_call(
+                tool_name="exec_command",
+                tool_call_id="runaway-call",
+                tool_args={"cmd": "echo done"},
+            ),
+            agent_run_id=agent_run_id,
+        )
+        raise UsageLimitExceeded("too many tool calls")
+
+    monkeypatch.setattr(harness, "_execute", fake_execute)
+
+    events = [
+        event
+        async for event in harness.run(
+            agent=SimpleNamespace(),
+            conversation=SimpleNamespace(
+                id=UUID("00000000-0000-0000-0000-0000000000aa")
+            ),
+            messages=[],
+            ctx=SimpleNamespace(),
+            options=SimpleNamespace(should_stop=None),
+            agent_run_id=agent_run_id,
+        )
+    ]
+
+    assert [event.type for event in events] == [
+        AgentEventType.MESSAGE,
+        AgentEventType.MESSAGE,
+        AgentEventType.ERROR,
+    ]
+    tool_return = events[1].data
+    assert tool_return.tool_call_id == "runaway-call"
+    assert tool_return.tool_result["success"] is False
+    assert tool_return.metadata["synthetic_tool_return"] is True
 
 
 @pytest.mark.asyncio

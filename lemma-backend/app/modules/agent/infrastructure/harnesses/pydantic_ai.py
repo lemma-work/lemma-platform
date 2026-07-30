@@ -16,7 +16,6 @@ from app.modules.agent.infrastructure.harnesses.mock_model import (
     is_mock_llm_enabled,
 )
 from pydantic_ai import Agent as PydanticAIAgent
-from pydantic_ai import BinaryContent, FunctionToolCallEvent, FunctionToolResultEvent
 from pydantic_ai.exceptions import (
     ModelHTTPError,
     UnexpectedModelBehavior,
@@ -59,7 +58,17 @@ from app.modules.agent.domain.value_objects import (
 from pydantic_ai.capabilities import ProcessHistory
 
 from app.modules.agent.infrastructure.harnesses.history import build_history_processors
-from app.modules.agent.infrastructure.harnesses.streaming import CharStreamBuffer
+from app.modules.agent.infrastructure.harnesses.streaming import ModelTokenBuffers
+from app.modules.agent.infrastructure.harnesses.tool_batch import (
+    release_tool_call_batch,
+)
+from app.modules.agent.infrastructure.harnesses.tool_returns import (
+    TERMINAL_TOOL_EVENT_TYPES,
+    OutstandingToolCalls,
+)
+from app.modules.agent.infrastructure.harnesses.tool_streaming import (
+    stream_tool_results,
+)
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
 )
@@ -127,7 +136,9 @@ class PydanticAIHarness:
     ) -> AsyncIterator[AgentEvent]:
         malformed_tool_call_ids: set[str] = set()
         emitted_tool_response_ids: set[str] = set()
+        outstanding_tool_calls = OutstandingToolCalls()
         terminal_event_seen = False
+        terminal_event: AgentEvent | None = None
 
         try:
             async for event in self._execute(
@@ -141,40 +152,39 @@ class PydanticAIHarness:
                 emitted_tool_response_ids=emitted_tool_response_ids,
                 should_stop=options.should_stop,
             ):
+                outstanding_tool_calls.observe(event)
+                for missing_event in outstanding_tool_calls.before(event):
+                    yield missing_event
                 yield event
-                if event.type in {AgentEventType.ERROR, AgentEventType.STOPPED}:
-                    terminal_event_seen = True
+                terminal_event_seen |= event.type in TERMINAL_TOOL_EVENT_TYPES
         except ModelHTTPError as exc:
             logger.error(
                 "agent.pydantic_ai.model_request_status_model.failed",
                 status_code=exc.status_code,
-            exc_info=True,
-        )
-            yield AgentEvent(
+                exc_info=True,
+            )
+            terminal_event = AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except UnexpectedModelBehavior as exc:
             # Reached only when a tool genuinely failed every retry (default 5) —
             # GracefulToolset turns ordinary execution errors into tool responses,
             # so this is the rare "model kept sending invalid arguments" case.
-            logger.debug('agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic')
-            yield AgentEvent(
+            logger.debug("agent.pydantic_ai.agent_run_ended_after_repeated.diagnostic")
+            terminal_event = AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except UsageLimitExceeded as exc:
             logger.warning("agent.pydantic_ai.agent_run_hit_usage_limit.degraded")
-            yield AgentEvent(
+            terminal_event = AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
-            return
         except AgentInputRequired as exc:
             # The agent called ask_user / request_approval: pause the run cleanly
             # rather than failing. The tool call is already persisted; the runner
@@ -184,7 +194,8 @@ class PydanticAIHarness:
                 "agent.pydantic_ai.agent_input_required_kind_call.observed",
                 tool_call_id=exc.tool_call_id,
             )
-            yield AgentEvent(
+            outstanding_tool_calls.discard(exc.tool_call_id)
+            terminal_event = AgentEvent(
                 type=AgentEventType.WAITING,
                 data={
                     "tool_call_id": exc.tool_call_id,
@@ -193,24 +204,31 @@ class PydanticAIHarness:
                 },
                 agent_run_id=agent_run_id,
             )
-            return
         except Exception as exc:
-            logger.error("agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True)
-            yield AgentEvent(
+            logger.error(
+                "agent.pydantic_ai.pydanticai_harness_type.failed", exc_info=True
+            )
+            terminal_event = AgentEvent(
                 type=AgentEventType.ERROR,
                 data=_user_facing_error_message(exc),
                 agent_run_id=agent_run_id,
             )
+
+        if terminal_event is not None:
+            for event in outstanding_tool_calls.close(terminal_event):
+                yield event
             return
 
         if terminal_event_seen:
             return
 
-        yield AgentEvent(
+        terminal_event = AgentEvent(
             type=AgentEventType.COMPLETED,
             data={"conversation_id": str(conversation.id)},
             agent_run_id=agent_run_id,
         )
+        for event in outstanding_tool_calls.close(terminal_event):
+            yield event
 
     async def _execute(
         self,
@@ -484,45 +502,17 @@ class PydanticAIHarness:
         malformed_tool_call_ids: set[str],
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
-        token_buffers = {
-            "text": CharStreamBuffer(max_chars=50),
-            "thinking": CharStreamBuffer(max_chars=50),
-            "tool": CharStreamBuffer(max_chars=50),
-        }
+        token_buffers = ModelTokenBuffers(emit_tokens=self.emit_tokens)
+        append_token_text = token_buffers.append
+        drain_all_token_buffers = token_buffers.drain_all
+        pending_tool_token_chunks = token_buffers.deferred_tool_chunks
         part_kinds: dict[int, str] = {}
         part_contents: dict[int, str] = {}
         part_objects: dict[int, object] = {}
         tool_names: dict[int, str] = {}
         tool_stream_started: set[int] = set()
         tool_stream_has_args: set[int] = set()
-
-        def token_delta(kind: str, chunk: str) -> dict[str, str]:
-            return {"kind": kind, "data": chunk}
-
-        def append_token_text(kind: str, text: str) -> list[dict[str, str]]:
-            if not self.emit_tokens:
-                return []
-            return [
-                token_delta(kind, chunk) for chunk in token_buffers[kind].append(text)
-            ]
-
-        def drain_token_buffer(
-            kind: str,
-            *,
-            force: bool = False,
-        ) -> list[dict[str, str]]:
-            if not self.emit_tokens:
-                return []
-            return [
-                token_delta(kind, chunk)
-                for chunk in token_buffers[kind].drain(force=force)
-            ]
-
-        def drain_all_token_buffers(*, force: bool = False) -> list[dict[str, str]]:
-            chunks: list[dict[str, str]] = []
-            for kind in ("text", "thinking", "tool"):
-                chunks.extend(drain_token_buffer(kind, force=force))
-            return chunks
+        pending_tool_call_events: list[AgentEvent] = []
 
         def start_tool_stream(index: int, tool_name: str) -> list[dict[str, str]]:
             if index in tool_stream_started:
@@ -558,7 +548,7 @@ class PydanticAIHarness:
                 if tool_args is None:
                     malformed_tool_call_ids.add(part.tool_call_id)
                     logger.debug(
-                        'agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic',
+                        "agent.pydantic_ai.skipping_malformed_tool_call_persistence.diagnostic",
                         tool_call_id=part.tool_call_id,
                     )
                     return None
@@ -757,11 +747,15 @@ class PydanticAIHarness:
                         part_content=part_content,
                     )
                     if message is not None:
-                        yield AgentEvent(
+                        message_event = AgentEvent(
                             type=AgentEventType.MESSAGE,
                             data=message,
                             agent_run_id=agent_run_id,
                         )
+                        if message.kind is MessageKind.TOOL_CALL:
+                            pending_tool_call_events.append(message_event)
+                        else:
+                            yield message_event
                         if await self._should_stop(should_stop):
                             yield self._stopped_event(agent_run_id)
                             return
@@ -797,14 +791,29 @@ class PydanticAIHarness:
                 part_content=part_contents.get(part_index),
             )
             if message is not None:
-                yield AgentEvent(
+                message_event = AgentEvent(
                     type=AgentEventType.MESSAGE,
                     data=message,
                     agent_run_id=agent_run_id,
                 )
+                if message.kind is MessageKind.TOOL_CALL:
+                    pending_tool_call_events.append(message_event)
+                else:
+                    yield message_event
                 if await self._should_stop(should_stop):
                     yield self._stopped_event(agent_run_id)
                     return
+
+        normalized_stop_checker = (
+            None if should_stop is None else lambda: self._should_stop(should_stop)
+        )
+        async for event in release_tool_call_batch(
+            token_chunks=pending_tool_token_chunks,
+            call_events=pending_tool_call_events,
+            agent_run_id=agent_run_id,
+            should_stop=normalized_stop_checker,
+        ):
+            yield event
 
     async def _stream_tool_calls(
         self,
@@ -817,48 +826,18 @@ class PydanticAIHarness:
         emitted_tool_response_ids: set[str],
         should_stop: StopChecker | None,
     ) -> AsyncIterator[AgentEvent]:
-        async with node.stream(run.ctx) as handle_stream:
-            async for event in handle_stream:
-                if isinstance(event, FunctionToolCallEvent):
-                    continue
-                if isinstance(event, FunctionToolResultEvent):
-                    result_part = event.part
-                    if result_part.tool_call_id in malformed_tool_call_ids:
-                        logger.debug(
-                            'agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic',
-                            tool_call_id=result_part.tool_call_id,
-                        )
-                        continue
-                    tool_output = result_part.content
-                    if isinstance(tool_output, BinaryContent):
-                        tool_output = {
-                            "type": "binary_content",
-                            "media_type": tool_output.media_type,
-                            "size_bytes": len(tool_output.data)
-                            if tool_output.data
-                            else 0,
-                        }
-                    elif hasattr(tool_output, "model_dump"):
-                        tool_output = to_json_value(tool_output)
-                    else:
-                        tool_output = to_json_value(tool_output)
-
-                    emitted_tool_response_ids.add(result_part.tool_call_id)
-                    yield AgentEvent(
-                        type=AgentEventType.MESSAGE,
-                        data=MessageDraft.of_tool_return(
-                            tool_name=result_part.tool_name or "unknown_tool",
-                            tool_call_id=result_part.tool_call_id,
-                            tool_result=tool_output,
-                            metadata={
-                                "tool_name": result_part.tool_name or "unknown_tool"
-                            },
-                        ),
-                        agent_run_id=agent_run_id,
-                    )
-                    if await self._should_stop(should_stop):
-                        yield self._stopped_event(agent_run_id)
-                        return
+        normalized_stop_checker = (
+            None if should_stop is None else lambda: self._should_stop(should_stop)
+        )
+        async for event in stream_tool_results(
+            node=node,
+            run_ctx=run.ctx,
+            agent_run_id=agent_run_id,
+            malformed_tool_call_ids=malformed_tool_call_ids,
+            emitted_tool_response_ids=emitted_tool_response_ids,
+            should_stop=normalized_stop_checker,
+        ):
+            yield event
 
     async def _should_stop(self, should_stop: StopChecker | None) -> bool:
         if should_stop is None:
@@ -866,7 +845,7 @@ class PydanticAIHarness:
         try:
             return await should_stop()
         except Exception:
-            logger.debug('agent.pydantic_ai.agent_stop_check_s.diagnostic')
+            logger.debug("agent.pydantic_ai.agent_stop_check_s.diagnostic")
             return False
 
     def _stopped_event(self, agent_run_id: UUID) -> AgentEvent:
@@ -972,7 +951,7 @@ class PydanticAIHarness:
                 continue
 
             logger.debug(
-                'agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic'
+                "agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic"
             )
             index += 1
 
@@ -1031,7 +1010,7 @@ class PydanticAIHarness:
             matched = matched_returns.get(getattr(msg, "tool_call_id", None))
             if matched is None:
                 logger.debug(
-                    'agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic',
+                    "agent.pydantic_ai.skipping_tool_call_without_matching.diagnostic",
                     tool_call_id=msg.tool_call_id,
                 )
                 continue
@@ -1039,7 +1018,7 @@ class PydanticAIHarness:
             parsed_args = _parse_tool_call_args(getattr(msg, "tool_args", None))
             if parsed_args is None:
                 logger.debug(
-                    'agent.pydantic_ai.skipping_malformed_persisted_tool_call.diagnostic',
+                    "agent.pydantic_ai.skipping_malformed_persisted_tool_call.diagnostic",
                     tool_call_id=msg.tool_call_id,
                 )
                 continue
@@ -1267,19 +1246,19 @@ def _parse_tool_call_args(args: object) -> dict[str, object] | None:
         return args
 
     if not isinstance(args, str):
-        logger.debug('agent.pydantic_ai.dropping_non_object_tool_args.diagnostic')
+        logger.debug("agent.pydantic_ai.dropping_non_object_tool_args.diagnostic")
         return None
 
     try:
         parsed = pydantic_core.from_json(args)
     except ValueError:
-        logger.debug('agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic')
+        logger.debug("agent.pydantic_ai.ignoring_malformed_tool_args_json.diagnostic")
         return None
 
     if isinstance(parsed, dict):
         return parsed
 
-    logger.debug('agent.pydantic_ai.ignoring_tool_args_that_did.diagnostic')
+    logger.debug("agent.pydantic_ai.ignoring_tool_args_that_did.diagnostic")
     return None
 
 

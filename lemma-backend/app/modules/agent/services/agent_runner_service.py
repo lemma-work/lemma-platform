@@ -11,7 +11,6 @@ from uuid import UUID
 
 import anyio
 from pydantic_ai import UsageLimits
-
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 from opentelemetry import trace
 from app.core.config import settings
@@ -160,7 +159,8 @@ class AgentRunnerService:
         self.uow_factory = uow_factory
         self.harness_registry = harness_registry
         self.fallback_model_name = fallback_model_name
-        self.fixed_usage_limits = fixed_usage_limits or UsageLimits(request_limit=200)
+        default_limits = UsageLimits(request_limit=64, tool_calls_limit=24)
+        self.fixed_usage_limits = fixed_usage_limits or default_limits
         self.tool_assembler = RunToolAssembler(uow_factory)
         self.usage_recorder = RunUsageRecorder(uow_factory)
         self.message_writer = RunMessageWriter(uow_factory)
@@ -299,15 +299,15 @@ class AgentRunnerService:
                 run_agent_host_fallback,
                 service=self,
                 state=runtime_state,
-                    user_id=user_id,
+                user_id=user_id,
                 conversation=conversation,
                 ctx=ctx,
                 full_toolsets=full_toolsets,
-                        agent=agent,
-                        agent_run_id=agent_run_id,
+                agent=agent,
+                agent_run_id=agent_run_id,
                 messages=messages,
-                    usage_limits=enforced_usage_limits,
-                )
+                usage_limits=enforced_usage_limits,
+            )
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,

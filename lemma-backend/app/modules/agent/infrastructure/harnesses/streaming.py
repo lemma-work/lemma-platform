@@ -101,3 +101,54 @@ class CharStreamBuffer:
             chunks.append(self._buffer[:split_index])
             self._buffer = self._buffer[split_index:]
         return chunks
+
+
+class ModelTokenBuffers:
+    """Batch model deltas while deferring tool tokens until admission succeeds."""
+
+    def __init__(self, *, emit_tokens: bool, max_chars: int = 50) -> None:
+        self.emit_tokens = emit_tokens
+        self.buffers = {
+            "text": CharStreamBuffer(max_chars=max_chars),
+            "thinking": CharStreamBuffer(max_chars=max_chars),
+            "tool": CharStreamBuffer(max_chars=max_chars),
+        }
+        self.deferred_tool_chunks: list[dict[str, str]] = []
+
+    def append(self, kind: str, text: str) -> list[dict[str, str]]:
+        if not self.emit_tokens:
+            return []
+        chunks = [
+            {"kind": kind, "data": chunk} for chunk in self.buffers[kind].append(text)
+        ]
+        return self._route(kind, chunks)
+
+    def drain(
+        self,
+        kind: str,
+        *,
+        force: bool = False,
+    ) -> list[dict[str, str]]:
+        if not self.emit_tokens:
+            return []
+        chunks = [
+            {"kind": kind, "data": chunk}
+            for chunk in self.buffers[kind].drain(force=force)
+        ]
+        return self._route(kind, chunks)
+
+    def drain_all(self, *, force: bool = False) -> list[dict[str, str]]:
+        chunks: list[dict[str, str]] = []
+        for kind in ("text", "thinking", "tool"):
+            chunks.extend(self.drain(kind, force=force))
+        return chunks
+
+    def _route(
+        self,
+        kind: str,
+        chunks: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        if kind != "tool":
+            return chunks
+        self.deferred_tool_chunks.extend(chunks)
+        return []

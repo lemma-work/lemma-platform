@@ -38,6 +38,16 @@ def test_rejected_run_error_message_falls_back_for_malformed_data():
     )
 
 
+def test_runner_applies_default_model_runaway_limits() -> None:
+    service = AgentRunnerService(
+        uow_factory=lambda: None,
+        harness_registry=HarnessRegistry({}),
+    )
+
+    assert service.fixed_usage_limits.request_limit == 64
+    assert service.fixed_usage_limits.tool_calls_limit == 24
+
+
 class _FailingContextManager:
     """Async context manager that raises on enter, simulating a dead DB session."""
 
