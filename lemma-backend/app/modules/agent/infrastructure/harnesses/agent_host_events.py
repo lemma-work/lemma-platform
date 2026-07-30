@@ -52,26 +52,30 @@ class AgentHostEventNormalizer:
             "adapter_version": row.adapter_version,
         }
         if event_type is AgentHostEventType.AGENT_MESSAGE_CHUNK:
-            return self._append_chunk(object_id, payload, self.message_text)
+            return self._append_chunk(
+                payload,
+                self.message_text,
+                stream_key="agent-message",
+            )
         if event_type is AgentHostEventType.AGENT_MESSAGE_UPSERT:
             return self._upsert_text(
-                object_id=object_id,
                 payload=payload,
                 storage=self.message_text,
+                stream_key="agent-message",
                 kind="text",
             )
         if event_type is AgentHostEventType.AGENT_THOUGHT_CHUNK:
             return self._append_chunk(
-                object_id,
                 payload,
                 self.thought_text,
+                stream_key="agent-thought",
                 kind="thinking",
             )
         if event_type is AgentHostEventType.AGENT_THOUGHT_UPSERT:
             return self._upsert_text(
-                object_id=object_id,
                 payload=payload,
                 storage=self.thought_text,
+                stream_key="agent-thought",
                 kind="thinking",
             )
         if event_type is AgentHostEventType.TOOL_CALL_UPSERT:
@@ -100,15 +104,15 @@ class AgentHostEventNormalizer:
 
     def _append_chunk(
         self,
-        object_id: str,
         payload: JsonObject,
         storage: dict[str, str],
         *,
+        stream_key: str,
         kind: str = "text",
     ) -> list[AgentEvent]:
         text = event_text(payload)
-        storage[object_id] = storage.get(object_id, "") + text
-        return self._stream_delta(object_id, text, kind=kind)
+        storage[stream_key] = storage.get(stream_key, "") + text
+        return self._stream_delta(text, kind=kind)
 
     def _tool_call_upsert(
         self,
@@ -273,21 +277,21 @@ class AgentHostEventNormalizer:
     def _upsert_text(
         self,
         *,
-        object_id: str,
         payload: JsonObject,
         storage: dict[str, str],
+        stream_key: str,
         kind: str,
     ) -> list[AgentEvent]:
         full_text = event_text(payload)
-        previous = storage.get(object_id, "")
-        storage[object_id] = full_text
+        previous = storage.get(stream_key, "")
+        storage[stream_key] = full_text
         if full_text.startswith(previous):
             delta = full_text[len(previous) :]
         elif full_text != previous:
             delta = full_text
         else:
             delta = ""
-        return self._stream_delta(object_id, delta, kind=kind)
+        return self._stream_delta(delta, kind=kind)
 
     def _token(self, text: str, *, kind: str = "text") -> AgentEvent:
         return AgentEvent(
@@ -298,14 +302,13 @@ class AgentHostEventNormalizer:
 
     def _stream_delta(
         self,
-        object_id: str,
         text: str,
         *,
         kind: str,
     ) -> list[AgentEvent]:
         if not text:
             return []
-        key = (kind, object_id)
+        key = (kind, f"{kind}-stream")
         events = self._drain_tokens() if self.token_buffer_key not in {None, key} else []
         self.token_buffer_key = key
         events.extend(

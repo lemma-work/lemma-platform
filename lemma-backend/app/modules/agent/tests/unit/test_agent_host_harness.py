@@ -142,7 +142,7 @@ def test_normalizer_batches_word_sized_acp_deltas_for_the_ui() -> None:
                 _row(
                     sequence=sequence,
                     event_type="agent_message_chunk",
-                    object_id="message-1",
+                    object_id=f"codex-content-{sequence}",
                     payload={"text": text},
                 )
             )
@@ -154,6 +154,22 @@ def test_normalizer_batches_word_sized_acp_deltas_for_the_ui() -> None:
         "kind": "text",
         "data": "I am streaming one readable chunk.",
     }
+    terminal = normalizer.normalize(
+        _row(
+            sequence=7,
+            event_type="terminal",
+            object_id=None,
+            payload={"state": "SUCCEEDED"},
+        )
+    )
+    final_messages = [
+        event.data
+        for event in terminal
+        if event.type is AgentEventType.MESSAGE
+        and getattr(event.data, "text", None)
+    ]
+    assert len(final_messages) == 1
+    assert final_messages[0].text == "I am streaming one readable chunk."
 
 
 def test_normalizer_preserves_order_when_acp_switches_stream_objects() -> None:
