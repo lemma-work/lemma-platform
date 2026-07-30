@@ -159,17 +159,101 @@ def test_start_routes_through_locald_when_desktop_owns_lifecycle(
     token.write_text("a" * 64)
     monkeypatch.setattr(commands, "_locald_binary", lambda: "/opt/lemma-locald")
     monkeypatch.setattr(commands, "_locald_token_path", lambda: token)
-    monkeypatch.setattr(
-        commands.subprocess,
-        "run",
-        lambda arguments, *, check: (
-            calls.append(arguments)
-            or subprocess.CompletedProcess(arguments, 0)
-        ),
-    )
+    def fake_run(arguments, *, check, **kwargs):
+        calls.append(arguments)
+        assert check is False
+        assert kwargs == {"capture_output": True, "text": True}
+        return subprocess.CompletedProcess(
+            arguments,
+            0,
+            stdout=(
+                '{"event":"done","id":"lemma-cli-start",'
+                '"ok":true}\n'
+            ),
+        )
+
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
 
     result = runner.invoke(commands.app, ["start"])
 
     assert result.exit_code == 0, result.output
     assert calls[0][:2] == ["/opt/lemma-locald", "send"]
     assert '"cmd":"agent-host.start"' in calls[0][2]
+
+
+def test_start_installs_service_when_old_locald_does_not_support_agent_host(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls: list[tuple[list[str], dict]] = []
+    token = tmp_path / "control.token"
+    token.write_text("a" * 64)
+    monkeypatch.setattr(commands, "_binary", lambda: "/opt/lemma-agent-host")
+    monkeypatch.setattr(commands, "_locald_binary", lambda: "/opt/lemma-locald")
+    monkeypatch.setattr(commands, "_locald_token_path", lambda: token)
+
+    def fake_run(arguments, *, check, **kwargs):
+        calls.append((arguments, kwargs))
+        if arguments[:2] == ["/opt/lemma-locald", "send"]:
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                stdout=(
+                    '{"code":"unknown-command","event":"error",'
+                    '"id":"lemma-cli-start"}\n'
+                ),
+            )
+        if arguments[-2:] == ["status", "--json"]:
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                stdout='{"service":{"installed":false}}\n',
+            )
+        return subprocess.CompletedProcess(arguments, 0)
+
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    result = runner.invoke(commands.app, ["start"])
+
+    assert result.exit_code == 0, result.output
+    assert [call[0] for call in calls] == [
+        ["/opt/lemma-locald", "send", calls[0][0][2]],
+        ["/opt/lemma-agent-host", "status", "--json"],
+        ["/opt/lemma-agent-host", "install-service"],
+    ]
+    assert (
+        calls[-1][1]["env"]["LEMMA_AGENT_HOST_ALLOW_STANDALONE_SERVICE"]
+        == "1"
+    )
+
+
+def test_start_installs_service_for_cli_only_user(monkeypatch, tmp_path) -> None:
+    calls: list[tuple[list[str], dict]] = []
+    monkeypatch.setattr(commands, "_binary", lambda: "/opt/lemma-agent-host")
+    monkeypatch.setattr(commands, "_locald_binary", lambda: None)
+    monkeypatch.setattr(
+        commands,
+        "_locald_token_path",
+        lambda: tmp_path / "missing-control.token",
+    )
+
+    def fake_run(arguments, *, check, **kwargs):
+        calls.append((arguments, kwargs))
+        if arguments[-2:] == ["status", "--json"]:
+            return subprocess.CompletedProcess(
+                arguments,
+                0,
+                stdout='{"service":{"installed":false}}\n',
+            )
+        return subprocess.CompletedProcess(arguments, 0)
+
+    monkeypatch.setattr(commands.subprocess, "run", fake_run)
+
+    result = runner.invoke(commands.app, ["start"])
+
+    assert result.exit_code == 0, result.output
+    assert [call[0] for call in calls] == [
+        ["/opt/lemma-agent-host", "status", "--json"],
+        ["/opt/lemma-agent-host", "install-service"],
+    ]
+    assert "LEMMA_AGENT_HOST_ALLOW_STANDALONE_SERVICE" not in calls[-1][1]["env"]

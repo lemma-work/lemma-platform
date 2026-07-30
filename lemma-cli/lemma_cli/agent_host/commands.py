@@ -79,6 +79,14 @@ def _locald_binary() -> str | None:
     sibling = Path(sys.executable).resolve().parent / name
     if sibling.is_file():
         return str(sibling)
+    if sys.platform == "darwin":
+        for application in (
+            Path("/Applications/Lemma.app"),
+            Path.home() / "Applications/Lemma.app",
+        ):
+            bundled = application / "Contents/MacOS/lemma-locald"
+            if bundled.is_file():
+                return str(bundled)
     repository = Path(__file__).resolve().parents[3]
     for profile in ("release", "debug"):
         candidate = repository / "locald" / "target" / profile / name
@@ -105,14 +113,79 @@ def _locald_token_path() -> Path:
 def _run_lifecycle(command: str) -> None:
     locald = _locald_binary()
     if locald and _locald_token_path().is_file():
+        request_id = f"lemma-cli-{command}"
         request = json.dumps(
-            {"cmd": f"agent-host.{command}", "id": f"lemma-cli-{command}"},
+            {"cmd": f"agent-host.{command}", "id": request_id},
             separators=(",", ":"),
         )
-        result = subprocess.run([locald, "send", request], check=False)
-        if result.returncode == 0:
+        result = subprocess.run(
+            [locald, "send", request],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        response = _locald_response(result.stdout, request_id)
+        if response == "handled":
             return
-    _run(command)
+        if response == "failed":
+            raise typer.BadParameter(
+                f"Lemma Desktop could not {command} Agent Host"
+            )
+    _run_standalone_lifecycle(command)
+
+
+def _locald_response(output: str, request_id: str) -> str:
+    """Return handled, unsupported, or failed for a locald control response."""
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("id") != request_id:
+            continue
+        if event.get("event") == "done" and event.get("ok") is True:
+            return "handled"
+        if event.get("event") == "error":
+            if event.get("code") == "unknown-command":
+                return "unsupported"
+            message = event.get("message")
+            if message:
+                typer.echo(str(message), err=True)
+            return "failed"
+    return "unsupported"
+
+
+def _run_standalone_lifecycle(command: str) -> None:
+    binary = _binary()
+    status = subprocess.run(
+        [binary, "status", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        installed = bool(json.loads(status.stdout)["service"]["installed"])
+    except (json.JSONDecodeError, KeyError, TypeError):
+        installed = False
+    if installed:
+        _run(command)
+        return
+    if command == "stop":
+        return
+
+    environment = os.environ.copy()
+    if _locald_token_path().is_file():
+        # Old Desktop releases created locald state before they learned how to
+        # supervise Agent Host. In that case a standalone service is safe and
+        # is the only durable CLI-only lifecycle available.
+        environment["LEMMA_AGENT_HOST_ALLOW_STANDALONE_SERVICE"] = "1"
+    result = subprocess.run(
+        [binary, "install-service"],
+        check=False,
+        env=environment,
+    )
+    if result.returncode:
+        raise typer.Exit(result.returncode)
 
 
 @app.command("install")
