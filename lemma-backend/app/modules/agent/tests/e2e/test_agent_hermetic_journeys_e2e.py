@@ -628,6 +628,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
     )
     assert agent.status_code == status.HTTP_201_CREATED, agent.text
 
+    missing_process_id = str(uuid4())
     script = [
         script_tool_call(
             "write_todos",
@@ -665,7 +666,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             "manage_process",
             {
                 "action": "input",
-                "process_id": "fake-interactive-process",
+                "process_id": missing_process_id,
                 "chars": "status\n",
                 "yield_time_ms": 10,
             },
@@ -675,7 +676,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             "manage_process",
             {
                 "action": "kill",
-                "process_id": "fake-interactive-process",
+                "process_id": missing_process_id,
                 "comment": "Stop the deterministic process",
             },
             tool_call_id="process-kill-1",
@@ -810,8 +811,11 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         tool_returns_by_id["shell-blocking-1"]["tool_result"]
     )
     assert tool_returns_by_id["shell-failure-1"]["tool_result"]["success"] is False
-    assert tool_returns_by_id["process-input-1"]["tool_result"]["success"] is True
-    assert tool_returns_by_id["process-kill-1"]["tool_result"]["success"] is True
+    # Successful interactive process continuity is covered by the real
+    # AgentBox lifecycle E2E. This static model script can only carry a fixed
+    # process id, so it exercises a well-formed but missing process instead.
+    assert tool_returns_by_id["process-input-1"]["tool_result"]["success"] is False
+    assert tool_returns_by_id["process-kill-1"]["tool_result"]["success"] is False
     assert "42" in str(tool_returns_by_id["python-1"]["tool_result"])
     assert tool_returns_by_id["python-failure-1"]["tool_result"]["success"] is False
     assert tool_returns_by_id["image-1"]["tool_result"]

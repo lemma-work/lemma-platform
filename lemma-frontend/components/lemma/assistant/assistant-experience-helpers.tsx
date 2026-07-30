@@ -3,18 +3,20 @@
 // Pure presentational helpers extracted from assistant-experience.tsx: class-name
 // builders, runtime-label formatting, the markdown component map + default message
 // renderer, suggestion-card parsing, the default pending-file chip, and the
-// @-mention matcher. These return strings/JSX from explicit inputs (no hooks, no
-// component-local state), so AssistantExperienceView consumes them unchanged.
+// @-mention matcher and markdown renderers. Most helpers are pure; pod-file
+// renderers resolve short-lived signed URLs through React Query.
 
-import { type ReactNode } from "react";
+import { type ComponentPropsWithoutRef, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useQuery } from "@tanstack/react-query";
 import type { AgentRuntimeConfig, AvailableModelInfo, ConversationModel } from "lemma-sdk";
 import {
   normalizeAssistantDisplayText,
   normalizeAssistantMarkdown,
 } from "lemma-sdk";
 import { cn } from "@/lib/utils";
+import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, XCircle } from "@/components/ui/icons";
@@ -158,6 +160,86 @@ export function stripMarkdownNode<T extends { node?: unknown }>(props: T): Omit<
   return elementProps;
 }
 
+function podIdFromBrowserPath(): string | null {
+  if (typeof window === "undefined") return null;
+  const match = window.location.pathname.match(/^\/pod\/([^/]+)/);
+  return match?.[1] ? decodeURIComponent(match[1]) : null;
+}
+
+function isPodFilePath(value: string | undefined): value is string {
+  return !!value && (value.startsWith("/me/") || value.startsWith("/pod/"));
+}
+
+function useResolvedMarkdownFileUrl(value: string | undefined): {
+  isPodFile: boolean;
+  resolvedUrl?: string;
+  failed: boolean;
+} {
+  const podId = podIdFromBrowserPath();
+  const path = isPodFilePath(value) ? value : null;
+  const query = useQuery({
+    queryKey: ["assistant-markdown-file-url", podId, path],
+    enabled: Boolean(podId && path),
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      if (!podId || !path) return null;
+      return getLemmaClient(podId).files.getUrl(path);
+    },
+  });
+  const signedUrl = query.data && typeof query.data.url === "string"
+    ? query.data.url
+    : undefined;
+  return {
+    isPodFile: path !== null,
+    resolvedUrl: path ? signedUrl : value,
+    failed: query.isError,
+  };
+}
+
+function AssistantMarkdownImage({
+  src,
+  alt,
+  className,
+  node,
+  ...props
+}: ComponentPropsWithoutRef<"img"> & { node?: unknown }) {
+  void node;
+  const imageSrc = typeof src === "string" ? src : undefined;
+  const { isPodFile, resolvedUrl, failed } = useResolvedMarkdownFileUrl(imageSrc);
+  if (isPodFile && !resolvedUrl) {
+    return (
+      <span className="my-3 block rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+        {failed ? "Generated image is unavailable." : "Loading generated image…"}
+      </span>
+    );
+  }
+  // The source is a short-lived signed pod URL or an agent-provided remote URL;
+  // intrinsic dimensions are not known when rendering arbitrary markdown.
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img {...props} src={resolvedUrl ?? src} alt={alt ?? ""} className={cn("my-3 h-auto max-w-full rounded-md", className)} />;
+}
+
+function AssistantMarkdownLink({
+  href,
+  className,
+  target,
+  rel,
+  node,
+  ...props
+}: ComponentPropsWithoutRef<"a"> & { node?: unknown }) {
+  void node;
+  const { isPodFile, resolvedUrl } = useResolvedMarkdownFileUrl(href);
+  return (
+    <a
+      {...props}
+      href={resolvedUrl ?? (isPodFile ? undefined : href)}
+      className={cn("font-medium text-[var(--action-primary)] underline-offset-4 hover:underline", className)}
+      target={target || "_blank"}
+      rel={rel || "noreferrer noopener"}
+    />
+  );
+}
+
 export function markdownComponentsForMessage(isUserMessage: boolean): Components {
   const textClassName = isUserMessage ? "text-current" : "text-[var(--text-primary)]";
   const softTextClassName = isUserMessage ? "text-[color:color-mix(in_srgb,var(--text-on-brand)_85%,transparent)]" : "text-[var(--text-secondary)]";
@@ -213,14 +295,13 @@ export function markdownComponentsForMessage(isUserMessage: boolean): Components
     td: ({ className, ...props }) => (
       <td className={cn("border px-2 py-1.5 align-top", borderClassName, className)} {...stripMarkdownNode(props)} />
     ),
-    a: ({ className, target, rel, ...props }) => (
-      <a
-        {...stripMarkdownNode(props)}
-        className={cn("font-medium underline-offset-4 hover:underline", isUserMessage ? "text-current" : "text-[var(--action-primary)]", className)}
-        target={target || "_blank"}
-        rel={rel || "noreferrer noopener"}
+    a: ({ className, ...props }) => (
+      <AssistantMarkdownLink
+        {...props}
+        className={cn(isUserMessage ? "text-current" : "text-[var(--action-primary)]", className)}
       />
     ),
+    img: AssistantMarkdownImage,
   };
 }
 

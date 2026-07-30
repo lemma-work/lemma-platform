@@ -7,16 +7,20 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
+import psycopg
 from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from psycopg import sql
 from sqlalchemy import inspect, select
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.crypto import get_secret_cipher
 from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.test_utils import create_postgres_database, get_postgres_url
 from app.modules.agent.domain.agent_host import (
     AgentHostEvent,
     AgentHostEventBatch,
@@ -84,35 +88,68 @@ async def _database_shape(database_url: str) -> tuple[set[str], set[str]]:
 
 def test_agent_host_migration_round_trip(
     e2e_settings,
-    test_database_url: str,
+    postgres_container,
 ) -> None:
     del e2e_settings
     from app.core.config import settings
 
-    settings.database_url = test_database_url
-    config = Config("alembic.ini")
-    command.upgrade(config, "head")
-    tables, profile_columns = asyncio.run(_database_shape(test_database_url))
-    assert {
-        "agent_hosts",
-        "agent_host_harnesses",
-        "agent_host_commands",
-        "agent_host_run_leases",
-        "agent_host_events",
-        "agent_host_mcp_routes",
-    } <= tables
-    assert "harness_id" in profile_columns
+    database_name = f"agent_host_migration_{uuid4().hex}"
+    create_postgres_database(postgres_container, database_name)
+    base_url = make_url(get_postgres_url(postgres_container))
+    migration_database_url = base_url.set(database=database_name).render_as_string(
+        hide_password=False
+    )
+    previous_database_url = settings.database_url
+    settings.database_url = migration_database_url
+    try:
+        config = Config("alembic.ini")
+        command.upgrade(config, "head")
+        tables, profile_columns = asyncio.run(
+            _database_shape(migration_database_url)
+        )
+        assert {
+            "agent_hosts",
+            "agent_host_harnesses",
+            "agent_host_commands",
+            "agent_host_run_leases",
+            "agent_host_events",
+            "agent_host_mcp_routes",
+        } <= tables
+        assert "harness_id" in profile_columns
 
-    command.downgrade(config, "0008_function_execution")
-    tables, profile_columns = asyncio.run(_database_shape(test_database_url))
-    assert "agent_hosts" not in tables
-    assert "agent_host_mcp_routes" not in tables
-    assert "harness_id" not in profile_columns
+        command.downgrade(config, "0008_function_execution")
+        tables, profile_columns = asyncio.run(
+            _database_shape(migration_database_url)
+        )
+        assert "agent_hosts" not in tables
+        assert "agent_host_mcp_routes" not in tables
+        assert "harness_id" not in profile_columns
 
-    command.upgrade(config, "head")
-    tables, profile_columns = asyncio.run(_database_shape(test_database_url))
-    assert "agent_host_run_leases" in tables
-    assert "harness_id" in profile_columns
+        command.upgrade(config, "head")
+        tables, profile_columns = asyncio.run(
+            _database_shape(migration_database_url)
+        )
+        assert "agent_host_run_leases" in tables
+        assert "harness_id" in profile_columns
+    finally:
+        settings.database_url = previous_database_url
+        dsn = (
+            f"host={postgres_container.get_container_host_ip()} "
+            f"port={postgres_container.get_exposed_port(5432)} "
+            f"user={postgres_container.username} "
+            f"password={postgres_container.password} "
+            f"dbname={postgres_container.dbname}"
+        )
+        with psycopg.connect(dsn, autocommit=True) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                    "WHERE datname = %s AND pid <> pg_backend_pid()",
+                    (database_name,),
+                )
+                cursor.execute(
+                    sql.SQL("DROP DATABASE {}").format(sql.Identifier(database_name))
+                )
 
 
 async def _pair_host(

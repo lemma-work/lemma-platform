@@ -9,6 +9,7 @@ from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     JsonObject,
+    JsonValue,
     MessageDraft,
 )
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
@@ -121,10 +122,11 @@ class AgentHostEventNormalizer:
         payload: JsonObject,
         metadata: JsonObject,
     ) -> list[AgentEvent]:
-        tool_name = str(payload.get("name") or payload.get("tool_name") or "tool")
+        tool_name = _tool_name(payload)
         if object_id in self.tool_calls:
             return []
         self.tool_calls[object_id] = tool_name
+        tool_metadata = _tool_metadata(metadata, payload)
         events = self._drain_tokens()
         events.append(
             AgentEvent(
@@ -132,8 +134,8 @@ class AgentHostEventNormalizer:
                 data=MessageDraft.of_tool_call(
                     tool_name=tool_name,
                     tool_call_id=object_id,
-                    tool_args=payload.get("arguments", payload.get("args")),
-                    metadata=metadata,
+                    tool_args=_tool_args(payload, tool_name),
+                    metadata=tool_metadata,
                 ),
                 agent_run_id=self.agent_run_id,
                 sequence=row.sequence,
@@ -156,10 +158,12 @@ class AgentHostEventNormalizer:
             return []
         tool_name = self.tool_calls.get(
             object_id,
-            str(payload.get("name") or payload.get("tool_name") or "tool"),
+            _tool_name(payload),
         )
         self.closed_tool_calls.add(object_id)
-        result = payload.get("result")
+        result = _bounded_tool_value(
+            _first_present(payload, "result", "rawOutput")
+        )
         if status != "COMPLETED":
             result = {
                 "success": False,
@@ -173,7 +177,7 @@ class AgentHostEventNormalizer:
                     tool_name=tool_name,
                     tool_call_id=object_id,
                     tool_result=result,
-                    metadata=metadata,
+                    metadata=_tool_metadata(metadata, payload),
                 ),
                 agent_run_id=self.agent_run_id,
                 sequence=row.sequence,
@@ -389,6 +393,87 @@ class AgentHostEventNormalizer:
         events.extend(self.close_outstanding(terminal))
         events.append(terminal)
         return events
+
+
+_MAX_TOOL_STRING_CHARACTERS = 4_096
+_MAX_TOOL_COLLECTION_ITEMS = 32
+_MAX_TOOL_VALUE_DEPTH = 4
+
+
+def _first_present(payload: JsonObject, *keys: str) -> object:
+    for key in keys:
+        if key in payload:
+            return payload[key]
+    return None
+
+
+def _tool_name(payload: JsonObject) -> str:
+    for key in ("name", "tool_name"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    kind = payload.get("kind")
+    if isinstance(kind, str) and kind.strip():
+        normalized = kind.strip().lower()
+        return "exec_command" if normalized == "execute" else normalized
+    title = payload.get("title")
+    if isinstance(title, str) and title.strip():
+        return title.strip()
+    return "tool"
+
+
+def _tool_metadata(metadata: JsonObject, payload: JsonObject) -> JsonObject:
+    result = dict(metadata)
+    for source, target in (("title", "tool_title"), ("kind", "tool_kind")):
+        value = payload.get(source)
+        if isinstance(value, str) and value.strip():
+            result[target] = value.strip()
+    return result
+
+
+def _tool_args(payload: JsonObject, tool_name: str) -> JsonValue:
+    value = _first_present(payload, "arguments", "args", "rawInput")
+    if tool_name == "exec_command" and isinstance(value, dict):
+        normalized = dict(value)
+        command = normalized.pop("command", None)
+        if "cmd" not in normalized and isinstance(command, str):
+            normalized["cmd"] = command
+        value = normalized
+    return _bounded_tool_value(value)
+
+
+def _bounded_tool_value(value: object, *, depth: int = 0) -> JsonValue:
+    if depth >= _MAX_TOOL_VALUE_DEPTH:
+        return {"omitted": "nested tool payload"}
+    if isinstance(value, str):
+        if len(value) <= _MAX_TOOL_STRING_CHARACTERS:
+            return value
+        return {
+            "omitted": "large tool payload",
+            "character_count": len(value),
+        }
+    if isinstance(value, dict):
+        items = list(value.items())
+        result = {
+            str(key): _bounded_tool_value(item, depth=depth + 1)
+            for key, item in items[:_MAX_TOOL_COLLECTION_ITEMS]
+        }
+        if len(items) > _MAX_TOOL_COLLECTION_ITEMS:
+            result["_omitted_item_count"] = len(items) - _MAX_TOOL_COLLECTION_ITEMS
+        return result
+    if isinstance(value, list):
+        result = [
+            _bounded_tool_value(item, depth=depth + 1)
+            for item in value[:_MAX_TOOL_COLLECTION_ITEMS]
+        ]
+        if len(value) > _MAX_TOOL_COLLECTION_ITEMS:
+            result.append(
+                {"omitted_item_count": len(value) - _MAX_TOOL_COLLECTION_ITEMS}
+            )
+        return result
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return str(value)
 
 
 def _json_object(value: object) -> JsonObject:

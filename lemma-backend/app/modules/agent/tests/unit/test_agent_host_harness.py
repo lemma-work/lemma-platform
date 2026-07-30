@@ -231,6 +231,92 @@ def test_normalizer_closes_unfinished_tool_call_before_failure() -> None:
     assert synthetic.metadata["synthetic_tool_return"] is True
 
 
+def test_normalizer_preserves_acp_tool_title_input_and_bounded_output() -> None:
+    normalizer = AgentHostEventNormalizer(
+        agent_run_id=uuid4(),
+        model_name="gpt-test",
+    )
+
+    call = normalizer.normalize(
+        _row(
+            sequence=1,
+            event_type="tool_call_upsert",
+            object_id="image-call",
+            payload={
+                "title": "Image generation",
+                "status": "in_progress",
+                "rawInput": {"prompt": "A useful poster"},
+            },
+        )
+    )
+    returned = normalizer.normalize(
+        _row(
+            sequence=2,
+            event_type="tool_call_update",
+            object_id="image-call",
+            payload={
+                "status": "completed",
+                "rawOutput": {"result": "x" * 10_000},
+            },
+        )
+    )
+
+    invocation = call[0].data
+    assert invocation.tool_name == "Image generation"
+    assert invocation.tool_args == {"prompt": "A useful poster"}
+    assert invocation.metadata["tool_title"] == "Image generation"
+    result = returned[0].data
+    assert result.tool_name == "Image generation"
+    assert result.tool_result == {
+        "result": {
+            "omitted": "large tool payload",
+            "character_count": 10_000,
+        }
+    }
+
+
+def test_normalizer_maps_acp_execute_to_terminal_command() -> None:
+    normalizer = AgentHostEventNormalizer(
+        agent_run_id=uuid4(),
+        model_name="gpt-test",
+    )
+
+    call = normalizer.normalize(
+        _row(
+            sequence=1,
+            event_type="tool_call_upsert",
+            object_id="command-call",
+            payload={
+                "kind": "execute",
+                "title": "python -c 'print(42)'",
+                "status": "in_progress",
+                "rawInput": {"command": "python -c 'print(42)'"},
+            },
+        )
+    )
+    returned = normalizer.normalize(
+        _row(
+            sequence=2,
+            event_type="tool_call_update",
+            object_id="command-call",
+            payload={
+                "status": "completed",
+                "rawOutput": {"exit_code": 0, "formatted_output": "42\n"},
+            },
+        )
+    )
+
+    invocation = call[0].data
+    assert invocation.tool_name == "exec_command"
+    assert invocation.tool_args == {"cmd": "python -c 'print(42)'"}
+    assert invocation.metadata["tool_title"] == "python -c 'print(42)'"
+    assert invocation.metadata["tool_kind"] == "execute"
+    assert returned[0].data.tool_result == {
+        "exit_code": 0,
+        "formatted_output": "42\n",
+    }
+
+
 def test_normalizer_maps_usage_totals() -> None:
     normalizer = AgentHostEventNormalizer(
         agent_run_id=uuid4(),
