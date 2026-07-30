@@ -28,10 +28,10 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     ConversationAgentScope,
 )
-from app.modules.agent.services.conversation_service import (
-    ApprovalResolution,
+from app.modules.agent.services.approval_reconciliation import (
     approval_reconcile_job_id,
 )
+from app.modules.agent.services.conversation_service import ApprovalResolution
 from app.modules.test_support.authz import allow_all_context
 from app.modules.usage.domain.errors import UsageLimitExceededError
 

@@ -58,13 +58,13 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.services.approval_reconciliation import (
+    approval_reconcile_job_id,
+)
 from app.modules.agent.services.conversation_retry_service import (
     ConversationRetryService,
 )
-from app.modules.agent.services.conversation_service import (
-    ConversationService,
-    approval_reconcile_job_id,
-)
+from app.modules.agent.services.conversation_service import ConversationService
 from app.composition.authorization import create_authorization_service
 from app.composition.agent_usage import build_usage_service
 

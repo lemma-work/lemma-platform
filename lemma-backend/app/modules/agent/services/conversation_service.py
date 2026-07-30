@@ -48,6 +48,11 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
+from app.modules.agent.services.approval_reconciliation import (
+    execute_approved_tool_as_user,
+    pending_user_approval_messages,
+    should_defer_approved_tool,
+)
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
 )
@@ -64,26 +69,11 @@ from app.composition.agent_usage import UsageLimitExceededError, UsageService
 
 _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
-# Tools that pause the run for user input. Both persist their tool call (rendered
-# as a card by the client) and are resolved via the approvals endpoint, which
-# synthesizes their tool return and resumes the run.
 _PAUSING_TOOL_NAMES = ("ask_user", "request_approval")
 
 
-def approval_reconcile_job_id(conversation_id: UUID, approval_id: str) -> str:
-    """Return the deterministic worker job id for one approval decision."""
-    return f"agent-approval:{conversation_id}:{approval_id}"
-
-
 class ApprovalResolution(NamedTuple):
-    """Outcome of resolving an approval.
-
-    ``status`` is ``"resolved"`` when this call recorded the decision, or
-    ``"reconciled"`` when the decision already existed and this call only
-    finished (or re-finished) the resume — the self-heal path. ``decision`` is
-    the authoritative (stored) decision, which may differ from what a late
-    caller submitted.
-    """
+    """Approval status plus the authoritative stored decision."""
 
     status: str
     decision: AgentRunApprovalDecision
@@ -439,23 +429,7 @@ class ConversationService:
             conversation_id=conversation.id,
             limit=500,
         )
-        # A decision is not fully resolved until its synthesized tool return has
-        # been persisted. Approved tools now execute asynchronously, so keeping
-        # the card visible during that short processing window lets a repeated
-        # click safely re-enqueue the deterministic job if a worker crashes.
-        returned_ids = {
-            message.tool_call_id
-            for message in messages
-            if message.kind == MessageKind.TOOL_RETURN
-            and message.tool_call_id is not None
-        }
-        return [
-            message
-            for message in messages
-            if message.kind == MessageKind.TOOL_CALL
-            and message.tool_name in _PAUSING_TOOL_NAMES
-            and message.tool_call_id not in returned_ids
-        ]
+        return pending_user_approval_messages(messages)
 
     async def resolve_user_approval(
         self,
@@ -602,23 +576,14 @@ class ConversationService:
             if defer_reconciliation
             else None
         )
-        should_defer = (
-            defer_reconciliation
-            and kind == "request_approval"
-            and effective_decision != AgentRunApprovalDecision.DENY
-            and existing_return is None
+        should_defer = should_defer_approved_tool(
+            defer_reconciliation=defer_reconciliation,
+            kind=kind,
+            decision=effective_decision,
+            has_tool_return=existing_return is not None,
         )
         if should_defer:
-            # HTTP callers acknowledge the durable decision immediately and hand
-            # the potentially slow approved tool (commands can legitimately run
-            # for minutes) to a worker job. Keeping that work in the request made
-            # the browser's 30-second timeout cancel reconciliation after the
-            # decision had already committed. ask_user, denials, and already-run
-            # approvals stay inline because they perform no external work.
-            return ApprovalResolution(
-                status="queued",
-                decision=effective_decision,
-            )
+            return ApprovalResolution(status="queued", decision=effective_decision)
 
         await self._reconcile_approval_resume(
             conversation=conversation,
@@ -924,40 +889,17 @@ class ConversationService:
         args: dict[str, object],
     ) -> dict[str, object]:
         """Run an approved tool with the user's authority; never raise."""
-        from app.core.infrastructure.db.session import async_session_maker
-        from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-        from app.modules.agent.domain.value_objects import to_json_value
-        from app.modules.agent.tools.approval.executor import ApprovalExecutor
-
-        try:
-            deps = await self._build_resume_context(
-                conversation=conversation,
-                user_id=user_id,
-                agent_run_id=agent_run_id,
-            )
-            # The approved action may run for minutes. Release the request/job's
-            # checked-out DB connection before crossing that external boundary;
-            # otherwise a command timeout can leave us trying to append its tool
-            # return through a connection the server closed while it sat idle.
-            # The repository session safely checks out a fresh connection for the
-            # subsequent append/resume transaction.
-            await self.uow.commit()
-            executor = ApprovalExecutor(SessionUnitOfWorkFactory(async_session_maker))
-            result = await executor.execute_as_user(
-                deps=deps,
-                tool_name=tool_name,
-                args=args,
-            )
-            value = to_json_value(result)
-            if isinstance(value, dict) and value.get("success") is False:
-                error = value.get("error") or value.get("message")
-                return {
-                    "ok": False,
-                    "error": str(error or f"{tool_name} did not complete"),
-                }
-            return {"ok": True, "value": value}
-        except Exception as exc:  # noqa: BLE001 - reported back to the model, not fatal
-            return {"ok": False, "error": str(exc)}
+        deps = await self._build_resume_context(
+            conversation=conversation,
+            user_id=user_id,
+            agent_run_id=agent_run_id,
+        )
+        return await execute_approved_tool_as_user(
+            uow=self.uow,
+            deps=deps,
+            tool_name=tool_name,
+            args=args,
+        )
 
     async def _build_resume_context(
         self,
