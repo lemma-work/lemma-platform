@@ -11,17 +11,31 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def _reconcile_failure_breakers(context) -> AsyncIterator[None]:
+    """Catch up schedules whose failure streak passed the threshold while down.
+
+    Best-effort by design. This is a backfill for state the breaker would have
+    applied anyway on the next fire, so it must never decide whether the
+    process starts: a worker that boots ahead of its migrations would otherwise
+    crash-loop on a missing table, taking down every consumer in it over a
+    reconciliation that could simply run next time.
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
     from app.modules.schedule.services.run_outcome_service import (
         ScheduleRunOutcomeService,
     )
 
-    async with context.uow_factory() as uow:
-        count = await ScheduleRunOutcomeService(uow).reconcile_tripped_schedules()
-    if count:
-        logger.warning(
-            "schedule.breakers.reconciled",
-            deactivated_count=count,
-        )
+    try:
+        async with context.uow_factory() as uow:
+            count = await ScheduleRunOutcomeService(uow).reconcile_tripped_schedules()
+    except SQLAlchemyError:
+        logger.warning("schedule.breakers.reconcile_skipped")
+    else:
+        if count:
+            logger.warning(
+                "schedule.breakers.reconciled",
+                deactivated_count=count,
+            )
     yield
 
 

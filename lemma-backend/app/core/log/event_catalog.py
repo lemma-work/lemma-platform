@@ -476,6 +476,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'schedule.agent_outcome.recorded': EventSpec('debug', frozenset({'conversation_id'})),
     'schedule.breaker.tripped': EventSpec('warning', frozenset({'consecutive_failures', 'schedule_id'})),
     'schedule.breakers.reconciled': EventSpec('warning', frozenset({'deactivated_count'})),
+    'schedule.breakers.reconcile_skipped': EventSpec('warning', frozenset()),
     'schedule.event.staged': EventSpec('debug', frozenset({'schedule_id', 'source_event_id'})),
     'schedule.reconcile.unusable_row': EventSpec('warning', frozenset({'reason', 'schedule_id'})),
     'schedule.scheduler.started': EventSpec('info', frozenset()),
