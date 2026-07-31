@@ -40,7 +40,7 @@ from app.modules.agent.domain.value_objects import (
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
 from app.modules.agent.infrastructure.models import AgentRuntimeDaemonModel
-from app.modules.agent.infrastructure.models import AgentRuntimeProfileModel
+from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_service import ConversationService

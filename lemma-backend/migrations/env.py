@@ -28,6 +28,9 @@ from app.modules.pod.infrastructure import models as pod_models  # noqa: F401
 
 # Agent
 from app.modules.agent.infrastructure import models as agent_models  # noqa: F401
+from app.modules.agent.infrastructure import (  # noqa: F401
+    runtime_models as agent_runtime_models,
+)
 
 # Trigger
 from app.modules.schedule.infrastructure import models as trigger_models  # noqa: F401

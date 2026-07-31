@@ -16,7 +16,6 @@ class UUIDAuditBase(Base):
     id: Mapped[UUID] = mapped_column(
         primary_key=True,
         default=uuid7,
-        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -43,7 +42,6 @@ class UUIDCreatedBase(Base):
     id: Mapped[UUID] = mapped_column(
         primary_key=True,
         default=uuid7,
-        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(
@@ -62,7 +60,6 @@ class StringAuditBase(Base):
 
     id: Mapped[str] = mapped_column(
         primary_key=True,
-        index=True,
     )
 
     created_at: Mapped[datetime] = mapped_column(

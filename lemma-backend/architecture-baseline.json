@@ -173,7 +173,6 @@
   "oversized_files": {
     "app/modules/agent/infrastructure/daemon_hub.py": 622,
     "app/modules/agent/infrastructure/harnesses/pydantic_ai.py": 1309,
-    "app/modules/agent/infrastructure/models.py": 632,
     "app/modules/agent/infrastructure/repositories.py": 1161,
     "app/modules/agent/services/agent_runner_service.py": 1137,
     "app/modules/agent/services/conversation_service.py": 1565,

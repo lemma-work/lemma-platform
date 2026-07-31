@@ -57,10 +57,12 @@ from app.modules.agent.infrastructure.models import (
     AgentApprovalDecisionModel,
     AgentModel,
     AgentRuntimeDaemonModel,
-    AgentRuntimeProfileModel,
     AgentRunModel,
     ConversationModel,
     MessageModel,
+)
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentRuntimeProfileModel,
 )
 from app.modules.agent.infrastructure.conversation_origin_store import (
     create_conversation_for_origin,

@@ -25,8 +25,8 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
     RuntimeProfileStatus,
 )
-from app.modules.agent.infrastructure.models import (
-    AgentRunModel,
+from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.runtime_models import (
     AgentRuntimeProfileModel,
 )
 from app.modules.agent_surfaces.domain.ingress_context import (
