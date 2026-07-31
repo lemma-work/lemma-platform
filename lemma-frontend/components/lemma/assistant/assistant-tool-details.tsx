@@ -515,8 +515,14 @@ export function ToolActivityRollup({
     : totalThoughtDurationMs > 0
       ? `Thought for ${formatDurationCompact(totalThoughtDurationMs)}`
       : "Completed";
+  // Only claim "Thinking" for a thought this rollup actually holds. When the
+  // thought renders as a sibling card instead - a message with text keeps its
+  // reasoning unfolded - that card is already showing the word, and a header
+  // repeating it reads as the assistant thinking twice.
   const summary = isWorking
-    ? (activitySummary ? `Working · ${activitySummary}` : "Thinking")
+    ? (activitySummary
+      ? `Working · ${activitySummary}`
+      : reasoningParts.length > 0 ? "Thinking" : "Working")
     : `${completionSummary}${failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
   const collapsedSummary = `${collapsedLabel || summary}${isWorking && failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
 

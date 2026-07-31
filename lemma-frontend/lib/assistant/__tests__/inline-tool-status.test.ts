@@ -3,7 +3,7 @@ import type { AssistantRenderableMessage, AssistantToolInvocation } from "lemma-
 import {
   currentToolStatusLabel,
   isInlineToolStatusAlreadyVisible,
-  isStreamingReasoningAlreadyVisible,
+  resolveThinkingOwner,
   type InlineToolStatus,
 } from "@/components/lemma/assistant/assistant-format";
 import type { DisplayMessageRow } from "@/components/lemma/assistant/assistant-experience";
@@ -128,58 +128,93 @@ describe("inline tool-status handoff", () => {
   });
 });
 
-describe("streaming reasoning status handoff", () => {
-  it("suppresses the fallback Thinking status once reasoning is visible", () => {
+describe("who owns the Thinking label", () => {
+  function reasoningRow(state: "streaming" | "done", sourceIndex = 1): DisplayMessageRow {
     const message: AssistantRenderableMessage = {
-      id: "reasoning-message",
+      id: `reasoning-message-${state}`,
       role: "assistant",
       content: "",
       createdAt: new Date("2026-07-11T00:00:01.000Z"),
       parts: [{
-        id: "reasoning-part",
+        id: `reasoning-part-${state}`,
         type: "reasoning",
-        text: "Inspecting the workspace",
-        state: "streaming",
+        text: state === "streaming" ? "Inspecting the workspace" : "Inspected the workspace",
+        state,
       }],
     };
-    const row: DisplayMessageRow = {
-      id: "reasoning-row",
-      message,
-      sourceIndexes: [1],
-    };
 
-    expect(isStreamingReasoningAlreadyVisible({
-      rows: [row],
+    return { id: `reasoning-row-${state}`, message, sourceIndexes: [sourceIndex] };
+  }
+
+  it("gives a streaming thought the label, so the placeholder yields", () => {
+    expect(resolveThinkingOwner({
+      rows: [reasoningRow("streaming")],
       latestUser: 0,
-    })).toBe(true);
+      hasRunStatus: true,
+    })).toBe("reasoning");
   });
 
-  it("does not suppress status for completed or prior-run reasoning", () => {
-    const message: AssistantRenderableMessage = {
-      id: "reasoning-message",
-      role: "assistant",
-      content: "",
-      createdAt: new Date("2026-07-11T00:00:01.000Z"),
-      parts: [{
-        id: "reasoning-part",
-        type: "reasoning",
-        text: "Inspected the workspace",
-        state: "done",
-      }],
-    };
-    const row: DisplayMessageRow = {
-      id: "reasoning-row",
-      message,
-      sourceIndexes: [1],
-    };
+  it("gives the tool rollup the label once tools are running", () => {
+    const row = toolRow({
+      toolCallId: "call-1",
+      toolName: "list_tables",
+      args: {},
+      state: "call",
+    });
 
-    expect(isStreamingReasoningAlreadyVisible({
+    expect(resolveThinkingOwner({
       rows: [row],
       latestUser: 0,
-    })).toBe(false);
-    expect(isStreamingReasoningAlreadyVisible({
-      rows: [row],
+      hasRunStatus: true,
+    })).toBe("tool-rollup");
+  });
+
+  it("still prefers the thought when a run has both a thought and tools", () => {
+    const tool = toolRow({
+      toolCallId: "call-2",
+      toolName: "list_tables",
+      args: {},
+      state: "call",
+    }, 2);
+
+    expect(resolveThinkingOwner({
+      rows: [reasoningRow("streaming"), tool],
+      latestUser: 0,
+      hasRunStatus: true,
+    })).toBe("reasoning");
+  });
+
+  it("falls back to the run-status placeholder while the run is still empty", () => {
+    expect(resolveThinkingOwner({
+      rows: [],
+      latestUser: 0,
+      hasRunStatus: true,
+    })).toBe("run-status");
+  });
+
+  it("hands the label back to the placeholder once the thought settles", () => {
+    // The durable THINKING message renders "Thought for Ns", not "Thinking",
+    // so it no longer competes for the streaming label.
+    expect(resolveThinkingOwner({
+      rows: [reasoningRow("done")],
+      latestUser: 0,
+      hasRunStatus: true,
+    })).toBe("run-status");
+  });
+
+  it("ignores reasoning that belongs to an earlier run", () => {
+    expect(resolveThinkingOwner({
+      rows: [reasoningRow("streaming")],
       latestUser: 1,
-    })).toBe(false);
+      hasRunStatus: true,
+    })).toBe("run-status");
+  });
+
+  it("names nobody when there is no run status to place", () => {
+    expect(resolveThinkingOwner({
+      rows: [],
+      latestUser: 0,
+      hasRunStatus: false,
+    })).toBeNull();
   });
 });

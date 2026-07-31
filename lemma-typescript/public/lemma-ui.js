@@ -1510,7 +1510,7 @@ ${BASE_STYLES}
         return `<div part="message" class="msg ${cls}" data-role="${cls}">${escapeHtml(text)}</div>`;
       }).join("");
       if (state == null ? void 0 : state.isStreaming) {
-        const streaming = state.streamingText ? `<div part="message" class="msg assistant" data-role="assistant">${escapeHtml(state.streamingText)}</div>` : `<div part="activity" class="activity">Working\u2026</div>`;
+        const streaming = state.streamingText ? `<div part="message" class="msg assistant" data-role="assistant">${escapeHtml(state.streamingText)}</div>` : `<div part="activity" class="activity">${state.streamingThinking ? "Thinking\u2026" : "Working\u2026"}</div>`;
         return rows + streaming;
       }
       return rows;
