@@ -510,11 +510,15 @@ jobs:
         working-directory: agent-host
         run: cargo test --locked
 
+  # macOS, not Linux, because that is a platform locald ships on. Most of
+  # managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build compiles
+  # it down to an unused parameter and a pile of dead helpers - failing the lint
+  # over code that never ships, while never once linting the code that does.
   locald:
     name: locald crate
     needs: changes
     if: needs.changes.outputs.locald == 'true'
-    runs-on: ubuntu-latest
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v7
 
@@ -532,11 +536,6 @@ jobs:
           key: locald-cargo-${{ runner.os }}-${{ hashFiles('locald/Cargo.lock') }}
           restore-keys: locald-cargo-${{ runner.os }}-
 
-      # reqwest is built with native-tls, so the crate links against the system
-      # OpenSSL rather than vendoring one.
-      - name: Install OpenSSL headers
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
-
       - name: Check formatting
         working-directory: locald
         run: cargo fmt --check
@@ -545,10 +544,6 @@ jobs:
         working-directory: locald
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      # locald ships with the macOS and Windows desktop, but its logic - the
-      # process ledger, operator config, sharing state, Agent Host supervision -
-      # is platform-agnostic and has explicit non-macOS arms, so Linux gives the
-      # same signal far faster than a macOS runner.
       - name: Test
         working-directory: locald
         run: cargo test --locked
