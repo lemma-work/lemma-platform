@@ -266,9 +266,15 @@ async function runDesktopAction(button) {
     }
     if (action === "logs") await invoke("open_logs");
     if (action === "devtools") await invoke("open_developer_tools");
-    if (action === "agent-host-start") await invoke("agent_host_action", { action: "start" });
+    // Connecting, choosing agents and turning it off live in the workspace, so
+    // a cloud user reaches the same controls. This page keeps only what is
+    // useful when the workspace itself will not load.
+    if (action === "agent-host-open") {
+      await invoke("close_local_settings");
+      await invoke("open_app");
+    }
     if (action === "agent-host-restart") await invoke("agent_host_action", { action: "restart" });
-    if (action === "agent-host-stop") await invoke("agent_host_action", { action: "stop" });
+    if (action === "agent-host-log") await invoke("open_logs");
     if (action === "repair-runtime") {
       if (!window.confirm("Stop Lemma briefly and verify or replace only signed runtime files?")) return;
       document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
@@ -367,17 +373,34 @@ function render() {
 }
 
 function renderAgentHost(agentHost) {
-  const detail = agentHost.available
-    ? agentHost.running
-      ? `PID ${agentHost.pid || "—"} · ${agentHost.uptime_seconds || 0}s uptime`
-      : agentHost.last_error || "Ready to start"
-    : "Agent Host sidecar is not installed";
-  $("agent-host-status").innerHTML = serviceHtml(
-    "Lemma Agent Host",
-    detail,
-    agentHost.running ? "online" : agentHost.available ? "stopped" : "unavailable",
-    agentHost.running ? "ok" : agentHost.available ? "" : "bad",
-  );
+  const targets = Array.isArray(agentHost.targets) ? agentHost.targets : [];
+  const connected = targets.some((target) => target.connection_state === "ONLINE");
+  const activeRuns = targets.reduce((total, target) => total + (target.active_runs || 0), 0);
+  // Reachability, not liveness: an unpaired host and one that cannot reach its
+  // workspace are both live processes that will never pick up a run.
+  let status = "unavailable";
+  let tone = "bad";
+  let detail = "This build of Lemma does not include the Agent Host.";
+  if (agentHost.available && !agentHost.running) {
+    status = "off";
+    tone = "";
+    detail = agentHost.last_error || "Turn it on from Lemma to run coding agents here.";
+  } else if (agentHost.available && !agentHost.paired) {
+    status = "not connected";
+    tone = "";
+    detail = "Connect this computer from Lemma to start running agents on it.";
+  } else if (agentHost.available && connected) {
+    status = "connected";
+    tone = "ok";
+    detail = activeRuns > 0
+      ? `Running ${activeRuns} task${activeRuns === 1 ? "" : "s"} · ${agentHost.uptime_seconds || 0}s uptime`
+      : `Ready for work · ${agentHost.uptime_seconds || 0}s uptime`;
+  } else if (agentHost.available) {
+    status = "reconnecting";
+    tone = "";
+    detail = targets[0]?.last_error || agentHost.last_error || "Trying to reach the workspace.";
+  }
+  $("agent-host-status").innerHTML = serviceHtml("Lemma Agent Host", detail, status, tone);
 }
 
 function summaryHtml(title, copy, status, page) {

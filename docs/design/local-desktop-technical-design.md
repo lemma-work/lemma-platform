@@ -12,6 +12,7 @@ Tauri Desktop
   │ authenticated local IPC
   ▼
 lemma-locald ─────────────── process ledger / network state / logs / config vault
+  ├─ lemma-agent-host sidecar (local coding agents over ACP)
   ├─ optional canonical-origin sharing gateway
   ├─ optional exact-owned ngrok or cloudflared child
   ├─ all-in-one Python backend (API + worker + scheduler + AgentBox + documents)
@@ -238,6 +239,13 @@ workspace.
 The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
 dependencies. Navigation is Overview; AI provider; Sharing,
 Integrations/Channels; Runtime, Updates/Diagnostics.
+
+Local settings exists only in local mode, so it is deliberately not the
+canonical home for anything a cloud workspace also needs. The Agent Host is the
+case in point: its Runtime panel shows status, restart, and the log - what is
+useful when the workspace itself will not load - while connecting, choosing
+agents, and turning it off live in the workspace page, which a hosted user can
+also reach. See [Agent Host in the desktop app](agent-host-desktop.md).
 
 ## 7.2 Sharing and canonical origin
 

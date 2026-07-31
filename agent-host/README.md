@@ -9,8 +9,9 @@ Agent Host is intentionally a separate native process. Lemma Desktop supervises
 it through `lemma-locald`; headless installations can run it in the foreground
 or install a per-user operating-system service.
 
-The complete architecture, protocol, threat model, and rollout rationale live
-in [the external-agent runtime design](../docs/design/external-agent-runtime.md).
+How Desktop supervises, controls, and reports it - including the privilege
+boundary for the workspace page - is in
+[Agent Host in the desktop app](../docs/design/agent-host-desktop.md).
 
 ## Architecture
 

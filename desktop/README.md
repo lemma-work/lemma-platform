@@ -150,24 +150,32 @@ Acceptance flow:
 7. On the AI provider page, use **Use Ollama** and **Use LM Studio** to
    prefill a loopback endpoint, apply it, and verify model discovery, thinking,
    and structured tool calls. Also verify an API provider can replace them.
-8. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
+8. Open **Models**, press **Connect this computer**, and confirm pairing needs
+   no code and no terminal. Add a detected agent with **Add to chat models**,
+   pick it in a chat, run a prompt, and approve a permission. Confirm the tray
+   reads `Agent Host: connected`, that turning it off from either the tray or
+   the card stops the process and survives an app restart, and that a full quit
+   stops it without turning it off. Repeat in hosted mode: no locald appears
+   until the Agent Host is enabled, and no host pack is downloaded.
+9. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
    second browser, create/sign into an account, and verify streamed chat, a
    tool call, and a file transfer. Disable it and confirm the LAN port closes.
-9. Verify ngrok preflight without exposing credentials. Activate a public link
-   only after the open-signup confirmation, repeat streamed chat/file/webhook
-   checks, then disable it. After `cloudflared tunnel login`, verify automatic
-   setup creates one installation-owned named tunnel and DNS route, reuses it
-   after disable, and still offers an existing tunnel as an advanced option.
-   Quick Tunnels must not appear.
-10. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
-11. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
+10. Verify ngrok preflight without exposing credentials. Activate a public link
+    only after the open-signup confirmation, repeat streamed chat/file/webhook
+    checks, then disable it. After `cloudflared tunnel login`, verify automatic
+    setup creates one installation-owned named tunnel and DNS route, reuses it
+    after disable, and still offers an existing tunnel as an advanced option.
+    Quick Tunnels must not appear.
+11. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
+12. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
     the UI honestly says published pod apps remain local-only.
-12. Close the window; verify schedules and active sharing remain available
-    from the tray. Full Quit must stop sharing before exiting.
-13. Restart and confirm ports and data persist, but LAN/Public mode does not
+13. Close the window; verify schedules, the Agent Host, and active sharing
+    remain available from the tray. Full Quit must stop sharing and the Agent
+    Host before exiting.
+14. Restart and confirm ports and data persist, but LAN/Public mode does not
     resume automatically.
-14. Inspect every Diagnostics source and exercise runtime repair.
-15. Use **Quit and stop Lemma** and confirm the VM also releases its memory.
+15. Inspect every Diagnostics source and exercise runtime repair.
+16. Use **Quit and stop Lemma** and confirm the VM also releases its memory.
 
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
 and unrelated listeners occupying persisted ports.
