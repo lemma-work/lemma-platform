@@ -3534,6 +3534,32 @@ mod tests {
                 "{command} is registered but no capability grants {permission}, so every call to it is rejected",
             );
         }
+
+        // Granted *somewhere* is not enough: a capability names one webview, so
+        // a page calling a command only its sibling was granted is still
+        // rejected at runtime. Check each bundled page against its own grants.
+        for (capability, script) in [
+            ("main", include_str!("../ui/index.html")),
+            ("control", include_str!("../ui/control.js")),
+        ] {
+            let grants = granted(capability);
+            for command in invoked_commands(script) {
+                let permission = format!("allow-{}", command.replace('_', "-"));
+                assert!(
+                    grants.contains(&permission),
+                    "{capability} calls {command} but its capability lacks {permission}",
+                );
+            }
+        }
+    }
+
+    /// Every `invoke("name")` a bundled page makes.
+    fn invoked_commands(script: &str) -> Vec<String> {
+        script
+            .split("invoke(\"")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').next().map(str::to_string))
+            .collect()
     }
 
     #[test]
