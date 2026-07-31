@@ -1,22 +1,25 @@
-"""Agent Host pairing, identity, and harness publication APIs.
+"""Agent Host pairing, identity, dispatch, and harness publication APIs.
 
 Two audiences share this router. ``/me/runtime/*`` routes are called by a
 signed-in user managing their machines. ``/agent-host/*`` routes are called by
 the Agent Host itself, authenticated by the opaque per-installation secret
 issued at pairing time.
-
-Run dispatch routes (poll, events) are added alongside the dispatch tables.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Annotated
 from uuid import UUID, uuid7
 
 from fastapi import APIRouter, Header, HTTPException, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
+from app.core.infrastructure.channels.channel_service import get_channel_service
+from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.api.agent_host_schemas import (
     AgentHostHarnessListResponse,
     AgentHostHarnessPublishRequest,
@@ -26,11 +29,21 @@ from app.modules.agent.api.agent_host_schemas import (
     AgentHostResponse,
 )
 from app.modules.agent.domain.agent_host import (
+    AGENT_HOST_PROTOCOL_VERSION,
+    AgentHostEventAck,
+    AgentHostEventBatch,
     AgentHostPairingComplete,
     AgentHostPairingCompleted,
     AgentHostPairingCreate,
     AgentHostPairingCreated,
+    AgentHostPollRequest,
+    AgentHostPollResponse,
+    AgentHostStatus,
     effective_agent_host_status,
+)
+from app.modules.agent.infrastructure.agent_host_channels import host_poke_channel
+from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
+    AgentHostDispatchRepository,
 )
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostRepository,
@@ -55,6 +68,16 @@ from app.modules.agent.services.agent_host_auth import (
 
 
 router = APIRouter(tags=["agent_host"])
+_uow_factory = SessionUnitOfWorkFactory(async_session_maker)
+
+_LONG_POLL_SECONDS = 25.0
+# Bounds how long a missed poke can delay delivery while idle. The poke is the
+# fast path; this is the floor on correctness.
+_IDLE_REPOLL_SECONDS = 5.0
+_MAX_COMMANDS_PER_POLL = 16
+# After applying control updates, ask the host back promptly rather than
+# holding the connection open for a full long poll.
+_CONTROL_UPDATE_BACKOFF_MS = 1_000
 
 
 def _repository_error(exc: AgentHostRepositoryError) -> HTTPException:
@@ -314,3 +337,126 @@ async def self_revoke_agent_host(
         raise _repository_error(exc) from exc
     await uow.commit()
     return _host_response(revoked)
+
+
+@router.post(
+    "/agent-host/poll",
+    response_model=AgentHostPollResponse,
+    operation_id="agent.host.poll",
+)
+async def poll_agent_host_commands(
+    request: AgentHostPollRequest,
+    authorization: Annotated[str | None, Header()] = None,
+) -> AgentHostPollResponse:
+    """Long-poll for commands, carrying the host's control updates up.
+
+    This owns its own units of work rather than the request-scoped one: the
+    idle wait below can hold the connection open for 25 seconds, and a
+    transaction must not stay open across it.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + _LONG_POLL_SECONDS
+
+    # First pass: authenticate, record the heartbeat, and apply the host's
+    # acknowledgements, checkpoints, and rejections.
+    async with _uow_factory() as uow:
+        host = await _authenticated_host(authorization=authorization, uow=uow)
+        host = await AgentHostRepository(uow).mark_seen(
+            host_id=host.id,
+            hello=request.hello,
+            capacity=request.capacity.model_dump(mode="json"),
+        )
+        negotiated_protocol = host.protocol_version or AGENT_HOST_PROTOCOL_VERSION
+        host_status = AgentHostStatus(host.status)
+        host_id = host.id
+        try:
+            commands = await AgentHostDispatchRepository(uow).poll_commands(
+                host_id=host_id,
+                limit=_MAX_COMMANDS_PER_POLL,
+                acknowledged_command_ids=request.acknowledged_command_ids,
+                checkpoints=request.checkpoints,
+                rejections=request.rejections,
+                available_run_slots=request.capacity.available_runs,
+            )
+        except AgentHostRepositoryError as exc:
+            raise _repository_error(exc) from exc
+        await uow.commit()
+
+    control_update_applied = bool(
+        request.acknowledged_command_ids or request.checkpoints or request.rejections
+    )
+    if (
+        commands
+        or control_update_applied
+        or request.capacity.available_runs == 0
+        or host_status is AgentHostStatus.UPGRADE_REQUIRED
+    ):
+        return AgentHostPollResponse(
+            protocol_version=negotiated_protocol,
+            host_status=host_status,
+            commands=commands,
+            poll_after_ms=_CONTROL_UPDATE_BACKOFF_MS if control_update_applied else 0,
+        )
+
+    # Idle path: wait for a poke, falling back to a slow re-query so a missed
+    # poke only delays delivery by a few seconds.
+    channel_service = await get_channel_service()
+    async with channel_service.subscribe([host_poke_channel(host_id)]) as pokes:
+        poke = aiter(pokes)
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return AgentHostPollResponse(
+                    protocol_version=negotiated_protocol,
+                    host_status=host_status,
+                    commands=[],
+                )
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    anext(poke), timeout=min(_IDLE_REPOLL_SECONDS, remaining)
+                )
+            if loop.time() >= deadline:
+                continue
+            async with _uow_factory() as uow:
+                commands = await AgentHostDispatchRepository(uow).poll_commands(
+                    host_id=host_id,
+                    limit=_MAX_COMMANDS_PER_POLL,
+                    acknowledged_command_ids=[],
+                    checkpoints=[],
+                    rejections=[],
+                    available_run_slots=request.capacity.available_runs,
+                )
+                await uow.commit()
+            if commands:
+                return AgentHostPollResponse(
+                    protocol_version=negotiated_protocol,
+                    host_status=host_status,
+                    commands=commands,
+                )
+
+
+@router.post(
+    "/agent-host/events:append",
+    response_model=AgentHostEventAck,
+    operation_id="agent.host.events.append",
+)
+async def append_agent_host_events(
+    request: AgentHostEventBatch,
+    uow: UoWDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> AgentHostEventAck:
+    """Append one ordered batch to the run's stream.
+
+    There is no second lane to publish on: every event type travels the one
+    ordered stream, and the ack watermark is the stream's last entry.
+    """
+    host = await _authenticated_host(authorization=authorization, uow=uow)
+    try:
+        ack = await AgentHostDispatchRepository(uow).append_events(
+            host_id=host.id,
+            batch=request,
+        )
+    except AgentHostRepositoryError as exc:
+        raise _repository_error(exc) from exc
+    await uow.commit()
+    return ack

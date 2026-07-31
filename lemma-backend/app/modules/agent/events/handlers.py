@@ -45,6 +45,7 @@ from app.modules.agent.infrastructure.harnesses import (
     DaemonHarness,
     HarnessRegistry,
     PydanticAIHarness,
+    RemoteHarness,
 )
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
@@ -82,6 +83,9 @@ def build_harness_registry() -> HarnessRegistry:
     return HarnessRegistry(
         [
             PydanticAIHarness(),
+            # One harness for every Agent Host tool; which one runs is decided
+            # by the profile's harness_id, not by the registry.
+            RemoteHarness(provide_uow_factory()),
             DaemonHarness(
                 HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds
             ),

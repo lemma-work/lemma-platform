@@ -25,6 +25,10 @@ class HarnessKind(str, Enum):
     """Runtime framework used to execute an agent."""
 
     LEMMA = "LEMMA"
+    # One kind for every Agent Host harness: which tool runs is identified by
+    # harness_id, not by a kind per tool. The per-tool values below belong to
+    # the legacy local daemon and go away with it.
+    HARNESS = "HARNESS"
     CODEX = "CODEX"
     CLAUDE_CODE = "CLAUDE_CODE"
     OPENCODE = "OPENCODE"

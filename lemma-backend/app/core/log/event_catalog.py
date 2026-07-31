@@ -442,6 +442,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod_bundle.state_store.inspect_legacy_pod_bundle_cache.diagnostic': EventSpec('debug', frozenset({'job_id', 'job_kind'})),
     'pod_bundle.state_store.mirror_recovered_pod_bundle_job.diagnostic': EventSpec('debug', frozenset({'job_id', 'job_kind'})),
     'pod_bundle.state_store.refresh_pod_bundle_state_cache.diagnostic': EventSpec('debug', frozenset({'job_id', 'job_kind', 'status'})),
+    'agent.infrastructure.agent_host_channels.poke_skipped': EventSpec('debug', frozenset({'host_id'})),
+    'agent_host.artifact.persist_failed': EventSpec('error', frozenset({'agent_run_id', 'event_sequence', 'harness_key'})),
     'agent.infrastructure.agent_host_event_stream.delete_failed': EventSpec('debug', frozenset({'agent_run_id'})),
     'agent.infrastructure.agent_host_event_stream.entry_dropped': EventSpec('warning', frozenset({'agent_run_id'})),
     'agent.infrastructure.agent_host_event_stream.read_failed': EventSpec('debug', frozenset({'agent_run_id'})),

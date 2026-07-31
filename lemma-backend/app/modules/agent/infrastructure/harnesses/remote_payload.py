@@ -1,0 +1,261 @@
+"""Dispatch payload construction shared by remote Agent Host harnesses."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from uuid import UUID
+
+from pydantic_ai.tools import RunContext
+from pydantic_ai.toolsets import AbstractToolset
+from pydantic_ai.usage import RunUsage
+
+from app.composition.agent_workspace import WorkspaceSandboxService
+from app.core.config import settings
+from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.entities import Agent, Conversation, Message
+from app.modules.agent.domain.prompts import build_agent_instructions
+from app.modules.agent.domain.runtime_notes import append_runtime_notes
+from app.modules.agent.domain.value_objects import (
+    ConversationType,
+    HarnessKind,
+    HarnessOptions,
+    JsonObject,
+    MessageKind,
+    MessageRole,
+    to_json_value,
+)
+from app.modules.agent.infrastructure.mcp import (
+    LEMMA_MCP_SERVER_NAME,
+    exported_tool_name,
+)
+
+
+def run_start_payload(
+    *,
+    agent: Agent,
+    conversation: Conversation,
+    messages: Sequence[Message],
+    ctx: AgentContext,
+    options: HarnessOptions,
+    agent_run_id: UUID,
+    harness_kind: HarnessKind,
+    runtime_instructions: str,
+) -> JsonObject:
+    return {
+        "agent_run_id": str(agent_run_id),
+        "conversation_id": str(conversation.id),
+        "harness_kind": harness_kind.value,
+        "model_name": options.model_name,
+        "runtime": {
+            "profile_id": _runtime_profile_value(options, "profile_id"),
+            "harness_kind": harness_kind.value,
+            "model_name": options.model_name,
+        },
+        "prompt": _prompt_payload(
+            agent=agent,
+            conversation=conversation,
+            messages=_current_turn_messages(messages),
+            ctx=ctx,
+            runtime_instructions=runtime_instructions,
+        ),
+        "agent": agent.model_dump(mode="json"),
+        "conversation": conversation.model_dump(
+            mode="json", exclude={"messages", "agent_runs"}
+        ),
+        "context": ctx.model_dump(mode="json"),
+        "runtime_profile": options.extra.get("runtime_profile"),
+        "runtime_credentials": options.extra.get("runtime_credentials"),
+        "mcp": {},
+    }
+
+
+async def mcp_payload(
+    *,
+    agent_run_id: UUID,
+    conversation_id: UUID,
+    ctx: AgentContext,
+    options: HarnessOptions,
+    prompt: str | None = None,
+) -> JsonObject:
+    workspace_service = WorkspaceSandboxService()
+    try:
+        workspace_env = await workspace_service.get_env_vars(
+            user_id=ctx.user_id,
+            pod_id=ctx.pod_id,
+            organization_id=ctx.org_id,
+            workload_type=getattr(ctx, "workload_type", None),
+            workload_id=getattr(ctx, "workload_id", None),
+            workload_name=ctx.agent_name,
+            scope=getattr(ctx, "scope", None),
+            session_id=str(agent_run_id),
+        )
+        token = workspace_env["LEMMA_TOKEN"]
+    finally:
+        await workspace_service.close()
+    return {
+        "server_name": LEMMA_MCP_SERVER_NAME,
+        "url": (
+            f"{settings.api_url.rstrip('/')}/agent-runtime/conversations/"
+            f"{conversation_id}/mcp"
+        ),
+        "authorization": f"Bearer {token}",
+        "token": token,
+        "run_id": str(agent_run_id),
+        "conversation_id": str(conversation_id),
+        "workspace": {
+            "id": str(getattr(ctx, "workspace_id", None) or "default"),
+            "cwd": _workspace_cwd(ctx),
+        },
+        "tool_names": await _exported_tool_names(
+            agent_run_id=agent_run_id,
+            ctx=ctx,
+            options=options,
+            prompt=prompt,
+        ),
+    }
+
+
+async def _exported_tool_names(
+    *,
+    agent_run_id: UUID,
+    ctx: AgentContext,
+    options: HarnessOptions,
+    prompt: str | None,
+) -> list[str]:
+    if not options.toolsets:
+        return []
+    run_ctx = RunContext(
+        deps=ctx,
+        model=None,  # type: ignore[arg-type]
+        usage=RunUsage(),
+        prompt=prompt,
+        retries={},
+        run_id=str(agent_run_id),
+        metadata={
+            "agent_run_id": str(agent_run_id),
+            "conversation_mcp": True,
+            "model_name": options.model_name,
+        },
+        model_settings=options.model_settings,
+    )
+    names: list[str] = []
+    for raw_toolset in options.toolsets:
+        if not isinstance(raw_toolset, AbstractToolset):
+            continue
+        toolset = await raw_toolset.for_run(run_ctx)
+        async with toolset:
+            for original_name, tool in (await toolset.get_tools(run_ctx)).items():
+                names.append(exported_tool_name(tool.tool_def.name or original_name))
+    return names
+
+
+def _prompt_payload(
+    *,
+    agent: Agent,
+    conversation: Conversation,
+    messages: Sequence[Message],
+    ctx: AgentContext,
+    runtime_instructions: str,
+) -> JsonObject:
+    sections: list[str] = []
+    instructions = build_agent_instructions(
+        agent=agent,
+        conversation=conversation,
+        ctx=ctx,
+    )
+    if instructions:
+        sections.append("# Instructions\n" + instructions)
+    sections.append(runtime_instructions)
+    output_contract = _output_contract(agent=agent, conversation=conversation)
+    if output_contract:
+        sections.append(output_contract)
+    return {
+        "user_prompt": append_runtime_notes(_render_history(messages)),
+        "system_prompt": "\n\n".join(section for section in sections if section),
+        "output_schema": agent.output_schema or {},
+        "structured": bool(agent.output_schema)
+        or conversation.type == ConversationType.TASK,
+    }
+
+
+def _current_turn_messages(messages: Sequence[Message]) -> list[Message]:
+    ordered = sorted(messages, key=lambda item: item.sequence)
+    for message in reversed(ordered):
+        if message.role == MessageRole.USER:
+            return [message]
+    return ordered[-1:]
+
+
+def _runtime_profile_value(options: HarnessOptions, key: str) -> object | None:
+    profile = options.extra.get("runtime_profile")
+    return profile.get(key) if isinstance(profile, dict) else None
+
+
+def _workspace_cwd(ctx: AgentContext) -> str:
+    get_workspace_cwd = getattr(ctx, "get_workspace_cwd", None)
+    if callable(get_workspace_cwd):
+        value = get_workspace_cwd()
+        if value:
+            return str(value)
+    return f"/workspace/conversations/{ctx.conversation_id}"
+
+
+def _output_contract(*, agent: Agent, conversation: Conversation) -> str:
+    if not agent.output_schema and conversation.type != ConversationType.TASK:
+        return ""
+    output_schema = json.dumps(
+        to_json_value(agent.output_schema or {}),
+        indent=2,
+        sort_keys=True,
+    )
+    return (
+        "# Output Contract\n"
+        "Your final response must be a single JSON object with this shape:\n"
+        "{\n"
+        '  "status": "COMPLETED" | "FAILED" | "WAITING",\n'
+        '  "output": <data matching the agent output schema>,\n'
+        '  "error": null | "short error message"\n'
+        "}\n\n"
+        "Use WAITING when more user input is required. Use FAILED only when "
+        "the task cannot be completed. The output value must match this JSON "
+        f"schema:\n```json\n{output_schema}\n```"
+    )
+
+
+def _render_history(messages: Sequence[Message]) -> str:
+    lines: list[str] = []
+    for message in sorted(messages, key=lambda item: item.sequence):
+        text = _message_text(message)
+        if text:
+            lines.append(f"{message.role.upper()}:\n{text}")
+    return "\n\n".join(lines)
+
+
+def _message_text(message: Message) -> str:
+    if message.kind == MessageKind.TOOL_CALL:
+        body = (
+            f"Tool call {message.tool_name}({message.tool_call_id}):\n"
+            f"{json.dumps(to_json_value(message.tool_args), indent=2)}"
+        )
+    elif message.kind == MessageKind.TOOL_RETURN:
+        body = (
+            f"Tool result {message.tool_name or 'unknown_tool'}"
+            f"({message.tool_call_id}):\n"
+            f"{json.dumps(to_json_value(message.tool_result), indent=2)}"
+        )
+    else:
+        body = message.text or ""
+    metadata = message.metadata or {}
+    extras: list[str] = []
+    state = metadata.get("state") if isinstance(metadata, dict) else None
+    if state is not None:
+        extras.append(
+            "UI state:\n```json\n"
+            + json.dumps(to_json_value(state), indent=2)
+            + "\n```"
+        )
+    attachments = metadata.get("attachments") if isinstance(metadata, dict) else None
+    if isinstance(attachments, list) and attachments:
+        extras.append(f"Attachments: {json.dumps(to_json_value(attachments))}")
+    return body + ("\n\n" + "\n\n".join(extras) if extras else "")
