@@ -372,3 +372,104 @@ async def test_unauthorized_event_user_fails_agent_schedule_without_fallback(
     run_repo.mark_failed.assert_awaited_once()
     assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
     assert service._record_fire.await_args.kwargs["dispatch_dead_lettered"] is False
+
+
+@pytest.mark.anyio
+async def test_workflow_timer_without_owner_adopts_the_run_owner() -> None:
+    """Wait timers persisted before ownership existed must still wake their run.
+
+    ``reconcile_time_schedule_jobs`` rewrites logical schedule jobs with an
+    owner at startup but deliberately leaves wait timers alone, so a timer
+    scheduled by an older deployment fires with no user_id. The run row is the
+    authoritative owner, so nothing needs to be synthesized and the wake
+    proceeds instead of hanging forever.
+    """
+    engine = _engine_with_mocks()
+    run_id, owner, pod_id = uuid4(), uuid4(), uuid4()
+    engine.run_repo.get = AsyncMock(
+        return_value=SimpleNamespace(id=run_id, user_id=owner, pod_id=pod_id)
+    )
+    engine.resume_internal = AsyncMock()
+    service = ScheduleStartService(engine)
+    service._build_user_context = AsyncMock(return_value=Mock())
+    wait_ref = str(uuid4())
+
+    await service.handle_schedule_fired(
+        schedule_id=str(uuid4()),
+        user_id=None,
+        payload={"workflow_run_id": str(run_id), "wait_ref": wait_ref},
+        schedule_event_id="timer:legacy-1",
+    )
+
+    engine.resume_internal.assert_awaited_once()
+    assert engine.resume_internal.await_args.kwargs["external_ref"] == wait_ref
+    # The run owner is what authorizes the resume, not anything from the timer.
+    assert service._build_user_context.await_args.kwargs["user_id"] == owner
+
+
+@pytest.mark.anyio
+async def test_schedule_fire_without_owner_is_refused(monkeypatch) -> None:
+    """A schedule run is owned; there is nothing authoritative to fall back to."""
+    engine = _engine_with_mocks()
+    schedule = SimpleNamespace(
+        id=uuid4(),
+        user_id=uuid4(),
+        pod_id=uuid4(),
+        workflow_id=uuid4(),
+        agent_id=None,
+        is_active=True,
+        schedule_type=SimpleNamespace(value="TIME"),
+    )
+    import app.modules.workflow.services.schedule_start_service as svc_mod
+
+    monkeypatch.setattr(
+        svc_mod,
+        "ScheduleRepository",
+        lambda uow: Mock(get=AsyncMock(return_value=schedule)),
+    )
+    run_repo = Mock(claim=AsyncMock())
+    monkeypatch.setattr(svc_mod, "ScheduleRunRepository", lambda uow: run_repo)
+    service = ScheduleStartService(engine)
+
+    with pytest.raises(ValueError, match="fired without an owner"):
+        await service.handle_schedule_fired(
+            schedule_id=str(schedule.id),
+            user_id=None,
+            payload={},
+            schedule_event_id="evt-no-owner",
+        )
+
+    run_repo.claim.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_unparseable_schedule_fire_is_dropped_by_the_inbox() -> None:
+    """Parsing must happen inside the inbox so poison events terminate.
+
+    A ``schedule.fired`` staged by an older deployment can lack the now-required
+    ``source_event_id``. Validating before ``inbox.process`` would nack it out
+    to the subscriber, and the 60s reclaim loop has no attempt cap — the same
+    message would redeliver forever. Inside the inbox it is marked TERMINAL and
+    acked once.
+    """
+    from app.modules.test_support.fakes import ValidationTerminalEventInbox
+    from app.modules.workflow.events.handlers import handle_schedule_events
+
+    inbox = ValidationTerminalEventInbox()
+    job_queue = Mock(enqueue=AsyncMock())
+
+    await handle_schedule_events(
+        {
+            "event_type": "schedule.fired",
+            "schedule_id": str(uuid4()),
+            "user_id": str(uuid4()),
+            "schedule_type": "TIME",
+            "payload": {},
+        },
+        Mock(),
+        job_queue=job_queue,
+        inbox=inbox,
+    )
+
+    assert inbox.terminal == ["workflow.schedule-start:ValidationError"]
+    job_queue.enqueue.assert_not_awaited()

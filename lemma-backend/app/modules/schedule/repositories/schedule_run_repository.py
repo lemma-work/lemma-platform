@@ -103,9 +103,15 @@ class ScheduleRunRepository:
         await self.session.flush()
         return model.to_entity()
 
-    async def mark_dispatched(self, run_id: UUID) -> bool:
-        """Mark launch complete unless a synchronous target outcome won the race."""
-        changed = await self.session.scalar(
+    async def mark_dispatched(self, run_id: UUID) -> None:
+        """Mark launch complete unless a synchronous target outcome won the race.
+
+        The ``PROCESSING`` predicate is the whole mechanism: a target that
+        already finished has moved the row to a terminal state, and dispatch
+        must not drag it back. Callers get no result because there is nothing
+        to decide — the ledger row is the authority either way.
+        """
+        await self.session.execute(
             update(ScheduleRun)
             .where(
                 ScheduleRun.id == run_id,
@@ -117,9 +123,7 @@ class ScheduleRunRepository:
                 error_code=None,
                 completed_at=None,
             )
-            .returning(ScheduleRun.id)
         )
-        return changed is not None
 
     async def mark_failed(self, run_id: UUID, exc: Exception) -> ScheduleRunStatus:
         model = await self.session.get(ScheduleRun, run_id, with_for_update=True)

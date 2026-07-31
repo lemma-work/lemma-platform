@@ -20,6 +20,7 @@ from app.core.infrastructure.events.inbox import (
 from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
+from app.core.log.log import get_logger
 from app.modules.agent.domain.events import (
     AGENT_EVENTS_STREAM,
     AgentRunCompletedEvent,
@@ -34,6 +35,7 @@ from app.modules.workflow.domain.events import (
 )
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
@@ -57,11 +59,10 @@ async def on_workflow_run_terminal(
 
     async def record() -> None:
         parsed = WorkflowRunTerminalEvent.model_validate(event)
-        status = {
-            "COMPLETED": ScheduleRunStatus.COMPLETED,
-            "FAILED": ScheduleRunStatus.TARGET_FAILED,
-            "CANCELLED": ScheduleRunStatus.CANCELLED,
-        }[parsed.status.value]
+        status = _schedule_status_for(parsed.status.value)
+        if status is None:
+            _log_unmapped_target_outcome("WORKFLOW", parsed.status.value)
+            return
         async with uow_factory() as uow:
             changed = await ScheduleRunOutcomeService(uow).record_target_outcome(
                 target_kind="WORKFLOW",
@@ -106,8 +107,10 @@ async def on_agent_run_completed(
             )
             if outcome is None:
                 return
-            status = _agent_schedule_status(outcome.status)
+            status = _schedule_status_for(outcome.status)
             if status is None:
+                # Agent conversations reach non-terminal states this consumer is
+                # not interested in, so this is the common path, not an anomaly.
                 return
             changed = await ScheduleRunOutcomeService(uow).record_target_outcome(
                 target_kind="AGENT",
@@ -129,11 +132,26 @@ async def on_agent_run_completed(
     await inbox.process("schedule.agent-outcomes", event, record)
 
 
-def _agent_schedule_status(
-    status: str,
-) -> ScheduleRunStatus | None:
+def _schedule_status_for(status: str) -> ScheduleRunStatus | None:
+    """Map a target's terminal state onto the ledger, or None if it has none.
+
+    Workflow runs and agent conversations spell the cancelled state differently
+    ("CANCELLED" vs "STOPPED") but otherwise agree, so one table serves both.
+    Returning None rather than raising keeps an unrecognised state from turning
+    a consumer into a redelivery loop.
+    """
     return {
         "COMPLETED": ScheduleRunStatus.COMPLETED,
         "FAILED": ScheduleRunStatus.TARGET_FAILED,
+        "CANCELLED": ScheduleRunStatus.CANCELLED,
         "STOPPED": ScheduleRunStatus.CANCELLED,
     }.get(status)
+
+
+def _log_unmapped_target_outcome(target_kind: str, status: str) -> None:
+    """A workflow run only publishes terminal states, so this means drift."""
+    logger.error(
+        "schedule.target_outcome.unmapped",
+        target_kind=target_kind,
+        target_status=status,
+    )

@@ -22,13 +22,16 @@ class DurableScheduleEventPublisher(ScheduleEventPublisher):
         schedule: ScheduleEntity,
         payload: Dict[str, Any],
         source_event_id: str,
-        user_id: UUID | None = None,
+        user_id: UUID,
         metadata: Optional[Dict[str, Any]] = None,
         llm_output: Optional[Dict[str, Any]] = None,
     ) -> None:
+        # The owner is resolved by the caller that knows the source: the row
+        # owner for RLS datastore events, the schedule owner everywhere else.
+        # Defaulting it here as well would put that decision in two places.
         event = ScheduleFired(
             schedule_id=schedule.id,
-            user_id=user_id or schedule.user_id,
+            user_id=user_id,
             schedule_type=schedule.schedule_type,
             payload=payload,
             metadata=metadata,

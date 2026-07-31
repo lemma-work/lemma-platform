@@ -48,25 +48,18 @@ class ScheduleStartService:
         self,
         *,
         schedule_id: str,
-        user_id: UUID | str,
+        user_id: UUID | str | None,
         payload: dict,
         schedule_event_id: str,
         metadata: dict | None = None,
         llm_output: dict | None = None,
         source_occurred_at: datetime | None = None,
     ) -> None:
-        # 1. A wake for a specific run. The per-wait token is required so
-        # sequential timers cannot cross-resume.
-        workflow_run_id = payload.get("workflow_run_id")
-        if workflow_run_id:
-            wait_ref = payload.get("wait_ref")
-            if not wait_ref:
-                raise ValueError("wait_ref is required for workflow timer fires")
-            await self._wake_run(
-                run_id=str(workflow_run_id),
-                external_ref=str(wait_ref),
-                user_id=UUID(str(user_id)),
+        # 1. A wake for a specific run.
+        if payload.get("workflow_run_id"):
+            await self._handle_timer_fire(
                 payload=payload,
+                user_id=user_id,
                 metadata=metadata,
                 llm_output=llm_output,
             )
@@ -85,6 +78,12 @@ class ScheduleStartService:
             return
         if not schedule.is_active:
             return
+        if user_id is None:
+            # A schedule run is owned; there is nothing authoritative to fall
+            # back to here, so refuse rather than invent an owner.
+            raise ValueError(
+                f"Schedule {schedule_id} fired without an owner; refusing to run it"
+            )
         run_user_id = UUID(str(user_id))
 
         run_repo = ScheduleRunRepository(self._uow)
@@ -223,12 +222,37 @@ class ScheduleStartService:
             llm_output=llm_output or {},
         )
 
+    async def _handle_timer_fire(
+        self,
+        *,
+        payload: dict,
+        user_id: UUID | str | None,
+        metadata: dict | None,
+        llm_output: dict | None,
+    ) -> None:
+        """Resume the one wait this timer was created for.
+
+        The per-wait token is required so sequential timers on the same run
+        cannot cross-resume each other.
+        """
+        wait_ref = payload.get("wait_ref")
+        if not wait_ref:
+            raise ValueError("wait_ref is required for workflow timer fires")
+        await self._wake_run(
+            run_id=str(payload["workflow_run_id"]),
+            external_ref=str(wait_ref),
+            user_id=UUID(str(user_id)) if user_id else None,
+            payload=payload,
+            metadata=metadata,
+            llm_output=llm_output,
+        )
+
     async def _wake_run(
         self,
         *,
         run_id: str,
         external_ref: str,
-        user_id: UUID,
+        user_id: UUID | None,
         payload: dict,
         metadata: dict | None,
         llm_output: dict | None,
@@ -240,7 +264,10 @@ class ScheduleStartService:
         run = await self._engine.run_repo.get(UUID(run_id))
         if run is None:
             return
-        if run.user_id != user_id:
+        # The run row owns the wake. A timer that names an owner must agree with
+        # it (a mismatched timer must never resume someone else's run); a timer
+        # persisted before ownership existed names nobody and simply adopts it.
+        if user_id is not None and run.user_id != user_id:
             raise ValueError("workflow timer user_id does not match the run owner")
         ctx = await self._build_user_context(user_id=run.user_id, pod_id=run.pod_id)
         ctx_token = set_current_context(ctx)

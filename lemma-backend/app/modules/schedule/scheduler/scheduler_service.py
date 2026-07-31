@@ -83,7 +83,7 @@ async def load_active_time_schedules() -> list[TimeScheduleJob]:
 
 async def execute_scheduled_job(
     schedule_id: str,
-    user_id: str,
+    user_id: str | None = None,
     payload: dict | None = None,
 ):
     """Static function to execute scheduled jobs.
@@ -91,8 +91,16 @@ async def execute_scheduled_job(
     This function is called by APScheduler when a job fires.
     It must be a module-level function to be serializable.
 
+    ``user_id`` is optional only because the job store is durable across
+    deployments: jobs persisted before ownership existed carry no user_id and
+    would otherwise raise TypeError on their first fire. Logical schedule jobs
+    are rewritten with an owner by ``reconcile_time_schedule_jobs`` at startup;
+    workflow wait timers are not, so they fire owner-less exactly once and the
+    workflow run itself supplies the owner downstream.
+
     Args:
         schedule_id: The schedule ID as a string (will be converted to UUID)
+        user_id: Owner of the resulting run; absent only on pre-ownership jobs
         payload: Optional payload data
     """
     from uuid import UUID
@@ -102,7 +110,7 @@ async def execute_scheduled_job(
     schedule_uuid = UUID(schedule_id)
     await emitter.emit_scheduled_job_event(
         schedule_id=schedule_uuid,
-        user_id=UUID(user_id),
+        user_id=UUID(user_id) if user_id else None,
         payload=payload or {},
         scheduled_at=current_scheduled_run_time(),
     )
@@ -180,6 +188,12 @@ class SchedulerService:
         Workflow wait timers are not logical schedule rows and carry a
         ``workflow_run_id`` payload instead of ``payload.schedule_id``; they are
         deliberately left untouched.
+
+        One unusable row must never stop the fleet: a schedule whose config has
+        no usable trigger is skipped like a past-due one-shot, so its stale job
+        is dropped and every other schedule still reconciles. This mirrors
+        ``SchedulerAPIClient.schedule_job``, which already skips the same rows at
+        write time instead of failing the request.
         """
         schedules = await load_active_time_schedules()
 
@@ -187,49 +201,94 @@ class SchedulerService:
         desired: list[
             tuple[TimeScheduleJob, dict, datetime | None, str | None]
         ] = []
-        desired_ids: set[str] = set()
         for schedule in schedules:
-            config = dict(schedule.config or {})
-            payload = dict(config.get("payload") or {})
-            payload.setdefault("schedule_id", str(schedule.id))
-            scheduled_at = config.get("scheduled_at")
-            cron = config.get("cron")
-            if scheduled_at:
-                run_date = datetime.fromisoformat(str(scheduled_at))
-                if run_date.tzinfo is None:
-                    run_date = run_date.replace(tzinfo=timezone.utc)
+            resolved = self._resolve_time_trigger(schedule, now=now)
+            if resolved is None:
+                continue
+            payload, run_date, cron = resolved
+            desired.append((schedule, payload, run_date, cron))
+
+        # Write first, then prune against what actually landed. A row whose
+        # trigger APScheduler rejects is treated exactly like one with no
+        # trigger at all, so its stale job is dropped rather than left behind
+        # firing pre-deploy kwargs. The scheduler is paused throughout, so no
+        # job can fire against a half-reconciled store.
+        scheduled_ids: set[str] = set()
+        for schedule, payload, run_date, cron in desired:
+            try:
+                if run_date is not None:
+                    self.add_once_job(
+                        schedule_id=schedule.id,
+                        user_id=schedule.user_id,
+                        run_date=run_date,
+                        payload=payload,
+                    )
                 else:
-                    run_date = run_date.astimezone(timezone.utc)
-                if run_date <= now:
-                    continue
-                desired.append((schedule, payload, run_date, None))
-            elif cron:
-                desired.append((schedule, payload, None, str(cron)))
-            else:
-                raise ValueError(f"TIME schedule {schedule.id} has no trigger")
-            desired_ids.add(str(schedule.id))
+                    assert cron is not None
+                    self.add_cron_job(
+                        schedule_id=schedule.id,
+                        user_id=schedule.user_id,
+                        cron_expression=cron,
+                        payload=payload,
+                    )
+            except (ValueError, TypeError):
+                logger.warning(
+                    "schedule.reconcile.unusable_row",
+                    schedule_id=str(schedule.id),
+                    reason="rejected_trigger",
+                )
+                continue
+            scheduled_ids.add(str(schedule.id))
 
         for job in self.scheduler.get_jobs():
             payload = dict((job.kwargs or {}).get("payload") or {})
-            if payload.get("schedule_id") == job.id and job.id not in desired_ids:
+            if payload.get("schedule_id") == job.id and job.id not in scheduled_ids:
                 self.scheduler.remove_job(job.id)
 
-        for schedule, payload, run_date, cron in desired:
-            if run_date is not None:
-                self.add_once_job(
-                    schedule_id=schedule.id,
-                    user_id=schedule.user_id,
-                    run_date=run_date,
-                    payload=payload,
+    def _resolve_time_trigger(
+        self,
+        schedule: TimeScheduleJob,
+        *,
+        now: datetime,
+    ) -> tuple[dict, datetime | None, str | None] | None:
+        """Return the desired job for one row, or None to drop it.
+
+        None means "no job should exist for this schedule": the row is past due,
+        has no usable trigger, or stores a run date this process cannot parse.
+        """
+        config = dict(schedule.config or {})
+        payload = dict(config.get("payload") or {})
+        payload.setdefault("schedule_id", str(schedule.id))
+        scheduled_at = config.get("scheduled_at")
+        cron = config.get("cron")
+
+        if scheduled_at:
+            try:
+                run_date = datetime.fromisoformat(str(scheduled_at))
+            except ValueError:
+                logger.warning(
+                    "schedule.reconcile.unusable_row",
+                    schedule_id=str(schedule.id),
+                    reason="unparsable_scheduled_at",
                 )
+                return None
+            if run_date.tzinfo is None:
+                run_date = run_date.replace(tzinfo=timezone.utc)
             else:
-                assert cron is not None
-                self.add_cron_job(
-                    schedule_id=schedule.id,
-                    user_id=schedule.user_id,
-                    cron_expression=cron,
-                    payload=payload,
-                )
+                run_date = run_date.astimezone(timezone.utc)
+            if run_date <= now:
+                return None
+            return payload, run_date, None
+
+        if cron:
+            return payload, None, str(cron)
+
+        logger.warning(
+            "schedule.reconcile.unusable_row",
+            schedule_id=str(schedule.id),
+            reason="no_trigger",
+        )
+        return None
 
     async def shutdown(self, wait: bool = True):
         """Shutdown the scheduler and event emitter."""

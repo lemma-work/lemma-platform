@@ -188,7 +188,7 @@ class ScheduleEventPublisher(ABC):
         schedule: ScheduleEntity,
         payload: Dict[str, Any],
         source_event_id: str,
-        user_id: UUID | None = None,
+        user_id: UUID,
         metadata: Optional[Dict[str, Any]] = None,
         llm_output: Optional[Dict[str, Any]] = None,
     ) -> None:

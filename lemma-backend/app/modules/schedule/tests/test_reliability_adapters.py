@@ -84,9 +84,15 @@ async def test_durable_schedule_publisher_stages_versioned_event(monkeypatch) ->
         pod_id=uuid4(),
     )
 
+    # The publisher stages whichever owner the caller resolved; it must not
+    # quietly substitute the schedule owner for it.
+    row_owner = uuid4()
+    assert row_owner != schedule.user_id
+
     await DurableScheduleEventPublisher().publish_schedule_fired(
         schedule,
         {"message": "run"},
+        user_id=row_owner,
         metadata={"source": "cron"},
         source_event_id="cron:2026-07-10T00:00:00Z",
     )
@@ -94,7 +100,7 @@ async def test_durable_schedule_publisher_stages_versioned_event(monkeypatch) ->
     stream, event = publish.await_args.args
     assert stream == "schedule_events"
     assert event.schedule_id == schedule.id
-    assert event.user_id == schedule.user_id
+    assert event.user_id == row_owner
     assert event.source_event_id == "cron:2026-07-10T00:00:00Z"
 
 
@@ -300,3 +306,125 @@ async def test_scheduler_does_not_resume_when_reconciliation_fails(monkeypatch) 
     scheduler.resume.assert_not_called()
     scheduler.shutdown.assert_called_once_with(wait=False)
     emitter.stop.assert_awaited_once()
+
+
+def _reconciling_service(scheduler, monkeypatch, schedules):
+    service = scheduler_service.SchedulerService.__new__(
+        scheduler_service.SchedulerService
+    )
+    service.scheduler = scheduler
+    monkeypatch.setattr(
+        scheduler_service,
+        "load_active_time_schedules",
+        AsyncMock(return_value=schedules),
+    )
+    return service
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_a_row_with_no_trigger_and_still_schedules_the_rest(
+    monkeypatch,
+) -> None:
+    """One unusable row must not stop the whole fleet from being reconciled."""
+    broken = SimpleNamespace(id=uuid4(), user_id=uuid4(), config={"payload": {}})
+    healthy = SimpleNamespace(
+        id=uuid4(), user_id=uuid4(), config={"cron": "*/5 * * * *"}
+    )
+    scheduler = Mock()
+    scheduler.get_jobs.return_value = [
+        SimpleNamespace(
+            id=str(broken.id),
+            kwargs={"payload": {"schedule_id": str(broken.id)}},
+        )
+    ]
+    service = _reconciling_service(scheduler, monkeypatch, [broken, healthy])
+    service.add_cron_job = Mock()
+    service.add_once_job = Mock()
+
+    await service.reconcile_time_schedule_jobs()
+
+    service.add_cron_job.assert_called_once_with(
+        schedule_id=healthy.id,
+        user_id=healthy.user_id,
+        cron_expression="*/5 * * * *",
+        payload={"schedule_id": str(healthy.id)},
+    )
+    # The unusable row's stale job is dropped rather than left firing.
+    scheduler.remove_job.assert_called_once_with(str(broken.id))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_skips_a_row_whose_run_date_cannot_be_parsed(
+    monkeypatch,
+) -> None:
+    broken = SimpleNamespace(
+        id=uuid4(), user_id=uuid4(), config={"scheduled_at": "not-a-timestamp"}
+    )
+    healthy = SimpleNamespace(
+        id=uuid4(), user_id=uuid4(), config={"cron": "*/5 * * * *"}
+    )
+    scheduler = Mock()
+    scheduler.get_jobs.return_value = []
+    service = _reconciling_service(scheduler, monkeypatch, [broken, healthy])
+    service.add_cron_job = Mock()
+    service.add_once_job = Mock()
+
+    await service.reconcile_time_schedule_jobs()
+
+    service.add_once_job.assert_not_called()
+    service.add_cron_job.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_drops_a_row_whose_trigger_apscheduler_rejects(
+    monkeypatch,
+) -> None:
+    """A malformed cron is rejected at add time, not at config-shape time."""
+    bad_cron = SimpleNamespace(
+        id=uuid4(), user_id=uuid4(), config={"cron": "not a cron"}
+    )
+    healthy = SimpleNamespace(
+        id=uuid4(), user_id=uuid4(), config={"cron": "*/5 * * * *"}
+    )
+    scheduler = Mock()
+    scheduler.get_jobs.return_value = [
+        SimpleNamespace(
+            id=str(bad_cron.id),
+            kwargs={"payload": {"schedule_id": str(bad_cron.id)}},
+        )
+    ]
+    def add_cron_job(**kwargs):
+        if kwargs["schedule_id"] == bad_cron.id:
+            raise ValueError("Invalid cron expression: not a cron")
+
+    service = _reconciling_service(scheduler, monkeypatch, [bad_cron, healthy])
+    service.add_once_job = Mock()
+    service.add_cron_job = Mock(side_effect=add_cron_job)
+
+    await service.reconcile_time_schedule_jobs()
+
+    assert {
+        call_.kwargs["schedule_id"] for call_ in service.add_cron_job.call_args_list
+    } == {bad_cron.id, healthy.id}
+    # Rejected trigger is treated like no trigger at all: its job goes away.
+    scheduler.remove_job.assert_called_once_with(str(bad_cron.id))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_leaves_workflow_wait_timers_alone(monkeypatch) -> None:
+    """Wait timers are not logical schedule rows and must survive reconciliation."""
+    timer_id = uuid4()
+    scheduler = Mock()
+    scheduler.get_jobs.return_value = [
+        SimpleNamespace(
+            id=str(timer_id),
+            kwargs={"payload": {"workflow_run_id": str(uuid4())}},
+        )
+    ]
+    service = _reconciling_service(scheduler, monkeypatch, [])
+    service.add_cron_job = Mock()
+    service.add_once_job = Mock()
+
+    await service.reconcile_time_schedule_jobs()
+
+    scheduler.remove_job.assert_not_called()

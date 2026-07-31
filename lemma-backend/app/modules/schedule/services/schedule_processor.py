@@ -34,7 +34,7 @@ class ScheduleProcessor:
         *,
         schedule: ScheduleEntity | None = None,
         payload: Dict[str, Any],
-        user_id: UUID | None = None,
+        user_id: UUID,
         metadata: Optional[Dict[str, Any]] = None,
         source_event_id: str | None = None,
     ) -> bool:

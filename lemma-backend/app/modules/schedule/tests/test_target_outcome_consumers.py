@@ -31,14 +31,9 @@ class _Logger:
 
 
 class _UoW:
-    def __init__(self) -> None:
-        # The deactivation consumer reads the schedule through ScheduleRepository
-        # to build the review URL; no row is needed to assert the recipient.
-        self.session = SimpleNamespace(
-            execute=AsyncMock(
-                return_value=SimpleNamespace(scalar_one_or_none=lambda: None)
-            )
-        )
+    # Repositories bind a session in __init__; no test here issues a query
+    # through it, so a placeholder is enough.
+    session = None
 
     async def __aenter__(self):
         return self
@@ -226,6 +221,13 @@ async def test_deactivation_email_is_sent_to_schedule_owner(monkeypatch) -> None
         "app.core.email.email_sender.EmailSender.from_settings",
         lambda: SimpleNamespace(send_email=send_email),
     )
+    # The consumer reads the schedule to build the review URL. Stub the
+    # repository rather than a session: going through the ORM would make this
+    # test depend on which model modules happen to be imported first.
+    monkeypatch.setattr(
+        "app.modules.schedule.repositories.schedule_repository.ScheduleRepository.get",
+        AsyncMock(return_value=None),
+    )
     owner_id = uuid4()
     event = ScheduleDeactivated(
         schedule_id=uuid4(),
@@ -245,3 +247,33 @@ async def test_deactivation_email_is_sent_to_schedule_owner(monkeypatch) -> None
     assert resolve_email.await_args.args[1] == owner_id
     send_email.assert_awaited_once()
     assert send_email.await_args.kwargs["to_email"] == owner_email
+
+
+@pytest.mark.asyncio
+async def test_agent_and_workflow_cancellation_spellings_map_to_one_status() -> None:
+    """Workflow runs say CANCELLED, agent conversations say STOPPED."""
+    resolve = schedule_target_outcome_consumer._schedule_status_for
+
+    assert resolve("CANCELLED") is ScheduleRunStatus.CANCELLED
+    assert resolve("STOPPED") is ScheduleRunStatus.CANCELLED
+    assert resolve("COMPLETED") is ScheduleRunStatus.COMPLETED
+    assert resolve("FAILED") is ScheduleRunStatus.TARGET_FAILED
+    assert resolve("RUNNING") is None
+
+
+def test_every_terminal_workflow_status_maps_onto_the_ledger() -> None:
+    """Adding a terminal workflow status must not silently orphan schedule runs.
+
+    ``_collect_terminal_event`` publishes exactly the statuses in
+    ``TERMINAL_STATUSES``. If one gains a new member without a ledger mapping,
+    schedule runs targeting it would sit in DISPATCHED forever, so fail here
+    instead — at the point where the mapping is defined.
+    """
+    from app.modules.workflow.domain.run import TERMINAL_STATUSES
+
+    unmapped = sorted(
+        status.value
+        for status in TERMINAL_STATUSES
+        if schedule_target_outcome_consumer._schedule_status_for(status.value) is None
+    )
+    assert not unmapped, f"terminal workflow statuses with no ledger status: {unmapped}"

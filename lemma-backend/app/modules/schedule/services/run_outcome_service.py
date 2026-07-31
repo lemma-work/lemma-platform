@@ -88,6 +88,17 @@ class ScheduleRunOutcomeService:
         *,
         failed: bool,
     ) -> None:
+        """Advance the breaker for the *schedule*, whoever owned the run.
+
+        Deliberate: on a shared RLS table any pod user's rows can drive runs, so
+        a run owned by a row owner still counts toward the schedule owner's
+        streak. The breaker protects the system from a persistently broken
+        target, which is a property of the schedule and not of whoever happened
+        to insert the row. The trade-off is that one user's bad data can pause a
+        schedule for everyone; the owner is emailed on deactivation and can
+        reactivate. See
+        ``test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedule``.
+        """
         if not failed:
             await self.schedule_repository.reset_consecutive_failures(schedule.id)
             return

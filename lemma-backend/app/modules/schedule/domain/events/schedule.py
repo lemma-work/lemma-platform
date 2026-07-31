@@ -6,8 +6,15 @@ from app.modules.schedule.domain.schedule import ScheduleType
 
 
 class ScheduleEvent(DomainEvent):
+    """Base for every event on the ``schedule_events`` stream.
+
+    ``user_id`` is declared per event rather than here. Lifecycle events always
+    know the schedule owner, but ``ScheduleFired`` has one case that genuinely
+    cannot — see its docstring — and promising it on the base only to weaken it
+    in a subclass would make the base contract a lie.
+    """
+
     schedule_id: UUID
-    user_id: UUID
     schedule_type: ScheduleType
 
     @classmethod
@@ -15,21 +22,27 @@ class ScheduleEvent(DomainEvent):
         return "schedule_events"
 
 
-class ScheduleCreated(ScheduleEvent):
+class ScheduleLifecycleEvent(ScheduleEvent):
+    """A change to the schedule itself, always attributed to its owner."""
+
+    user_id: UUID
+
+
+class ScheduleCreated(ScheduleLifecycleEvent):
     event_type: str = "schedule.created"
     config: dict[str, Any]
 
 
-class ScheduleUpdated(ScheduleEvent):
+class ScheduleUpdated(ScheduleLifecycleEvent):
     event_type: str = "schedule.updated"
     config: dict[str, Any]
 
 
-class ScheduleDeleted(ScheduleEvent):
+class ScheduleDeleted(ScheduleLifecycleEvent):
     event_type: str = "schedule.deleted"
 
 
-class ScheduleDeactivated(ScheduleEvent):
+class ScheduleDeactivated(ScheduleLifecycleEvent):
     """A schedule was auto-deactivated by the failure circuit breaker.
 
     Emitted when a schedule hits the consecutive-failure threshold and is set
@@ -49,9 +62,16 @@ class ScheduleFired(ScheduleEvent):
     Unified event for all schedule source types (TIME, WEBHOOK, DATASTORE).
     ``user_id`` is the single owner of the resulting schedule/target run: the
     row owner for RLS datastore events, otherwise the schedule owner.
+
+    It is optional for exactly one case: a workflow wait timer persisted before
+    ownership existed. Those fires carry ``payload.workflow_run_id``, and the
+    run row is the authoritative owner, so nothing has to be synthesized. A
+    fire that starts a *schedule* run still fails closed without an owner —
+    see ``ScheduleStartService``.
     """
 
     event_type: str = "schedule.fired"
+    user_id: UUID | None = None
     payload: dict[str, Any]
     source_event_id: str
     metadata: dict[str, Any] | None = None

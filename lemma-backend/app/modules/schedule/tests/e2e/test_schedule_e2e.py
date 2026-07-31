@@ -858,6 +858,68 @@ async def test_wait_until_resumes_through_scheduler_with_exact_wait_ref(
 
 
 @pytest.mark.asyncio
+async def test_wait_until_resumes_from_a_timer_persisted_without_an_owner(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    worker,
+):
+    """A wait timer from before ownership existed must still wake its run.
+
+    APScheduler's job store is durable across deployments, so timers scheduled
+    by an older build deserialize with kwargs that carry no ``user_id``, and
+    ``reconcile_time_schedule_jobs`` deliberately leaves wait timers alone. This
+    fires exactly those kwargs: the run row supplies the owner, so the workflow
+    resumes instead of hanging until someone notices.
+    """
+    from app.modules.schedule.scheduler.scheduler_service import execute_scheduled_job
+
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={"type": "MANUAL"},
+        name_prefix="legacy-timer-workflow",
+        nodes=[
+            {
+                "id": "timer",
+                "type": "WAIT_UNTIL",
+                # Long enough that only the fire below can resume this run.
+                "config": {"timeout_seconds": 3600},
+            },
+            {"id": "end", "type": "END"},
+        ],
+        edges=[{"id": "timer-end", "source": "timer", "target": "end"}],
+    )
+
+    response = await authenticated_client.post(
+        f"/pods/{pod_id}/workflows/{workflow['name']}/runs"
+    )
+    assert response.status_code == 201, response.text
+    waiting = response.json()
+    assert waiting["active_wait"]["wait_type"] == "TIME"
+    wait_ref = waiting["active_wait"]["external_ref"]
+
+    # Exactly what a pre-ownership job row deserializes to: no user_id kwarg.
+    await execute_scheduled_job(
+        wait_ref,
+        payload={
+            "workflow_run_id": waiting["id"],
+            "wait_ref": wait_ref,
+            "source": "workflow_wait_until",
+        },
+    )
+
+    completed = await _wait_for_run_status(
+        authenticated_client,
+        pod_id,
+        waiting["id"],
+        "COMPLETED",
+    )
+    assert completed["active_wait"] is None
+    assert [step["node_id"] for step in completed["step_history"]] == ["timer", "end"]
+
+
+@pytest.mark.asyncio
 async def test_composio_webhook_schedule_starts_event_workflow_from_logged_payload(
     authenticated_client: AsyncClient,
     fixed_test_org,

@@ -217,9 +217,12 @@ async def handle_schedule_events(
     if event_type != "schedule.fired":
         return
 
-    fired = ScheduleFired.model_validate(event)
-
+    # Validate inside the inbox, not before it. The inbox turns a ValidationError
+    # into a TERMINAL outcome and acks; raising out here instead would nack an
+    # unparseable event forever, since the 60s reclaim subscriber has no attempt
+    # cap and would redeliver the same poison message indefinitely.
     async def process() -> None:
+        fired = ScheduleFired.model_validate(event)
         await on_schedule_fired(fired, fs_logger, job_queue)
 
     await inbox.process("workflow.schedule-start", event, process)
