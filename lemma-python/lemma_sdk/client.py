@@ -94,6 +94,12 @@ class Lemma:
         return Tools(self._transport)
 
     @cached_property
+    def agent_hosts(self) -> "AgentHosts":
+        from .resources import AgentHosts
+
+        return AgentHosts(self._transport)
+
+    @cached_property
     def runtime(self) -> "Runtime":
         from .resources import Runtime
 

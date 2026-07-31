@@ -159,7 +159,10 @@
       <div class="savebar"><span class="save-status">Webhook surfaces remain unavailable until you configure public ingress.</span><button class="btn primary" data-save>Save surfaces</button></div>
     </section>
 
-    <section class="page" data-page="services"><div class="grid"><article class="card full"><h2>Capability health</h2><p>The application topology stays one backend plus one frontend; database/cache/auth are private background dependencies.</p><div id="service-list"></div><div class="actions"><button class="btn" data-action="restart">Restart application</button><button class="btn danger" data-action="stop-all">Stop everything</button></div></article></div></section>
+    <section class="page" data-page="services"><div class="grid">
+      <article class="card full"><h2>Capability health</h2><p>The application topology stays one backend plus one frontend; database/cache/auth are private background dependencies.</p><div id="service-list"></div><div class="actions"><button class="btn" data-action="restart">Restart application</button><button class="btn danger" data-action="stop-all">Stop everything</button></div></article>
+      <article class="card full"><h2>External coding agents</h2><p>Agent Host connects Codex, Claude Code, and OpenCode to Local Lemma or Lemma Cloud. It stays supervised when this window is closed.</p><div id="agent-host-status"></div><div class="actions"><button class="btn" data-action="agent-host-start">Start Agent Host</button><button class="btn" data-action="agent-host-restart">Restart Agent Host</button><button class="btn danger" data-action="agent-host-stop">Stop Agent Host</button></div></article>
+    </div></section>
 
     <section class="page" data-page="updates"><div class="grid">
       <article class="card third"><div class="eyebrow">Desktop</div><div class="metric" id="runtime-desktop-release">—</div><p>The signed native application release.</p></article>
@@ -273,6 +276,13 @@
     const capabilityHtml = embeddings ? `<div class="service"><span>Semantic search<small>${escapeHtml(embeddings.detail || "Optional local embeddings")}</small></span><span class="status ${embeddings.status === "ready" ? "ok" : embeddings.status === "degraded" ? "bad" : ""}">${escapeHtml(embeddings.status)}</span></div>` : "";
     const serviceHtml = processHtml || capabilityHtml ? processHtml + capabilityHtml : `<p class="subtitle">No application processes are running.</p>`;
     $("service-list").innerHTML = serviceHtml; $("overview-services").innerHTML = serviceHtml;
+    const agentHost = snapshot.agent_host || {};
+    const agentHostDetail = agentHost.available
+      ? agentHost.running
+        ? `PID ${agentHost.pid || "—"} · ${agentHost.uptime_seconds || 0}s uptime`
+        : agentHost.last_error || "Ready to start"
+      : "Agent Host sidecar is not installed";
+    $("agent-host-status").innerHTML = `<div class="service"><span>Lemma Agent Host<small>${escapeHtml(agentHostDetail)}</small></span><span class="status ${agentHost.running ? "ok" : agentHost.available ? "" : "bad"}">${agentHost.running ? "online" : agentHost.available ? "stopped" : "unavailable"}</span></div>`;
     $("diag-paths").textContent = snapshot.paths ? `Control: ${snapshot.paths.locald}\nLogs: ${snapshot.paths.logs}` : "Paths unavailable";
     const workspaceUrl = snapshot.state?.url || state?.url;
     const apiUrl = snapshot.state?.api_url || state?.api_url;
@@ -327,6 +337,9 @@
       if (action === "stop-all") await invoke("stop", { includeInfra: true });
       if (action === "logs") await invoke("open_logs");
       if (action === "devtools") await invoke("open_developer_tools");
+      if (action === "agent-host-start") await invoke("agent_host_action", { action: "start" });
+      if (action === "agent-host-restart") await invoke("agent_host_action", { action: "restart" });
+      if (action === "agent-host-stop") await invoke("agent_host_action", { action: "stop" });
       if (action === "repair-runtime") {
         if (!window.confirm("Stop Lemma briefly and replace only the current signed runtime files? Workspace data and configuration are preserved.")) return;
         document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.disabled = true; item.textContent = "Repairing…"; });
@@ -347,7 +360,7 @@
     if (event.event === "control.snapshot") { snapshot = event; state = event.state; fill(); render(); }
     if (event.event === "config.applied") { snapshot.operator = event.operator; fill(); render(); document.querySelectorAll("[data-save]").forEach((b) => { b.disabled = false; b.textContent = b.closest("[data-page=ai]") ? "Validate & apply" : b.closest("[data-page=integrations]") ? "Save integrations" : "Save surfaces"; }); toast("Configuration saved. Provider and backend health checks passed."); requestSnapshot(); }
     if (event.event === "error") { document.querySelectorAll("[data-save]").forEach((b) => { b.disabled = false; b.textContent = "Try again"; }); toast(event.message || "Local operation failed", true); }
-    if (["status", "state", "ready", "phase"].includes(event.event)) { requestSnapshot(); if (event.event === "ready") loadRuntimeInfo(); }
+    if (["status", "state", "ready", "phase", "done", "agent-host.status"].includes(event.event)) { requestSnapshot(); if (event.event === "ready") loadRuntimeInfo(); }
   });
   let snapshotTimer = null;
   function requestSnapshot() { clearTimeout(snapshotTimer); snapshotTimer = setTimeout(() => invoke("control_snapshot", { id: nextId("snapshot") }).catch((error) => toast(String(error), true)), 100); }

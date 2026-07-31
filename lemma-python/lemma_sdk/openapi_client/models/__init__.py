@@ -26,6 +26,41 @@ _NAME_TO_MODULE = {
     'AgentDetailResponseOutputSchemaType0': 'agent_detail_response_output_schema_type_0',
     'AgentHarnessInfo': 'agent_harness_info',
     'AgentHarnessListResponse': 'agent_harness_list_response',
+    'AgentHostCapacity': 'agent_host_capacity',
+    'AgentHostCommand': 'agent_host_command',
+    'AgentHostCommandKind': 'agent_host_command_kind',
+    'AgentHostCommandPayload': 'agent_host_command_payload',
+    'AgentHostCommandRejection': 'agent_host_command_rejection',
+    'AgentHostConfigOption': 'agent_host_config_option',
+    'AgentHostConfigOptionMetadata': 'agent_host_config_option_metadata',
+    'AgentHostConfigOptionOptionsItem': 'agent_host_config_option_options_item',
+    'AgentHostEvent': 'agent_host_event',
+    'AgentHostEventAck': 'agent_host_event_ack',
+    'AgentHostEventBatch': 'agent_host_event_batch',
+    'AgentHostEventPayload': 'agent_host_event_payload',
+    'AgentHostEventType': 'agent_host_event_type',
+    'AgentHostHarnessCapabilities': 'agent_host_harness_capabilities',
+    'AgentHostHarnessHealth': 'agent_host_harness_health',
+    'AgentHostHarnessListResponse': 'agent_host_harness_list_response',
+    'AgentHostHarnessPublishRequest': 'agent_host_harness_publish_request',
+    'AgentHostHarnessPublishResponse': 'agent_host_harness_publish_response',
+    'AgentHostHarnessResponse': 'agent_host_harness_response',
+    'AgentHostHarnessResponseCapabilities': 'agent_host_harness_response_capabilities',
+    'AgentHostHarnessSnapshot': 'agent_host_harness_snapshot',
+    'AgentHostListResponse': 'agent_host_list_response',
+    'AgentHostPairingComplete': 'agent_host_pairing_complete',
+    'AgentHostPairingCompleted': 'agent_host_pairing_completed',
+    'AgentHostPairingCreate': 'agent_host_pairing_create',
+    'AgentHostPairingCreated': 'agent_host_pairing_created',
+    'AgentHostPollRequest': 'agent_host_poll_request',
+    'AgentHostPollResponse': 'agent_host_poll_response',
+    'AgentHostRejectionCode': 'agent_host_rejection_code',
+    'AgentHostResponse': 'agent_host_response',
+    'AgentHostResponseCapacity': 'agent_host_response_capacity',
+    'AgentHostRunCheckpoint': 'agent_host_run_checkpoint',
+    'AgentHostRunCheckpointDetail': 'agent_host_run_checkpoint_detail',
+    'AgentHostRunState': 'agent_host_run_state',
+    'AgentHostStatus': 'agent_host_status',
     'AgentListResponse': 'agent_list_response',
     'AgentMessageResponse': 'agent_message_response',
     'AgentNode': 'agent_node',
@@ -213,6 +248,7 @@ _NAME_TO_MODULE = {
     'FunctionSummaryResponse': 'function_summary_response',
     'FunctionType': 'function_type',
     'HarnessKind': 'harness_kind',
+    'HostHello': 'host_hello',
     'IconUploadRequest': 'icon_upload_request',
     'IconUploadResponse': 'icon_upload_response',
     'ImportPlanResponse': 'import_plan_response',
@@ -474,6 +510,41 @@ if TYPE_CHECKING:
     from .agent_detail_response_output_schema_type_0 import AgentDetailResponseOutputSchemaType0
     from .agent_harness_info import AgentHarnessInfo
     from .agent_harness_list_response import AgentHarnessListResponse
+    from .agent_host_capacity import AgentHostCapacity
+    from .agent_host_command import AgentHostCommand
+    from .agent_host_command_kind import AgentHostCommandKind
+    from .agent_host_command_payload import AgentHostCommandPayload
+    from .agent_host_command_rejection import AgentHostCommandRejection
+    from .agent_host_config_option import AgentHostConfigOption
+    from .agent_host_config_option_metadata import AgentHostConfigOptionMetadata
+    from .agent_host_config_option_options_item import AgentHostConfigOptionOptionsItem
+    from .agent_host_event import AgentHostEvent
+    from .agent_host_event_ack import AgentHostEventAck
+    from .agent_host_event_batch import AgentHostEventBatch
+    from .agent_host_event_payload import AgentHostEventPayload
+    from .agent_host_event_type import AgentHostEventType
+    from .agent_host_harness_capabilities import AgentHostHarnessCapabilities
+    from .agent_host_harness_health import AgentHostHarnessHealth
+    from .agent_host_harness_list_response import AgentHostHarnessListResponse
+    from .agent_host_harness_publish_request import AgentHostHarnessPublishRequest
+    from .agent_host_harness_publish_response import AgentHostHarnessPublishResponse
+    from .agent_host_harness_response import AgentHostHarnessResponse
+    from .agent_host_harness_response_capabilities import AgentHostHarnessResponseCapabilities
+    from .agent_host_harness_snapshot import AgentHostHarnessSnapshot
+    from .agent_host_list_response import AgentHostListResponse
+    from .agent_host_pairing_complete import AgentHostPairingComplete
+    from .agent_host_pairing_completed import AgentHostPairingCompleted
+    from .agent_host_pairing_create import AgentHostPairingCreate
+    from .agent_host_pairing_created import AgentHostPairingCreated
+    from .agent_host_poll_request import AgentHostPollRequest
+    from .agent_host_poll_response import AgentHostPollResponse
+    from .agent_host_rejection_code import AgentHostRejectionCode
+    from .agent_host_response import AgentHostResponse
+    from .agent_host_response_capacity import AgentHostResponseCapacity
+    from .agent_host_run_checkpoint import AgentHostRunCheckpoint
+    from .agent_host_run_checkpoint_detail import AgentHostRunCheckpointDetail
+    from .agent_host_run_state import AgentHostRunState
+    from .agent_host_status import AgentHostStatus
     from .agent_list_response import AgentListResponse
     from .agent_message_response import AgentMessageResponse
     from .agent_node import AgentNode
@@ -661,6 +732,7 @@ if TYPE_CHECKING:
     from .function_summary_response import FunctionSummaryResponse
     from .function_type import FunctionType
     from .harness_kind import HarnessKind
+    from .host_hello import HostHello
     from .icon_upload_request import IconUploadRequest
     from .icon_upload_response import IconUploadResponse
     from .import_plan_response import ImportPlanResponse
@@ -935,6 +1007,41 @@ __all__ = [
     'AgentDetailResponseOutputSchemaType0',
     'AgentHarnessInfo',
     'AgentHarnessListResponse',
+    'AgentHostCapacity',
+    'AgentHostCommand',
+    'AgentHostCommandKind',
+    'AgentHostCommandPayload',
+    'AgentHostCommandRejection',
+    'AgentHostConfigOption',
+    'AgentHostConfigOptionMetadata',
+    'AgentHostConfigOptionOptionsItem',
+    'AgentHostEvent',
+    'AgentHostEventAck',
+    'AgentHostEventBatch',
+    'AgentHostEventPayload',
+    'AgentHostEventType',
+    'AgentHostHarnessCapabilities',
+    'AgentHostHarnessHealth',
+    'AgentHostHarnessListResponse',
+    'AgentHostHarnessPublishRequest',
+    'AgentHostHarnessPublishResponse',
+    'AgentHostHarnessResponse',
+    'AgentHostHarnessResponseCapabilities',
+    'AgentHostHarnessSnapshot',
+    'AgentHostListResponse',
+    'AgentHostPairingComplete',
+    'AgentHostPairingCompleted',
+    'AgentHostPairingCreate',
+    'AgentHostPairingCreated',
+    'AgentHostPollRequest',
+    'AgentHostPollResponse',
+    'AgentHostRejectionCode',
+    'AgentHostResponse',
+    'AgentHostResponseCapacity',
+    'AgentHostRunCheckpoint',
+    'AgentHostRunCheckpointDetail',
+    'AgentHostRunState',
+    'AgentHostStatus',
     'AgentListResponse',
     'AgentMessageResponse',
     'AgentNode',
@@ -1122,6 +1229,7 @@ __all__ = [
     'FunctionSummaryResponse',
     'FunctionType',
     'HarnessKind',
+    'HostHello',
     'IconUploadRequest',
     'IconUploadResponse',
     'ImportPlanResponse',

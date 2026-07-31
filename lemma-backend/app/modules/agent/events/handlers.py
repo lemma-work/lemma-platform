@@ -9,6 +9,10 @@ from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 from streaq.task import TaskStatus
 
+from app.composition.agent_usage import build_usage_service
+from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.scope import context_scope
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
@@ -47,8 +51,12 @@ from app.modules.agent.infrastructure.harnesses import (
     PydanticAIHarness,
     RemoteHarness,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories import (
+    AgentRepository,
+    ConversationRepository,
+)
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
     completed_payload,
     publish_conversation_event,
@@ -264,6 +272,68 @@ async def process_agent_run(
             'agent.handlers.process_agent_run_cancelled_run.diagnostic',
             agent_run_id=agent_run_id,
         )
+
+
+@streaq_task(name="reconcile_agent_approval")
+async def reconcile_agent_approval(
+    context: dict[str, str | None],
+) -> None:
+    """Execute a durable approval decision outside the HTTP request deadline."""
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    await reconcile_agent_approval_now(context, uow_factory=worker_ctx.uow_factory)
+
+
+async def reconcile_agent_approval_now(
+    context: dict[str, str | None],
+    *,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """Reconcile one already-recorded decision; split out for focused tests.
+
+    Both lookups can legitimately come back empty — the conversation was deleted,
+    or this job outran the transaction that recorded the decision — and neither
+    is an error worth retrying, so both simply return.
+    """
+    conversation_id = UUID(str(context["conversation_id"]))
+    approval_id = str(context["approval_id"])
+    user_id = UUID(str(context["user_id"]))
+    pod_id = UUID(str(context["pod_id"]))
+
+    async with uow_factory() as uow:
+        conversation_repository = ConversationRepository(uow)
+        conversation = await conversation_repository.get_conversation(conversation_id)
+        if conversation is None:
+            return
+        recorded = await conversation_repository.get_approval_decision(
+            conversation_id=conversation_id,
+            approval_id=approval_id,
+        )
+        if recorded is None:
+            return
+        decision, response = recorded
+        service = ConversationService(
+            uow=uow,
+            conversation_repository=conversation_repository,
+            agent_repository=AgentRepository(uow),
+            authorization_service=create_authorization_service(uow),
+            usage_service=build_usage_service(uow),
+        )
+        # An approved request_approval runs its wrapped tool with the *user's*
+        # authority, which needs their authorization context bound — the request
+        # that recorded this decision had one, this worker job does not.
+        auth_ctx = await create_authorization_data_service(uow).build_user_context(
+            user_id=conversation.user_id,
+            pod_id=conversation.pod_id,
+        )
+        async with context_scope(auth_ctx):
+            await service.resolve_user_approval_internal(
+                conversation=conversation,
+                approval_id=approval_id,
+                user_id=user_id,
+                pod_id=pod_id,
+                decision=decision,
+                response=response,
+            )
 
 
 @streaq_task(name="generate_conversation_title")

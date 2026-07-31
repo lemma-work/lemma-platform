@@ -228,6 +228,69 @@ export function availableHarnessStatusLabel(harness: AgentHarnessInfo): string |
     return null;
 }
 
+// A paired Agent Host reports each harness's health from its own probe, so
+// every non-READY state is fixed on that computer rather than here. Pair the
+// label with the fix so an unusable harness never reads as an opaque code.
+const AGENT_HOST_HARNESS_HEALTH: Record<string, { label: string; detail: string }> = {
+    READY: { label: 'Ready', detail: 'Accepting runs.' },
+    AUTH_REQUIRED: {
+        label: 'Sign-in needed',
+        detail: 'Sign in to this agent on that computer, then let Agent Host re-probe.',
+    },
+    UNSUPPORTED_VERSION: {
+        label: 'Version unsupported',
+        detail: 'Update this agent on that computer to a release Agent Host supports.',
+    },
+    CONFIG_INVALID: {
+        label: 'Configuration invalid',
+        detail: "This agent's settings on that computer were rejected. Fix them, then re-probe.",
+    },
+    PROBE_FAILED: {
+        label: 'Probe failed',
+        detail: 'Agent Host could not start this agent. Check the Agent Host log on that computer.',
+    },
+    INSTALLING: { label: 'Installing', detail: 'Agent Host is still installing the adapter.' },
+    DISABLED: { label: 'Disabled', detail: 'Turned off in the Agent Host configuration on that computer.' },
+};
+
+export function agentHostHarnessHealth(health: string): { label: string; detail: string; ready: boolean } {
+    const known = AGENT_HOST_HARNESS_HEALTH[health];
+    if (known) return { ...known, ready: health === 'READY' };
+    return {
+        label: humanizeAgentHostState(health),
+        detail: 'That computer reported a state this version of Lemma does not recognize yet.',
+        ready: false,
+    };
+}
+
+const AGENT_HOST_STATUS_LABELS: Record<string, string> = {
+    ONLINE: 'Online',
+    OFFLINE: 'Offline',
+    DRAINING: 'Draining',
+    UPGRADE_REQUIRED: 'Upgrade required',
+    REVOKED: 'Revoked',
+};
+
+export function agentHostStatusLabel(status: string): string {
+    return AGENT_HOST_STATUS_LABELS[status] ?? humanizeAgentHostState(status);
+}
+
+function humanizeAgentHostState(value: string): string {
+    const words = value.replaceAll('_', ' ').toLowerCase();
+    return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+// Model choices a harness advertises, used only to tell the user how much this
+// harness brings. Config options are an open shape, so count defensively.
+export function agentHostHarnessModelCount(
+    options: Array<{ category: string; options?: Array<Record<string, unknown>> }>,
+): number {
+    return options.reduce(
+        (total, option) => total + (option.category === 'model' ? (option.options?.length ?? 0) : 0),
+        0,
+    );
+}
+
 export function firstHarnessModelName(harness: AgentHarnessInfo | AvailableHarnessOption): string | undefined {
     const firstModel = harness.models?.[0];
     return typeof firstModel === 'string' ? firstModel : firstModel?.name;

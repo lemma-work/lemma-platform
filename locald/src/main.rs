@@ -103,6 +103,7 @@ fn client_event_finishes(command: &str, event: &str) -> bool {
         "status" => event == "status",
         "ping" => event == "pong",
         "control.snapshot" => event == "control.snapshot",
+        "agent-host.status" => event == "agent-host.status",
         "config.apply" => event == "config.applied",
         "runtime.prepare" => event == "done",
         _ => event == "done",

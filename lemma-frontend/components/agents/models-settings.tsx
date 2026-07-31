@@ -9,18 +9,31 @@ import type {
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
 } from 'lemma-sdk';
-import { Check, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare } from '@/components/ui/icons';
+import { Check, Copy, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useCreateAgentRuntime } from '@/lib/hooks/use-agent-runtime';
+import {
+    useAgentHostHarnesses,
+    useAgentHosts,
+    useCreateAgentHostPairing,
+    useCreateAgentRuntime,
+    useRevokeAgentHost,
+    type AgentHost,
+    type AgentHostHarness,
+    type AgentHostPairing,
+} from '@/lib/hooks/use-agent-runtime';
 import { useProfile } from '@/lib/hooks/use-user';
+import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
     LOCAL_RUNTIME_SETUP_COMMANDS,
+    agentHostHarnessHealth,
+    agentHostHarnessModelCount,
+    agentHostStatusLabel,
     availableHarnessKey,
     availableHarnessStatusLabel,
     firstHarnessModelName,
@@ -128,6 +141,8 @@ export function ModelsSettings({
                 savedDaemonScopeByKey={savedDaemonScopeByKey}
                 onRefresh={onRefresh}
             />
+
+            <AgentHostsSection organizationId={organizationId} />
         </div>
     );
 }
@@ -533,6 +548,248 @@ function AddDaemonForm({
                     </Button>
                 </div>
             </div>
+        </div>
+    );
+}
+
+// Agent Host is the successor to the daemon above: the machine holds a scoped,
+// separately revocable secret and reaches Lemma over outbound HTTPS, so nothing
+// here needs an inbound port or the user's own session on that computer.
+function AgentHostsSection({ organizationId }: { organizationId: string }) {
+    const hosts = useAgentHosts();
+    const createPairing = useCreateAgentHostPairing();
+    const [pairing, setPairing] = useState<(AgentHostPairing & { display_name: string }) | null>(null);
+    const [displayName, setDisplayName] = useState('My computer');
+
+    // A revoked host stays readable through the API for audit, but it can never
+    // take work again, so it has no place in a "what can I use" list.
+    const activeHosts = (hosts.data?.items ?? []).filter((host) => host.status !== 'REVOKED');
+
+    const pair = async () => {
+        const name = displayName.trim();
+        if (!name) return toast.error('Name this computer');
+        try {
+            const created = await createPairing.mutateAsync({ organizationId, displayName: name });
+            setPairing({ ...created, display_name: name });
+        } catch (error) {
+            toast.error(`Couldn't create a pairing code: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
+    return (
+        <section>
+            <SectionHeader
+                icon={<TerminalSquare className="size-4" />}
+                title="Paired computers"
+                hint="Pair a computer once and its Agent Host runs Codex, Claude Code, and OpenCode for this workspace. Credentials never leave that machine."
+            />
+            <div className="flex flex-col gap-3">
+                {hosts.isLoading ? (
+                    <p className="text-sm text-[var(--text-tertiary)]">Loading paired computers…</p>
+                ) : null}
+
+                {activeHosts.map((host) => (
+                    <AgentHostCard key={host.id} host={host} />
+                ))}
+
+                {pairing ? (
+                    <PairingInstructions
+                        pairing={pairing}
+                        onDone={() => {
+                            setPairing(null);
+                            void hosts.refetch();
+                        }}
+                    />
+                ) : (
+                    <div className="flex flex-col gap-3 rounded-md border border-dashed border-[var(--border-strong)] p-4">
+                        <div>
+                            <div className="text-sm font-medium text-[var(--text-primary)]">
+                                {activeHosts.length ? 'Pair another computer' : 'Pair a computer'}
+                            </div>
+                            <p className="mt-1 text-sm text-[var(--text-tertiary)]">
+                                You&apos;ll get a one-time code to run on that machine.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap items-end gap-3">
+                            <Field label="Computer name">
+                                <Input
+                                    value={displayName}
+                                    onChange={(event) => setDisplayName(event.target.value)}
+                                    className="w-64"
+                                />
+                            </Field>
+                            <Button
+                                type="button"
+                                size="sm"
+                                onClick={() => void pair()}
+                                loading={createPairing.isPending}
+                                loadingLabel="Creating code"
+                            >
+                                Create pairing code
+                            </Button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
+
+function PairingInstructions({
+    pairing,
+    onDone,
+}: {
+    pairing: AgentHostPairing & { display_name: string };
+    onDone: () => void;
+}) {
+    const commands = [
+        'lemma agent-host install',
+        `lemma agent-host connect --url ${getLemmaApiBaseUrl()} --pairing-code ${pairing.pairing_code} --name "${pairing.display_name.replaceAll('"', '\\"')}"`,
+    ];
+    const expiresAt = new Date(pairing.expires_at);
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(commands.join('\n'));
+            toast.success('Commands copied');
+        } catch {
+            toast.error('Copy the commands manually — the browser blocked clipboard access');
+        }
+    };
+
+    return (
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
+            <div className="flex items-start justify-between gap-3">
+                <div className="text-sm font-medium text-[var(--text-primary)]">Run these on that computer</div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => void copy()} className="gap-1.5">
+                    <Copy className="size-3.5" />
+                    Copy
+                </Button>
+            </div>
+            <div className="mt-2 flex flex-col gap-1.5">
+                {commands.map((command) => (
+                    <code
+                        key={command}
+                        className="overflow-x-auto rounded bg-[var(--surface-2)] px-3 py-2 font-mono text-xs whitespace-pre text-[var(--text-secondary)]"
+                    >
+                        {command}
+                    </code>
+                ))}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-[var(--text-tertiary)]">
+                    This code works once, and expires{' '}
+                    {Number.isNaN(expiresAt.valueOf()) ? 'shortly' : expiresAt.toLocaleTimeString()}.
+                </p>
+                <Button type="button" size="sm" onClick={onDone}>
+                    I ran them
+                </Button>
+            </div>
+        </div>
+    );
+}
+
+function AgentHostCard({ host }: { host: AgentHost }) {
+    const harnesses = useAgentHostHarnesses(host.id);
+    const revoke = useRevokeAgentHost();
+    const activeRuns = host.capacity?.active_runs ?? 0;
+    const maxRuns = host.capacity?.max_runs ?? null;
+    const online = host.status === 'ONLINE';
+
+    const disconnect = async () => {
+        if (!window.confirm(`Disconnect ${host.display_name}? Its credential is revoked immediately and new runs stop.`)) {
+            return;
+        }
+        try {
+            await revoke.mutateAsync(host.id);
+            toast.success(`${host.display_name} disconnected`);
+        } catch (error) {
+            toast.error(`Couldn't disconnect: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
+    return (
+        <div className="rounded-md border border-[var(--border-subtle)]">
+            <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
+                    <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
+                </span>
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{host.display_name}</div>
+                    <div className="text-xs text-[var(--text-tertiary)]">
+                        Agent Host {host.host_release} · {activeRuns}
+                        {maxRuns === null ? '' : `/${maxRuns}`} running
+                        {host.last_seen_at ? ` · seen ${new Date(host.last_seen_at).toLocaleTimeString()}` : ''}
+                    </div>
+                </div>
+                <StatusBadge label={agentHostStatusLabel(host.status)} tone={online ? 'ok' : 'muted'} />
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void harnesses.refetch()}
+                    disabled={harnesses.isFetching}
+                    aria-label={`Recheck ${host.display_name}`}
+                >
+                    <RefreshCw className={cn('size-4', harnesses.isFetching && 'animate-spin')} />
+                </Button>
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void disconnect()}
+                    loading={revoke.isPending}
+                    aria-label={`Disconnect ${host.display_name}`}
+                >
+                    <Trash2 className="size-4" />
+                </Button>
+            </div>
+            <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
+                {harnesses.isLoading ? (
+                    <p className="px-1 text-xs text-[var(--text-tertiary)]">Looking for agents on this computer…</p>
+                ) : null}
+                {(harnesses.data?.items ?? []).map((harness) => (
+                    <AgentHostHarnessRow key={harness.id} harness={harness} hostOnline={online} />
+                ))}
+                {!harnesses.isLoading && !(harnesses.data?.items.length ?? 0) ? (
+                    <p className="px-1 text-xs text-[var(--text-tertiary)]">
+                        No agents published yet. Run <code className="font-mono">lemma agent-host harnesses</code> on that
+                        computer to see what it found.
+                    </p>
+                ) : null}
+            </div>
+        </div>
+    );
+}
+
+function AgentHostHarnessRow({ harness, hostOnline }: { harness: AgentHostHarness; hostOnline: boolean }) {
+    const health = agentHostHarnessHealth(harness.health);
+    const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
+    // A healthy harness on an offline computer still can't take work, so say so
+    // instead of showing a green badge next to an unreachable machine.
+    const usable = health.ready && hostOnline;
+    const blockedReason = health.ready
+        ? hostOnline
+            ? null
+            : 'That computer is offline. Runs resume when Agent Host reconnects.'
+        : health.detail;
+
+    return (
+        <div className="rounded-md bg-[var(--surface-1)] px-3 py-3">
+            <div className="flex flex-wrap items-center gap-3">
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{harness.display_name}</div>
+                    <div className="text-xs text-[var(--text-tertiary)]">
+                        adapter {harness.adapter_version}
+                        {harness.upstream_version ? ` · agent ${harness.upstream_version}` : ''}
+                        {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
+                    </div>
+                </div>
+                <StatusBadge label={health.label} tone={usable ? 'ok' : 'muted'} />
+            </div>
+            {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
+            {harness.stale_reason ? (
+                <p className="mt-1 text-xs text-[var(--text-tertiary)]">{harness.stale_reason}</p>
+            ) : null}
         </div>
     );
 }

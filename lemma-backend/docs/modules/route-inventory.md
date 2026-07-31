@@ -7,8 +7,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
+| DELETE | `/me/runtime/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
 | GET | `/agent-runtime/harnesses` | `agent.runtime.harnesses.list` | List Available Agent Harnesses |
+| GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
+| GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
 | GET | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |
 | GET | `/pods/{pod_id}/agents` | `agent.list` | List Agents |
 | GET | `/pods/{pod_id}/agents/{agent_name}` | `agent.get` | Get Agent |
@@ -20,6 +23,11 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/conversations/{conversation_id}/stream` | `agent.conversation.stream` | Stream Pod Conversation |
 | PATCH | `/pods/{pod_id}/agents/{agent_name}` | `agent.update` | Update Agent |
 | PATCH | `/pods/{pod_id}/conversations/{conversation_id}` | `agent.conversation.update` | Update Pod Conversation |
+| POST | `/agent-host/events:append` | `agent.host.events.append` | Append Agent Host Events |
+| POST | `/agent-host/pairings:complete` | `agent.host.pairing.complete` | Complete Agent Host Pairing |
+| POST | `/agent-host/poll` | `agent.host.poll` | Poll Agent Host Commands |
+| POST | `/agent-host/revoke` | `agent.host.self_revoke` | Self Revoke Agent Host |
+| POST | `/me/runtime/agent-host-pairings` | `agent.host.pairing.create` | Create Agent Host Pairing |
 | POST | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.create` | Create Agent Runtime Profile |
 | POST | `/pods/{pod_id}/agents` | `agent.create` | Create Agent |
 | POST | `/pods/{pod_id}/conversations` | `agent.conversation.create` | Create Pod Agent Conversation |
@@ -30,6 +38,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/widgets/{conversation_id}/{tool_call_id}/embed-token` | `widget.embed_token` | Mint Widget Embed URL |
 | POST | `/tools/report-feedback` | `agent.tool.report_feedback` | Agent Report Feedback |
 | POST | `/tools/web-search` | `agent.tool.web_search` | Agent Web Search |
+| PUT | `/agent-host/harnesses` | `agent.host.harnesses.publish` | Publish Agent Host Harnesses |
 | PUT | `/pods/{pod_id}/agents/{agent_name}/permissions` | `agent.permissions.replace` | Replace Agent Resource Permissions |
 
 ## agent_surfaces

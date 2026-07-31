@@ -48,6 +48,17 @@ from app.modules.agent.domain.value_objects import (
     MessageKind,
     MessageRole,
 )
+from app.modules.agent.domain.agent_host_permissions import (
+    agent_host_permission_request,
+)
+from app.modules.agent.services.approval_reconciliation import (
+    agent_host_permission_tool_return,
+    execute_approved_tool_as_user,
+    pending_user_approval_messages,
+    queue_approval_reconciliation,
+    record_session_approvals,
+    should_defer_approved_tool,
+)
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
 )
@@ -71,13 +82,12 @@ _PAUSING_TOOL_NAMES = ("ask_user", "request_approval")
 
 
 class ApprovalResolution(NamedTuple):
-    """Outcome of resolving an approval.
+    """Approval status plus the authoritative (stored) decision.
 
-    ``status`` is ``"resolved"`` when this call recorded the decision, or
-    ``"reconciled"`` when the decision already existed and this call only
-    finished (or re-finished) the resume — the self-heal path. ``decision`` is
-    the authoritative (stored) decision, which may differ from what a late
-    caller submitted.
+    ``status`` is ``"resolved"`` when this call recorded the decision,
+    ``"reconciled"`` when it only finished a prior half-done resume (the
+    self-heal path), or ``"queued"`` when the decision is durable and a worker
+    job owns the rest.
     """
 
     status: str
@@ -430,20 +440,11 @@ class ConversationService:
             agent_name=agent_name,
             action=Permissions.AGENT_READ,
         )
-        resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
-            conversation_id=conversation.id
-        )
         messages, _ = await self.conversation_repository.list_messages(
             conversation_id=conversation.id,
             limit=500,
         )
-        return [
-            message
-            for message in messages
-            if message.kind == MessageKind.TOOL_CALL
-            and message.tool_name in _PAUSING_TOOL_NAMES
-            and message.tool_call_id not in resolved_ids
-        ]
+        return pending_user_approval_messages(messages)
 
     async def resolve_user_approval(
         self,
@@ -455,6 +456,7 @@ class ConversationService:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
+        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Record the user's decision and resume the paused agent run.
 
@@ -484,6 +486,7 @@ class ConversationService:
             decision=decision,
             response=response,
             agent_name=agent_name,
+            defer_reconciliation=defer_reconciliation,
         )
 
     async def resolve_user_approval_internal(
@@ -496,6 +499,7 @@ class ConversationService:
         decision: AgentRunApprovalDecision,
         response: dict[str, object] | None = None,
         agent_name: str | None = None,
+        defer_reconciliation: bool = False,
     ) -> ApprovalResolution:
         """Resume a paused run for an already-authorized + loaded conversation.
 
@@ -513,6 +517,11 @@ class ConversationService:
         conversation first. The caller's current auth context must be the
         conversation owner's, since an approved ``request_approval`` runs the
         wrapped tool with that authority.
+
+        ``defer_reconciliation`` is for callers under a deadline (an HTTP
+        request, a platform webhook): the decision still commits here, but the
+        slow half is handed to a worker job and the status comes back
+        ``"queued"``.
         """
         decision_row = await self.conversation_repository.get_approval_decision(
             conversation_id=conversation.id,
@@ -578,6 +587,29 @@ class ConversationService:
             # prior attempt left undone.
             effective_decision, effective_response = decision_row
             status = "reconciled"
+
+        existing_return = (
+            await self.conversation_repository.get_tool_return(
+                conversation_id=conversation.id,
+                tool_call_id=approval_id,
+            )
+            if defer_reconciliation
+            else None
+        )
+        if should_defer_approved_tool(
+            defer_reconciliation=defer_reconciliation,
+            kind=kind,
+            tool_args=tool_args,
+            decision=effective_decision,
+            has_tool_return=existing_return is not None,
+        ):
+            await queue_approval_reconciliation(
+                conversation_id=conversation.id,
+                approval_id=approval_id,
+                user_id=user_id,
+                pod_id=pod_id,
+            )
+            return ApprovalResolution(status="queued", decision=effective_decision)
 
         await self._reconcile_approval_resume(
             conversation=conversation,
@@ -655,6 +687,13 @@ class ConversationService:
                 conversation.id,
                 message_payload(paused_run_id, message_to_payload(saved_return)),
             )
+
+        if agent_host_permission_request(tool_args) is not None:
+            # An Agent Host pauses *inside* a live run: the decision was just
+            # handed to the host, which carries the same run on from where it
+            # stopped. Starting a resume run here would dispatch a second,
+            # duplicate host run for the same turn.
+            return
 
         # A turn can pause with several pending interactions (e.g. request_approval +
         # ask_user in one assistant turn). Resume only once every pausing tool call in
@@ -764,6 +803,18 @@ class ConversationService:
                 )
             return "ask_user", content.model_dump(mode="json")
 
+        host_permission = agent_host_permission_request(tool_args)
+        if host_permission is not None:
+            # Checked before the denial branch below: a denial must reach the
+            # host too, or its ACP agent sits blocked until the request times
+            # out half an hour later.
+            return "request_approval", await agent_host_permission_tool_return(
+                request=host_permission,
+                agent_run_id=paused_agent_run_id,
+                decision=decision,
+                response=response,
+            )
+
         inner_tool = str(tool_args.get("tool_name") or "")
         inner_args = tool_args.get("args")
         inner_args = inner_args if isinstance(inner_args, dict) else {}
@@ -784,8 +835,9 @@ class ConversationService:
             # which is the only unlock for DESTRUCTIVE_ACTIONS besides an
             # explicit grant). The permission ids ride in the request_approval
             # args, copied by the agent from the denied tool result.
-            await self._record_session_approvals(
-                conversation=conversation,
+            await record_session_approvals(
+                conversation_id=conversation.id,
+                agent_id=conversation.agent_id,
                 tool_args=tool_args,
                 user_id=user_id,
             )
@@ -816,63 +868,6 @@ class ConversationService:
             )
         return "request_approval", content.model_dump(mode="json")
 
-    async def _record_session_approvals(
-        self,
-        *,
-        conversation: Conversation,
-        tool_args: dict[str, object],
-        user_id: UUID,
-    ) -> None:
-        """Persist APPROVE_FOR_SESSION as per-permission session approvals, plus
-        an exact-match approval for the wrapped call itself.
-
-        Keyed to (conversation, workload actor, permission) — the same key the
-        authorizer checks (for `permission_ids`) or `request_approval` itself
-        checks before pausing again (for the exact-command key). Structured
-        actions (pod/table/folder/... delete) carry `permission_ids` copied from
-        the denied tool result, unlocking the whole action TYPE for the rest of
-        the conversation. Tools with no structured permission — exec_command,
-        execute_python, anything not gated by the authorizer — have no category
-        to unlock, so they get only the exact-command key: approving one call
-        lets the agent repeat that LITERAL call again without re-prompting, but
-        a different command still re-prompts (see
-        session_approvals.exact_command_permission_id for why anything looser,
-        e.g. a prefix match, would be a shell-injection vector).
-        """
-        from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
-        from app.core.authorization.session_approvals import (
-            exact_command_permission_id,
-            record_session_approval,
-        )
-
-        workload_actor_id = f"agent:{conversation.agent_id or DEFAULT_POD_AGENT_ID}"
-
-        inner_tool_name = tool_args.get("tool_name")
-        if isinstance(inner_tool_name, str) and inner_tool_name:
-            inner_args = tool_args.get("args")
-            await record_session_approval(
-                session_id=str(conversation.id),
-                workload_actor_id=workload_actor_id,
-                permission_id=exact_command_permission_id(
-                    inner_tool_name,
-                    inner_args if isinstance(inner_args, dict) else {},
-                ),
-                resolved_by_user_id=user_id,
-            )
-
-        permission_ids = tool_args.get("permission_ids")
-        if not isinstance(permission_ids, list):
-            return
-        for permission_id in permission_ids:
-            if not isinstance(permission_id, str) or not permission_id:
-                continue
-            await record_session_approval(
-                session_id=str(conversation.id),
-                workload_actor_id=workload_actor_id,
-                permission_id=permission_id,
-                resolved_by_user_id=user_id,
-            )
-
     async def _execute_approved_tool_as_user(
         self,
         *,
@@ -883,26 +878,17 @@ class ConversationService:
         args: dict[str, object],
     ) -> dict[str, object]:
         """Run an approved tool with the user's authority; never raise."""
-        from app.core.infrastructure.db.session import async_session_maker
-        from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-        from app.modules.agent.domain.value_objects import to_json_value
-        from app.modules.agent.tools.approval.executor import ApprovalExecutor
-
-        try:
-            deps = await self._build_resume_context(
-                conversation=conversation,
-                user_id=user_id,
-                agent_run_id=agent_run_id,
-            )
-            executor = ApprovalExecutor(SessionUnitOfWorkFactory(async_session_maker))
-            result = await executor.execute_as_user(
-                deps=deps,
-                tool_name=tool_name,
-                args=args,
-            )
-            return {"ok": True, "value": to_json_value(result)}
-        except Exception as exc:  # noqa: BLE001 - reported back to the model, not fatal
-            return {"ok": False, "error": str(exc)}
+        deps = await self._build_resume_context(
+            conversation=conversation,
+            user_id=user_id,
+            agent_run_id=agent_run_id,
+        )
+        return await execute_approved_tool_as_user(
+            uow=self.uow,
+            deps=deps,
+            tool_name=tool_name,
+            args=args,
+        )
 
     async def _build_resume_context(
         self,
@@ -1126,31 +1112,10 @@ class ConversationService:
         ingress to render the questions on the surface (from a WAITING event) and
         to route a typed reply back into the run as the answer.
         """
-        resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
-            conversation_id=conversation_id
-        )
-        messages, _ = await self.conversation_repository.list_messages(
+        return await self._oldest_unresolved_pause(
             conversation_id=conversation_id,
-            limit=500,
+            tool_names=("ask_user",),
         )
-        for message in messages:
-            if (
-                message.kind == MessageKind.TOOL_CALL
-                and message.tool_name == "ask_user"
-                and message.tool_call_id is not None
-                and message.tool_call_id not in resolved_ids
-            ):
-                return {
-                    "tool_call_id": message.tool_call_id,
-                    "kind": message.tool_name,
-                    "tool_args": (
-                        message.tool_args
-                        if isinstance(message.tool_args, dict)
-                        else {}
-                    ),
-                    "agent_run_id": message.agent_run_id,
-                }
-        return None
 
     async def get_pending_user_interaction(
         self,
@@ -1163,6 +1128,17 @@ class ConversationService:
         Returns ``{tool_call_id, kind, tool_args, agent_run_id}``. Used by
         surface ingress to route a typed reply back into the paused run.
         """
+        return await self._oldest_unresolved_pause(
+            conversation_id=conversation_id,
+            tool_names=_PAUSING_TOOL_NAMES,
+        )
+
+    async def _oldest_unresolved_pause(
+        self,
+        *,
+        conversation_id: UUID,
+        tool_names: Sequence[str],
+    ) -> dict[str, object] | None:
         resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
             conversation_id=conversation_id
         )
@@ -1173,7 +1149,7 @@ class ConversationService:
         for message in messages:
             if (
                 message.kind == MessageKind.TOOL_CALL
-                and message.tool_name in _PAUSING_TOOL_NAMES
+                and message.tool_name in tool_names
                 and message.tool_call_id is not None
                 and message.tool_call_id not in resolved_ids
             ):

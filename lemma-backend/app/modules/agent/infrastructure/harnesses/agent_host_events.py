@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent.domain.agent_host import AgentHostEventType, AgentHostRunState
+from app.modules.agent.domain.agent_host_permissions import (
+    permission_approval_events,
+)
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -354,23 +357,23 @@ class AgentHostEventNormalizer:
         payload: JsonObject,
         metadata: JsonObject,
     ) -> list[AgentEvent]:
-        """Surface a permission request so a human can answer it.
+        """Turn a permission request into an ordinary Lemma approval.
 
-        The run pauses here: the host holds the agent's request open until a
-        decision comes back as a command, so this emits WAITING rather than a
-        terminal event.
+        Rendering it as a ``request_approval`` call is what lets the web client,
+        Slack, Teams and Telegram all show and resolve it with the machinery they
+        already have; see ``domain.agent_host_permissions`` for the shape and for
+        why this pause emits no WAITING event.
         """
-        events = self._flush_messages(final=False)
-        events.append(self._status(row, "permission_request", payload, metadata))
-        events.append(
-            AgentEvent(
-                type=AgentEventType.WAITING,
-                data={**payload, "agent_host_object_id": row.object_id},
+        return [
+            *self._flush_messages(final=False),
+            *permission_approval_events(
                 agent_run_id=self.agent_run_id,
+                request_id=row.object_id or f"permission-{row.sequence}",
                 sequence=row.sequence,
-            )
-        )
-        return events
+                payload=payload,
+                metadata=metadata,
+            ),
+        ]
 
     def _terminal(
         self,

@@ -1,13 +1,26 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import anyio
 import pytest
-from pydantic_ai.messages import PartEndEvent, PartStartEvent, TextPart
+from pydantic import BaseModel
+from pydantic_ai import Agent as PydanticAgent
+from pydantic_ai.messages import (
+    ModelResponse,
+    PartEndEvent,
+    PartStartEvent,
+    TextPart,
+    ToolCallPart,
+)
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.domain.value_objects import AgentEventType
+from app.modules.agent.domain.context import AgentContext
+from app.modules.agent.domain.entities import Agent, Conversation
+from app.modules.agent.domain.value_objects import AgentEventType, HarnessOptions
+from app.modules.agent.infrastructure.harnesses import pydantic_ai as harness_module
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import PydanticAIHarness
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 
@@ -107,3 +120,136 @@ async def test_run_emits_waiting_event_when_tool_requests_input(monkeypatch) -> 
     assert events[0].data["tool_call_id"] == "tool-call-1"
     assert events[0].data["kind"] == "ask_user"
     assert events[0].data["conversation_id"] == str(conversation_id)
+
+
+class _EmptyAgentRun:
+    usage = SimpleNamespace(input_tokens=0, output_tokens=0, requests=0, tool_calls=0)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+class _Output(BaseModel):
+    answer: str
+
+
+class TestPausingToolsBesideFinalAnswer:
+    """A pausing tool emitted in the same model response as the final answer.
+
+    A TASK conversation returns through an output tool. Under pydantic-ai's
+    default "early" end strategy, any normal tool in that same response is
+    skipped the moment the output tool validates — so `request_approval` never
+    executes, never raises AgentInputRequired, and never persists. The run
+    completes and the user is simply never asked. `graceful` is what makes the
+    sibling run, so these tests pin the setting to the behaviour it buys rather
+    than to the string itself.
+    """
+
+    @staticmethod
+    def _agent(end_strategy: str, pausing_tool_name: str):
+        async def pausing_tool() -> str:
+            raise AgentInputRequired("call-1", pausing_tool_name)
+
+        pausing_tool.__name__ = pausing_tool_name
+
+        def model_fn(messages, info: AgentInfo) -> ModelResponse:
+            del messages
+            return ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        tool_name=info.output_tools[0].name, args={"answer": "done"}
+                    ),
+                    ToolCallPart(tool_name=pausing_tool_name, args={}),
+                ]
+            )
+
+        return PydanticAgent(
+            FunctionModel(model_fn),
+            output_type=_Output,
+            toolsets=[FunctionToolset(tools=[pausing_tool])],
+            end_strategy=end_strategy,
+        )
+
+    @pytest.mark.parametrize("pausing_tool_name", ["request_approval", "ask_user"])
+    @pytest.mark.asyncio
+    async def test_the_pause_still_happens(self, pausing_tool_name: str) -> None:
+        agent = self._agent("graceful", pausing_tool_name)
+
+        with pytest.raises(AgentInputRequired):
+            await agent.run("go")
+
+    @pytest.mark.parametrize("pausing_tool_name", ["request_approval", "ask_user"])
+    @pytest.mark.asyncio
+    async def test_the_early_strategy_is_what_swallowed_it(
+        self, pausing_tool_name: str
+    ) -> None:
+        """The bug itself, pinned: with "early" the run answers as if the user
+        had never been asked. If this ever stops holding, the fix above has
+        become unnecessary — but until then it is the reason for it."""
+        agent = self._agent("early", pausing_tool_name)
+
+        result = await agent.run("go")
+
+        assert result.output.answer == "done"
+
+    @pytest.mark.asyncio
+    async def test_the_harness_configures_the_graceful_strategy(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The behaviour above only reaches production through this kwarg."""
+        captured: dict[str, object] = {}
+
+        class _Agent:
+            def __init__(self, model, **kwargs):
+                del model
+                captured.update(kwargs)
+
+            def iter(self, *args, **kwargs):
+                del args, kwargs
+                return _EmptyAgentRun()
+
+        monkeypatch.setattr(harness_module, "PydanticAIAgent", _Agent)
+        monkeypatch.setattr(
+            harness_module, "_runtime_profile_model", lambda options: object()
+        )
+        pod_id = uuid4()
+        conversation = Conversation(pod_id=pod_id, user_id=uuid4())
+
+        events = [
+            event
+            async for event in PydanticAIHarness()._execute(
+                agent=Agent(
+                    pod_id=pod_id,
+                    user_id=conversation.user_id,
+                    name="assistant",
+                    instruction="",
+                ),
+                conversation=conversation,
+                messages=[],
+                ctx=AgentContext(
+                    user_id=conversation.user_id,
+                    pod_id=pod_id,
+                    conversation_id=conversation.id,
+                ),
+                options=HarnessOptions(
+                    model_name="test-model",
+                    history_summarization_enabled=False,
+                ),
+                agent_run_id=uuid4(),
+                malformed_tool_call_ids=set(),
+                emitted_tool_response_ids=set(),
+                should_stop=None,
+            )
+        ]
+
+        assert captured["end_strategy"] == "graceful"
+        assert [event.type for event in events] == [AgentEventType.USAGE]
