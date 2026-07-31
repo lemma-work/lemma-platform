@@ -111,6 +111,10 @@ struct Shell {
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
     tray_agent_host: Mutex<Option<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)>>,
+    // locald answers asynchronously on the event stream, but the workspace page
+    // calls a command and expects a value back. The latest status is kept here
+    // so a caller gets an answer immediately and the next poll sees the update.
+    agent_host_status: Mutex<Option<Value>>,
 }
 
 struct LocaldConnection {
@@ -135,6 +139,7 @@ impl Shell {
             locald_connect: Mutex::new(()),
             quit_after_stop: AtomicBool::new(false),
             tray_agent_host: Mutex::new(None),
+            agent_host_status: Mutex::new(None),
         }
     }
 }
@@ -1440,6 +1445,7 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
     // Every reply that carries Agent Host state refreshes the tray, so a change
     // made in one surface shows in the others without anyone polling.
     if let Some(status) = event.get("agent_host").filter(|value| value.is_object()) {
+        *shell.agent_host_status.lock().unwrap() = Some(status.clone());
         refresh_agent_host_tray(app, status);
     }
 
@@ -2418,10 +2424,19 @@ fn ensure_agent_host_daemon(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn agent_host_status(window: Webview, app: AppHandle, id: String) -> Result<(), String> {
+fn agent_host_status(window: Webview, app: AppHandle) -> Result<Value, String> {
     require_agent_host_caller(&window, &app)?;
     ensure_agent_host_daemon(&app)?;
-    send_to_locald(&app, json!({"cmd": "agent-host.status", "id": id}))
+    // Ask for a fresh reading, then answer with the newest one already in hand.
+    // locald replies on the event stream rather than to this call, so waiting
+    // for it here would mean holding a second socket open for every poll.
+    let _ = send_to_locald(
+        &app,
+        json!({"cmd": "agent-host.status", "id": operation_id("agent-host-status")}),
+    );
+    let shell: State<Shell> = app.state();
+    let status = shell.agent_host_status.lock().unwrap().clone();
+    Ok(status.unwrap_or(Value::Null))
 }
 
 #[tauri::command]

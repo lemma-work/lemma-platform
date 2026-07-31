@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { RuntimeProfileScope } from 'lemma-sdk';
 import type {
     AgentRuntimeProfileListResponse,
@@ -24,6 +24,7 @@ import {
     type AgentHostPairing,
 } from '@/lib/hooks/use-agent-runtime';
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
+import { ThisComputerCard } from './this-computer-card';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
@@ -314,6 +315,10 @@ function AgentHostsSection({
     const createPairing = useCreateAgentHostPairing();
     const [pairing, setPairing] = useState<(AgentHostPairing & { display_name: string }) | null>(null);
     const [displayName, setDisplayName] = useState('My computer');
+    // Which paired computer is the one the user is sitting at. Only the desktop
+    // app can answer that; in a browser it stays null and the list is unchanged.
+    const [thisHostId, setThisHostId] = useState<string | null>(null);
+    const onHostIdChange = useCallback((hostId: string | null) => setThisHostId(hostId), []);
 
     // Harnesses that are already saved as runtime profiles, so a row can say
     // "already added" instead of leaving the user guessing whether picking this
@@ -346,6 +351,12 @@ function AgentHostsSection({
                 hint="Pair a computer once and its Agent Host runs Codex, Claude Code, and OpenCode for this workspace. Credentials never leave that machine."
             />
             <div className="flex flex-col gap-3">
+                <ThisComputerCard
+                    organizationId={organizationId}
+                    onHostIdChange={onHostIdChange}
+                    onPaired={() => void hosts.refetch()}
+                />
+
                 {hosts.isLoading ? (
                     <p className="text-sm text-[var(--text-tertiary)]">Loading paired computers…</p>
                 ) : null}
@@ -354,6 +365,8 @@ function AgentHostsSection({
                     <AgentHostCard
                         key={host.id}
                         host={host}
+                        organizationId={organizationId}
+                        isThisComputer={host.id === thisHostId}
                         savedProfileNameByHarnessId={savedProfileNameByHarnessId}
                     />
                 ))}
@@ -454,9 +467,13 @@ function PairingInstructions({
 
 function AgentHostCard({
     host,
+    organizationId,
+    isThisComputer,
     savedProfileNameByHarnessId,
 }: {
     host: AgentHost;
+    organizationId: string;
+    isThisComputer: boolean;
     savedProfileNameByHarnessId: Map<string, string>;
 }) {
     const harnesses = useAgentHostHarnesses(host.id);
@@ -484,7 +501,10 @@ function AgentHostCard({
                     <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
                 </span>
                 <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">{host.display_name}</div>
+                    <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium text-[var(--text-primary)]">{host.display_name}</span>
+                        {isThisComputer ? <StatusBadge label="This computer" tone="muted" /> : null}
+                    </div>
                     <div className="text-xs text-[var(--text-tertiary)]">
                         Agent Host {host.host_release} · {activeRuns}
                         {maxRuns === null ? '' : `/${maxRuns}`} running
@@ -521,15 +541,16 @@ function AgentHostCard({
                     <AgentHostHarnessRow
                         key={harness.id}
                         harness={harness}
+                        organizationId={organizationId}
                         hostOnline={online}
                         savedProfileName={savedProfileNameByHarnessId.get(harness.id) ?? null}
                     />
                 ))}
                 {!harnesses.isLoading && !(harnesses.data?.items.length ?? 0) ? (
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">
-                        No agents published yet. That computer republishes what it finds every 15
-                        minutes; <code className="font-mono">lemma agent-host refresh</code> asks it
-                        to look again now.
+                        No agents published yet. {isThisComputer
+                            ? 'Use "Recheck agents" above to look again now.'
+                            : 'That computer republishes what it finds every 15 minutes.'}
                     </p>
                 ) : null}
             </div>
@@ -539,13 +560,16 @@ function AgentHostCard({
 
 function AgentHostHarnessRow({
     harness,
+    organizationId,
     hostOnline,
     savedProfileName,
 }: {
     harness: AgentHostHarness;
+    organizationId: string;
     hostOnline: boolean;
     savedProfileName: string | null;
 }) {
+    const createRuntime = useCreateAgentRuntime();
     const health = agentHostHarnessHealth(harness.health);
     const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
     const logo = harnessLogo(harness.harness_key);
@@ -557,6 +581,24 @@ function AgentHostHarnessRow({
             ? null
             : 'That computer is offline. Runs resume when Agent Host reconnects.'
         : health.detail;
+
+    // The endpoint has always accepted this; only the button was missing, which
+    // is why the page used to print a CLI incantation instead.
+    const addToModels = async () => {
+        try {
+            await createRuntime.mutateAsync({
+                organizationId,
+                request: {
+                    source: 'AGENT_HOST',
+                    name: harness.display_name,
+                    harness_id: harness.id,
+                },
+            });
+            toast.success(`${harness.display_name} is now pickable in chats`);
+        } catch (error) {
+            toast.error(`Couldn't add it: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
 
     return (
         <div className="rounded-md bg-[var(--surface-1)] px-3 py-3">
@@ -581,13 +623,20 @@ function AgentHostHarnessRow({
             </div>
             {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
             {!savedProfileName && health.ready ? (
-                <p className="mt-2 text-xs text-[var(--text-tertiary)]">
-                    Make this pickable in chats with{' '}
-                    <code className="font-mono">
-                        lemma runtime profiles create AGENT_HOST --harness-id {harness.id}
-                    </code>
-                    .
-                </p>
+                <div className="mt-2">
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="gap-1.5 px-2"
+                        loading={createRuntime.isPending}
+                        loadingLabel="Adding"
+                        onClick={() => void addToModels()}
+                    >
+                        <Plus className="size-3.5" />
+                        Add to chat models
+                    </Button>
+                </div>
             ) : null}
             {harness.stale_reason ? (
                 <p className="mt-1 text-xs text-[var(--text-tertiary)]">{harness.stale_reason}</p>
