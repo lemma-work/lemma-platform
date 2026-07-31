@@ -1,12 +1,50 @@
 """Interfaces for schedule module."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Any, Dict
+from dataclasses import dataclass
+from typing import List, Optional, Any, Dict, Protocol
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.domain.value_objects import DatastoreOperation
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleTarget:
+    id: UUID
+    pod_id: UUID
+    name: str
+    is_global_workflow: bool = False
+    event_trigger_id: str | None = None
+    event_trigger_config: dict[str, object] | None = None
+
+
+class ScheduleTargetResolver(Protocol):
+    async def get_workflow(self, workflow_id: UUID) -> ScheduleTarget | None: ...
+
+    async def get_workflow_by_name(
+        self, pod_id: UUID, name: str
+    ) -> ScheduleTarget | None: ...
+
+
+class ScheduleEventFilter(Protocol):
+    """Evaluate an optional schedule filter without exposing model infrastructure."""
+
+    async def filter_event(
+        self,
+        *,
+        instruction: str,
+        output_schema: dict[str, Any] | None,
+        event_payload: dict[str, Any],
+        schedule: ScheduleEntity,
+    ) -> tuple[bool, dict[str, Any] | None]: ...
+
+    async def get_agent(self, agent_id: UUID) -> ScheduleTarget | None: ...
+
+    async def get_agent_by_name(
+        self, pod_id: UUID, name: str
+    ) -> ScheduleTarget | None: ...
 
 
 class ScheduleRepository(ABC):
@@ -151,6 +189,7 @@ class ScheduleEventPublisher(ABC):
         payload: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None,
         llm_output: Optional[Dict[str, Any]] = None,
+        source_event_id: str | None = None,
     ) -> None:
         """Publish a ScheduleFired event."""
         pass
@@ -165,6 +204,7 @@ class ScheduleFilterTaskQueue(ABC):
         schedule_id: UUID,
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
+        source_event_id: str,
     ) -> None:
         """Enqueue background LLM filter work for a schedule."""
         pass

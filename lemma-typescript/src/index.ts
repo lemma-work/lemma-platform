@@ -1,5 +1,5 @@
 export { LemmaClient } from "./client.js";
-export type { LemmaConfig } from "./client.js";
+export type { LemmaAppConfig, LemmaConfig } from "./client.js";
 export {
   AuthManager,
   buildAuthUrl,
@@ -45,13 +45,14 @@ export type {
 export {
   normalizeRunStatus,
   isTerminalFunctionStatus,
-  isTerminalFlowStatus,
+  isTerminalWorkflowStatus,
   sleep,
   nextBackoffDelay,
 } from "./run-utils.js";
 export type { AnyRunStatus } from "./run-utils.js";
 export { parseAssistantStreamEvent, upsertConversationMessage } from "./assistant-events.js";
 export type { ParsedAssistantStreamEvent } from "./assistant-events.js";
+export { normalizeAgentToolName } from "./core/agent/tool-names.js";
 // Framework-agnostic agent core (drives the React hooks and, next, web components).
 export {
   AgentController,
@@ -78,7 +79,11 @@ export {
   isUserApprovalToolName,
   isAskUserToolName,
   isUserInteractionToolName,
+  isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
+  isPlanToolName,
+  parsePlanSteps,
+  planStepsFromToolInvocation,
   latestPlanSummary,
   latestUserIndex,
   messageTextContent,
@@ -221,7 +226,10 @@ export type {
   JoinedRecordsSource,
 } from "./datastore-query.js";
 
+export { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
+
 // Namespace types (for advanced usage)
+export type { AgentHostNamespace } from "./namespaces/agent-host.js";
 export type { AgentRuntimeNamespace } from "./namespaces/agent-runtime.js";
 export type { AgentsNamespace } from "./namespaces/agents.js";
 export type { DatastoreNamespace } from "./namespaces/datastore.js";
@@ -238,6 +246,7 @@ export type { PodPermissionsNamespace } from "./namespaces/pod-permissions.js";
 export type { PodRolesNamespace } from "./namespaces/pod-roles.js";
 export type { PodsNamespace } from "./namespaces/pods.js";
 export type { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
+export type { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 export type { RecordsNamespace } from "./namespaces/records.js";
 export type { ResourceAccessNamespace } from "./namespaces/resource-access.js";
 export type { ScheduleListOptions, SchedulesNamespace } from "./namespaces/schedules.js";

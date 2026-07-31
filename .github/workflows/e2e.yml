@@ -1,18 +1,21 @@
-name: Backend E2E (mocked)
+name: Backend E2E
 
-# The fast mocked backend e2e suite — mock LLM (deterministic FunctionModel) +
-# in-process fake AgentBox, so it needs NO model API keys and NO Docker workspace
-# image (Postgres / Redis / SuperTokens come from testcontainers on the runner).
-# Excludes slow/worker/workspace/provider/indexing tests (those need the
-# real-worker runtime or the Kreuzberg container and are run separately).
+# The fast backend end-to-end suite. This is a REAL e2e run — Postgres, Redis,
+# SuperTokens, the streaq workers, and the fake provider servers all run for real
+# (from testcontainers on the runner). Only the two nondeterministic/expensive
+# externals are stubbed: the LLM (a deterministic FunctionModel) and the AgentBox
+# workspace (an in-process fake) — so it needs NO model API keys and NO Docker
+# workspace image. Slow, Docker-workspace, live-provider, local-CLI, and
+# real-indexing tests live in "Backend protected E2E" instead.
 #
-# The suite is sharded across runners, each serial, so it finishes in ~3min and
-# is reliable (no within-runner container contention).
+# The suite is sharded across runners. Most shards stay serial; the 100+ journey
+# surfaces shard uses two fully isolated xdist workers to remain under ten
+# minutes without creating extra jobs or comments.
 #
 # Trigger model: runs automatically once the "CI" workflow (unit tests etc.)
 # SUCCEEDS for a PR — so the container-heavy e2e only spins up after the cheap
 # checks are green, roughly once per PR update. Also runnable on demand:
-# Actions -> "Backend E2E (mocked)" -> Run workflow.
+# Actions -> "Backend E2E" -> Run workflow.
 #
 # Not a required check yet. To make a green e2e a hard merge requirement later,
 # add the "lemma-backend e2e (*)" shard checks (or an aggregation job) to the
@@ -20,6 +23,10 @@ name: Backend E2E (mocked)
 
 on:
   workflow_dispatch:
+  pull_request:
+    # Labels provide an explicit run before CI completes. Normal PR updates run
+    # once through workflow_run after CI succeeds.
+    types: [labeled]
   workflow_run:
     workflows: ["CI"]
     types: [completed]
@@ -28,7 +35,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-${{ github.event.workflow_run.head_branch || github.ref }}
+  group: e2e-${{ github.event.workflow_run.head_branch || github.event.pull_request.head.ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -37,39 +44,56 @@ jobs:
     # Manual dispatch, or automatically after CI (unit tests etc.) passes on a PR.
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'run-e2e') ||
       (github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
     strategy:
       # Run every shard even if one fails, so one red shard doesn't mask others.
       fail-fast: false
       matrix:
-        # The fast suite is sharded across runners, each serial (E2E_WORKERS=1):
-        # parallelism is across machines, not xdist workers within one machine —
-        # which sidesteps the shared-container contention that makes -n2 flaky.
-        # Each shard runs `test-e2e-shard` scoped by E2E_ARGS; the union of all
-        # shard args equals the whole fast suite, with `rest` a catch-all via
-        # --ignore so a new module's e2e tests are never silently skipped.
-        # Shards are balanced by test count (~50-75 each); wall-clock ≈ the
-        # slowest shard (~3min).
+        # The fast suite is sharded across runners. Only surfaces uses two xdist
+        # workers; E2E support namespaces its containers, database, Redis, storage,
+        # fake providers, and streaq subprocess per worker.
+        # Each shard runs the normal fast e2e command under coverage, scoped by
+        # E2E_ARGS; the union of all shard args equals the whole fast suite, with
+        # `rest` a catch-all via --ignore so a new module's e2e tests are never
+        # silently skipped.
+        # Agent and function have dedicated shards because both exercise a real
+        # worker with deterministic fake model/sandbox dependencies. Wall-clock
+        # remains the slowest shard rather than the sum.
         suite:
           - name: surfaces
-            target: test-e2e-shard
             args: app/modules/agent_surfaces/tests/e2e
+            workers: 2
+          - name: agent
+            args: app/modules/agent/tests/e2e
+            workers: 1
+          - name: function
+            args: app/modules/function/tests/e2e
+            workers: 1
           - name: pod
-            target: test-e2e-shard
             args: app/modules/pod/tests/e2e
+            workers: 1
           - name: datastore
-            target: test-e2e-shard
             args: app/modules/datastore/tests/e2e app/modules/apps/tests/e2e
+            workers: 1
           - name: connectors
-            target: test-e2e-shard
             args: app/modules/connectors/tests/e2e app/modules/schedule/tests/e2e
+            workers: 1
           - name: rest
-            target: test-e2e-shard
+            workers: 1
             args: >-
               app/modules app/core
+              --ignore=app/modules/agent/tests/e2e
               --ignore=app/modules/agent_surfaces/tests/e2e
+              --ignore=app/modules/function/tests/e2e
               --ignore=app/modules/pod/tests/e2e
               --ignore=app/modules/datastore/tests/e2e
               --ignore=app/modules/apps/tests/e2e
@@ -81,16 +105,272 @@ jobs:
     steps:
       # On workflow_run, check out the PR head that CI validated (the event
       # otherwise defaults to the repo's default branch).
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+          ref: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.ref }}
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - name: Sync deps
         run: uv sync
-      # Every shard runs serially (E2E_WORKERS=1) on its own runner; the shards
-      # run in parallel, so the gate's wall-clock is the slowest shard, not their
-      # sum. E2E_ARGS scopes each shard to its module paths.
-      - name: E2E tests (mocked LLM + fake AgentBox)
-        run: make ${{ matrix.suite.target }} E2E_ARGS="${{ matrix.suite.args }}" E2E_WORKERS=1
+      # Shards run in parallel, so wall-clock is the slowest shard, not their sum.
+      # E2E_ARGS scopes each shard; matrix workers keeps surfaces below ten minutes.
+      - name: E2E tests (deterministic LLM + in-process sandbox, real services)
+        run: >-
+          make coverage-backend-e2e-shard
+          E2E_ARGS="${{ matrix.suite.args }}"
+          E2E_WORKERS=${{ matrix.suite.workers }}
+          COVERAGE_PHASE=e2e-${{ matrix.suite.name }}
+      - name: Upload backend e2e coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-e2e-${{ matrix.suite.name }}-coverage
+          include-hidden-files: true
+          path: |
+            lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/comment.md
+            lemma-backend/coverage-backend/summary.json
+            lemma-backend/coverage-backend/coverage.json
+            lemma-backend/coverage-backend/coverage.xml
+            lemma-backend/coverage-backend/junit-*.xml
+            lemma-backend/coverage-backend/html
+          if-no-files-found: ignore
+
+  aggregate-coverage:
+    name: backend aggregate coverage gate
+    # A skipped producer has no coverage artifacts. Requiring success prevents
+    # label-only/direct PR events from running an empty aggregation job.
+    if: needs.backend-e2e.result == 'success'
+    needs: backend-e2e
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      issues: write
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha || github.ref }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync dependencies
+        run: uv sync
+      - name: Download E2E coverage shards
+        uses: actions/download-artifact@v8
+        with:
+          pattern: backend-e2e-*-coverage
+          path: lemma-backend/coverage-artifacts/e2e
+      - name: Combine E2E-only coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/e2e-combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            cp "$coverage_file" "coverage-artifacts/e2e-combined/.coverage.e2e.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/e2e -type f -name '.coverage.backend')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw E2E coverage artifacts were downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage combine coverage-artifacts/e2e-combined
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage json -o coverage-backend/e2e-union.json
+          COVERAGE_FILE="$PWD/.coverage.e2e" uv run coverage xml -o coverage-backend/e2e-union.xml
+          uv run python scripts/backend_coverage_report.py \
+            --phase e2e-union \
+            --coverage-json coverage-backend/e2e-union.json \
+            --junit-glob 'coverage-artifacts/e2e/*/coverage-backend/junit-*.xml' \
+            --markdown-out coverage-backend/e2e-union.md \
+            --summary-json-out coverage-backend/e2e-union-summary.json
+      - name: Download validated unit coverage
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          name: backend-unit-coverage
+          path: lemma-backend/coverage-artifacts/unit
+      - name: Produce unit coverage for direct runs
+        if: github.event_name != 'workflow_run'
+        run: |
+          make coverage-backend-unit
+          mkdir -p coverage-artifacts/unit
+          cp .coverage.backend coverage-artifacts/unit/.coverage.backend
+      - name: Prepare unit-only coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/unit-combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            cp "$coverage_file" "coverage-artifacts/unit-combined/.coverage.unit.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/unit -type f -name '.coverage.backend*')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw unit coverage artifact was downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.unit" uv run coverage combine coverage-artifacts/unit-combined
+          COVERAGE_FILE="$PWD/.coverage.unit" uv run coverage json -o coverage-backend/unit.json
+      - name: Combine unit and E2E coverage
+        shell: bash
+        run: |
+          mkdir -p coverage-artifacts/combined coverage-backend
+          index=0
+          while IFS= read -r coverage_file; do
+            # Coverage.py discovers parallel inputs by appending a suffix to
+            # the configured data-file basename. COVERAGE_FILE below is
+            # `.coverage.backend`, so retain that basename here.
+            cp "$coverage_file" "coverage-artifacts/combined/.coverage.backend.$index"
+            index=$((index + 1))
+          done < <(find coverage-artifacts/e2e coverage-artifacts/unit -type f -name '.coverage.backend*')
+          if [ "$index" -eq 0 ]; then
+            echo "::error::No raw coverage artifacts were downloaded"
+            exit 1
+          fi
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage combine coverage-artifacts/combined
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage json -o coverage-backend/coverage.json
+          COVERAGE_FILE="$PWD/.coverage.backend" uv run coverage xml -o coverage-backend/coverage.xml
+      - name: Build authoritative coverage report
+        run: >-
+          uv run python scripts/backend_coverage_report.py
+          --unit-coverage-json coverage-backend/unit.json
+          --e2e-coverage-json coverage-backend/e2e-union.json
+          --combined-coverage-json coverage-backend/coverage.json
+          --unit-junit-glob 'coverage-artifacts/unit/**/junit-*.xml'
+          --e2e-junit-glob 'coverage-artifacts/e2e/**/junit-*.xml'
+          --markdown-out coverage-backend/overall.md
+          --summary-json-out coverage-backend/overall-summary.json
+      - name: Add authoritative coverage to job summary
+        run: cat coverage-backend/overall.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish one authoritative PR coverage comment
+        if: >-
+          (github.event_name == 'workflow_run' || github.event_name == 'pull_request') &&
+          hashFiles('lemma-backend/coverage-backend/overall.md') != ''
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- lemma-backend-coverage:overall -->';
+            const body = fs.readFileSync(
+              'lemma-backend/coverage-backend/overall.md',
+              'utf8',
+            );
+            const pullRequests = context.payload.workflow_run?.pull_requests || [];
+            const pr = context.payload.pull_request || pullRequests[0];
+            if (!pr) {
+              core.info('No PR is associated with this workflow run.');
+              return;
+            }
+            const {owner, repo} = context.repo;
+            const {data: pull} = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pr.number,
+            });
+            if (pull.head.repo.full_name !== `${owner}/${repo}`) {
+              core.info(`Skipping coverage comment for fork PR ${pull.head.repo.full_name}.`);
+              return;
+            }
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+            const obsoleteComments = comments.filter((comment) =>
+              comment.user?.type === 'Bot' &&
+              /<!-- lemma-backend-coverage:(?!overall)[^>]+ -->/.test(comment.body || '')
+            );
+            for (const comment of obsoleteComments) {
+              await github.rest.issues.deleteComment({
+                owner,
+                repo,
+                comment_id: comment.id,
+              });
+            }
+            const existing = comments.find((comment) =>
+              comment.user?.type === 'Bot' && comment.body?.includes(marker)
+            );
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: pr.number,
+                body,
+              });
+            }
+      - name: Enforce critical-module E2E floors
+        run: >-
+          uv run python scripts/check_coverage_thresholds.py
+          coverage-backend/e2e-union.json
+          --min-total 0
+          --min-module agent=80
+          --min-module agent_surfaces=80
+          --min-module datastore=80
+          --min-module function=80
+      - name: Enforce total and module floors
+        run: >-
+          uv run python scripts/check_coverage_thresholds.py
+          coverage-backend/coverage.json
+          --min-total 70
+          --min-module schedule=65
+      - name: Enforce changed-code coverage
+        run: >-
+          uv run diff-cover coverage-backend/coverage.xml
+          --compare-branch origin/main
+          --fail-under=85
+      - name: Upload aggregate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-aggregate-coverage
+          path: |
+            lemma-backend/coverage-backend/coverage.json
+            lemma-backend/coverage-backend/coverage.xml
+            lemma-backend/coverage-backend/unit.json
+            lemma-backend/coverage-backend/e2e-union.json
+            lemma-backend/coverage-backend/e2e-union.xml
+            lemma-backend/coverage-backend/e2e-union.md
+            lemma-backend/coverage-backend/e2e-union-summary.json
+            lemma-backend/coverage-backend/overall.md
+            lemma-backend/coverage-backend/overall-summary.json
+          if-no-files-found: error
+
+  surface-live-smoke:
+    name: agent surfaces live smoke
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' &&
+       github.event.action == 'labeled' &&
+       github.event.label.name == 'surface-live')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync deps
+        run: uv sync
+      - name: Live provider smoke tests
+        run: uv run pytest app/modules/agent_surfaces/tests/e2e/test_surface_live_smoke_e2e.py -m surface_live -o timeout=120
+        env:
+          LEMMA_RUN_SURFACE_LIVE_E2E: "1"

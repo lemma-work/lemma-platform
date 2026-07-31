@@ -10,4 +10,3 @@ export type SurfaceSetupActionField = {
     secret?: boolean;
     value: string;
 };
-

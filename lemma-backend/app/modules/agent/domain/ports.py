@@ -14,6 +14,7 @@ from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunFinishResult,
     AgentRunStatus,
+    ConversationAgentSelection,
     ConversationStatus,
     ConversationType,
     HarnessKind,
@@ -77,6 +78,11 @@ class AgentRepository(Protocol):
 class ConversationRepository(Protocol):
     async def create_conversation(self, conversation: Conversation) -> Conversation: ...
 
+    async def create_conversation_once(
+        self,
+        conversation: Conversation,
+    ) -> tuple[Conversation, bool]: ...
+
     async def update_conversation(self, conversation: Conversation) -> Conversation: ...
 
     async def get_conversation(self, conversation_id: UUID) -> Conversation | None: ...
@@ -86,10 +92,11 @@ class ConversationRepository(Protocol):
         *,
         user_id: UUID,
         pod_id: UUID,
-        agent_id: UUID | None,
+        agent_selection: ConversationAgentSelection[UUID],
         status: ConversationStatus | None = None,
         conversation_type: ConversationType | None = None,
         metadata_filters: JsonObject | None = None,
+        parent_id: UUID | None = None,
         cursor: UUID | None = None,
         limit: int = 20,
     ) -> tuple[list[Conversation], UUID | None]: ...
@@ -115,6 +122,16 @@ class ConversationRepository(Protocol):
         self,
         conversation_id: UUID,
     ) -> AgentRun | None: ...
+
+    async def get_latest_agent_run_for_conversation(
+        self,
+        conversation_id: UUID,
+    ) -> AgentRun | None: ...
+
+    async def list_agent_runs_with_messages_by_run_id(
+        self,
+        agent_run_id: UUID,
+    ) -> list[AgentRun]: ...
 
     async def append_message(
         self,

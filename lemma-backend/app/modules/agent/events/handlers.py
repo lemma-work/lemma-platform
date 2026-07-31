@@ -7,22 +7,31 @@ from uuid import UUID
 
 from faststream import Depends, Logger
 from faststream.redis import RedisRouter
+from sqlalchemy.exc import SQLAlchemyError
 from streaq.task import TaskStatus
 
-from app.core.config import settings
+from app.composition.agent_usage import build_usage_service
+from app.composition.authorization import create_authorization_service
+from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.scope import context_scope
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.events.publisher import EventPublisher
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
+)
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     get_streaq_job_queue,
 )
 from app.core.infrastructure.jobs.streaq_runtime import (
-    JOB_TIMEOUT_SECONDS,
+    AGENT_RUN_JOB_TIMEOUT_SECONDS,
     AppWorkerContext,
     streaq_cron,
     streaq_task,
@@ -35,14 +44,17 @@ from app.modules.agent.domain.events import (
     AgentRunStopRequestedEvent,
 )
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.infrastructure.harnesses import (
-    DaemonHarness,
     HarnessRegistry,
     PydanticAIHarness,
+    RemoteHarness,
 )
-from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.repositories import (
+    AgentRepository,
+    ConversationRepository,
+)
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.realtime import (
     completed_payload,
     publish_conversation_event,
@@ -63,6 +75,7 @@ CONTROL_EVENT_MODELS = {
 def conversation_title_job_id(conversation_id: UUID) -> str:
     return f"conv-title:{conversation_id}"
 
+
 def provide_job_queue() -> SharedStreaqJobQueue:
     return get_streaq_job_queue()
 
@@ -72,15 +85,12 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def build_harness_registry() -> HarnessRegistry:
-    reconnect_grace_seconds = settings.daemon_reconnect_grace_seconds
     return HarnessRegistry(
         [
             PydanticAIHarness(),
-            DaemonHarness(HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.CLAUDE_CODE, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds),
-            DaemonHarness(HarnessKind.ANTIGRAVITY, reconnect_grace_seconds=reconnect_grace_seconds),
+            # One harness for every Agent Host tool; which one runs is decided
+            # by the profile's harness_id, not by the registry.
+            RemoteHarness(provide_uow_factory()),
         ]
     )
 
@@ -89,24 +99,42 @@ def agent_run_job_id(agent_run_id: UUID) -> str:
     return f"agent-run:{agent_run_id}"
 
 
-@router.subscriber(
-    stream=redis_stream_sub(
-        AGENT_EVENTS_STREAM,
-        group="agent-events",
-        consumer="agent-events-consumer",
-    )
+@reliable_redis_stream_subscriber(
+    router,
+    AGENT_EVENTS_STREAM,
+    group="agent-events",
+    consumer="agent-events-consumer",
 )
 async def handle_agent_control_event(
     event: dict,
     fs_logger: Logger,
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     event_model = CONTROL_EVENT_MODELS.get(event.get("event_type"))
     if event_model is None:
         return
 
-    parsed = event_model.model_validate(event)
+    async def process() -> None:
+        parsed = event_model.model_validate(event)
+        await _process_agent_control_event(
+            parsed,
+            fs_logger=fs_logger,
+            job_queue=job_queue,
+            uow_factory=uow_factory,
+        )
+
+    await inbox.process("agent.control", event, process)
+
+
+async def _process_agent_control_event(
+    parsed: AgentRunStartedEvent | AgentRunStopRequestedEvent | AgentRunCompletedEvent,
+    *,
+    fs_logger: Logger,
+    job_queue: SharedStreaqJobQueue,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
     if isinstance(parsed, AgentRunStartedEvent):
         await enqueue_agent_run(parsed, fs_logger=fs_logger, job_queue=job_queue)
         return
@@ -124,47 +152,42 @@ async def handle_agent_control_event(
         job_id = agent_run_job_id(parsed.agent_run_id)
         task_status = await job_queue.status(job_id)
         if task_status == TaskStatus.RUNNING:
-            fs_logger.info(
-                "Agent run stop requested; runner will stop cooperatively: %s",
-                parsed.agent_run_id,
-            )
             return
 
         # Do not call streaq abort here. A queued task can race into RUNNING
         # between status() and abort(), and aborting that internal cancel scope
         # can poison the worker task. Mark the run terminal instead; if the
         # streaq task later starts, process_agent_run exits as a no-op.
-        async with uow_factory() as uow:
-            finish_result = await ConversationRepository(uow).finish_agent_run(
-                agent_run_id=parsed.agent_run_id,
-                status=AgentRunStatus.STOPPED,
-            )
-        if finish_result is None or not finish_result.updated:
-            return
-
-        fs_logger.info(
-            "Agent run stopped before worker execution: %s",
-            parsed.agent_run_id,
-        )
         event_data = {
             "aborted": False,
             "task_status": task_status.value,
         }
+        async with uow_factory() as uow:
+            repo = ConversationRepository(uow)
+            finish_result = await repo.finish_agent_run(
+                agent_run_id=parsed.agent_run_id,
+                status=AgentRunStatus.STOPPED,
+            )
+            if finish_result is not None and finish_result.updated:
+                repo.collect_events(
+                    [
+                        AgentRunCompletedEvent(
+                            conversation_id=parsed.conversation_id,
+                            agent_run_id=parsed.agent_run_id,
+                            status=finish_result.status,
+                            data=event_data,
+                        )
+                    ]
+                )
+        if finish_result is None or not finish_result.updated:
+            return
+
         await publish_conversation_event(
             parsed.conversation_id,
             completed_payload(
                 conversation_id=parsed.conversation_id,
                 agent_run_id=parsed.agent_run_id,
                 status=finish_result.status.value,
-                data=event_data,
-            ),
-        )
-        await EventPublisher.publish(
-            AGENT_EVENTS_STREAM,
-            AgentRunCompletedEvent(
-                conversation_id=parsed.conversation_id,
-                agent_run_id=parsed.agent_run_id,
-                status=finish_result.status,
                 data=event_data,
             ),
         )
@@ -188,13 +211,11 @@ async def enqueue_agent_run(
         _job_id=agent_run_job_id(event.agent_run_id),
     )
     if job is None:
-        fs_logger.info("Skipped duplicate agent run enqueue: %s", event.agent_run_id)
         return False
-    fs_logger.info("Enqueued agent run: %s", event.agent_run_id)
     return True
 
 
-@streaq_task(name="process_agent_run")
+@streaq_task(name="process_agent_run", timeout=AGENT_RUN_JOB_TIMEOUT_SECONDS)
 async def process_agent_run(
     context: dict[str, str | None],
 ):
@@ -208,9 +229,7 @@ async def process_agent_run(
         uow_factory=worker_ctx.uow_factory,
         harness_registry=build_harness_registry(),
     )
-    from app.modules.agent_surfaces.services.progress_observer import (
-        SurfaceAgentRunProgressObserver,
-    )
+    from app.composition.agent_surface_runtime import build_progress_observer
 
     # Safety net: if a cancellation arrives before/during runner.execute (e.g.
     # streaq task timeout, worker shutdown) and propagates as CancelledError
@@ -225,13 +244,84 @@ async def process_agent_run(
             user_id=user_id,
             pod_id=pod_id,
             agent_name=agent_name,
-            observer=SurfaceAgentRunProgressObserver(
+            observer=build_progress_observer(
                 uow_factory=worker_ctx.uow_factory,
                 service_factory=worker_ctx.build_surface_event_handler,
             ),
         )
     except asyncio.CancelledError:
-        logger.warning("process_agent_run cancelled run=%s", agent_run_id)
+        logger.debug(
+            'agent.handlers.process_agent_run_cancelled_run.diagnostic',
+            agent_run_id=agent_run_id,
+        )
+
+
+@streaq_task(name="reconcile_agent_approval")
+async def reconcile_agent_approval(
+    context: dict[str, str | None],
+) -> None:
+    """Execute a durable approval decision outside the HTTP request deadline."""
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    await reconcile_agent_approval_now(context, uow_factory=worker_ctx.uow_factory)
+
+
+async def reconcile_agent_approval_now(
+    context: dict[str, str | None],
+    *,
+    uow_factory: UnitOfWorkFactory,
+) -> None:
+    """Reconcile one already-recorded decision; split out for focused tests.
+
+    Both lookups can legitimately come back empty — the conversation was deleted,
+    or this job outran the transaction that recorded the decision — and neither
+    is an error worth retrying, so both simply return.
+    """
+    conversation_id = UUID(str(context["conversation_id"]))
+    approval_id = str(context["approval_id"])
+    pod_id = UUID(str(context["pod_id"]))
+
+    async with uow_factory() as uow:
+        conversation_repository = ConversationRepository(uow)
+        conversation = await conversation_repository.get_conversation(conversation_id)
+        if conversation is None:
+            return
+        recorded = await conversation_repository.get_approval_decision(
+            conversation_id=conversation_id,
+            approval_id=approval_id,
+        )
+        if recorded is None:
+            return
+        decision, response = recorded
+        service = ConversationService(
+            uow=uow,
+            conversation_repository=conversation_repository,
+            agent_repository=AgentRepository(uow),
+            authorization_service=create_authorization_service(uow),
+            usage_service=build_usage_service(uow),
+        )
+        # An approved request_approval runs its wrapped tool with a user's
+        # authority, which needs that user's authorization context bound — the
+        # request that recorded this decision had one, this worker job does not.
+        # Both halves must name the SAME user or the tool runs with one
+        # principal's ambient permissions under another's identity. It is the
+        # conversation owner, per resolve_user_approval_internal's contract and
+        # matching the surface approval path: the agent acts for the owner, and
+        # whoever clicked approve is deciding, not lending their authority.
+        # ``user_id`` from the job context is the resolver and is only recorded
+        # as such, which already happened before this job was queued.
+        auth_ctx = await create_authorization_data_service(uow).build_user_context(
+            user_id=conversation.user_id,
+            pod_id=conversation.pod_id,
+        )
+        async with context_scope(auth_ctx):
+            await service.resolve_user_approval_internal(
+                conversation=conversation,
+                approval_id=approval_id,
+                user_id=conversation.user_id,
+                pod_id=pod_id,
+                decision=decision,
+                response=response,
+            )
 
 
 @streaq_task(name="generate_conversation_title")
@@ -249,11 +339,12 @@ async def process_conversation_title(
     ).generate_title_if_absent(conversation_id)
 
 
-# Sweep stale runs only well after the streaq task timeout, so a legitimately
-# long-running agent (up to JOB_TIMEOUT_SECONDS) is never swept; by then the
-# task is definitively gone (crash/OOM/forced shutdown losing the finalization
-# race) and the run must be failed so it doesn't sit in RUNNING forever.
-_ORPHANED_RUN_CUTOFF_SECONDS = JOB_TIMEOUT_SECONDS + 300
+# Sweep stale runs only well after the agent-run task timeout, so a legitimately
+# long-running agent (up to AGENT_RUN_JOB_TIMEOUT_SECONDS) is never swept; by
+# then the task is definitively gone (crash/OOM/forced shutdown losing the
+# finalization race) and the run must be failed so it doesn't sit in RUNNING
+# forever.
+_ORPHANED_RUN_CUTOFF_SECONDS = AGENT_RUN_JOB_TIMEOUT_SECONDS + 300
 
 
 @streaq_cron("*/10 * * * *", name="reconcile_orphaned_agent_runs")
@@ -281,18 +372,31 @@ async def reconcile_orphaned_agent_runs() -> None:
                     error="Agent run was interrupted (worker restart or crash)",
                 )
                 if finish_result is not None and finish_result.updated:
+                    event_data = {
+                        "error": "Agent run was interrupted (worker restart or crash)"
+                    }
+                    repo.collect_events(
+                        [
+                            AgentRunCompletedEvent(
+                                conversation_id=run.conversation_id,
+                                agent_run_id=run.id,
+                                status=finish_result.status,
+                                data=event_data,
+                            )
+                        ]
+                    )
                     finalized.append(
                         (run.conversation_id, run.id, finish_result.status)
                     )
-    except Exception as exc:
-        logger.error("reconcile_orphaned_agent_runs cron failed: %s", exc)
+    except Exception:
+        logger.error("agent.handlers.reconcile_orphaned_agent_runs_cron.failed", exc_info=True)
         return
 
     if not finalized:
         return
 
-    logger.warning(
-        "Reconciled %d orphaned agent run(s) to FAILED", len(finalized)
+    logger.debug(
+        'agent.handlers.reconciled_d_orphaned_agent_run.diagnostic', count=len(finalized)
     )
     # Publish outside the UoW (mirrors handle_agent_control_event's stop path)
     # so SSE clients refresh and workflow waits resume promptly.
@@ -308,18 +412,61 @@ async def reconcile_orphaned_agent_runs() -> None:
                     data=event_data,
                 ),
             )
-            await EventPublisher.publish(
-                AGENT_EVENTS_STREAM,
-                AgentRunCompletedEvent(
-                    conversation_id=conversation_id,
-                    agent_run_id=agent_run_id,
-                    status=status,
-                    data=event_data,
-                ),
-            )
-        except Exception as exc:
+        except Exception:
             logger.error(
-                "Failed publishing reconciled-run events run=%s: %s",
-                agent_run_id,
-                exc,
-            )
+                "agent.handlers.publishing_reconciled_run_realtime_update.failed",
+                agent_run_id=agent_run_id,
+            exc_info=True,
+        )
+
+
+@streaq_cron("*/5 * * * *", name="reconcile_agent_host_dispatch")
+async def reconcile_agent_host_dispatch() -> None:
+    """Reconcile Agent Host leases against the runs they belong to.
+
+    Two things nobody else does once the worker driving a run is gone. Cancel
+    host runs whose Lemma run already ended, so a machine on someone's desk
+    stops executing tools for a turn we have reported as failed. And advance
+    leases whose heartbeat lapsed, which otherwise stay non-terminal forever and
+    are never collected by retention.
+    """
+    from app.modules.agent.infrastructure import agent_host_recovery
+    from app.modules.agent.infrastructure.agent_host_channels import poke_host
+
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    # Only database trouble is swallowed here: it is the transient failure this
+    # sweep expects, and the next tick is five minutes away. Anything else is a
+    # bug and surfaces through the worker's own job-failure path.
+    try:
+        async with worker_ctx.uow() as uow:
+            host_ids = await agent_host_recovery.cancel_abandoned_host_runs(uow.session)
+            await agent_host_recovery.reconcile_expired_leases(uow.session)
+            await uow.commit()
+    except SQLAlchemyError:
+        logger.error("agent.handlers.reconcile_agent_host_dispatch_cron.failed", exc_info=True)
+        return
+    # Poke outside the transaction: the host is long-polling, and without this
+    # the cancel waits out its poll deadline. poke_host never raises.
+    for host_id in dict.fromkeys(host_ids):
+        await poke_host(host_id)
+
+
+@streaq_cron("23 4 * * *", name="cleanup_agent_host_retained_state")
+async def cleanup_agent_host_retained_state() -> None:
+    """Collect spent Agent Host pairings, commands, and leases.
+
+    Without this registration the sweep existed but never ran, so dispatch rows
+    accumulated for the lifetime of the deployment and consumed pairing codes
+    were never purged.
+    """
+    from app.modules.agent.infrastructure import agent_host_recovery
+
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    try:
+        async with worker_ctx.uow() as uow:
+            await agent_host_recovery.cleanup_retained_state(uow.session)
+            await uow.commit()
+    except SQLAlchemyError:
+        logger.error(
+            "agent.handlers.cleanup_agent_host_retained_state_cron.failed", exc_info=True
+        )

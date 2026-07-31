@@ -98,7 +98,7 @@ class ReportFeedbackResponse:
                 agent_id_type_0 = UUID(data)
 
                 return agent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -115,7 +115,7 @@ class ReportFeedbackResponse:
                 feedback_id_type_0 = UUID(data)
 
                 return feedback_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -141,7 +141,7 @@ class ReportFeedbackResponse:
                 user_id_type_0 = UUID(data)
 
                 return user_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

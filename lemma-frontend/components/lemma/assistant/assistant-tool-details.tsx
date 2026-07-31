@@ -12,11 +12,11 @@ import {
   isAskUserToolName,
   isLongRunningToolResult,
   isToolInvocationActive,
-  isUserApprovalToolName,
   isUserInteractionToolName,
+  isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
 } from "lemma-sdk";
-import { Check, ChevronDown, Copy } from "lucide-react";
+import { Check, ChevronDown, Copy } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +34,8 @@ import {
 } from "./assistant-format";
 import { DetailsWithCopy, contextualToolDetails } from "./assistant-tool-cards";
 import { ReasoningPartCard } from "./assistant-parts";
+import { SubagentActivityRollup } from "./assistant-subagent-activity";
+import { isSubagentLifecycleToolName } from "@/lib/assistant/subagent-activity";
 import {
   currentPodIdFromBrowserPath,
   isCurrentBrowserHref,
@@ -43,6 +45,7 @@ import {
   InlineUserApprovalCall,
   UserApprovalCard,
 } from "./assistant-approval-cards";
+import { playSoundFeedback } from "@/lib/feedback/sound-feedback";
 import type {
   AssistantMessagePart,
   AssistantRenderableMessage,
@@ -54,6 +57,7 @@ import type {
   ToolCardResult,
   UserApprovalDecision,
 } from "./assistant-experience";
+import { ToolCallIcon } from "./assistant-tool-icon";
 
 export function ToolDetailsPanel({
   toolCallId,
@@ -155,14 +159,14 @@ export function ToolDetailsPanel({
   const hiddenInputCount = Math.max(0, countSummarizablePayloadEntries(args, summaryOptions.input) - inputEntries.length);
   const hiddenOutputCount = Math.max(0, countSummarizablePayloadEntries(resultData, summaryOptions.output) - outputEntries.length);
 
-  if (isUserInteractionToolName(toolName)) {
-    const interactionInvocation = {
+  const interactionInvocation = {
       toolCallId,
       toolName,
       args,
       state: (state === "result" ? "result" : "call") as "result" | "call",
       ...(result ? { result } : {}),
     };
+  if (isRenderableUserInteractionInvocation(interactionInvocation)) {
     return (
       <div className="mt-1.5">
         {isAskUserToolName(toolName) ? (
@@ -292,13 +296,17 @@ function InlineToolCall({
     <button
       type="button"
       onClick={onClick}
-      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm leading-5 transition-colors hover:text-[var(--text-primary)]"
+      className="lemma-assistant-inline-tool-button inline-flex max-w-full items-center gap-2 border-0 bg-transparent p-0 text-left transition-colors"
       data-state={isExecuting ? "executing" : isFailed ? "failed" : "complete"}
       data-selected={isSelected}
     >
+      <ToolCallIcon
+        toolName={invocation.toolName}
+        className="size-3.5 shrink-0 text-current opacity-80"
+      />
       <span
         className={cn(
-          "min-w-0 truncate text-[var(--text-secondary)]",
+          "min-w-0 truncate",
           isExecuting && "lemma-assistant-thinking-shimmer bg-clip-text text-transparent animate-[lemma-skeleton-breathe_1.5s_ease-in-out_infinite]",
         )}
       >
@@ -423,14 +431,14 @@ export function RunTraceHeader({
       {isInteractive ? (
         <button
           type="button"
-          className="flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left text-sm font-normal leading-6 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+          className="lemma-assistant-run-trace-header flex w-fit max-w-full items-center gap-1.5 border-0 bg-transparent p-0 text-left transition-colors"
           onClick={onToggle}
           aria-expanded={isExpanded}
         >
           {content}
         </button>
       ) : (
-        <div className="flex w-fit max-w-full items-center gap-1.5 text-sm font-normal leading-6 text-[var(--text-secondary)]">
+        <div className="lemma-assistant-run-trace-header flex w-fit max-w-full items-center gap-1.5">
           {content}
         </div>
       )}
@@ -464,15 +472,19 @@ export function ToolActivityRollup({
   const [activeDetailId, setActiveDetailId] = useState<string | null>(null);
   const [expandedGroupId, setExpandedGroupId] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
-  const visibleDetailParts = detailParts.filter((part) => {
-    if (part.type !== "tool") return true;
-    const invocation = part.toolInvocation;
-    if (isUserApprovalToolName(invocation.toolName)) return true;
-    return true;
-  });
+  const subagentToolParts = detailParts.filter((part): part is ToolActivityPart => (
+    part.type === "tool" && isSubagentLifecycleToolName(part.toolInvocation.toolName)
+  ));
+  const visibleDetailParts = detailParts.filter((part) => (
+    part.type !== "tool" || !isSubagentLifecycleToolName(part.toolInvocation.toolName)
+  ));
   const toolParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "tool" }> => part.type === "tool");
   const reasoningParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "reasoning" }> => part.type === "reasoning");
-  const totalThoughtDurationMs = reasoningParts.reduce((total, part) => total + (part.durationMs ?? 0), 0);
+  const hasCompleteThoughtDuration = reasoningParts.length > 0
+    && reasoningParts.every((part) => typeof part.durationMs === "number" && part.durationMs > 0);
+  const totalThoughtDurationMs = hasCompleteThoughtDuration
+    ? reasoningParts.reduce((total, part) => total + (part.durationMs ?? 0), 0)
+    : 0;
   const hasRunHeader = Boolean(collapsedLabel);
   const activitySummary = formatToolActivitySummary(toolParts);
   const activityBlocks = groupActivityDetailParts(visibleDetailParts);
@@ -482,13 +494,21 @@ export function ToolActivityRollup({
   // so a master header would just repeat that group's "×N" label — skip it.
   const onlyBlock = activityBlocks.length === 1 ? activityBlocks[0] : null;
   const hasLongToolGroup = onlyBlock?.type === "tool-group" && onlyBlock.parts.length > 2;
-  const shouldShowHeader = hasRunHeader || hasLongToolGroup;
+  const hasPendingUserInteraction = toolParts.some((part) => {
+    const invocation = part.toolInvocation;
+    if (!isUserInteractionToolName(invocation.toolName)) return false;
+    const resultData = (invocation.result || {}) as ToolCardResult;
+    return invocation.state !== "result" && !userApprovalResolvedDecision(resultData);
+  });
+  const shouldShowHeader = hasRunHeader
+    || hasLongToolGroup
+    || (Boolean(isRunActive) && !hasPendingUserInteraction);
   const failedCount = toolParts.filter((part) => (
     part.toolInvocation.state === "result"
     && !isLongRunningToolResult(part.toolInvocation)
     && part.toolInvocation.result?.success === false
   )).length;
-  const isWorking = reasoningParts.some((part) => part.state === "streaming");
+  const isWorking = Boolean(isRunActive) || reasoningParts.some((part) => part.state === "streaming");
   const isSingleDetail = visibleDetailParts.length === 1;
   const completionSummary = activitySummary
     ? activitySummary
@@ -496,23 +516,18 @@ export function ToolActivityRollup({
       ? `Thought for ${formatDurationCompact(totalThoughtDurationMs)}`
       : "Completed";
   const summary = isWorking
-    ? "Thinking"
+    ? (activitySummary ? `Working · ${activitySummary}` : "Thinking")
     : `${completionSummary}${failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
-  const collapsedSummary = collapsedLabel
-    || (isWorking
-      ? summary
-      : toolParts.length > 0
-      ? `${completionSummary}${failedCount > 0 ? ` · ${failedCount} failed` : ""}`
-      : summary);
+  const collapsedSummary = `${collapsedLabel || summary}${isWorking && failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
 
-  if (visibleDetailParts.length === 0) return null;
+  if (visibleDetailParts.length === 0 && subagentToolParts.length === 0) return null;
 
-  const isTraceExpanded = isExpanded || isRunActive;
+  const isTraceExpanded = isExpanded || hasPendingUserInteraction;
 
   const renderToolActivityPart = (part: ToolActivityPart): ReactNode => {
     const invocation = part.toolInvocation;
     const isSelected = activeDetailId === invocation.toolCallId;
-    if (isUserInteractionToolName(invocation.toolName)) {
+    if (isRenderableUserInteractionInvocation(invocation)) {
       const resultData = (invocation.result || {}) as ToolCardResult;
       const isResolved = invocation.state === "result" || !!userApprovalResolvedDecision(resultData);
       if (isResolved) {
@@ -582,12 +597,21 @@ export function ToolActivityRollup({
   };
 
   return (
-    <div className={cn("flex min-w-0 flex-col", hasRunHeader ? "gap-3" : "gap-1.5")} data-single={isSingleDetail ? "true" : "false"}>
+    <div className="flex min-w-0 flex-col gap-3">
+      {subagentToolParts.length > 0 ? (
+        <SubagentActivityRollup
+          parts={subagentToolParts}
+          parentConversationId={activeConversationId}
+          isRunActive={isRunActive}
+        />
+      ) : null}
+      {visibleDetailParts.length > 0 ? (
+        <div className={cn("flex min-w-0 flex-col", hasRunHeader ? "gap-3" : "gap-1.5")} data-single={isSingleDetail ? "true" : "false"}>
       {hasRunHeader ? (
         <RunTraceHeader
           label={collapsedSummary}
           isExpanded={isTraceExpanded}
-          isInteractive={!isRunActive}
+          isInteractive
           onToggle={() => setIsExpanded((prev) => !prev)}
         />
       ) : shouldShowHeader ? (
@@ -648,8 +672,7 @@ export function ToolActivityRollup({
             }
 
             const groupSummary = formatToolActivitySummary(block.parts) || `Used ${pluralize(block.parts.length, "tool")}`;
-            const hasActiveTool = block.parts.some((part) => isToolInvocationActive(part.toolInvocation));
-            const isGroupSelected = expandedGroupId === block.id || (isRunActive && hasActiveTool);
+            const isGroupSelected = expandedGroupId === block.id;
             return (
               <div key={block.id} className="flex flex-col gap-1.5">
                 <button
@@ -667,6 +690,8 @@ export function ToolActivityRollup({
               </div>
             );
           })}
+        </div>
+      ) : null}
         </div>
       ) : null}
     </div>
@@ -691,6 +716,7 @@ export function TextBlockWithCopy({
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
+      playSoundFeedback('action-success');
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }
   };

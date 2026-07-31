@@ -1,6 +1,6 @@
 'use client';
 
-import { LayoutGrid, List } from 'lucide-react';
+import { LayoutGrid, List } from '@/components/ui/icons';
 
 export type ViewType = 'grid' | 'list' | 'kanban' | 'calendar';
 

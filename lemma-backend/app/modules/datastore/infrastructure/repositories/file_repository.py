@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, text, update
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants
@@ -46,6 +46,12 @@ def _file_actions_expr(ctx: Context):
     )
 
 
+def _content_identity_matches(content_sha256: str | None):
+    if content_sha256 is None:
+        return DatastoreFile.content_sha256.is_(None)
+    return DatastoreFile.content_sha256 == content_sha256
+
+
 def _file_payload(entity: DatastoreFileEntity) -> dict:
     payload = entity.model_dump(exclude={"allowed_actions"})
     payload["kind"] = entity.kind.value
@@ -56,6 +62,16 @@ def _file_payload(entity: DatastoreFileEntity) -> dict:
 
 class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPort):
     """Persistence for file/folder metadata (the application DB)."""
+
+    async def acquire_path_lock(self, pod_id: UUID, path: str) -> None:
+        """Serialize mkdir-p decisions for one pod/path until transaction end."""
+        await self.session.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(CAST(:path_key AS text), 0))"
+            ),
+            {"path_key": f"{pod_id}:{path}"},
+        )
 
     async def create(self, entity: DatastoreFileEntity) -> DatastoreFileEntity:
         instance = DatastoreFile(**_file_payload(entity))
@@ -90,28 +106,59 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
             .values(status=FileStatus.NOT_REQUIRED.value, indexed_at=None)
         )
 
-    async def claim_for_processing(self, file_id: UUID) -> bool:
-        """Atomically move PENDING -> PROCESSING; False if already claimed."""
+    async def claim_for_processing(
+        self, file_id: UUID, *, content_sha256: str | None
+    ) -> int | None:
+        """Atomically claim one content identity and return its attempt token."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PENDING.value,
+                _content_identity_matches(content_sha256),
             )
             .values(
                 status=FileStatus.PROCESSING.value,
                 processing_attempts=DatastoreFile.processing_attempts + 1,
             )
+            .returning(DatastoreFile.processing_attempts)
         )
-        return result.rowcount > 0
+        return result.scalar_one_or_none()
 
-    async def mark_completed(self, file_id: UUID, *, file_metadata: dict) -> bool:
-        """PROCESSING -> COMPLETED; False if a newer update already reset it."""
+    async def is_processing_claim_current(
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+    ) -> bool:
+        return bool(
+            await self.session.scalar(
+                select(DatastoreFile.id).where(
+                    DatastoreFile.id == file_id,
+                    DatastoreFile.status == FileStatus.PROCESSING.value,
+                    _content_identity_matches(content_sha256),
+                    DatastoreFile.processing_attempts == processing_attempt,
+                )
+            )
+        )
+
+    async def mark_completed(
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+        file_metadata: dict,
+    ) -> bool:
+        """Complete only the exact content identity and processing claim."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
+                _content_identity_matches(content_sha256),
+                DatastoreFile.processing_attempts == processing_attempt,
             )
             .values(
                 status=FileStatus.COMPLETED.value,
@@ -123,15 +170,50 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
         )
         return result.rowcount > 0
 
-    async def mark_failed(self, file_id: UUID, *, error: str) -> bool:
-        """PROCESSING -> FAILED; False if a newer update already reset it."""
+    async def mark_failed(
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+        error: str,
+    ) -> bool:
+        """Fail only the exact content identity and processing claim."""
         result = await self.session.execute(
             update(DatastoreFile)
             .where(
                 DatastoreFile.id == file_id,
                 DatastoreFile.status == FileStatus.PROCESSING.value,
+                _content_identity_matches(content_sha256),
+                DatastoreFile.processing_attempts == processing_attempt,
             )
-            .values(status=FileStatus.FAILED.value, last_processing_error=error)
+            .values(
+                status=FileStatus.FAILED.value,
+                last_processing_error=error,
+            )
+        )
+        return result.rowcount > 0
+
+    async def mark_missing_original(
+        self,
+        file_id: UUID,
+        *,
+        content_sha256: str | None,
+        processing_attempt: int,
+        error: str,
+    ) -> bool:
+        result = await self.session.execute(
+            update(DatastoreFile)
+            .where(
+                DatastoreFile.id == file_id,
+                DatastoreFile.status == FileStatus.PROCESSING.value,
+                _content_identity_matches(content_sha256),
+                DatastoreFile.processing_attempts == processing_attempt,
+            )
+            .values(
+                status=FileStatus.FAILED_PERMANENT.value,
+                last_processing_error=error,
+            )
         )
         return result.rowcount > 0
 
@@ -331,16 +413,24 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
         pending_cutoff: datetime,
         processing_cutoff: datetime,
         failed_cutoff: datetime | None = None,
-        max_attempts: int = 5,
+        max_attempts: int = 3,
     ) -> Sequence[DatastoreFileEntity]:
+        # The attempt cap applies to EVERY re-drive branch, not just FAILED.
+        # A worker that is OOM-killed / SIGKILLed mid-extraction never runs its
+        # mark_failed handler, so the row is stranded in PROCESSING with an
+        # incremented processing_attempts. Without the cap here, the PROCESSING
+        # branch would re-drive that poison file forever (the failure mode that
+        # took the dev worker down). Capping all branches makes the budget real.
         branches = [
             and_(
                 DatastoreFile.status == FileStatus.PENDING.value,
                 DatastoreFile.updated_at < pending_cutoff,
+                DatastoreFile.processing_attempts < max_attempts,
             ),
             and_(
                 DatastoreFile.status == FileStatus.PROCESSING.value,
                 DatastoreFile.updated_at < processing_cutoff,
+                DatastoreFile.processing_attempts < max_attempts,
             ),
         ]
         if failed_cutoff is not None:
@@ -350,6 +440,45 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
                     DatastoreFile.status == FileStatus.FAILED.value,
                     DatastoreFile.updated_at < failed_cutoff,
                     DatastoreFile.processing_attempts < max_attempts,
+                )
+            )
+        result = await self.session.execute(
+            select(DatastoreFile).where(
+                DatastoreFile.kind == "FILE",
+                DatastoreFile.search_enabled == True,  # noqa: E712
+                or_(*branches),
+            )
+        )
+        return [instance.to_entity() for instance in result.scalars().all()]
+
+    async def list_exhausted_recovery_candidates(
+        self,
+        *,
+        processing_cutoff: datetime,
+        failed_cutoff: datetime | None = None,
+        max_attempts: int = 3,
+    ) -> Sequence[DatastoreFileEntity]:
+        """Stale PROCESSING/FAILED files that have hit the attempt cap.
+
+        These are the counterpart to ``list_stale_recovery_candidates``: instead
+        of being re-driven they are transitioned to the terminal FAILED_PERMANENT
+        state so the cron stops resurrecting them. PENDING is excluded — a file
+        that has never been claimed past the cap shouldn't exist, and a fresh
+        upload legitimately resets attempts to 0.
+        """
+        branches = [
+            and_(
+                DatastoreFile.status == FileStatus.PROCESSING.value,
+                DatastoreFile.updated_at < processing_cutoff,
+                DatastoreFile.processing_attempts >= max_attempts,
+            ),
+        ]
+        if failed_cutoff is not None:
+            branches.append(
+                and_(
+                    DatastoreFile.status == FileStatus.FAILED.value,
+                    DatastoreFile.updated_at < failed_cutoff,
+                    DatastoreFile.processing_attempts >= max_attempts,
                 )
             )
         result = await self.session.execute(
@@ -375,6 +504,45 @@ class DatastoreFileRepository(DatastoreRepositoryBase, DatastoreFileRepositoryPo
             .values(status=status.value)
         )
         return result.rowcount or 0
+
+    async def bulk_mark_failed_permanent(
+        self,
+        *,
+        file_ids: Sequence[UUID],
+        error: str,
+    ) -> int:
+        """Transition files to the terminal FAILED_PERMANENT state with a reason."""
+        if not file_ids:
+            return 0
+        result = await self.session.execute(
+            update(DatastoreFile)
+            .where(DatastoreFile.id.in_(list(file_ids)))
+            .values(
+                status=FileStatus.FAILED_PERMANENT.value,
+                last_processing_error=error,
+            )
+        )
+        return result.rowcount or 0
+
+    async def mark_failed_permanent(self, file_id: UUID, *, error: str) -> bool:
+        """Terminally fail a single file (e.g. too large to process).
+
+        Not guarded on a prior status: this is called pre-claim (file is PENDING)
+        for the size guard, but must not clobber a COMPLETED row if a race put one
+        there — so exclude COMPLETED explicitly.
+        """
+        result = await self.session.execute(
+            update(DatastoreFile)
+            .where(
+                DatastoreFile.id == file_id,
+                DatastoreFile.status != FileStatus.COMPLETED.value,
+            )
+            .values(
+                status=FileStatus.FAILED_PERMANENT.value,
+                last_processing_error=error,
+            )
+        )
+        return result.rowcount > 0
 
 
 def _file_payload_unset(entity: DatastoreFileEntity) -> dict:

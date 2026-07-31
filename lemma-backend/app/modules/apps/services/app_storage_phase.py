@@ -13,13 +13,15 @@ The DB→storage hand-off dataclasses live here (their natural home) so
 
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from uuid import UUID
 
 import structlog
 
+from app.core.api.uploads import upload_source_sha256
 from app.core.runtime_config import inject_runtime_config
 from app.modules.apps.domain.entities import AppAssetDocument, AppReleaseEntity
 from app.modules.apps.domain.errors import AppNotFoundError
@@ -46,6 +48,8 @@ class _AssetReadInputs:
     dist_root_path: str
     normalized_asset_path: str
     quoted_etag: str
+    app: dict[str, str] | None = None
+    branding: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,7 +122,12 @@ class AppStoragePhase:
                 raise AppNotFoundError("App index.html not found") from exc
             is_entrypoint = True
         if is_entrypoint:
-            content = inject_runtime_config(content, inputs.pod_id)
+            content = inject_runtime_config(
+                content,
+                inputs.pod_id,
+                app=inputs.app,
+                branding=inputs.branding,
+            )
         return AppAssetDocument(
             content=content,
             media_type=self._guess_media_type(
@@ -140,24 +149,61 @@ class AppStoragePhase:
     async def write_bundle(
         self,
         plan: _UploadPlan,
-        source_archive_bytes: bytes | None,
-        dist_archive_bytes: bytes | None,
+        source_archive_bytes: bytes | Path | None,
+        dist_archive_bytes: bytes | Path | None,
     ) -> _WrittenBundle:
         """Write uploaded bytes to storage. Holds NO DB connection — call between
         resolve_upload_bundle and finalize_upload_bundle."""
         storage = self.file_manager_factory(plan.app_id)
         source_path: str | None = None
-        if plan.has_source and source_archive_bytes is not None:
-            source_path = "source/archive.zip"
-            await storage.write_file(source_path, source_archive_bytes)
         dist_archive_path: str | None = None
-        if plan.needs_dist_write and dist_archive_bytes is not None:
-            bundle = load_app_dist_bundle(dist_archive_bytes)
-            for item in bundle.files:
-                await storage.write_file(f"{plan.release_root}{item.path}", item.content)
-            dist_archive_path = f"{plan.release_root}archive.zip"
-            await storage.write_file(dist_archive_path, dist_archive_bytes)
-        return _WrittenBundle(source_path=source_path, dist_archive_path=dist_archive_path)
+        try:
+            if plan.has_source and source_archive_bytes is not None:
+                source_version = await asyncio.to_thread(
+                    upload_source_sha256, source_archive_bytes
+                )
+                source_path = f"source/{source_version}/archive.zip"
+                await storage.write_file(source_path, source_archive_bytes)
+            if plan.needs_dist_write and dist_archive_bytes is not None:
+                bundle = await asyncio.to_thread(
+                    load_app_dist_bundle, dist_archive_bytes
+                )
+                for item in bundle.files:
+                    await storage.write_file(
+                        f"{plan.release_root}{item.path}", item.content
+                    )
+                dist_archive_path = f"{plan.release_root}archive.zip"
+                await storage.write_file(dist_archive_path, dist_archive_bytes)
+        except BaseException:
+            await self._cleanup_written_paths(
+                storage,
+                plan,
+                _WrittenBundle(
+                    source_path=source_path,
+                    dist_archive_path=dist_archive_path,
+                ),
+            )
+            raise
+        return _WrittenBundle(
+            source_path=source_path, dist_archive_path=dist_archive_path
+        )
+
+    async def cleanup_written_bundle(
+        self, plan: _UploadPlan, written: _WrittenBundle
+    ) -> None:
+        storage = self.file_manager_factory(plan.app_id)
+        await self._cleanup_written_paths(storage, plan, written)
+
+    async def _cleanup_written_paths(
+        self,
+        storage: AppStoragePort,
+        plan: _UploadPlan,
+        written: _WrittenBundle,
+    ) -> None:
+        if written.source_path:
+            await self._delete_file_if_present(storage, written.source_path)
+        if plan.needs_dist_write and plan.release_root:
+            await storage.delete_prefix(plan.release_root)
 
     async def cleanup_storage(self, cleanup: _AppDeletionCleanup) -> None:
         """Delete an app's stored bytes. Holds NO DB connection; call after
@@ -169,8 +215,11 @@ class AppStoragePhase:
             for release in cleanup.releases:
                 await self._delete_release_files(storage, release)
             await storage.delete_prefix("")
-        except Exception as exc:  # pragma: no cover - best-effort cleanup
-            logger.warning("App storage cleanup failed for %s: %s", cleanup.app_id, exc)
+        except Exception:  # pragma: no cover - best-effort cleanup
+            logger.debug(
+                'apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic',
+                app_id=cleanup.app_id,
+            )
 
     async def _delete_release_files(
         self,

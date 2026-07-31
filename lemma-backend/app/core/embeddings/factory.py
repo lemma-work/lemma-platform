@@ -13,6 +13,7 @@ def create_embedder() -> Embedder:
     return _create_embedder(
         settings.effective_embedding_provider(),
         settings.local_embedding_model,
+        settings.local_embedding_cache_dir,
         settings.openai_compat_embedding_model,
         settings.embedding_dimension,
     )
@@ -22,6 +23,7 @@ def create_embedder() -> Embedder:
 def _create_embedder(
     provider: str,
     local_model: str,
+    local_cache_dir: str,
     openai_compat_model: str,
     dimension: int,
 ) -> Embedder:
@@ -29,4 +31,8 @@ def _create_embedder(
         from app.core.embeddings.openai_compat_embedder import OpenAICompatEmbedder
 
         return OpenAICompatEmbedder(model=openai_compat_model, dimension=dimension)
-    return FastEmbedLocalEmbedder(model_name=local_model, dimension=dimension)
+    return FastEmbedLocalEmbedder(
+        model_name=local_model,
+        dimension=dimension,
+        cache_dir=local_cache_dir,
+    )

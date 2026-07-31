@@ -10,4 +10,3 @@ export type PodRoleCreateRequest = {
     name: string;
     permission_ids?: Array<string>;
 };
-

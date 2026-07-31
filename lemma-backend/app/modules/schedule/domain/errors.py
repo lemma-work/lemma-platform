@@ -18,8 +18,16 @@ class ScheduleValidationError(ScheduleDomainError):
         super().__init__(
             message=message,
             code="SCHEDULE_VALIDATION_ERROR",
-            status_code=400,
+            status_code=422,
         )
+
+
+class ScheduleSourceEventIdRequiredError(ScheduleValidationError):
+    def __init__(self):
+        super().__init__(
+            "A stable provider event identifier is required for schedule delivery"
+        )
+        self.code = "SCHEDULE_SOURCE_EVENT_ID_REQUIRED"
 
 
 class ScheduleNotFoundError(ScheduleDomainError):
@@ -41,5 +49,5 @@ class ScheduleInfrastructureError(ScheduleDomainError):
         super().__init__(
             message=message,
             code="SCHEDULE_INFRASTRUCTURE_ERROR",
-            status_code=500,
+            status_code=503,
         )

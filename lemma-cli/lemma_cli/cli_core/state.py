@@ -140,6 +140,12 @@ def humanize_error(exc: Exception) -> str:
         key = exc.args[0] if exc.args else ""
         return f"Missing required field: {key}." if key else "Missing required field."
     if isinstance(exc, LemmaAPIError):
+        if getattr(exc, "status_code", None) == 429:
+            return (
+                str(exc)
+                + "\nYou've hit a rate limit — export/import are capped per day. "
+                "Wait and try again, or ask an admin to raise the limit."
+            )
         fields = _extract_field_errors(exc.details)
         if fields:
             return str(exc) + "\n" + "\n".join(f"  - {line}" for line in fields)

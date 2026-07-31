@@ -191,7 +191,7 @@ class OrganizationInvitationResponse:
                 accepted_at_type_0 = isoparse(data)
 
                 return accepted_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -226,7 +226,7 @@ class OrganizationInvitationResponse:
                 pod_id_type_0 = UUID(data)
 
                 return pod_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -270,7 +270,7 @@ class OrganizationInvitationResponse:
                 revoked_at_type_0 = isoparse(data)
 
                 return revoked_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

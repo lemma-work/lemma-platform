@@ -13,4 +13,3 @@ export type CreateConversationRequest = {
     title?: (string | null);
     type?: ConversationType;
 };
-

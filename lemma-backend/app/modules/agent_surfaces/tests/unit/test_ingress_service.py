@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -42,6 +42,12 @@ from app.modules.agent_surfaces.services.ingress_service import (
 )
 from app.modules.agent_surfaces.services.surface_file_ingest_service import (
     IngestedAttachment,
+)
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    TelegramMiniApp,
+)
+from app.modules.agent_surfaces.services.telegram_command_service import (
+    handle_telegram_command,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -146,6 +152,22 @@ def _slack_channel_event(*, channel_id: str = "C999") -> ParsedInboundSurfaceEve
         mentioned_agent=True,
         reply_target={"channel": channel_id},
         metadata={"mentioned_user_ids": ["U-BOT"]},
+    )
+
+
+def _telegram_event(*, chat_id: str, message_id: str) -> ParsedInboundSurfaceEvent:
+    return ParsedInboundSurfaceEvent(
+        platform="TELEGRAM",
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id=chat_id,
+        external_thread_id=chat_id,
+        external_message_id=message_id,
+        sender_external_user_id="777",
+        sender_display_name="Telegram User",
+        message_text="Hello from Telegram",
+        is_dm=True,
+        mentioned_agent=True,
+        reply_target={"chat_id": chat_id, "message_id": message_id},
     )
 
 
@@ -307,13 +329,14 @@ async def test_prepare_webhook_returns_signup_context_for_unresolved_user():
 
     assert isinstance(context, SurfaceReplyContext)
     assert context.surface_id == surface.id
+    assert context.reply_kind == "signup"
     assert context.agent_display_name == "Surface Agent"
     service.conversation_service.create_conversation.assert_not_called()
 
 
-async def test_prepare_webhook_returns_pod_access_link_for_non_member():
-    """A signed-up user who isn't a pod member is pointed to the pod home page
-    (request access) on a DM system surface, instead of being dropped."""
+async def test_prepare_webhook_avoids_pod_access_link_for_system_non_member():
+    """A signed-up non-member on a shared system Telegram bot should not receive
+    a pod-specific URL, because the shared identity can front many pods."""
     surface = _telegram_surface()
     surface.credential_mode = SurfaceCredentialMode.SYSTEM
     event = ParsedInboundSurfaceEvent(
@@ -350,8 +373,227 @@ async def test_prepare_webhook_returns_pod_access_link_for_non_member():
     )
 
     assert isinstance(context, SurfaceReplyContext)
-    assert "Request access" in (context.reply_message or "")
+    assert "Request access" not in (context.reply_message or "")
+    assert str(surface.pod_id) not in (context.reply_message or "")
+    assert context.reply_kind == "surface_setup"
+    assert "set up or select a surface" in (context.reply_message or "")
     service.conversation_service.create_conversation.assert_not_called()
+
+
+async def test_prepare_webhook_returns_pod_access_link_for_custom_non_member(
+    monkeypatch,
+):
+    """A custom/bound bot maps to one configured surface, so the pod target is
+    explicit and the access link is safe to show."""
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test/")
+    monkeypatch.setattr(
+        app_settings,
+        "auth_frontend_url",
+        "https://auth.example.test/auth/",
+    )
+    surface = _telegram_surface()
+    surface.credential_mode = SurfaceCredentialMode.CUSTOM
+    event = ParsedInboundSurfaceEvent(
+        platform=SurfacePlatform.TELEGRAM,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_thread_id="123",
+        external_channel_id="123",
+        sender_external_user_id="999",
+        message_text="hi",
+        is_dm=True,
+        reply_target={"chat_id": "123"},
+    )
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    adapter.unresolved_sender_reply.return_value = None
+    adapter.linked_sender_confirmation.return_value = None
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(),
+            external_user_id="999",
+            email="member@example.com",
+            display_name="Member",
+        ),
+    )
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[])
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(
+            source="telegram",
+            payload={},
+            headers={},
+            receiver_surface_ids=[surface.id],
+        )
+    )
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "pod_access"
+    assert "Request access" in (context.reply_message or "")
+    assert context.reply_message.endswith(
+        f"https://app.example.test/pod/{surface.pod_id}"
+    )
+    assert "auth.example.test" not in context.reply_message
+    service.conversation_service.create_conversation.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "platform", [SurfacePlatform.TELEGRAM, SurfacePlatform.WHATSAPP]
+)
+async def test_unresolved_managed_dm_with_multiple_surfaces_gets_one_fallback(
+    platform: SurfacePlatform,
+):
+    surfaces = [
+        AgentSurfaceEntity(
+            id=uuid4(),
+            pod_id=uuid4(),
+            name=f"{platform.value.lower()}-{index}",
+            agent_id=uuid4(),
+            surface_type=platform,
+            mode=SurfaceMode.DM,
+            account_id=None,
+            credential_mode=SurfaceCredentialMode.SYSTEM,
+            config=SurfaceConfig(),
+            is_active=True,
+        )
+        for index in range(2)
+    ]
+    event = ParsedInboundSurfaceEvent(
+        platform=platform,
+        conversation_type=ConversationType.EXTERNAL_DM,
+        external_channel_id="dm-123",
+        external_thread_id="dm-123",
+        external_message_id="message-123",
+        sender_external_user_id="external-123",
+        message_text="hello",
+        is_dm=True,
+        reply_target={"chat_id": "dm-123", "sender_wa_id": "external-123"},
+    )
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    adapter.unresolved_sender_reply.return_value = None
+    service = _build_service(
+        adapter=adapter,
+        surfaces=surfaces,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=None,
+            external_user_id="external-123",
+        ),
+    )
+    service.event_dedup_store.claim_message.side_effect = [True, False]
+
+    first = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(
+            source=platform.value.lower(), payload={}, headers={}
+        )
+    )
+    second = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(
+            source=platform.value.lower(), payload={}, headers={}
+        )
+    )
+
+    assert isinstance(first, SurfaceReplyContext)
+    assert first.reply_kind == "signup"
+    assert first.surface_id is None
+    assert second is None
+    assert (
+        service.event_dedup_store.claim_message.await_args.kwargs[
+            "surface_installation_id"
+        ]
+        is None
+    )
+
+
+async def test_resolved_dm_without_matching_surface_gets_setup_link(monkeypatch):
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test/")
+    surfaces = [_telegram_surface(), _telegram_surface()]
+    event = _telegram_event(chat_id="dm-setup", message_id="message-setup")
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    service = _build_service(
+        adapter=adapter,
+        surfaces=surfaces,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=uuid4(),
+            external_user_id="777",
+            email="signed-in@example.com",
+        ),
+    )
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[]),
+        get_user_email=AsyncMock(return_value="signed-in@example.com"),
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="telegram", payload={}, headers={})
+    )
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "surface_setup"
+    assert context.surface_id is None
+    assert context.reply_message.endswith("https://app.example.test")
+
+
+async def test_unroutable_group_remains_silent():
+    surfaces = [_slack_surface(), _slack_surface()]
+    event = _slack_channel_event()
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    service = _build_service(
+        adapter=adapter,
+        surfaces=surfaces,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=None,
+            external_user_id="U123",
+        ),
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="slack", payload={}, headers={})
+    )
+
+    assert context is None
+    service.event_dedup_store.claim_message.assert_not_awaited()
+
+
+async def test_resolved_dm_with_no_route_gets_setup_reply():
+    surface = _slack_surface()
+    user_id = uuid4()
+    event = _slack_event()
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id,
+            external_user_id="U123",
+            email="sender@example.com",
+        ),
+    )
+    service._resolve_route = AsyncMock(return_value=None)
+
+    context = await service._prepare_surface_context(
+        surface=surface,
+        parsed=event,
+        adapter=adapter,
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id,
+            external_user_id="U123",
+            email="sender@example.com",
+        ),
+    )
+
+    assert isinstance(context, SurfaceReplyContext)
+    assert context.reply_kind == "surface_setup"
+    assert "set up or select a surface" in context.reply_message
 
 
 async def test_prepare_webhook_creates_conversation_link_for_resolved_user():
@@ -419,6 +661,7 @@ async def test_prepare_webhook_reuses_existing_conversation_link():
         external_channel_id="D123",
         external_thread_id="D123",
         external_user_id="U123",
+        routed_agent_id=surface.agent_id,
         last_event={},
     )
     event = _slack_event()
@@ -447,6 +690,54 @@ async def test_prepare_webhook_reuses_existing_conversation_link():
     assert context.conversation_id == conversation_id
     service.conversation_service.create_conversation.assert_not_called()
     service.conversation_link_repository.update_last_event.assert_awaited_once()
+
+
+async def test_prepare_webhook_resets_dm_conversation_when_surface_agent_changes():
+    old_agent_id = uuid4()
+    new_agent_id = uuid4()
+    surface = _slack_surface(agent_id=new_agent_id)
+    user_id = uuid4()
+    old_conversation_id = uuid4()
+    new_conversation = _conversation(surface, user_id)
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=old_conversation_id,
+        platform="SLACK",
+        external_channel_id="D123",
+        external_thread_id="D123",
+        external_user_id="U123",
+        routed_agent_id=old_agent_id,
+        last_event={},
+    )
+    event = _slack_event()
+    adapter = AsyncMock()
+    adapter.parse_inbound_event.return_value = event
+    adapter.fetch_sender_profile.return_value = SurfaceSenderProfile(
+        external_user_id="U123",
+        display_name="Sender",
+    )
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        resolved_user=ResolvedSurfaceUser(
+            internal_user_id=user_id,
+            external_user_id="U123",
+            display_name="Sender",
+        ),
+        conversation=new_conversation,
+        existing_link=link,
+    )
+
+    context = await service.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="slack", payload={}, headers={})
+    )
+
+    assert isinstance(context, SurfaceChatContext)
+    assert context.conversation_id == new_conversation.id
+    update = service.conversation_link_repository.update_conversation.await_args.kwargs
+    assert update["routed_agent_id"] == new_agent_id
+    service.conversation_service.create_conversation.assert_awaited_once()
+    service.conversation_link_repository.update_last_event.assert_not_called()
 
 
 async def test_prepare_webhook_routes_slack_channel_from_surface_config():
@@ -726,6 +1017,9 @@ async def test_execute_chat_sends_direct_replies():
     parsed_event = _slack_event()
     adapter = AsyncMock()
     service = _build_service(adapter=adapter)
+    service._resolve_credentials_from_context = AsyncMock(
+        return_value={"bot_token": "test-token", "access_token": "test-token"}
+    )
     signup_context = SurfaceReplyContext(
         platform="SLACK",
         agent_display_name="Lemma",
@@ -747,6 +1041,57 @@ async def test_execute_chat_sends_direct_replies():
     assert adapter.send_message.await_args.kwargs["metadata"]["reply_markup"] == {
         "remove_keyboard": True
     }
+
+
+async def test_execute_chat_logs_missing_fallback_credentials(monkeypatch):
+    parsed_event = _telegram_event(chat_id="123", message_id="missing-creds")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter)
+    service._resolve_credentials_from_context = AsyncMock(
+        return_value={"bot_token": ""}
+    )
+    incident = Mock()
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.fallback_reply_service._fallback_incident",
+        incident,
+    )
+    context = SurfaceReplyContext(
+        platform="TELEGRAM",
+        reply_kind="signup",
+        reply_message="Please sign up",
+        event=parsed_event,
+    )
+
+    await service.execute_chat(context)
+
+    adapter.send_message.assert_not_awaited()
+    incident.record_failure.assert_called_once_with(error_type="MissingCredentials")
+
+
+async def test_execute_chat_logs_delivery_failure_without_secret(monkeypatch):
+    parsed_event = _telegram_event(chat_id="123", message_id="failed-delivery")
+    adapter = AsyncMock()
+    adapter.send_message.side_effect = RuntimeError("provider exposed secret-token")
+    service = _build_service(adapter=adapter)
+    service._resolve_credentials_from_context = AsyncMock(
+        return_value={"bot_token": "secret-token"}
+    )
+    incident = Mock()
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.fallback_reply_service._fallback_incident",
+        incident,
+    )
+    context = SurfaceReplyContext(
+        platform="TELEGRAM",
+        reply_kind="surface_setup",
+        reply_message="Set up a surface",
+        event=parsed_event,
+    )
+
+    await service.execute_chat(context)
+
+    incident.record_failure.assert_called_once_with(error_type="RuntimeError")
+    assert "secret-token" not in repr(incident.record_failure.call_args)
 
 
 async def test_execute_chat_starts_agent_run_with_surface_metadata():
@@ -790,6 +1135,133 @@ async def test_execute_chat_starts_agent_run_with_surface_metadata():
     assert kwargs["agent_name"] is None
     assert kwargs["message_metadata"]["surface_platform"] == "SLACK"
     assert kwargs["message_metadata"]["external_message_id"] == "1700000000.000100"
+
+
+@pytest.mark.parametrize("command", ["/start", "/help"])
+async def test_telegram_help_points_to_bound_mini_app_button(command, monkeypatch):
+    surface = _telegram_surface()
+    event = _telegram_event(chat_id="42", message_id="7")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    app_id = uuid4()
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_command_service."
+        "_telegram_mini_app_for_context",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=app_id,
+                name="field-log",
+                url="https://field-log.apps.example.test",
+            )
+        ),
+    )
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Logger",
+        message_text=command,
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=event,
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
+    )
+
+    assert handled is True
+    sent = adapter.send_message.await_args.kwargs
+    assert "Open Field Log from the app button beside the message field" in sent[
+        "message"
+    ]
+    assert "metadata" not in sent
+
+
+async def test_telegram_help_does_not_claim_unavailable_local_app_button(monkeypatch):
+    surface = _telegram_surface()
+    event = _telegram_event(chat_id="42", message_id="7")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_command_service."
+        "_telegram_mini_app_for_context",
+        AsyncMock(
+            return_value=TelegramMiniApp(
+                app_id=uuid4(),
+                name="field-log",
+                url=None,
+            )
+        ),
+    )
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        agent_display_name="Logger",
+        message_text="/help",
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=event,
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
+    )
+
+    assert handled is True
+    sent = adapter.send_message.await_args.kwargs
+    assert "app button beside the message field" not in sent["message"]
+
+
+async def test_telegram_app_command_is_not_a_special_command():
+    surface = _telegram_surface()
+    event = _telegram_event(chat_id="42", message_id="7")
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface])
+    context = SurfaceChatContext(
+        platform=SurfacePlatform.TELEGRAM,
+        pod_id=surface.pod_id,
+        conversation_id=uuid4(),
+        user_id=uuid4(),
+        surface_id=surface.id,
+        surface_config=surface.config,
+        message_text="/app",
+        message_metadata=SurfaceMessageMetadata(surface_platform="TELEGRAM"),
+        message_user_id=uuid4(),
+        event=event,
+    )
+
+    handled = await handle_telegram_command(
+        context=context,
+        adapter=adapter,
+        credentials={"bot_token": "secret"},
+        uow_factory=service._uow_factory,
+        conversation_service_factory=service._conversation_service_factory,
+        uow=service.uow,
+        conversation_service=service.conversation_service,
+    )
+
+    assert handled is False
+    adapter.send_message.assert_not_awaited()
 
 
 async def test_execute_chat_factory_mode_holds_no_session_during_io(monkeypatch):
@@ -1099,17 +1571,17 @@ async def _ask_user_link(surface, conversation_id, parsed_event):
     )
 
 
-_ASK_USER_TOOL_ARGS = {
-    "request": {
-        "questions": [
-            {
-                "question": "Pick a color",
-                "header": "color",
-                "options": [{"label": "Red"}, {"label": "Blue"}],
-            }
-        ]
+_ASK_USER_QUESTIONS = [
+    {
+        "question": "Pick a color",
+        "header": "color",
+        "options": [{"label": "Red"}, {"label": "Blue"}],
     }
-}
+]
+# Wrapped shape (hand-built / legacy). pydantic-ai actually flattens the single
+# `request: AskUserRequest` param, so production persists the FLAT shape below.
+_ASK_USER_TOOL_ARGS = {"request": {"questions": _ASK_USER_QUESTIONS}}
+_ASK_USER_TOOL_ARGS_FLAT = {"questions": _ASK_USER_QUESTIONS}
 
 
 async def test_send_questions_for_conversation_renders_native_then_falls_back():
@@ -1144,6 +1616,56 @@ async def test_send_questions_for_conversation_renders_native_then_falls_back():
     )
     assert sent is True
     assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_send_questions_reads_flattened_pydantic_ai_args():
+    """Regression: pydantic-ai flattens ask_user's single-model param, so the
+    persisted args are {"questions": [...]} (NOT {"request": {...}}). The question
+    must still be delivered — reading tool_args["request"] here swallowed it in
+    production (no card, no text, run stuck WAITING)."""
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    adapter.send_questions.return_value = True
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_ask_user.return_value = {
+        "tool_call_id": "tool-1",
+        "tool_args": _ASK_USER_TOOL_ARGS_FLAT,  # the real production shape
+        "agent_run_id": uuid4(),
+    }
+
+    sent = await service.send_questions_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-1"
+    )
+    assert sent is True
+    plan = adapter.send_questions.await_args.kwargs["question_plan"]
+    assert [q.header for q in plan.questions] == ["color"]
+
+    # Native False → guaranteed text fallback still fires with the flat shape.
+    adapter.send_questions.return_value = False
+    await service.send_questions_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-1"
+    )
+    assert "Pick a color" in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_ask_user_request_dict_accepts_both_shapes():
+    from app.modules.agent_surfaces.services.ingress_service import (
+        _ask_user_request_dict,
+    )
+
+    assert _ask_user_request_dict(_ASK_USER_TOOL_ARGS_FLAT) == {
+        "questions": _ASK_USER_QUESTIONS
+    }
+    assert _ask_user_request_dict(_ASK_USER_TOOL_ARGS) == {
+        "questions": _ASK_USER_QUESTIONS
+    }
+    assert _ask_user_request_dict({"foo": 1}) is None
+    assert _ask_user_request_dict("not-a-dict") is None
+    assert _ask_user_request_dict(None) is None
 
 
 async def test_handle_interaction_resumes_via_approval_path():
@@ -1181,6 +1703,161 @@ async def test_handle_interaction_resumes_via_approval_path():
     service.conversation_service.add_user_message_and_start_run.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "decision_value, expected",
+    [
+        ("APPROVE_ONCE", AgentRunApprovalDecision.APPROVE_ONCE),
+        ("DENY", AgentRunApprovalDecision.DENY),
+        ("APPROVE_FOR_SESSION", AgentRunApprovalDecision.APPROVE_FOR_SESSION),
+    ],
+)
+async def test_handle_interaction_routes_approval_decision(decision_value, expected):
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    owner = link.external_user_id
+    conversation = SimpleNamespace(user_id=uuid4(), pod_id=surface.pod_id)
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=conversation)
+    )
+
+    interaction = ParsedSurfaceInteraction(
+        platform=SurfacePlatform.SLACK,
+        external_channel_id=parsed_event.external_channel_id,
+        external_thread_id=parsed_event.external_thread_id,
+        external_user_id=owner,
+        callback_id=f"{conversation_id}|tool-9",
+        approval_decision=decision_value,
+        dedup_id="m-approval-1",
+    )
+    await service.handle_interaction(interaction)
+
+    service.conversation_service.resolve_user_approval_internal.assert_awaited_once()
+    kwargs = service.conversation_service.resolve_user_approval_internal.await_args.kwargs
+    assert kwargs["approval_id"] == "tool-9"
+    assert kwargs["decision"] == expected
+    # An approval button carries a decision, not an answer payload.
+    assert kwargs["response"] == {}
+
+
+async def test_handle_retry_resolves_conversation_from_current_thread_link():
+    surface = _telegram_surface()
+    user_id = uuid4()
+    conversation = _conversation(surface, user_id)
+    event = _telegram_event(chat_id="123", message_id="5")
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=conversation.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        routed_agent_id=surface.agent_id,
+        last_event=event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        existing_link=link,
+    )
+    service.conversation_link_repository.find_surface_id_for_external_thread.return_value = (
+        surface.id
+    )
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=conversation)
+    )
+    service._refresh_interaction_conversation = AsyncMock(
+        return_value=(link, conversation, False)
+    )
+    interaction = ParsedSurfaceInteraction(
+        platform=SurfacePlatform.TELEGRAM,
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        action="retry",
+        dedup_id="cbq-retry",
+    )
+
+    with patch(
+        "app.modules.agent_surfaces.services.ingress_service."
+        "retry_interaction_conversation",
+        new=AsyncMock(),
+    ) as retry:
+        await service.handle_interaction(interaction)
+
+    service.conversation_link_repository.get_by_conversation_id.assert_not_awaited()
+    service.conversation_link_repository.get_by_external_thread.assert_awaited_once_with(
+        surface_id=surface.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+    )
+    retry.assert_awaited_once()
+    assert retry.await_args.kwargs["conversation"] is conversation
+    adapter.acknowledge_interaction.assert_awaited_once_with(
+        credentials={},
+        interaction=interaction,
+        text="Retrying…",
+        clear_actions=True,
+    )
+
+
+async def test_refresh_retry_uses_normal_agent_change_reset_policy():
+    old_agent_id = uuid4()
+    new_agent_id = uuid4()
+    surface = _telegram_surface(agent_id=new_agent_id)
+    user_id = uuid4()
+    old_conversation = _conversation(surface, user_id).model_copy(
+        update={"agent_id": old_agent_id}
+    )
+    new_conversation = _conversation(surface, user_id)
+    event = _telegram_event(chat_id="123", message_id="5")
+    link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=old_conversation.id,
+        platform="TELEGRAM",
+        external_channel_id="123",
+        external_thread_id="123",
+        external_user_id="777",
+        # Even if denormalized route metadata was already updated, the actual
+        # conversation's agent remains authoritative for deciding to reset.
+        routed_agent_id=new_agent_id,
+        last_event=event.model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[surface],
+        conversation=new_conversation,
+        existing_link=link,
+    )
+    service.conversation_service.conversation_repository = SimpleNamespace(
+        get_conversation=AsyncMock(return_value=new_conversation)
+    )
+
+    refreshed = await service._refresh_interaction_conversation(
+        link=link,
+        surface=surface,
+        conversation=old_conversation,
+    )
+
+    assert refreshed is not None
+    refreshed_link, refreshed_conversation, restarted = refreshed
+    assert restarted is True
+    assert refreshed_link.conversation_id == new_conversation.id
+    assert refreshed_conversation is new_conversation
+    service.conversation_service.create_conversation.assert_awaited_once()
+    update = service.conversation_link_repository.update_conversation.await_args.kwargs
+    assert update["conversation_id"] == new_conversation.id
+    assert update["routed_agent_id"] == new_agent_id
+
+
 _REQUEST_APPROVAL_TOOL_ARGS = {
     "tool_name": "pod_write_record",
     "title": "Write a record",
@@ -1189,12 +1866,44 @@ _REQUEST_APPROVAL_TOOL_ARGS = {
 }
 
 
-async def test_send_approval_prompt_for_conversation_sends_text():
+async def test_send_approval_prompt_renders_native_buttons():
     surface = _slack_surface()
     conversation_id = uuid4()
     parsed_event = _slack_event()
     link = await _ask_user_link(surface, conversation_id, parsed_event)
     adapter = AsyncMock()
+    adapter.send_approval.return_value = True  # platform rendered native buttons
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_user_interaction.return_value = {
+        "tool_call_id": "tool-2",
+        "kind": "request_approval",
+        "tool_args": _REQUEST_APPROVAL_TOOL_ARGS,
+        "agent_run_id": uuid4(),
+    }
+
+    sent = await service.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-2"
+    )
+    assert sent is True
+    # Native render is attempted; the plan carries Approve + Deny and the callback.
+    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    assert [b.decision for b in plan.buttons] == ["APPROVE_ONCE", "DENY"]
+    assert plan.callback_id == f"{conversation_id}|tool-2"
+    assert plan.title == "Write a record"
+    # No permission_ids on this call → no approve-for-session button.
+    assert all(b.decision != "APPROVE_FOR_SESSION" for b in plan.buttons)
+    # When native buttons render, we do NOT also post the text prompt.
+    adapter.send_message.assert_not_awaited()
+
+
+async def test_send_approval_prompt_falls_back_to_text():
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    adapter.send_approval.return_value = False  # platform has no native buttons
     service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
     service.conversation_link_repository.get_by_conversation_id.return_value = link
     service.conversation_service.get_pending_user_interaction.return_value = {
@@ -1212,6 +1921,36 @@ async def test_send_approval_prompt_for_conversation_sends_text():
     assert "Write a record" in msg
     assert "approve" in msg.lower()
     assert "deny" in msg.lower()
+
+
+async def test_send_approval_prompt_adds_session_button_with_permission_ids():
+    surface = _slack_surface()
+    conversation_id = uuid4()
+    parsed_event = _slack_event()
+    link = await _ask_user_link(surface, conversation_id, parsed_event)
+    adapter = AsyncMock()
+    adapter.send_approval.return_value = True
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=link)
+    service.conversation_link_repository.get_by_conversation_id.return_value = link
+    service.conversation_service.get_pending_user_interaction.return_value = {
+        "tool_call_id": "tool-2",
+        "kind": "request_approval",
+        "tool_args": {
+            **_REQUEST_APPROVAL_TOOL_ARGS,
+            "permission_ids": ["perm-1"],
+        },
+        "agent_run_id": uuid4(),
+    }
+
+    await service.send_approval_prompt_for_conversation(
+        conversation_id=conversation_id, tool_call_id="tool-2"
+    )
+    plan = adapter.send_approval.await_args.kwargs["approval_plan"]
+    assert [b.decision for b in plan.buttons] == [
+        "APPROVE_ONCE",
+        "DENY",
+        "APPROVE_FOR_SESSION",
+    ]
 
 
 async def test_send_approval_prompt_skips_when_no_pending():
@@ -1292,6 +2031,138 @@ async def test_send_to_member_reuses_existing_thread():
     )
     assert sent is True
     assert "Your report is ready." in adapter.send_message.await_args.kwargs["message"]
+
+
+async def test_send_to_member_uses_requested_surface_latest_thread():
+    surface = _telegram_surface()
+    user_id = uuid4()
+    older_link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=uuid4(),
+        platform="TELEGRAM",
+        external_channel_id="older-chat",
+        external_thread_id="older-chat",
+        external_user_id="777",
+        last_event=_telegram_event(
+            chat_id="older-chat", message_id="older-message"
+        ).model_dump(mode="json"),
+    )
+    latest_link = AgentSurfaceConversationLink(
+        surface_id=surface.id,
+        conversation_id=uuid4(),
+        platform="TELEGRAM",
+        external_channel_id="latest-chat",
+        external_thread_id="latest-chat",
+        external_user_id="777",
+        last_event=_telegram_event(
+            chat_id="latest-chat", message_id="latest-message"
+        ).model_dump(mode="json"),
+    )
+    adapter = AsyncMock()
+    service = _build_service(adapter=adapter, surfaces=[surface], existing_link=older_link)
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(return_value=[surface.pod_id])
+    )
+    service.external_user_repository = AsyncMock(
+        get_by_resolved_user=AsyncMock(
+            return_value=SimpleNamespace(external_user_id="777")
+        )
+    )
+    service.conversation_link_repository.get_latest_by_surface_and_external_user = (
+        AsyncMock(return_value=latest_link)
+    )
+    service.conversation_link_repository.get_by_conversation_id.return_value = latest_link
+
+    sent = await service.send_to_member(
+        surface=surface,
+        user_id=user_id,
+        message="Use the newest thread.",
+    )
+
+    assert sent is True
+    service.conversation_link_repository.get_latest_by_surface_and_external_user.assert_awaited_once_with(
+        surface_id=surface.id,
+        external_user_id="777",
+    )
+    event = adapter.send_message.await_args.kwargs["event"]
+    assert event.external_thread_id == "latest-chat"
+    assert event.reply_target["chat_id"] == "latest-chat"
+
+
+async def test_send_to_member_does_not_confuse_system_and_custom_threads():
+    system_surface = _telegram_surface()
+    custom_surface = _telegram_surface()
+    user_id = uuid4()
+    system_link = AgentSurfaceConversationLink(
+        surface_id=system_surface.id,
+        conversation_id=uuid4(),
+        platform="TELEGRAM",
+        external_channel_id="system-chat",
+        external_thread_id="system-chat",
+        external_user_id="777",
+        last_event=_telegram_event(
+            chat_id="system-chat", message_id="system-message"
+        ).model_dump(mode="json"),
+    )
+    custom_link = AgentSurfaceConversationLink(
+        surface_id=custom_surface.id,
+        conversation_id=uuid4(),
+        platform="TELEGRAM",
+        external_channel_id="custom-chat",
+        external_thread_id="custom-chat",
+        external_user_id="777",
+        last_event=_telegram_event(
+            chat_id="custom-chat", message_id="custom-message"
+        ).model_dump(mode="json"),
+    )
+    links_by_surface = {
+        system_surface.id: system_link,
+        custom_surface.id: custom_link,
+    }
+    links_by_conversation = {
+        system_link.conversation_id: system_link,
+        custom_link.conversation_id: custom_link,
+    }
+    adapter = AsyncMock()
+    service = _build_service(
+        adapter=adapter,
+        surfaces=[system_surface, custom_surface],
+        existing_link=system_link,
+    )
+    service.pod_membership_port = SimpleNamespace(
+        get_user_pod_ids=AsyncMock(
+            return_value=[system_surface.pod_id, custom_surface.pod_id]
+        )
+    )
+    service.external_user_repository = AsyncMock(
+        get_by_resolved_user=AsyncMock(
+            return_value=SimpleNamespace(external_user_id="777")
+        )
+    )
+    service.conversation_link_repository.get_latest_by_surface_and_external_user = (
+        AsyncMock(side_effect=lambda *, surface_id, external_user_id: links_by_surface[surface_id])
+    )
+    service.conversation_link_repository.get_by_conversation_id.side_effect = (
+        lambda conversation_id: links_by_conversation[conversation_id]
+    )
+
+    custom_sent = await service.send_to_member(
+        surface=custom_surface,
+        user_id=user_id,
+        message="custom only",
+    )
+    system_sent = await service.send_to_member(
+        surface=system_surface,
+        user_id=user_id,
+        message="system only",
+    )
+
+    assert custom_sent is True
+    assert system_sent is True
+    first_event = adapter.send_message.await_args_list[0].kwargs["event"]
+    second_event = adapter.send_message.await_args_list[1].kwargs["event"]
+    assert first_event.external_thread_id == "custom-chat"
+    assert second_event.external_thread_id == "system-chat"
 
 
 async def test_send_to_member_rejects_non_member():

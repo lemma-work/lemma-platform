@@ -1,0 +1,26 @@
+[run]
+source = app
+omit =
+    */tests/*
+    */test_*.py
+    */conftest.py
+parallel = true
+relative_files = true
+sigterm = true
+concurrency =
+    multiprocessing
+    thread
+
+[report]
+show_missing = true
+skip_covered = false
+sort = Cover
+
+[html]
+directory = coverage-backend/html
+
+[xml]
+output = coverage-backend/coverage.xml
+
+[json]
+output = coverage-backend/coverage.json

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ExternalLink, Loader2, Plug, Plus, X } from 'lucide-react';
+import { Check, ExternalLink, Loader2, Plug, Plus, X } from '@/components/ui/icons';
 import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 
@@ -21,6 +21,7 @@ import {
     getAccountStatusMeta,
     getCredentialSchema,
     getPrimaryCapability,
+    getProviderCapability,
     hasSystemDefault,
     schemaHasFields,
     usesDirectCredentials,
@@ -31,7 +32,16 @@ import type { Account, Connector } from '@/lib/types';
 interface AccountVariableFieldProps {
     organizationId?: string;
     podId?: string | null;
-    platform: string;
+    /** The connector this variable needs an account for (e.g. "slack"),
+     * matched against the connector catalog's name/title/slug. Named
+     * `connectorId` (not `connector`) to avoid shadowing the resolved
+     * Connector entity this component looks up below. */
+    connectorId: string;
+    /** Auth provider ("LEMMA" or "COMPOSIO") the bundle needs for this
+     * connector. When set, only accounts/auth configs of that provider are
+     * offered — an org can have both a native and a Composio-backed auth
+     * config for the same connector, and only one is the right fit here. */
+    provider?: string | null;
     label: string;
     description?: string | null;
     required?: boolean;
@@ -39,8 +49,8 @@ interface AccountVariableFieldProps {
     onChange: (value: string) => void;
 }
 
-function matchesPlatform(connector: Connector, platform: string): boolean {
-    const p = platform.toLowerCase();
+function matchesConnector(connector: Connector, connectorId: string): boolean {
+    const p = connectorId.toLowerCase();
     const slug = (connector as { slug?: string }).slug;
     return (
         connector.name?.toLowerCase() === p ||
@@ -50,13 +60,14 @@ function matchesPlatform(connector: Connector, platform: string): boolean {
 }
 
 function accountLabel(account: Account): string {
-    return account.email || account.provider_account_id || 'Connected account';
+    return account.display_name || account.email || account.provider_account_id || 'Connected account';
 }
 
 export function AccountVariableField({
     organizationId,
     podId,
-    platform,
+    connectorId,
+    provider,
     label,
     description,
     required,
@@ -65,26 +76,48 @@ export function AccountVariableField({
 }: AccountVariableFieldProps) {
     const { data: connectors = [] } = useConnectors({ limit: 200 });
     const connector = useMemo(
-        () => connectors.find((c) => matchesPlatform(c, platform)) ?? null,
-        [connectors, platform],
+        () => connectors.find((c) => matchesConnector(c, connectorId)) ?? null,
+        [connectors, connectorId],
     );
 
-    const { data: accounts = [], refetch } = useAccounts({
+    const { data: accountsForConnector = [], refetch } = useAccounts({
         organizationId,
         connectorId: connector?.id,
         limit: 100,
         enabled: Boolean(organizationId && connector),
     });
-    const { data: authConfigs = [] } = useAuthConfigs({
+    // An org can have both a native and a Composio-backed auth config for the
+    // same connector; only accounts through the provider this variable needs
+    // are valid picks.
+    const accounts = useMemo(
+        () =>
+            provider
+                ? accountsForConnector.filter((a) => !a.provider || a.provider === provider)
+                : accountsForConnector,
+        [accountsForConnector, provider],
+    );
+    const { data: authConfigsForConnector = [] } = useAuthConfigs({
         organizationId,
         limit: 200,
         enabled: Boolean(organizationId && connector),
     });
+    const authConfigs = useMemo(
+        () =>
+            provider
+                ? authConfigsForConnector.filter((cfg) => cfg.provider === provider)
+                : authConfigsForConnector,
+        [authConfigsForConnector, provider],
+    );
     const enableConnector = useEnableConnector(organizationId);
     const createConnectRequest = useCreateConnectRequest(organizationId);
     const createConnectorAccount = useCreateConnectorAccount(organizationId);
 
-    const capability = useMemo(() => getPrimaryCapability(connector), [connector]);
+    // When the variable pins a provider, connect/create through that specific
+    // capability instead of the connector's default (e.g. Composio-first) pick.
+    const capability = useMemo(
+        () => (provider ? getProviderCapability(connector, provider) : getPrimaryCapability(connector)),
+        [connector, provider],
+    );
     const credentialSchema = useMemo(() => getCredentialSchema(capability), [capability]);
     const isOAuth = Boolean(capability && hasSystemDefault(capability) && !usesDirectCredentials(capability));
     const canCredential = usesDirectCredentials(capability);
@@ -116,13 +149,13 @@ export function AccountVariableField({
             if (fresh) {
                 onChangeRef.current(fresh.id);
                 setAwaitingOAuth(false);
-                toast.success(`Connected ${platform}`);
+                toast.success(`Connected ${connectorId}`);
             } else if (Date.now() - started > 120_000) {
                 setAwaitingOAuth(false);
             }
         }, 2500);
         return () => clearInterval(timer);
-    }, [awaitingOAuth, refetch, platform]);
+    }, [awaitingOAuth, refetch, connectorId]);
 
     async function resolveAuthConfigId(): Promise<string> {
         const active = authConfigs.find((cfg) => cfg.connector_id === connector!.id && cfg.status === 'ACTIVE');
@@ -150,7 +183,7 @@ export function AccountVariableField({
             }
         } catch (error) {
             setAwaitingOAuth(false);
-            toast.error(error instanceof Error ? error.message : `Could not connect ${platform}`);
+            toast.error(error instanceof Error ? error.message : `Could not connect ${connectorId}`);
         }
     }
 
@@ -171,7 +204,7 @@ export function AccountVariableField({
             await refetch();
             if (account?.id) onChange(account.id);
             setShowCredentials(false);
-            toast.success(`Connected ${platform}`);
+            toast.success(`Connected ${connectorId}`);
         } catch (error) {
             toast.error(error instanceof Error ? error.message : 'Could not save credentials');
         } finally {
@@ -198,7 +231,7 @@ export function AccountVariableField({
         if (podId) window.open(`/pod/${podId}/connectors`, '_blank', 'noopener,noreferrer');
     }
 
-    const title = platform.charAt(0).toUpperCase() + platform.slice(1);
+    const title = connectorId.charAt(0).toUpperCase() + connectorId.slice(1);
 
     return (
         <div className="space-y-2">
@@ -218,7 +251,7 @@ export function AccountVariableField({
                 <Input
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
-                    placeholder={`${platform} account id`}
+                    placeholder={`${connectorId} account id`}
                 />
             ) : (
                 <div className="space-y-1.5">

@@ -30,6 +30,8 @@ import tempfile
 import aiohttp
 import anyio
 
+from app.core.concurrency.offload import run_blocking
+from app.modules.datastore.infrastructure.streaming import read_file_bytes
 from app.core.log.log import get_logger
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.document_processing import (
@@ -76,20 +78,33 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
         self._conversion_timeout = (
             conversion_timeout or datastore_settings.docling_request_timeout_seconds
         )
-        self._request_timeout = aiohttp.ClientTimeout(total=_HTTP_REQUEST_TIMEOUT_SECONDS)
+        self._request_timeout = aiohttp.ClientTimeout(
+            total=_HTTP_REQUEST_TIMEOUT_SECONDS
+        )
 
     async def extract(
         self,
-        content: bytes,
+        content: bytes | None,
         filename: str,
         *,
         mime_type: str | None = None,
+        content_path: str | None = None,
     ) -> DocumentExtraction:
         if not self.base_url:
             raise ValueError("Docling serve URL not configured")
+        # Docling serve takes the bytes; when handed a streamed temp path, read
+        # it off the loop.
+        if content is None:
+            content = await run_blocking(
+                read_file_bytes, content_path, limiter="cpu_bound"
+            )
         raw_markdown = await self._convert(content, filename, mime_type)
         markdown = self._number_page_markers(raw_markdown)
-        chunks = chunk_markdown(markdown) if markdown.strip() else []
+        chunks = (
+            await run_blocking(chunk_markdown, markdown, limiter="cpu_bound")
+            if markdown.strip()
+            else []
+        )
         pages = await anyio.to_thread.run_sync(
             self._pdf_pages, content, mime_type, filename
         )
@@ -104,7 +119,9 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
 
     # -- HTTP (async submit -> poll -> result) -----------------------------
 
-    async def _convert(self, content: bytes, filename: str, mime_type: str | None) -> str:
+    async def _convert(
+        self, content: bytes, filename: str, mime_type: str | None
+    ) -> str:
         async with aiohttp.ClientSession(timeout=self._request_timeout) as session:
             task = await self._submit_async(session, content, filename, mime_type)
             task_id = task.get("task_id")
@@ -134,16 +151,15 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
                 ) as response:
                     await self._raise_for_status(response)
                     return await response.json()
-            except (aiohttp.ClientConnectionError, asyncio.TimeoutError, TimeoutError) as exc:
+            except (
+                aiohttp.ClientConnectionError,
+                asyncio.TimeoutError,
+                TimeoutError,
+            ) as exc:
                 if attempt < _SUBMIT_RETRY_ATTEMPTS - 1:
                     delay = _SUBMIT_RETRY_BASE_DELAY_SECONDS * (2**attempt)
-                    logger.warning(
-                        "Docling async submit connection failed for %s "
-                        "(attempt %d/%d); retrying in %.1fs",
-                        filename,
-                        attempt + 1,
-                        _SUBMIT_RETRY_ATTEMPTS,
-                        delay,
+                    logger.debug(
+                        'datastore.docling_processor.docling_async_submit_connection_s.diagnostic'
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -174,9 +190,12 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
             try:
                 task = await self._poll(session, task_id)
                 status = task.get("task_status")
-            except (aiohttp.ClientError, asyncio.TimeoutError, TimeoutError):
+            except aiohttp.ClientError, asyncio.TimeoutError, TimeoutError:
                 # Job still runs server-side; retry the poll after a short pause.
-                logger.debug("Docling poll hiccup for %s; retrying", filename, exc_info=True)
+                logger.debug(
+                    "datastore.docling_processor.docling_poll_hiccup_s_retrying.observed",
+                    exc_info=True,
+                )
                 await asyncio.sleep(_POLL_WAIT_SECONDS)
         return status
 
@@ -269,7 +288,10 @@ class DoclingDocumentProcessor(PdfPageRenderingMixin):
             tmp.close()
             count = get_pdf_page_count(tmp.name)
         except Exception:
-            logger.debug("docling: PDF page-count probe failed", exc_info=True)
+            logger.debug(
+                "datastore.docling_processor.docling_pdf_page_count_probe.observed",
+                exc_info=True,
+            )
             return []
         finally:
             try:

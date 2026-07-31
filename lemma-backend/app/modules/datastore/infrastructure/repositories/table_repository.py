@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
 from app.core.authorization.grants import delete_resource_sharing_grants

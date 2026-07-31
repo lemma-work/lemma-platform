@@ -28,7 +28,8 @@ _PROMPT = (
     "add a short intro sentence or lightly reorganize prose.\n\n"
     "Hard constraints — do NOT change these:\n"
     "- Keep the centered install button exactly as-is: the `<a>`/`<img>` block "
-    "whose image is the `https://img.shields.io/...Install%20to%20Lemma...` badge.\n"
+    "whose image is the `https://img.shields.io/...Run%20it%20on%20Lemma...` badge.\n"
+    "- Keep the `social-card.png` hero image exactly as-is.\n"
     "- Keep every link, the `<div align=\"center\">` header, the '## Install' "
     "instructions, and the resource counts in 'What's inside'.\n"
     "- Do not invent resources, features, or links that are not already present.\n"
@@ -41,14 +42,39 @@ async def polish_readme(readme: str, *, polish_fn: PolishFn | None = None) -> st
         return readme
     try:
         polished = await polish_fn(readme)
-    except Exception as exc:  # noqa: BLE001 - never fail a publish over polish
-        logger.warning("README AI polish failed; using deterministic README: %s", exc)
+    except Exception:  # noqa: BLE001 - never fail a publish over polish
+        logger.debug(
+            "pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic"
+        )
         return readme
     polished = _strip_code_fence((polished or "").strip())
-    # A model that returns nothing or drops the install badge is not trusted.
-    if not polished or "img.shields.io" not in polished:
+    if not polished or not _preserves_required_invariants(readme, polished):
         return readme
     return polished
+
+
+def _preserves_required_invariants(original: str, polished: str) -> bool:
+    """Reject model output that drops any executable landing-page structure."""
+    required_exact_lines: list[str] = []
+    for line in original.splitlines():
+        stripped = line.strip()
+        if (
+            stripped.startswith(("<a ", "<img", "!["))
+            or stripped == '<div align="center">'
+            or stripped.startswith("| ") and " **" in stripped
+        ):
+            required_exact_lines.append(stripped)
+    required_markers = [
+        marker for marker in ("## 🚀 Install",) if marker in original
+    ]
+    preserves_lines = all(line in polished for line in required_exact_lines)
+    preserves_markers = all(marker in polished for marker in required_markers)
+    preserves_centering = (
+        polished.count('<div align="center">')
+        >= original.count('<div align="center">')
+        and polished.count("</div>") >= original.count("</div>")
+    )
+    return preserves_lines and preserves_markers and preserves_centering
 
 
 def _strip_code_fence(text: str) -> str:
@@ -75,24 +101,26 @@ def build_system_polish_fn(
     :func:`polish_readme` falls back to the deterministic README."""
 
     async def _polish(readme: str) -> str:
-        from pydantic_ai import Agent as PydanticAIAgent
+        from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
 
-        from app.modules.agent.domain.value_objects import AgentRuntimeConfig
-        from app.modules.agent.services.runtime_model_factory import (
+        from app.core.domain.runtime import AgentRuntimeConfig
+        from app.composition.pod_bundle_readme import (
             require_pydantic_ai_model_from_runtime_profile,
         )
-        from app.modules.agent.services.runtime_profile_service import (
+        from app.composition.pod_bundle_readme import (
             DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
             AgentRuntimeProfileService,
         )
-        from app.modules.usage.services.pydantic_ai_tracking import (
+        from app.composition.pod_bundle_readme import (
             record_pydantic_ai_result_usage,
             reserve_usage_for_runtime,
         )
-        from app.modules.usage.services.usage_context import UsageExecutionContext
+        from app.composition.pod_bundle_readme import UsageExecutionContext
 
         resolved = await AgentRuntimeProfileService().resolve(
-            runtime=AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID),
+            runtime=AgentRuntimeConfig(
+                profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID
+            ),
             organization_id=organization_id,
             user_id=user_id,
         )
@@ -102,8 +130,6 @@ def build_system_polish_fn(
             runtime_credentials=resolved.credentials or {},
             fallback_model_name=resolved.model_name_for_harness,
         )
-        agent = PydanticAIAgent(model, system_prompt=_PROMPT)
-
         usage_context = UsageExecutionContext(
             user_id=user_id,
             organization_id=organization_id,
@@ -115,9 +141,19 @@ def build_system_polish_fn(
             user_id=user_id,
             runtime_profile=runtime_profile,
         )
+        agent = PydanticAIAgent(model, system_prompt=_PROMPT)
         result = None
         try:
-            result = await agent.run(readme)
+            result = await agent.run(
+                readme,
+                usage_limits=UsageLimits(
+                    request_limit=1,
+                    input_tokens_limit=64_000,
+                    output_tokens_limit=8_000,
+                    total_tokens_limit=72_000,
+                    count_tokens_before_request=True,
+                ),
+            )
             await record_pydantic_ai_result_usage(
                 ctx=usage_context,
                 runtime_profile=runtime_profile,

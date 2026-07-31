@@ -1,0 +1,27 @@
+{
+  "gmail": {
+    "LEMMA": ["get_profile"],
+    "COMPOSIO": ["GMAIL_GET_PROFILE", "get_profile"]
+  },
+  "outlook": {
+    "COMPOSIO": ["OUTLOOK_GET_PROFILE"]
+  },
+  "asana": {
+    "COMPOSIO": ["ASANA_GET_CURRENT_USER"]
+  },
+  "notion": {
+    "COMPOSIO": ["NOTION_GET_ABOUT_ME"]
+  },
+  "hubspot": {
+    "COMPOSIO": ["HUBSPOT_GET_ACCOUNT_INFO"]
+  },
+  "linear": {
+    "COMPOSIO": ["LINEAR_GET_CURRENT_USER"]
+  },
+  "github": {
+    "COMPOSIO": ["GITHUB_GET_THE_AUTHENTICATED_USER"]
+  },
+  "discord": {
+    "COMPOSIO": ["DISCORD_GET_MY_USER"]
+  }
+}

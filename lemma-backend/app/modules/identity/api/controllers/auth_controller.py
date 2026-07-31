@@ -1,18 +1,55 @@
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Literal
+from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from supertokens_python.recipe.session.asyncio import (
+    get_session,
+)
 
-from app.core.api.dependencies import UoWDep
 from app.core.config import settings
-from app.modules.identity.api.dependencies import UserServiceDep
+from app.core.helpers.identifiers import normalize_mobile_e164
+from app.core.infrastructure.db.session import async_session_maker
+from app.modules.identity.api.dependencies import PodMembershipDep, UserServiceDep
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.infrastructure.mobile_number_claims import (
+    get_other_mobile_number_owner_id,
+)
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.supertokens_auth.helpers import (
     create_cli_session_tokens,
+    create_browser_session,
+    create_desktop_browser_session,
     refresh_cli_session_tokens,
+)
+from app.modules.identity.services.auth_abuse import (
+    RateLimitExceeded,
+    client_ip,
+    get_auth_abuse_store,
+)
+from app.modules.identity.services.telegram_oidc import (
+    TelegramOIDCError,
+    TelegramPurpose,
+    get_telegram_oidc_service,
+    safe_return_to,
+)
+from app.modules.identity.services.whatsapp_mobile_verification import (
+    WhatsAppVerificationRateLimited,
+    WhatsAppVerificationUnavailable,
+    get_whatsapp_mobile_verification_service,
+)
+from app.modules.identity.services.desktop_auth_handoff import (
+    DesktopAuthCompletionConflict,
+    DesktopAuthRequestNotFound,
+    DesktopAuthRequestPending,
+    DesktopAuthRateLimitExceeded,
+    DesktopAuthVerifierRejected,
+    get_desktop_auth_handoff_store,
 )
 from app.core.authorization.delegation import (
     CLAIM_ACTOR_ID,
@@ -22,7 +59,6 @@ from app.core.authorization.delegation import (
     CLAIM_SCOPE,
     WorkloadPrincipalType,
 )
-from app.modules.pod.infrastructure.models.pod_models import Pod
 
 router = APIRouter(
     prefix="/auth",
@@ -60,6 +96,291 @@ class CliRefreshRequest(BaseModel):
     refresh_token: str
 
 
+class DesktopAuthRequestCreate(BaseModel):
+    code_challenge: str = Field(
+        min_length=43, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+
+class DesktopAuthRequestResponse(BaseModel):
+    request_id: str
+    expires_in_seconds: int
+
+
+class DesktopAuthCompleteResponse(BaseModel):
+    status: str = "complete"
+
+
+class DesktopAuthSessionRequest(BaseModel):
+    request_id: str = Field(min_length=20, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    code_verifier: str = Field(
+        min_length=43, max_length=128, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+
+
+class DesktopAuthSessionResponse(BaseModel):
+    status: str = "complete"
+    user_id: UUID
+    session_handle: str
+
+
+class AltchaChallengeResponse(BaseModel):
+    enabled: bool
+    algorithm: str | None = None
+    challenge: str | None = None
+    maxnumber: int | None = None
+    salt: str | None = None
+    signature: str | None = None
+
+
+class AltchaConfigResponse(BaseModel):
+    enabled: bool
+
+
+class TelegramConfigResponse(BaseModel):
+    enabled: bool
+
+
+class WhatsAppMobileVerificationConfigResponse(BaseModel):
+    available: bool
+    display_number: str | None = None
+
+
+class WhatsAppMobileVerificationStartRequest(BaseModel):
+    mobile_number: str = Field(min_length=8, max_length=32)
+
+
+class WhatsAppMobileVerificationStartResponse(BaseModel):
+    transaction_id: str
+    code: str
+    whatsapp_url: str
+    display_number: str
+    expires_at: datetime
+
+
+class WhatsAppMobileVerificationStatusResponse(BaseModel):
+    status: Literal["PENDING", "VERIFIED", "EXPIRED"]
+
+
+async def _enforce_telegram_rate_limit(request: Request) -> None:
+    store = get_auth_abuse_store()
+    ip_hash = store.digest(client_ip(request.scope))
+    try:
+        await store.enforce(
+            f"identity:rate:telegram:ip:{ip_hash}", limit=10, window_seconds=900
+        )
+    except RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many Telegram login requests",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+
+
+def _telegram_error_redirect(return_to: str | None, code: str) -> RedirectResponse:
+    destination = safe_return_to(return_to)
+    separator = "&" if "?" in destination else "?"
+    return RedirectResponse(
+        f"{destination}{separator}{urlencode({'telegram_error': code})}",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/altcha/config",
+    include_in_schema=False,
+    response_model=AltchaConfigResponse,
+)
+async def altcha_config() -> AltchaConfigResponse:
+    return AltchaConfigResponse(enabled=settings.auth_altcha_enabled)
+
+
+@router.get(
+    "/altcha/challenge",
+    include_in_schema=False,
+    response_model=AltchaChallengeResponse,
+)
+async def create_altcha_challenge(
+    purpose: Literal["signup", "verification", "password-reset", "signin-risk"],
+) -> AltchaChallengeResponse:
+    try:
+        challenge = await get_auth_abuse_store().issue_altcha(purpose)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return AltchaChallengeResponse.model_validate(challenge)
+
+
+@router.get(
+    "/telegram/config",
+    include_in_schema=False,
+    response_model=TelegramConfigResponse,
+)
+async def telegram_config() -> TelegramConfigResponse:
+    return TelegramConfigResponse(enabled=settings.is_telegram_oidc_configured())
+
+
+async def _verified_auth_user(request: Request) -> User:
+    session = await get_session(request, session_required=False)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        user_id = UUID(session.get_user_id())
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Authentication required") from exc
+    async with async_session_maker() as db_session:
+        user = await db_session.get(User, user_id)
+    if user is None or not user.is_active or user.is_deleted or not user.is_verified:
+        raise HTTPException(status_code=403, detail="Verified account required")
+    return user
+
+
+@router.get(
+    "/mobile-verification/whatsapp/config",
+    include_in_schema=False,
+    response_model=WhatsAppMobileVerificationConfigResponse,
+)
+async def whatsapp_mobile_verification_config(
+    request: Request,
+) -> WhatsAppMobileVerificationConfigResponse:
+    await _verified_auth_user(request)
+    config = await get_whatsapp_mobile_verification_service().config()
+    return WhatsAppMobileVerificationConfigResponse(
+        available=config.available,
+        display_number=config.display_number,
+    )
+
+
+@router.post(
+    "/mobile-verification/whatsapp/start",
+    include_in_schema=False,
+    response_model=WhatsAppMobileVerificationStartResponse,
+)
+async def start_whatsapp_mobile_verification(
+    request: Request,
+    data: WhatsAppMobileVerificationStartRequest,
+) -> WhatsAppMobileVerificationStartResponse:
+    user = await _verified_auth_user(request)
+    try:
+        normalized_phone = normalize_mobile_e164(data.mobile_number)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    async with async_session_maker() as db_session:
+        owner = await get_other_mobile_number_owner_id(
+            db_session,
+            digits=normalized_phone.removeprefix("+"),
+            user_id=user.id,
+        )
+    if owner is not None:
+        raise HTTPException(
+            status_code=409, detail="This mobile number is already in use"
+        )
+
+    service = get_whatsapp_mobile_verification_service()
+    try:
+        transaction = await service.start(
+            user_id=user.id,
+            mobile_number=data.mobile_number,
+            client_key=client_ip(request.scope),
+        )
+    except WhatsAppVerificationRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many mobile verification attempts",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except WhatsAppVerificationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return WhatsAppMobileVerificationStartResponse(
+        transaction_id=transaction.transaction_id,
+        code=transaction.code,
+        whatsapp_url=transaction.whatsapp_url,
+        display_number=transaction.display_number,
+        expires_at=transaction.expires_at,
+    )
+
+
+@router.get(
+    "/mobile-verification/whatsapp/status/{transaction_id}",
+    include_in_schema=False,
+    response_model=WhatsAppMobileVerificationStatusResponse,
+)
+async def whatsapp_mobile_verification_status(
+    transaction_id: str,
+    request: Request,
+) -> WhatsAppMobileVerificationStatusResponse:
+    if not 20 <= len(transaction_id) <= 128:
+        raise HTTPException(status_code=404, detail="Verification not found")
+    user = await _verified_auth_user(request)
+    status_value = await get_whatsapp_mobile_verification_service().status(
+        transaction_id=transaction_id,
+        user_id=user.id,
+    )
+    return WhatsAppMobileVerificationStatusResponse(status=status_value)
+
+
+@router.get("/telegram/start", include_in_schema=False)
+async def telegram_start(
+    request: Request,
+    purpose: TelegramPurpose = Query(default="signin"),
+    return_to: str | None = Query(default=None, max_length=2048),
+) -> RedirectResponse:
+    await _enforce_telegram_rate_limit(request)
+    user_id: UUID | None = None
+    if purpose == "verify_mobile":
+        session = await get_session(request, session_required=True)
+        if session is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        user_id = UUID(session.get_user_id())
+        async with async_session_maker() as db_session:
+            user = await db_session.get(User, user_id)
+        if user is None or not user.is_active or not user.is_verified:
+            raise HTTPException(status_code=403, detail="Verified account required")
+    try:
+        authorization_url = await get_telegram_oidc_service().start(
+            purpose=purpose,
+            return_to=return_to,
+            user_id=user_id,
+        )
+    except TelegramOIDCError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return RedirectResponse(authorization_url, status_code=303)
+
+
+@router.get("/telegram/callback", include_in_schema=False)
+async def telegram_callback(
+    request: Request,
+    state: str = Query(min_length=20, max_length=256),
+    code: str | None = Query(default=None, min_length=1, max_length=4096),
+    error: str | None = Query(default=None, max_length=255),
+) -> RedirectResponse:
+    await _enforce_telegram_rate_limit(request)
+    service = get_telegram_oidc_service()
+    transaction = None
+    try:
+        transaction = await service.consume(state)
+        if error or not code:
+            raise TelegramOIDCError("Telegram login was cancelled")
+        claims = await service.exchange_and_validate(code=code, transaction=transaction)
+        phone = str(claims["phone_number"])
+        if transaction.purpose == "signin":
+            user = await service.find_signin_user(phone)
+            await create_browser_session(request, user.id, client="telegram-oidc")
+        else:
+            session = await get_session(request, session_required=False)
+            if session is None or session.get_user_id() != transaction.user_id:
+                raise TelegramOIDCError("The Lemma session changed during verification")
+            await service.verify_mobile(UUID(transaction.user_id), phone)  # type: ignore[arg-type]
+        return RedirectResponse(transaction.return_to, status_code=303)
+    except TelegramOIDCError:
+        return _telegram_error_redirect(
+            transaction.return_to if transaction is not None else None,
+            "unable_to_authenticate",
+        )
+
+
 @router.get(
     "/verify-token",
     operation_id="auth.verify_token",
@@ -70,7 +391,7 @@ class CliRefreshRequest(BaseModel):
 async def verify_token(
     request: Request,
     user_service: UserServiceDep,
-    uow: UoWDep,
+    pod_membership: PodMembershipDep,
 ) -> VerifyTokenResponse:
     user: UserEntity = request.state.user
     user_data = await user_service.get_user(user.id)
@@ -81,15 +402,23 @@ async def verify_token(
     scopes = auth_claims.get(CLAIM_SCOPE)
     if isinstance(scopes, str):
         scopes = [scopes]
-    if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
+    if not isinstance(scopes, list) or not all(
+        isinstance(scope, str) for scope in scopes
+    ):
         scopes = []
     function_id = None
     function_name = None
     if auth_claims.get(CLAIM_ACTOR_TYPE) == WorkloadPrincipalType.FUNCTION.value:
         raw_function_id = auth_claims.get(CLAIM_ACTOR_ID)
-        function_id = UUID(str(raw_function_id)) if raw_function_id is not None else None
+        function_id = (
+            UUID(str(raw_function_id)) if raw_function_id is not None else None
+        )
         function_name = auth_claims.get(CLAIM_ACTOR_NAME)
-    organization_id = await _resolve_pod_organization_id(uow, pod_id)
+    organization_id = (
+        await pod_membership.get_pod_organization_id(pod_id)
+        if pod_id is not None
+        else None
+    )
     return VerifyTokenResponse(
         user_id=user.id,
         email=user_data.email,
@@ -99,15 +428,6 @@ async def verify_token(
         function_name=function_name if isinstance(function_name, str) else None,
         scopes=scopes,
     )
-
-
-async def _resolve_pod_organization_id(uow: UoWDep, pod_id: UUID | None) -> UUID | None:
-    if pod_id is None:
-        return None
-    result = await uow.session.execute(
-        select(Pod.organization_id).where(Pod.id == pod_id)
-    )
-    return result.scalar_one_or_none()
 
 
 @router.get(
@@ -122,6 +442,99 @@ async def cli_auth_info() -> CliAuthInfoResponse:
     return CliAuthInfoResponse(
         api_url=settings.cli_api_url or settings.api_url,
         auth_frontend_url=settings.cli_auth_frontend_url or settings.auth_frontend_url,
+    )
+
+
+@router.post(
+    "/desktop/requests",
+    include_in_schema=False,
+    operation_id="auth.desktop.request.create",
+    response_model=DesktopAuthRequestResponse,
+)
+async def create_desktop_auth_request(
+    body: DesktopAuthRequestCreate,
+    request: Request,
+) -> DesktopAuthRequestResponse:
+    client_key = request.client.host if request.client else "unknown"
+    try:
+        handoff = await get_desktop_auth_handoff_store().create(
+            body.code_challenge,
+            client_key=client_key,
+        )
+    except DesktopAuthRateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many desktop login requests",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    return DesktopAuthRequestResponse(
+        request_id=handoff.request_id,
+        expires_in_seconds=handoff.expires_in_seconds,
+    )
+
+
+@router.post(
+    "/desktop/requests/{request_id}/complete",
+    include_in_schema=False,
+    operation_id="auth.desktop.request.complete",
+    response_model=DesktopAuthCompleteResponse,
+)
+async def complete_desktop_auth_request(
+    request_id: str,
+    request: Request,
+) -> DesktopAuthCompleteResponse:
+    user: UserEntity = request.state.user
+    try:
+        await get_desktop_auth_handoff_store().complete(request_id, user.id)
+    except DesktopAuthRequestNotFound as exc:
+        raise HTTPException(
+            status_code=404, detail="Desktop login request expired"
+        ) from exc
+    except DesktopAuthCompletionConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Desktop login request was already completed by another user",
+        ) from exc
+    return DesktopAuthCompleteResponse()
+
+
+@router.post(
+    "/desktop/session",
+    include_in_schema=False,
+    operation_id="auth.desktop.session.create",
+    response_model=DesktopAuthSessionResponse,
+)
+async def create_desktop_auth_session(
+    body: DesktopAuthSessionRequest,
+    request: Request,
+) -> DesktopAuthSessionResponse:
+    if request.headers.get("st-auth-mode") != "cookie":
+        raise HTTPException(
+            status_code=400,
+            detail="Desktop session exchange requires cookie auth mode",
+        )
+    try:
+        user_id = await get_desktop_auth_handoff_store().consume(
+            body.request_id,
+            body.code_verifier,
+        )
+    except DesktopAuthRequestPending as exc:
+        raise HTTPException(
+            status_code=409, detail="Desktop login is still pending"
+        ) from exc
+    except DesktopAuthVerifierRejected as exc:
+        raise HTTPException(
+            status_code=403, detail="Desktop login verifier was rejected"
+        ) from exc
+    except DesktopAuthRequestNotFound as exc:
+        raise HTTPException(
+            status_code=404, detail="Desktop login request expired"
+        ) from exc
+
+    session_handle = await create_desktop_browser_session(request, user_id)
+    return DesktopAuthSessionResponse(
+        user_id=user_id,
+        session_handle=session_handle,
     )
 
 
@@ -172,7 +585,7 @@ async def cli_refresh_session(
             detail={
                 "code": "INVALID_REFRESH_TOKEN",
                 "message": "Unable to refresh CLI session.",
-                "details": str(exc),
+                "details": {"error_type": type(exc).__name__},
             },
         ) from exc
 

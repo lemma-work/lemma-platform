@@ -10,4 +10,3 @@ export type FileSearchResponse = {
     search_method: SearchMethod;
     total: number;
 };
-

@@ -108,6 +108,19 @@
     text-align: left;
   }
 
+  /* Named controls that are deliberately not the shared Button: option cards a
+     step picks between, the reach/trigger chips on a resource row, and the
+     quiet text affordance that skips a step. */
+  .resource-option-button,
+  .resource-chip-button {
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .lemma-quiet-text-button {
+    cursor: pointer;
+  }
+
   .form-field-control.assistant-composer-textarea,
   .form-field-control.assistant-composer-textarea:hover,
   .form-field-control.assistant-composer-textarea:focus,
@@ -123,7 +136,7 @@
      Shared access/configuration rows for modals and side panels. */
   .resource-property-row {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--space-3);
     padding-block: 0.75rem;
   }
 
@@ -137,7 +150,7 @@
     display: flex;
     min-height: 2.25rem;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     color: var(--text-secondary);
     font-size: var(--text-sm);
     font-weight: 500;
@@ -154,18 +167,18 @@
     display: flex;
     min-width: 0;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   .resource-list-row {
     display: flex;
     min-height: 2.625rem;
     align-items: center;
-    gap: 0.625rem;
+    gap: var(--space-2-5);
     border: 1px solid var(--row-border);
     border-radius: var(--radius-md);
     background: var(--row-bg);
-    padding: 0.5rem 0.625rem 0.5rem 0.75rem;
+    padding: var(--space-2) var(--space-2-5) var(--space-2) var(--space-3);
     color: var(--row-fg);
     box-shadow: 0 1px 0 var(--row-glint) inset;
     transition:
@@ -187,9 +200,9 @@
     display: inline-flex;
     width: fit-content;
     align-items: center;
-    gap: 0.375rem;
+    gap: var(--space-1-5);
     border-radius: var(--radius-sm);
-    padding: 0.25rem 0.375rem;
+    padding: var(--space-1) var(--space-1-5);
     color: var(--text-tertiary);
     font-size: var(--text-sm);
     font-weight: 500;
@@ -230,15 +243,118 @@
     cursor: pointer;
   }
 
+  /* ── FOLDER PICKER
+     Lazy folder tree behind "Link folder". The popover is capped to the space
+     the popper actually has, so a deep pod tree scrolls instead of spilling
+     off screen. */
+  .folder-picker-popover {
+    display: flex;
+    max-height: min(24rem, var(--radix-popover-content-available-height, 24rem));
+    width: min(22rem, calc(100vw - 2rem));
+    flex-direction: column;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .folder-picker-header {
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: var(--space-2) var(--space-3);
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .folder-picker-list {
+    min-height: 0;
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-1);
+  }
+
+  .folder-picker-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-0-5);
+    border-radius: var(--radius-sm);
+    padding-left: calc(var(--folder-depth, 0) * 0.875rem);
+  }
+
+  .folder-picker-row:hover,
+  .folder-picker-row:focus-within {
+    background: var(--surface-2);
+  }
+
+  .folder-picker-disclosure {
+    display: inline-flex;
+    width: 1.25rem;
+    height: 1.5rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+
+  .folder-picker-disclosure:hover {
+    color: var(--text-primary);
+  }
+
+  .folder-picker-option {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: var(--space-2);
+    border-radius: var(--radius-sm);
+    padding: var(--space-1-5) var(--space-2) var(--space-1-5) var(--space-1);
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .folder-picker-row[data-selected='true'] .folder-picker-option {
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .folder-picker-check {
+    display: inline-flex;
+    width: 0.875rem;
+    height: 0.875rem;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-on-brand);
+  }
+
+  .folder-picker-check[data-checked='true'] {
+    border-color: var(--action-primary);
+    background: var(--action-primary);
+  }
+
+  .folder-picker-note {
+    padding: var(--space-1-5) var(--space-2) var(--space-1-5)
+      calc(1.375rem + var(--folder-depth, 0) * var(--space-3-5));
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+  }
+
   .segmented-control {
     display: inline-flex;
     flex-shrink: 0;
     align-items: center;
-    gap: 0.125rem;
+    gap: var(--space-0-5);
     border: 1px solid var(--segmented-border);
     border-radius: var(--radius-md);
     background: var(--segmented-bg);
-    padding: 0.1875rem;
+    padding: var(--space-0-5);
   }
 
   .segmented-control-item {
@@ -247,9 +363,9 @@
     min-width: 3.125rem;
     align-items: center;
     justify-content: center;
-    gap: 0.375rem;
+    gap: var(--space-1-5);
     border-radius: var(--radius-sm);
-    padding: 0.3125rem 0.625rem;
+    padding: var(--space-1) var(--space-2-5);
     color: var(--text-tertiary);
     font-size: var(--text-xs);
     font-weight: 600;
@@ -276,53 +392,11 @@
     padding: 0;
   }
 
-  .access-tool-grid {
-    display: grid;
-    gap: 0.5rem;
-  }
-
-  @media (min-width: 640px) {
-    .access-tool-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-  }
-
-  .access-tool-option {
-    display: flex;
-    min-height: 2.625rem;
-    align-items: center;
-    gap: 0.625rem;
-    border: 1px solid transparent;
-    border-radius: var(--radius-md);
-    padding: 0.5rem 0.625rem;
-    color: var(--text-secondary);
-    font-size: var(--text-sm);
-    font-weight: 500;
-    transition:
-      background-color var(--dur-base) var(--ease-out),
-      border-color var(--dur-base) var(--ease-out),
-      color var(--dur-base) var(--ease-out);
-  }
-
-  .access-tool-option:hover,
-  .access-tool-option:focus-within {
-    border-color: var(--row-border);
-    background: var(--row-bg);
-    color: var(--text-primary);
-  }
-
-  .access-tool-option[data-selected="true"] {
-    border-color: color-mix(in srgb, var(--action-primary) 34%, var(--row-border));
-    background: color-mix(in srgb, var(--action-primary) 8%, var(--row-bg));
-    color: var(--text-primary);
-    box-shadow: 0 1px 0 var(--row-glint) inset;
-  }
-
   /* ── SETTINGS AND INSPECTOR STRUCTURE
      Shared composition language for dense profile/settings/editor panels. */
   .settings-stack {
     display: grid;
-    gap: 2rem;
+    gap: var(--space-8);
   }
 
   .settings-panel {
@@ -335,7 +409,7 @@
   .settings-panel-header {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: var(--space-3);
   }
 
   @media (min-width: 640px) {
@@ -349,7 +423,7 @@
   .settings-title-row {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     color: var(--text-primary);
   }
 
@@ -368,12 +442,12 @@
 
   .settings-field-stack {
     display: grid;
-    gap: 1.5rem;
+    gap: var(--space-6);
   }
 
   .settings-field-grid {
     display: grid;
-    gap: 1.5rem;
+    gap: var(--space-6);
   }
 
   @media (min-width: 640px) {
@@ -384,7 +458,7 @@
 
   .settings-field {
     display: grid;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   .settings-help-text {
@@ -395,7 +469,7 @@
 
   .settings-choice-grid {
     display: grid;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   @media (min-width: 640px) {
@@ -410,10 +484,10 @@
     width: 100%;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--space-3);
     border: 1px solid transparent;
     border-radius: var(--radius-md);
-    padding: 0.5rem 0.75rem;
+    padding: var(--space-2) var(--space-3);
     color: var(--text-secondary);
     font-size: var(--text-sm);
     text-align: left;
@@ -442,11 +516,11 @@
     display: flex;
     min-height: 2.75rem;
     align-items: center;
-    gap: 0.75rem;
+    gap: var(--space-3);
     border: 1px solid color-mix(in srgb, var(--border-default) 62%, transparent);
     border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-1) 62%, transparent);
-    padding: 0.5rem 0.75rem;
+    padding: var(--space-2) var(--space-3);
     color: var(--text-primary);
     font-size: var(--text-sm);
     box-shadow: inset 0 1px 0 var(--row-glint);
@@ -454,7 +528,7 @@
 
   .settings-list {
     display: grid;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   .settings-list-row {
@@ -462,10 +536,10 @@
     width: 100%;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: var(--space-4);
     border: 1px solid transparent;
     border-radius: var(--radius-md);
-    padding: 0.75rem;
+    padding: var(--space-3);
     color: var(--text-secondary);
     transition:
       background-color var(--dur-base) var(--ease-out),
@@ -513,7 +587,7 @@
 
   .settings-inline-callout {
     display: flex;
-    gap: 1rem;
+    gap: var(--space-4);
     border-top: 1px solid var(--border-subtle);
     padding-block: 1.25rem;
   }
@@ -521,14 +595,12 @@
   .settings-identity-band {
     display: flex;
     flex-direction: column;
-    gap: 1.25rem;
-    border: 1px solid color-mix(in srgb, var(--border-default) 56%, transparent);
+    gap: var(--space-5);
+    border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    background:
-      linear-gradient(140deg, color-mix(in srgb, var(--surface-1) 72%, transparent), color-mix(in srgb, var(--surface-2) 34%, transparent)),
-      color-mix(in srgb, var(--surface-1) 72%, transparent);
-    padding: 1rem;
-    box-shadow: inset 0 1px 0 var(--row-glint);
+    background: var(--surface-1);
+    padding: var(--space-4);
+    box-shadow: none;
   }
 
   @media (min-width: 1024px) {
@@ -536,19 +608,19 @@
       flex-direction: row;
       align-items: center;
       justify-content: space-between;
-      padding: 1.125rem 1.25rem;
+      padding: var(--space-4) var(--space-5);
     }
   }
 
   .settings-open-section {
     border-top: 1px solid var(--border-subtle);
-    padding-top: 1.5rem;
+    padding-top: var(--space-6);
   }
 
   .settings-stat-strip {
     display: grid;
     width: 100%;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   @media (min-width: 640px) {
@@ -567,7 +639,7 @@
     border: 1px solid color-mix(in srgb, var(--border-default) 58%, transparent);
     border-radius: var(--radius-md);
     background: color-mix(in srgb, var(--surface-1) 46%, transparent);
-    padding: 0.75rem 0.875rem;
+    padding: var(--space-3) var(--space-3-5);
     box-shadow: inset 0 1px 0 var(--row-glint);
   }
 
@@ -580,19 +652,19 @@
 
   .inspector-section {
     display: grid;
-    gap: 0.75rem;
+    gap: var(--space-3);
   }
 
   .inspector-section + .inspector-section {
     border-top: 1px solid var(--border-subtle);
-    padding-top: 1.25rem;
+    padding-top: var(--space-5);
   }
 
   .inspector-section-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: var(--space-3);
   }
 
   .inspector-section-title {
@@ -621,12 +693,12 @@
   }
 
   .agent-detail-editor .inspector-section {
-    gap: 0.7rem;
+    gap: var(--space-3);
   }
 
   .agent-detail-editor .inspector-section + .inspector-section {
     border-top: 0;
-    padding-top: 0.45rem;
+    padding-top: var(--space-2);
   }
 
   .agent-detail-editor .form-field-control,
@@ -658,7 +730,7 @@
   }
 
   .agent-detail-editor .resource-summary-row {
-    gap: 0.35rem;
+    gap: var(--space-1-5);
   }
 
   .agent-detail-editor-main {
@@ -751,9 +823,9 @@
 
   .agent-test-start-panel {
     display: grid;
-    gap: 1rem;
+    gap: var(--space-4);
     border-radius: var(--radius-xl);
-    padding: 1.2rem;
+    padding: var(--space-5);
     background:
       linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 78%, transparent), color-mix(in srgb, var(--surface-2) 30%, transparent)),
       color-mix(in srgb, var(--surface-1) 72%, transparent);
@@ -763,8 +835,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
-    padding-bottom: 0.25rem;
+    gap: var(--space-4);
+    padding-bottom: var(--space-1);
   }
 
   .agent-test-run-form-head h4 {
@@ -777,12 +849,12 @@
 
   .agent-test-run-connections {
     border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 42%, transparent);
-    padding-bottom: 1rem;
+    padding-bottom: var(--space-4);
   }
 
   .agent-test-run-field {
     display: grid;
-    gap: 0.45rem;
+    gap: var(--space-2);
   }
 
   .agent-test-run-label {
@@ -829,7 +901,7 @@
   .agent-test-run-no-input {
     border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--surface-2) 46%, transparent);
-    padding: 1rem;
+    padding: var(--space-4);
     color: var(--text-secondary);
     font-size: var(--text-sm);
     line-height: var(--leading-relaxed);
@@ -843,10 +915,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: var(--space-4);
     margin-top: 0.25rem;
     border-top: 1px solid color-mix(in srgb, var(--border-subtle) 42%, transparent);
-    padding-top: 1rem;
+    padding-top: var(--space-4);
   }
 
   .agent-test-run-action-copy {
@@ -905,76 +977,9 @@
     border-radius: var(--radius-lg);
   }
 
-  .agent-access-dialog {
-    background:
-      radial-gradient(circle at 82% 0%, color-mix(in srgb, var(--surface-2) 28%, transparent), transparent 26rem),
-      var(--surface-1);
-  }
-
-  .agent-access-dialog-header {
-    border-bottom-color: transparent;
-    padding: 1.5rem 1.75rem 0.75rem;
-  }
-
-  .agent-access-dialog .resource-dialog-body {
-    padding: 1rem 1.75rem 1.75rem;
-  }
-
-  .agent-access-dialog .resource-configuration-stack {
-    gap: 1.25rem;
-  }
-
-  .agent-access-dialog .resource-dialog-body .resource-property-row {
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-    padding: 0;
-  }
-
-  .agent-access-dialog .resource-dialog-body .resource-property-row + .resource-property-row {
-    border-top: 1px solid color-mix(in srgb, var(--border-subtle) 46%, transparent);
-    padding-top: 1.25rem;
-  }
-
-  .agent-access-dialog .resource-dialog-body .resource-property-label {
-    color: var(--text-primary);
-    font-weight: 500;
-  }
-
-  .agent-access-dialog .resource-dialog-body .resource-property-label svg {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--surface-2) 52%, transparent);
-    color: var(--text-secondary);
-  }
-
-  .agent-access-dialog .access-tool-grid {
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-    gap: 0.5rem;
-  }
-
-  .agent-access-dialog .resource-dialog-body .access-tool-option {
-    min-height: 2.5rem;
-    border-color: transparent;
-    border-radius: var(--radius-md);
-    background: color-mix(in srgb, var(--surface-2) 36%, transparent);
-    box-shadow: none;
-  }
-
-  .agent-access-dialog .resource-dialog-body .access-tool-option:hover,
-  .agent-access-dialog .resource-dialog-body .access-tool-option:focus-within {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--surface-2) 56%, transparent);
-  }
-
-  .agent-access-dialog .resource-dialog-body .access-tool-option[data-selected="true"] {
-    border-color: transparent;
-    background: color-mix(in srgb, var(--text-primary) 8%, var(--surface-2));
-  }
-
   .resource-summary-row {
     display: grid;
-    gap: 0.5rem;
+    gap: var(--space-2);
   }
 
   @media (min-width: 640px) {
@@ -994,72 +999,16 @@
     min-width: 0;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
-  }
-
-  .resource-dialog-body {
-    max-height: calc(86vh - 96px);
-    overflow-y: auto;
-    padding: 1.25rem;
-  }
-
-  .resource-configuration-stack {
-    display: grid;
-    gap: 1rem;
-  }
-
-  .resource-dialog-body .resource-property-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.75rem;
-    border: 1px solid var(--card-border-subtle);
-    border-radius: var(--radius-lg);
-    background: color-mix(in srgb, var(--card-bg) 82%, transparent);
-    padding: 1rem;
-    box-shadow: var(--shadow-xs);
-  }
-
-  .resource-dialog-body .resource-property-label {
-    min-height: 0;
-    align-items: center;
-    color: var(--text-primary);
-    font-size: var(--text-sm);
-    font-weight: 600;
-  }
-
-  .resource-dialog-body .resource-property-label svg {
-    width: 1.375rem;
-    height: 1.375rem;
-    border: 1px solid var(--chip-border);
-    border-radius: var(--radius-sm);
-    background: var(--chip-bg);
-    padding: 0.25rem;
-    color: var(--action-primary);
-  }
-
-  .resource-dialog-body .access-tool-option {
-    border-color: var(--row-border);
-    background: var(--row-bg);
-    box-shadow: 0 1px 0 var(--row-glint) inset;
-  }
-
-  .resource-dialog-body .access-tool-option:hover,
-  .resource-dialog-body .access-tool-option:focus-within {
-    border-color: color-mix(in srgb, var(--action-primary) 28%, var(--row-border));
-    background: var(--row-bg-hover);
-  }
-
-  .resource-dialog-body .access-tool-option[data-selected="true"] {
-    border-color: color-mix(in srgb, var(--action-primary) 44%, var(--row-border));
-    background: var(--action-primary-soft);
+    gap: var(--space-2);
   }
 
   /* ── PRODUCT SURFACES
      Reusable workbench containers for inspectors, previews, and empty states. */
   .surface-panel {
     border: 1px solid var(--card-border-subtle);
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-xl);
     background: var(--card-bg);
-    box-shadow: var(--card-shadow);
+    box-shadow: none;
   }
 
   .surface-panel-quiet {
@@ -1084,7 +1033,8 @@
   .surface-panel-interactive:focus-within {
     border-color: color-mix(in srgb, var(--border-strong) 58%, var(--border-default));
     background: color-mix(in srgb, var(--card-bg-hover) 74%, var(--card-bg));
-    box-shadow: var(--shadow-xs);
+    box-shadow: none;
+    transform: none;
   }
 
   .surface-panel-footer {
@@ -1153,22 +1103,22 @@
   }
 
   .office-title-lg {
-    font-size: 2rem;
+    font-size: var(--text-2xl);
     line-height: 1.08;
   }
 
   .office-title-xl {
-    font-size: 2.125rem;
+    font-size: var(--text-3xl);
     line-height: 1.08;
   }
 
   @media (min-width: 640px) {
     .office-title-lg {
-      font-size: 2.875rem;
+      font-size: var(--text-4xl);
     }
 
     .office-title-xl {
-      font-size: 3rem;
+      font-size: var(--text-4xl);
     }
   }
 
@@ -1176,7 +1126,7 @@
     position: relative;
     overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--border-default) 78%, transparent);
-    border-radius: 1.25rem;
+    border-radius: var(--radius-3xl);
     background:
       linear-gradient(150deg, color-mix(in srgb, var(--surface-1) 88%, transparent), color-mix(in srgb, var(--surface-2) 64%, transparent)),
       var(--surface-1);
@@ -1208,7 +1158,7 @@
     isolation: isolate;
     overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--border-default) 68%, transparent);
-    border-radius: 1.5rem;
+    border-radius: var(--radius-4xl);
     background:
       linear-gradient(145deg, color-mix(in srgb, var(--surface-1) 92%, transparent), color-mix(in srgb, var(--surface-2) 48%, transparent)),
       var(--surface-1);
@@ -1249,7 +1199,7 @@
 
   .office-command-panel {
     border: 1px solid color-mix(in srgb, var(--border-default) 80%, transparent);
-    border-radius: 1.25rem;
+    border-radius: var(--radius-3xl);
     background: color-mix(in srgb, var(--surface-1) 78%, transparent);
     box-shadow:
       0 18px 52px -42px rgba(45, 34, 20, 0.46),
@@ -1278,7 +1228,7 @@
 
   .office-chip {
     border: 1px solid color-mix(in srgb, var(--border-default) 72%, transparent);
-    border-radius: 9999px;
+    border-radius: var(--radius-full);
     background: color-mix(in srgb, var(--surface-1) 70%, transparent);
     color: var(--text-secondary);
     transition:
@@ -1347,9 +1297,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: var(--space-4);
     border-bottom: 1px solid color-mix(in srgb, var(--text-inverse) 12%, transparent);
-    padding: 0.5rem 0.875rem;
+    padding: var(--space-2) var(--space-3-5);
   }
 
   .code-surface-label {
@@ -1367,7 +1317,7 @@
   .code-surface-pre {
     max-width: 100%;
     overflow-x: auto;
-    padding: 0.875rem;
+    padding: var(--space-3-5);
     color: var(--text-inverse);
     font-family: var(--font-mono-family);
     font-size: var(--text-xs);
@@ -1420,6 +1370,25 @@
     color: var(--text-secondary);
   }
 
+  /* ── TYPE ROLES
+     Pick by ROLE, never by size. Each role below has exactly one correct
+     answer, which is the whole point: the previous vocabulary defined five
+     near-identical label variants and nothing else, so authors hand-picked
+     a font-size for every body, title, and meta string in the product —
+     53 distinct sizes across 33 values inside an 8px band.
+
+     Ladder, smallest to largest:
+       .type-eyebrow[-sm|-mono]  uppercase section labels
+       .type-meta                metadata, counts, timestamps, helper copy
+       .type-body                default UI text
+       .type-body-strong         row titles, emphasized body
+       .type-title               card / panel / dialog titles
+       .type-page-title          page headings
+       .type-display             onboarding and hero headings
+
+     If none of these fits, the answer is a new role here — not a literal
+     font-size in a feature stylesheet. The design audit enforces this. */
+
   .type-eyebrow {
     color: var(--text-tertiary);
     font-size: var(--text-xs);
@@ -1428,6 +1397,65 @@
     text-transform: uppercase;
   }
 
+  /* The dense-chrome eyebrow: pills, column headers, table meta. */
+  .type-eyebrow-sm {
+    color: var(--text-tertiary);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    letter-spacing: var(--tracking-wider);
+    text-transform: uppercase;
+  }
+
+  .type-meta {
+    color: var(--text-tertiary);
+    font-size: var(--text-xs);
+    font-weight: 400;
+    letter-spacing: var(--tracking-normal);
+  }
+
+  .type-body {
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    font-weight: 400;
+    letter-spacing: var(--tracking-normal);
+    line-height: var(--leading-normal);
+  }
+
+  .type-body-strong {
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    letter-spacing: var(--tracking-normal);
+    line-height: var(--leading-normal);
+  }
+
+  .type-title {
+    color: var(--text-primary);
+    font-size: var(--text-md);
+    font-weight: 600;
+    letter-spacing: var(--tracking-snug);
+    line-height: var(--leading-snug);
+  }
+
+  .type-page-title {
+    color: var(--text-primary);
+    font-size: var(--text-xl);
+    font-weight: 700;
+    letter-spacing: var(--tracking-tight);
+    line-height: var(--leading-tight);
+  }
+
+  .type-display {
+    color: var(--text-primary);
+    font-size: var(--text-3xl);
+    font-weight: 700;
+    letter-spacing: var(--tracking-tight);
+    line-height: var(--leading-tight);
+  }
+
+  /* Deprecated: differ from .type-eyebrow only in weight. Kept so the 40
+     existing consumers keep rendering as they do today; migrate to
+     .type-eyebrow during Phase 3 with visual QA, then delete. */
   .type-micro-label {
     font-size: var(--text-xs);
     font-weight: 600;
@@ -1455,7 +1483,7 @@
   .chip {
     display: inline-flex;
     align-items: center;
-    gap: 0.375rem;
+    gap: var(--space-1-5);
     border: 1px solid var(--chip-border);
     border-radius: var(--radius-md);
     background: var(--chip-bg);
@@ -1468,12 +1496,12 @@
 
   .chip-sm {
     min-height: 1.375rem;
-    padding: 0.125rem 0.5rem;
+    padding: var(--space-0-5) var(--space-2);
   }
 
   .chip-md {
     min-height: 1.75rem;
-    padding: 0.25rem 0.625rem;
+    padding: var(--space-1) var(--space-2-5);
   }
 
   .chip-pill {
@@ -1678,7 +1706,7 @@
   }
 
   .state-loader-glow-info {
-    border-radius: 999px;
+    border-radius: var(--radius-full);
     background: color-mix(in srgb, var(--state-info) 20%, transparent);
   }
 
@@ -2047,15 +2075,15 @@
   }
 
   .lemma-wordmark-loader-sm {
-    font-size: 1.5rem;
+    font-size: var(--text-xl);
   }
 
   .lemma-wordmark-loader-md {
-    font-size: 2.5rem;
+    font-size: var(--text-3xl);
   }
 
   .lemma-wordmark-loader-lg {
-    font-size: 3.5rem;
+    font-size: var(--text-5xl);
   }
 
   .lemma-wordmark-letter {
@@ -2216,11 +2244,11 @@
   .lemma-mark-xl .lemma-mark-bar-1 { height: 36px; }
   .lemma-mark-xl .lemma-mark-bar-2 { height: 52px; }
 
-  .lemma-logo-xs { gap: 6px; }
-  .lemma-logo-sm { gap: 8px; }
-  .lemma-logo-md { gap: 10px; }
-  .lemma-logo-lg { gap: 12px; }
-  .lemma-logo-xl { gap: 16px; }
+  .lemma-logo-xs { gap: var(--space-1-5); }
+  .lemma-logo-sm { gap: var(--space-2); }
+  .lemma-logo-md { gap: var(--space-2-5); }
+  .lemma-logo-lg { gap: var(--space-3); }
+  .lemma-logo-xl { gap: var(--space-4); }
 
   .lemma-logo-wordmark {
     font-family: var(--font-display-family);
@@ -2230,18 +2258,18 @@
     line-height: 1;
   }
 
-  .lemma-logo-wordmark-xs { font-size: 0.95rem; }
-  .lemma-logo-wordmark-sm { font-size: 1.15rem; }
-  .lemma-logo-wordmark-md { font-size: 1.65rem; }
-  .lemma-logo-wordmark-lg { font-size: 2.15rem; }
-  .lemma-logo-wordmark-xl { font-size: 2.7rem; }
+  .lemma-logo-wordmark-xs { font-size: var(--text-base); }
+  .lemma-logo-wordmark-sm { font-size: var(--text-md); }
+  .lemma-logo-wordmark-md { font-size: var(--text-xl); }
+  .lemma-logo-wordmark-lg { font-size: var(--text-3xl); }
+  .lemma-logo-wordmark-xl { font-size: var(--text-4xl); }
 
   /* ── LANDING EYEBROW
      Small-caps label above section headings on the landing page. */
   .landing-eyebrow {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     font-size: var(--text-xs);
     font-weight: 500;
     letter-spacing: var(--tracking-widest);

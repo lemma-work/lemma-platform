@@ -88,6 +88,32 @@ _QUESTIONS = [
         "options": [{"label": "Red"}, {"label": "Blue"}],
     }
 ]
+_MULTI_QUESTIONS = [
+    {
+        "question": "Which incident priorities should the agent monitor?",
+        "header": "priorities",
+        "options": [
+            {
+                "label": "Critical",
+                "description": "Page the on-call engineer immediately.",
+                "recommended": True,
+            },
+            {
+                "label": "High",
+                "description": "Include high-priority incidents too.",
+            },
+        ],
+        "multi_select": True,
+    },
+    {
+        "question": "Which response channel should receive the summary?",
+        "header": "channel",
+        "options": [
+            {"label": "Slack", "description": "Keep the response in this thread."},
+            {"label": "Email", "description": "Send a follow-up email summary."},
+        ],
+    },
+]
 _TOOL_CALL_ID = "tool-ask-1"
 
 
@@ -193,8 +219,12 @@ async def test_ask_user_native_slack_blocks_then_resumes_with_answer(
         header="color",
         label="Blue",
     )
-    form_body = urllib.parse.urlencode({"payload": json.dumps(submission)}).encode("utf-8")
-    headers = build_slack_signature_headers(raw_body=form_body, signing_secret="slack-secret")
+    form_body = urllib.parse.urlencode({"payload": json.dumps(submission)}).encode(
+        "utf-8"
+    )
+    headers = build_slack_signature_headers(
+        raw_body=form_body, signing_secret="slack-secret"
+    )
     headers["Content-Type"] = "application/x-www-form-urlencoded"
     resp = await authenticated_client.post(
         "/surfaces/webhooks/slack", content=form_body, headers=headers
@@ -233,6 +263,106 @@ async def test_ask_user_native_slack_blocks_then_resumes_with_answer(
     assert tool_return["tool_result"]["answers"] == {"color": "Blue"}
 
 
+async def test_ask_user_slack_native_failure_falls_back_to_text_and_typed_reply(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    message_store,
+    monkeypatch,
+):
+    """A rejected Block Kit payload degrades to usable text and still resumes.
+
+    Slack can reject a structurally valid native card as its platform limits
+    evolve. The user must still see every question and be able to answer by
+    typing, while the original tool call remains the durable interaction that
+    the resumed run completes.
+    """
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-ask-fallback",
+            "scope": "chat:write",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "bot_user_id": "U0AGSSTQZLH",
+                "team_id": "T0123456",
+                "api_base_url": fake_slack.base_url,
+            },
+        },
+    )
+    await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "SLACK", "account_id": str(account.id)},
+        toolsets=["USER_INTERACTION"],
+    )
+
+    fake_slack.chat_post_blocks_error = "invalid_blocks"
+    first_payload = _load_slack_dm_fixture(
+        text="Help me configure incident notifications",
+        ts="1700000000.610610",
+    )
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="slack", payload=first_payload, headers={}
+        ),
+        script=[
+            script_ask_user(_MULTI_QUESTIONS, tool_call_id=_TOOL_CALL_ID),
+            script_text("Incident notification preferences saved."),
+        ],
+    )
+    assert isinstance(context, SurfaceChatContext)
+    failed = message_store.get_all("SLACK_FAILED")
+    assert failed[-1]["error"] == "invalid_blocks"
+    fallback_messages = await wait_for_messages(message_store, "SLACK", min_count=1)
+    fallback = fallback_messages[-1]["text"]
+    assert "1. Which incident priorities" in fallback
+    assert "Critical — Page the on-call engineer immediately. (recommended)" in fallback
+    assert "2. Which response channel" in fallback
+    assert "you can pick more than one" in fallback
+
+    reply_payload = _load_slack_dm_fixture(
+        text="Use standard incident defaults",
+        ts="1700000000.610611",
+        thread_ts="1700000000.610610",
+    )
+    resumed = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="slack", payload=reply_payload, headers={}
+        ),
+    )
+    assert isinstance(resumed, SurfaceChatContext)
+
+    slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
+    assert slack_messages[-1]["text"] == "Incident notification preferences saved."
+    messages = await _messages_for_conversation(
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
+    )
+    tool_return = next(
+        message
+        for message in messages
+        if message.get("tool_call_id") == _TOOL_CALL_ID
+        and message.get("kind") == "TOOL_RETURN"
+    )
+    assert tool_return["tool_result"]["answers"] == {
+        "priorities": "Use standard incident defaults",
+        "channel": "Use standard incident defaults",
+    }
+
+
 async def test_ask_user_native_teams_adaptive_card_then_resumes_with_answer(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
@@ -268,7 +398,7 @@ async def test_ask_user_native_teams_adaptive_card_then_resumes_with_answer(
     account = await _ensure_connector_account(
         db_session,
         user_id=fixed_test_user["id"],
-        connector_id="teams",
+        connector_id="microsoft_teams",
         credentials={
             "access_token": "teams-token",
             "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
@@ -322,8 +452,7 @@ async def test_ask_user_native_teams_adaptive_card_then_resumes_with_answer(
         headers={
             "Content-Type": "application/json",
             "Authorization": (
-                "Bearer "
-                f"{fake_teams.issue_webhook_token(audience='teams-app-id')}"
+                f"Bearer {fake_teams.issue_webhook_token(audience='teams-app-id')}"
             ),
         },
     )
@@ -683,6 +812,80 @@ async def test_ask_user_suppressed_on_gmail_reply_completes_via_reply_tool(
             user_id=UUID(fixed_test_user["id"]),
         ),
         script=[script_email_reply("gmail_reply_email", "Here is my answer.")],
+    )
+
+    gmail_messages = await wait_for_messages(message_store, "GMAIL_REPLY", min_count=1)
+    reply = gmail_messages[-1]
+    assert reply["operation_name"] == "GMAIL_REPLY_TO_THREAD"
+    assert "Here is my answer." in json.dumps(reply["payload"])
+
+
+async def test_ask_user_on_email_fails_fast_and_completes_via_reply_tool(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_gmail,
+    fake_composio_email,
+    message_store,
+    monkeypatch,
+):
+    """Even when an email agent DOES have the USER_INTERACTION toolset and calls
+    ask_user, the tool must fail fast (never pause) so the run completes and the
+    email reply is still delivered — no permanent WAITING stall."""
+    monkeypatch.setattr(
+        ManagersFactory, "get_manager", lambda *args, **kwargs: _FakeScheduleManager()
+    )
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="gmail",
+        credentials={
+            "access_token": "gmail-token",
+            "api_base_url": fake_gmail.api_base,
+        },
+        email="assistant@gmail.test",
+        provider=AuthProvider.COMPOSIO,
+    )
+    await _ensure_connector_trigger(
+        db_session,
+        connector_id="gmail",
+        trigger_id="gmail_new_message_ask_user_failfast_e2e",
+        event_type="GMAIL_NEW_GMAIL_MESSAGE",
+    )
+    _agent, surface = await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "GMAIL", "account_id": str(account.id)},
+        toolsets=["USER_INTERACTION"],
+    )
+    surface_model = await db_session.get(AgentSurface, UUID(surface["id"]))
+    assert surface_model is not None
+    assert surface_model.schedule_id is not None
+
+    # The model calls ask_user first (which must fall through on email), then
+    # delivers via the reply tool. If ask_user paused instead, the reply step
+    # would never run and wait_for_messages would time out.
+    await process_ingress_and_run_scripted(
+        db_session,
+        SurfaceScheduleIngress(
+            schedule_id=surface_model.schedule_id,
+            payload=_gmail_payload(
+                sender_email=fixed_test_user["email"],
+                assistant_email="assistant@gmail.test",
+                thread_id="gmail-thread-ask-user-failfast-e2e",
+                message_id="gmail-message-ask-user-failfast-1",
+                text="Can you help over Gmail?",
+            ),
+            account_id=account.id,
+            pod_id=UUID(pod_id),
+            user_id=UUID(fixed_test_user["id"]),
+        ),
+        script=[
+            script_ask_user(_QUESTIONS, tool_call_id=_TOOL_CALL_ID),
+            script_email_reply("gmail_reply_email", "Here is my answer."),
+        ],
     )
 
     gmail_messages = await wait_for_messages(message_store, "GMAIL_REPLY", min_count=1)

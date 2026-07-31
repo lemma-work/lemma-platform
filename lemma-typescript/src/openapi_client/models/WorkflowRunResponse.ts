@@ -2,8 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { FlowRunStatus } from './FlowRunStatus.js';
 import type { StepRecordResponse } from './StepRecordResponse.js';
+import type { WorkflowRunStatus } from './WorkflowRunStatus.js';
 import type { WorkflowRunWaitResponse } from './WorkflowRunWaitResponse.js';
 /**
  * Full run state. `execution_context` is the same flat view that
@@ -19,15 +19,14 @@ export type WorkflowRunResponse = {
     error?: (string | null);
     execution_context?: Record<string, any>;
     failed_node_id?: (string | null);
-    flow_id: string;
     id: string;
     pod_id: string;
     schedule_event_id?: (string | null);
     start_type?: string;
     started_at?: (string | null);
-    status?: FlowRunStatus;
+    status?: WorkflowRunStatus;
     step_history?: Array<StepRecordResponse>;
     updated_at?: (string | null);
     user_id: string;
+    workflow_id: string;
 };
-

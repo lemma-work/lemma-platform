@@ -12,8 +12,8 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
-    ChannelService,
     get_channel_service,
 )
 from app.core.log.log import get_logger
@@ -29,14 +29,15 @@ async def publish_bundle_event(
     job_id: UUID,
     payload: dict[str, Any],
     *,
-    channel_service: ChannelService | None = None,
+    channel_service: RealtimeChannel | None = None,
 ) -> None:
     try:
         service = channel_service or await get_channel_service()
         await service.publish(bundle_job_channel(job_id), payload)
-    except Exception as exc:
-        logger.warning(
-            "Failed publishing pod-bundle realtime event for job %s: %s", job_id, exc
+    except Exception:
+        logger.debug(
+            'pod_bundle.realtime.publishing_pod_bundle_realtime_event.diagnostic',
+            job_id=job_id,
         )
 
 

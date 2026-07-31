@@ -14,4 +14,3 @@ export type FileSearchRequest = {
     scope_path?: (string | null);
     search_method?: SearchMethod;
 };
-

@@ -12,7 +12,10 @@ const queue = process.argv.includes('--queue');
 const summary = process.argv.includes('--summary');
 const printBaseline = process.argv.includes('--print-baseline');
 const baselinePath = parseArgValue('--baseline');
-const targets = ['app', 'components'];
+// `styles` carries the token definitions, the shared primitive layer, and the
+// per-feature stylesheets. It was omitted here, so ~24k lines of CSS — where
+// the scale drift actually accumulates — were never audited.
+const targets = ['app', 'components', 'styles'];
 const changedMode = hasArg('--changed');
 const explicitPathMode = hasArg('--paths');
 const pathFilters = parseArgList('--paths');
@@ -47,6 +50,16 @@ const protectedUiFiles = new Map([
     'components/lemma/assistant/assistant-experience-helpers.tsx',
     'Protected assistant experience surface (extracted from assistant-experience.tsx). Report drift, but do not block unrelated design-system cleanup.',
   ],
+]);
+
+const allowedInlineSvgFiles = new Set([
+  'components/docs/how-lemma-works-map.tsx',
+  'components/education/concept-illustration.tsx',
+  'components/education/first-win-checklist.tsx',
+  'components/landing/hero-builds-collage.tsx',
+  'components/landing/landing-animations.tsx',
+  'components/lemma/assistant/assistant-parts.tsx',
+  'components/shared/resource-icon-uploader.tsx',
 ]);
 
 if (help) {
@@ -88,6 +101,38 @@ Common commands:
 }
 
 const checks = [
+  {
+    id: 'foreignIconLibrary',
+    label: 'imports from non-Phosphor icon libraries',
+    pattern: /from\s+['"](?:lucide-react|react-icons(?:\/[^'"]*)?)['"]/g,
+    allowed() {
+      return false;
+    },
+  },
+  {
+    id: 'directPhosphorImport',
+    label: 'direct Phosphor imports outside the icon vocabulary',
+    pattern: /from\s+['"]@phosphor-icons\/react(?:\/ssr)?['"]/g,
+    allowed(path) {
+      return path === 'components/ui/icons.ts';
+    },
+  },
+  {
+    id: 'productIconToneApi',
+    label: 'resource identity passed through a ProductIcon tone API',
+    pattern: /\bproductIconTone\b|<ProductIcon\b[^>]*\btone\s*=/g,
+    allowed() {
+      return false;
+    },
+  },
+  {
+    id: 'unapprovedInlineSvg',
+    label: 'inline SVG outside approved brand, illustration, and visualization files',
+    pattern: /<svg\b/g,
+    allowed(path) {
+      return allowedInlineSvgFiles.has(path);
+    },
+  },
   {
     id: 'rawHex',
     label: 'raw hex colors',
@@ -540,6 +585,42 @@ const advisoryChecks = [
   },
 ];
 
+// ── Scale-drift helpers ──────────────────────────────────────────────────
+// Shared by the three CSS declaration checks below.
+
+// Files that legitimately carry raw values: the token definitions themselves,
+// the Tailwind entrypoint, and the landing pages, which design.md explicitly
+// exempts from the product scale ("Landing pages intentionally diverge").
+function allowedScaleSource(path) {
+  return (
+    path.endsWith('styles/tokens.css') ||
+    path.endsWith('app/globals.css') ||
+    path.includes('/landing') ||
+    path.includes('landing-')
+  );
+}
+
+// Two kinds of selector legitimately sit off the scale.
+//
+// 1. Miniature fake-UI illustrations — the starter/template preview tiles that
+//    render a whole pretend app at thumbnail size. Their type is deliberately
+//    sub-scale; snapping it to --text-xs would blow the illustration apart.
+//
+// 2. Drawn geometry — the brand mark and the loaders. `.lemma-mark-*` is a
+//    1px-increment ladder (2/3/4/5/6px gaps against 3/4/5/6/7px bars); putting
+//    it on the space scale would collapse two sizes into one and redraw the
+//    logo. These are figures, not chrome.
+//
+// Keyed on the selector, which is why the patterns capture it.
+function isIllustrationSelector(match) {
+  const selector = match.slice(0, match.indexOf('{'));
+  return (
+    /(?:^|[\s,.#])(?:starter|mock|illus|collage|glyph|sparkline)[\w-]*|[\w-]*-(?:preview|thumb|mini|illustration|figure)\b/.test(
+      selector
+    ) || /\b(?:lemma-mark|lemma-step-bar|lemma-step-loader|lemma-page-loader|anomalous-orb)[\w-]*/.test(selector)
+  );
+}
+
 const informationalChecks = [
   {
     id: 'rawButtonElements',
@@ -658,7 +739,22 @@ const informationalChecks = [
         /\blemma-assistant-runtime-trigger-button\b/.test(match) ||
         /\blemma-assistant-runtime-choice-button\b/.test(match) ||
         /\blemma-assistant-runtime-group-button\b/.test(match) ||
-        /\blemma-assistant-file-remove-button\b/.test(match)
+        /\blemma-assistant-file-remove-button\b/.test(match) ||
+        /\bmarkdown-selection-item\b/.test(match) ||
+        /\bagent-identity-avatar\b/.test(match) ||
+        /\bagent-access-row-main\b/.test(match) ||
+        /\bagent-access-rail-item\b/.test(match) ||
+        /\bagent-dock-stale\b/.test(match) ||
+        /\bfolder-picker-disclosure\b/.test(match) ||
+        /\bfolder-picker-option\b/.test(match) ||
+        /\bflow-run-compact\b/.test(match) ||
+        /\bsurface-inline-callout\b/.test(match) ||
+        /\bresource-option-button\b/.test(match) ||
+        /\bresource-chip-button\b/.test(match) ||
+        /\blemma-quiet-text-button\b/.test(match) ||
+        /\bsurface-copy-field\b/.test(match) ||
+        /\bsurface-identity-option\b/.test(match) ||
+        /\bsurface-default-option\b/.test(match)
       );
     },
   },
@@ -738,6 +834,14 @@ const informationalChecks = [
       }
 
       if (/\bagent-test-field\b/.test(match)) {
+        return true;
+      }
+
+      if (/\bagent-identity-name-input\b/.test(match)) {
+        return true;
+      }
+
+      if (/\bagent-identity-description-field\b/.test(match)) {
         return true;
       }
 
@@ -837,6 +941,54 @@ const informationalChecks = [
     allowed(path) {
       return path.includes('/landing/');
     },
+  },
+  {
+    id: 'pageBodyRepeatsResourceName',
+    label: 'Page body headings that reprint the ResourceHeader title (design.md §7)',
+    // The shell can already print a resource name in the tab strip, the
+    // sidebar, and the context bar. A heading in the page body that renders the
+    // same expression makes it four, which is what drove routes to delete their
+    // header outright. Hand the title to another band via `titleOwner` instead.
+    // Matches `<h1..h3>{expr}` where `expr` is also passed as `title={expr}`.
+    pattern: /<h[1-3][^>]*>\s*\{\s*(?:formatAgentName\()?\s*([\w.]+)\s*\)?\s*\}/g,
+    allowed(path) {
+      return !path.startsWith('app/pod/') || path.includes('/landing');
+    },
+    allowedMatch(match, rel) {
+      const expr = /\{\s*(?:formatAgentName\()?\s*([\w.]+)/.exec(match)?.[1];
+      if (!expr) return true;
+      const source = readFileSync(join(root, rel), 'utf8');
+      // Only a violation when the same expression is also the header title.
+      return !new RegExp(`title=\\{\\s*(?:formatAgentName\\()?\\s*${expr.replace('.', '\\.')}\\b`).test(source);
+    },
+  },
+  {
+    id: 'rawFontSizeDeclaration',
+    label: 'CSS font-size declarations off the type scale',
+    // The Tailwind-class rules above only see `text-[13px]`; a hand-picked
+    // `font-size: 0.688rem` in a stylesheet was invisible to every check.
+    // Match the declaration together with its selector so miniature mock
+    // illustrations can be exempted by name in allowedMatch.
+    pattern: /[.#][\w-]+[^{}]*\{[^{}]*?font-size:\s*(?!var\()[0-9.]+(?:px|r?em)/g,
+    allowed: allowedScaleSource,
+    allowedMatch: isIllustrationSelector,
+  },
+  {
+    id: 'rawRadiusDeclaration',
+    label: 'CSS border-radius declarations off the radius scale',
+    // Percentages are geometric circles, not scale steps, so they stay legal.
+    pattern: /[.#][\w-]+[^{}]*\{[^{}]*?border-radius:\s*(?!var\()[0-9.]+(?:px|r?em)/g,
+    allowed: allowedScaleSource,
+    allowedMatch: isIllustrationSelector,
+  },
+  {
+    id: 'rawSpacingDeclaration',
+    label: 'CSS padding/gap declarations off the space scale',
+    // padding and gap had 0% token adoption across styles/features, which is
+    // what makes comparable surfaces sit at visibly different densities.
+    pattern: /[.#][\w-]+[^{}]*\{[^{}]*?(?:padding|gap):\s*(?!var\()(?:[0-9.]*[1-9][0-9.]*)(?:px|r?em)/g,
+    allowed: allowedScaleSource,
+    allowedMatch: isIllustrationSelector,
   },
 ];
 
@@ -1072,6 +1224,28 @@ function findMatches(source, check, rel) {
   return matches;
 }
 
+// The scale checks are the only ones that read the stylesheet layer today.
+//
+// `styles/` sat outside `targets` entirely until these checks were added, so
+// every legacy check is unproven there: switching them all on at once surfaces
+// ~1.4k pre-existing colour violations, the bulk of them in landing CSS (which
+// design.md exempts by design) and in tokens.css (which necessarily contains
+// the literal hex it defines). Those are strict checks, and strict cannot be
+// ratcheted — CI would be red with no way to burn it down incrementally.
+//
+// So the stylesheet layer runs the scale checks now, and Phase 3 enables the
+// colour checks there file by file as each one is cleaned.
+const stylesheetLayerCheckIds = new Set([
+  'rawFontSizeDeclaration',
+  'rawRadiusDeclaration',
+  'rawSpacingDeclaration',
+]);
+
+function checkAppliesTo(check, rel) {
+  if (rel.startsWith('styles/')) return stylesheetLayerCheckIds.has(check.id);
+  return true;
+}
+
 function collect(checkList) {
   const totals = Object.fromEntries(checkList.map((check) => [check.id, 0]));
   const protectedTotals = emptyTotals(checkList);
@@ -1084,6 +1258,7 @@ function collect(checkList) {
     const isProtected = protectedUiFiles.has(rel);
 
     for (const check of checkList) {
+      if (!checkAppliesTo(check, rel)) continue;
       if (check.allowed(rel)) continue;
 
       const matches = findMatches(source, check, rel);

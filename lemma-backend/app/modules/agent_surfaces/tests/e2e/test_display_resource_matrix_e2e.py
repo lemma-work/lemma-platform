@@ -31,12 +31,17 @@ N/A cells:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import pytest
+from agentbox_client import PortAccessGrant, PortProtocol, WorkloadKind
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.agent.tools.user_interaction import (
+    pydantic_adapter as user_interaction_adapter,
+)
 from app.modules.agent_surfaces.config import surface_settings
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfacePlatformWebhookIngress,
@@ -141,9 +146,7 @@ async def test_display_resource_slack_small_file_attaches_natively(
         db_session,
         SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
         script=[
-            script_display_resource(
-                type="FILE", path=path, tool_call_id=_TOOL_CALL_ID
-            ),
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
             script_text("Here you go."),
         ],
     )
@@ -204,14 +207,14 @@ async def test_display_resource_slack_large_file_falls_back_to_link(
         content=big,
     )
 
-    dm_payload = _load_slack_dm_fixture(text="show the big file", ts="1700002200.600600")
+    dm_payload = _load_slack_dm_fixture(
+        text="show the big file", ts="1700002200.600600"
+    )
     await process_ingress_and_run_scripted(
         db_session,
         SurfacePlatformWebhookIngress(source="slack", payload=dm_payload, headers={}),
         script=[
-            script_display_resource(
-                type="FILE", path=path, tool_call_id=_TOOL_CALL_ID
-            ),
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
             script_text("Here's a link instead."),
         ],
     )
@@ -224,6 +227,241 @@ async def test_display_resource_slack_large_file_falls_back_to_link(
     # like the Teams case below.
     rendered = json.dumps(slack_messages)
     assert "app.example.test" in rendered
+
+
+async def test_display_resource_slack_routes_pod_resource_catalog_to_deep_links(
+    authenticated_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fixed_test_user,
+    fake_slack,
+    message_store,
+    monkeypatch,
+):
+    """A catalog-style request renders every non-widget pod resource shape.
+
+    This starts at the Slack ingress boundary, runs the real agent harness and
+    ``display_resource`` tool, persists every tool result, and finally observes
+    the platform cards sent to Slack.  It protects the frontend deep-link
+    contract for named resources, collection views, filtered tables, read-only
+    queries, and file-viewer fallbacks in one realistic user turn.
+    """
+    from app.core.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    monkeypatch.setattr(app_settings, "frontend_url", "https://app.example.test")
+    monkeypatch.setattr(surface_settings, "slack_signing_secret", "slack-secret")
+    browser_access_calls: list[tuple[UUID, int]] = []
+
+    class _FakeWorkspaceSandboxService:
+        """Keep this surface-delivery journey hermetic at the AgentBox boundary."""
+
+        async def create_browser_access(
+            self,
+            user_id: UUID,
+            *,
+            ttl_seconds: int,
+        ) -> PortAccessGrant:
+            browser_access_calls.append((user_id, ttl_seconds))
+            return PortAccessGrant(
+                workload_kind=WorkloadKind.WORKSPACE,
+                logical_id=user_id,
+                port=4848,
+                protocol=PortProtocol.HTTP,
+                url="https://agentbox.example.test/port-access/browser-token",
+                expires_at=datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds),
+            )
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        user_interaction_adapter,
+        "WorkspaceSandboxService",
+        _FakeWorkspaceSandboxService,
+    )
+    pod_id = test_pod["id"]
+    account = await _ensure_connector_account(
+        db_session,
+        user_id=fixed_test_user["id"],
+        connector_id="slack",
+        credentials={
+            "access_token": "xoxb-resource-catalog",
+            "scope": "chat:write",
+            "api_base_url": fake_slack.base_url,
+            "raw_response": {
+                "bot_user_id": "U0AGSSTQZLH",
+                "team_id": "T0123456",
+                "api_base_url": fake_slack.base_url,
+            },
+        },
+    )
+    await _create_agent_surface(
+        authenticated_client,
+        pod_id,
+        config={"type": "SLACK", "account_id": str(account.id)},
+        toolsets=["USER_INTERACTION"],
+    )
+
+    long_query = "SELECT * FROM incidents WHERE summary ILIKE '%outage%' " + (
+        "AND resolved_at IS NULL " * 12
+    )
+    invalid_calls = [
+        script_display_resource(
+            type="BROWSER", name="browser", tool_call_id="tool-invalid-browser"
+        ),
+        script_display_resource(
+            type="AGENT", path="/me/not-an-agent", tool_call_id="tool-invalid-path"
+        ),
+        script_display_resource(
+            type="AGENT",
+            content="<div>not a widget</div>",
+            tool_call_id="tool-invalid-content",
+        ),
+        script_display_resource(
+            type="AGENT",
+            loading_messages=["Loading"],
+            tool_call_id="tool-invalid-loading",
+        ),
+        script_display_resource(
+            type="FILE",
+            path="/private/tmp/report.pdf",
+            tool_call_id="tool-invalid-private-file",
+        ),
+        script_display_resource(type="WIDGET", tool_call_id="tool-invalid-widget"),
+        script_display_resource(
+            type="AGENT", query="SELECT 1", tool_call_id="tool-invalid-query"
+        ),
+        script_display_resource(
+            type="TABLE",
+            name="incidents",
+            filters=[{"field": "status", "op": "eq", "value": "OPEN"}],
+            query="SELECT 1",
+            tool_call_id="tool-invalid-table-combination",
+        ),
+        script_display_resource(
+            type="TABLE",
+            filters=[{"field": "status", "op": "eq", "value": "OPEN"}],
+            tool_call_id="tool-invalid-table-filter",
+        ),
+    ]
+    resource_calls = [
+        script_display_resource(type="BROWSER", tool_call_id="tool-browser"),
+        script_display_resource(
+            type="TABLE",
+            name="incidents",
+            filters=[{"field": "status", "op": "eq", "value": "OPEN"}],
+            tool_call_id="tool-table-filtered",
+        ),
+        script_display_resource(
+            type="TABLE",
+            query=long_query,
+            tool_call_id="tool-table-query",
+        ),
+        script_display_resource(
+            type="AGENT", name="incident-triage", tool_call_id="tool-agent"
+        ),
+        # Lowercase deliberately exercises the public model's case-insensitive
+        # enum coercion, as model providers do not always preserve enum casing.
+        script_display_resource(type="agent", tool_call_id="tool-agents"),
+        script_display_resource(
+            type="FUNCTION", name="summarize-incident", tool_call_id="tool-function"
+        ),
+        script_display_resource(type="FUNCTION", tool_call_id="tool-functions"),
+        script_display_resource(
+            type="WORKFLOW", name="incident-response", tool_call_id="tool-workflow"
+        ),
+        script_display_resource(type="WORKFLOW", tool_call_id="tool-workflows"),
+        script_display_resource(
+            type="APP", name="incident-dashboard", tool_call_id="tool-app"
+        ),
+        script_display_resource(type="APP", tool_call_id="tool-apps"),
+        script_display_resource(
+            type="SCHEDULE", name="daily-triage", tool_call_id="tool-schedule"
+        ),
+        script_display_resource(type="SCHEDULE", tool_call_id="tool-schedules"),
+        script_display_resource(type="FILE", tool_call_id="tool-files"),
+        script_display_resource(
+            type="FILE",
+            path=r"/pod//reports\quarterly.pdf",
+            tool_call_id="tool-missing-file",
+        ),
+    ]
+    context = await process_ingress_and_run_scripted(
+        db_session,
+        SurfacePlatformWebhookIngress(
+            source="slack",
+            payload=_load_slack_dm_fixture(
+                text="Show me the incident resources and current report views",
+                ts="1700002250.600600",
+            ),
+            headers={},
+        ),
+        script=[
+            *invalid_calls,
+            *resource_calls,
+            script_text("The incident catalog is ready."),
+        ],
+    )
+
+    messages = await _messages_for_conversation(
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
+    )
+    tool_returns = [
+        message
+        for message in messages
+        if message.get("kind") == "TOOL_RETURN"
+        and str(message.get("tool_call_id", "")).startswith("tool-")
+    ]
+    assert len(tool_returns) == len(invalid_calls) + len(resource_calls)
+    invalid_returns = [
+        message
+        for message in tool_returns
+        if str(message["tool_call_id"]).startswith("tool-invalid-")
+    ]
+    assert len(invalid_returns) == len(invalid_calls)
+    assert all(
+        message["tool_result"]["success"] is False for message in invalid_returns
+    )
+    successful_returns = [
+        message for message in tool_returns if message not in invalid_returns
+    ]
+    unexpected_failures = [
+        {
+            "tool_call_id": message["tool_call_id"],
+            "tool_result": message["tool_result"],
+        }
+        for message in successful_returns
+        if not message["tool_result"]["success"]
+    ]
+    assert unexpected_failures == []
+    assert browser_access_calls == [(UUID(fixed_test_user["id"]), 1800)]
+
+    slack_messages = await wait_for_messages(
+        message_store, "SLACK", min_count=len(resource_calls) + 1
+    )
+    rendered = json.dumps(slack_messages)
+    # Every Lemma-owned resource gets a frontend deep link. BROWSER is the one
+    # exception: it intentionally opens the short-lived AgentBox URL asserted
+    # separately below.
+    assert rendered.count("https://app.example.test/pod/") >= len(resource_calls) - 1
+    assert "incidents" in rendered
+    assert "/port-access/" in rendered
+    assert "incident-triage" in rendered
+    assert "summarize-incident" in rendered
+    assert "incident-response" in rendered
+    assert "incident-dashboard" in rendered
+    assert "daily-triage" in rendered
+    assert "%2Freports%2Fquarterly.pdf" in rendered
+    assert (
+        sum(
+            message.get("text") == "The incident catalog is ready."
+            for message in slack_messages
+        )
+        == 1
+    )
 
 
 async def test_display_resource_teams_file_always_falls_back_to_link(
@@ -260,7 +498,7 @@ async def test_display_resource_teams_file_always_falls_back_to_link(
     account = await _ensure_connector_account(
         db_session,
         user_id=fixed_test_user["id"],
-        connector_id="teams",
+        connector_id="microsoft_teams",
         credentials={
             "access_token": "teams-token",
             "user_data": {"tenant_id": REAL_TEAMS_TENANT_ID},
@@ -289,9 +527,7 @@ async def test_display_resource_teams_file_always_falls_back_to_link(
         db_session,
         SurfacePlatformWebhookIngress(source="teams", payload=payload, headers={}),
         script=[
-            script_display_resource(
-                type="FILE", path=path, tool_call_id=_TOOL_CALL_ID
-            ),
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
             script_text("Here's a link instead."),
         ],
     )
@@ -346,9 +582,7 @@ async def test_display_resource_telegram_small_file_attaches_natively(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
         script=[
-            script_display_resource(
-                type="FILE", path=path, tool_call_id=_TOOL_CALL_ID
-            ),
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
             script_text("Here you go."),
         ],
     )
@@ -406,9 +640,7 @@ async def test_display_resource_telegram_large_file_falls_back_to_link(
         db_session,
         SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={}),
         script=[
-            script_display_resource(
-                type="FILE", path=path, tool_call_id=_TOOL_CALL_ID
-            ),
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
             script_text("Here's a link instead."),
         ],
     )
@@ -470,14 +702,14 @@ async def test_display_resource_whatsapp_small_file_attaches_natively(
         db_session,
         SurfacePlatformWebhookIngress(source="whatsapp", payload=payload, headers={}),
         script=[
-            script_display_resource(
-                type="FILE", path=path, tool_call_id=_TOOL_CALL_ID
-            ),
+            script_display_resource(type="FILE", path=path, tool_call_id=_TOOL_CALL_ID),
             script_text("Here you go."),
         ],
     )
 
-    uploads = await wait_for_messages(message_store, "WHATSAPP_MEDIA_UPLOAD", min_count=1)
+    uploads = await wait_for_messages(
+        message_store, "WHATSAPP_MEDIA_UPLOAD", min_count=1
+    )
     assert uploads[-1]["filename"] == "small.pdf"
     whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=1)
     documents = [m for m in whatsapp_messages if m.get("type") == "document"]
@@ -560,7 +792,9 @@ async def test_display_resource_gmail_attaches_datastore_file_via_composio(
     )
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     tool_return = next(
         m
@@ -653,7 +887,9 @@ async def test_display_resource_outlook_attaches_datastore_file_via_composio(
     )
 
     messages = await _messages_for_conversation(
-        authenticated_client, pod_id=pod_id, conversation_id=str(context.conversation_id)
+        authenticated_client,
+        pod_id=pod_id,
+        conversation_id=str(context.conversation_id),
     )
     tool_return = next(
         m

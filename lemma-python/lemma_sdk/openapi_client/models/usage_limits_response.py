@@ -22,6 +22,7 @@ class UsageLimitsResponse:
         org_monthly (UsageLimitScopeResponse):
         organization_id (None | UUID):
         user_id (UUID):
+        user_monthly (UsageLimitScopeResponse):
         user_weekly (UsageLimitScopeResponse):
     """
 
@@ -29,6 +30,7 @@ class UsageLimitsResponse:
     org_monthly: UsageLimitScopeResponse
     organization_id: None | UUID
     user_id: UUID
+    user_monthly: UsageLimitScopeResponse
     user_weekly: UsageLimitScopeResponse
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -45,6 +47,8 @@ class UsageLimitsResponse:
 
         user_id = str(self.user_id)
 
+        user_monthly = self.user_monthly.to_dict()
+
         user_weekly = self.user_weekly.to_dict()
 
         field_dict: dict[str, Any] = {}
@@ -55,6 +59,7 @@ class UsageLimitsResponse:
                 "org_monthly": org_monthly,
                 "organization_id": organization_id,
                 "user_id": user_id,
+                "user_monthly": user_monthly,
                 "user_weekly": user_weekly,
             }
         )
@@ -79,13 +84,15 @@ class UsageLimitsResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | UUID, data)
 
         organization_id = _parse_organization_id(d.pop("organization_id"))
 
         user_id = UUID(d.pop("user_id"))
+
+        user_monthly = UsageLimitScopeResponse.from_dict(d.pop("user_monthly"))
 
         user_weekly = UsageLimitScopeResponse.from_dict(d.pop("user_weekly"))
 
@@ -94,6 +101,7 @@ class UsageLimitsResponse:
             org_monthly=org_monthly,
             organization_id=organization_id,
             user_id=user_id,
+            user_monthly=user_monthly,
             user_weekly=user_weekly,
         )
 

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw } from "@/components/ui/icons";
 import type { AgentRuntimeConfig, AvailableModelInfo } from "lemma-sdk";
 import type {
   AssistantControllerView,

@@ -7,6 +7,7 @@ from app.modules.agent_surfaces.domain.entities import SurfacePlatform
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceValidationError,
 )
+from app.modules.agent_surfaces.domain.surface_connectors import surface_connector_id
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountBindingPort,
     SurfaceAccountInfo,
@@ -37,14 +38,16 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
             # connector account is optional.
             if account_id is not None:
                 await self._require_account_app(
-                    account_id, label="Resend", expected_connector_id="resend"
+                    account_id,
+                    label="Resend",
+                    expected_connector_id=surface_connector_id(platform),
                 )
             return None, None, None
         if platform.is_email:
             await self._require_account_app(
                 account_id,
                 label=platform.value.title(),
-                expected_connector_id=platform.value.lower(),
+                expected_connector_id=surface_connector_id(platform),
             )
             return None, None, None
         if account_id is not None:
@@ -52,7 +55,7 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
             await self._require_account_app(
                 account_id,
                 label=platform.value.title(),
-                expected_connector_id=platform.value.lower(),
+                expected_connector_id=surface_connector_id(platform),
             )
         return None, None, None
 
@@ -85,7 +88,7 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
         account = await self._require_account_app(
             account_id,
             label="Slack",
-            expected_connector_id="slack",
+            expected_connector_id=surface_connector_id(SurfacePlatform.SLACK),
         )
         raw_response = account.credentials.get("raw_response") or {}
         workspace_id = (
@@ -104,7 +107,7 @@ class SurfaceAccountBindingResolver(SurfaceAccountBindingPort):
         account = await self._require_account_app(
             account_id,
             label="Teams",
-            expected_connector_id="teams",
+            expected_connector_id=surface_connector_id(SurfacePlatform.TEAMS),
         )
         raw_response = account.credentials.get("raw_response") or {}
         user_data = account.credentials.get("user_data") or {}

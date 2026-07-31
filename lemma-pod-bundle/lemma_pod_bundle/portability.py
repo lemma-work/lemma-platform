@@ -2,10 +2,20 @@
 
 Some resource fields hold ids that are only valid in the source pod/org and
 break a re-import elsewhere: a workflow's assignee_pod_member_id and a
-schedule/surface account_id. On export we replace each with a ``${name}``
+schedule/surface/etc account_id. On export we replace each with a ``${name}``
 placeholder and record it under ``pod.json -> variables``; on import the
 placeholders are resolved (``--var``, ``--values``, or a per-type default) and
 any still-unresolved ones drop their field so the import still succeeds.
+
+An ``account_id`` reference is tokenized generically for *every* resource type
+(not a hardcoded per-type list): whatever JSON file under
+``<resource_type>/<name>/*.json`` holds an ``account_id`` key must also carry
+sibling ``connector_id``/``provider`` keys (stamped by the exporter from a real
+account lookup, never inferred from the resource's own name), so the recorded
+variable always tells the importer exactly which connector + auth provider it
+needs to reconnect. A resource that has an ``account_id`` but no
+``connector_id``/``provider`` sibling is an exporter bug and fails the export
+immediately rather than producing a variable the importer can't resolve.
 """
 
 from __future__ import annotations
@@ -44,7 +54,10 @@ def _slug_var_name(base: str, existing: dict[str, Any]) -> str:
 
 def _tokenize_ref_fields(node: object, field_keys: frozenset[str], on_value) -> bool:
     """Recursively replace string values stored under ``field_keys`` with the
-    placeholder returned by ``on_value(raw)``. Skips values already templated."""
+    placeholder returned by ``on_value(raw, container)`` — ``container`` is the
+    dict the field was found on, so a caller can read sibling metadata (e.g.
+    ``connector_id``/``provider`` next to ``account_id``). Skips values already
+    templated."""
     changed = False
     if isinstance(node, dict):
         for key, value in list(node.items()):
@@ -55,7 +68,7 @@ def _tokenize_ref_fields(node: object, field_keys: frozenset[str], on_value) -> 
                 and value != POD_MEMBER_TOKEN
                 and not _PLACEHOLDER_RE.fullmatch(value)
             ):
-                node[key] = on_value(value)
+                node[key] = on_value(value, node)
                 changed = True
             elif _tokenize_ref_fields(value, field_keys, on_value):
                 changed = True
@@ -66,10 +79,66 @@ def _tokenize_ref_fields(node: object, field_keys: frozenset[str], on_value) -> 
     return changed
 
 
+def _contains_literal_account_ref(node: object) -> bool:
+    """True if ``node`` still holds a raw (non-``${...}``) value under an
+    account-reference key anywhere in its tree."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if (
+                key in _ACCOUNT_REF_FIELDS
+                and isinstance(value, str)
+                and value
+                and not _PLACEHOLDER_RE.fullmatch(value)
+            ):
+                return True
+            if _contains_literal_account_ref(value):
+                return True
+        return False
+    if isinstance(node, list):
+        return any(_contains_literal_account_ref(item) for item in node)
+    return False
+
+
+def _assert_no_literal_account_ids(bundle_root: Path) -> None:
+    """Defense in depth: after tokenization, no resource file may still hold a
+    literal account id. A source-org account id is meaningless (and often
+    inaccessible) to whoever imports the bundle, so leaking one instead of a
+    ``${var}`` placeholder would silently break re-import elsewhere."""
+    for resource_json in sorted(bundle_root.glob("*/*/*.json")):
+        data = loads_jsonc(resource_json.read_text(encoding="utf-8"))
+        if _contains_literal_account_ref(data):
+            raise ValueError(
+                f"{resource_json.relative_to(bundle_root)} still holds a literal "
+                "account_id after tokenization — refusing to export a bundle "
+                "that leaks a source-org account reference."
+            )
+
+
+def require_account_variable_metadata(variables: dict[str, Any] | None) -> None:
+    """Raise ``ValueError`` if any declared ``type="account"`` variable is
+    missing connector/provider metadata.
+
+    An up-to-date exporter always populates both (enforced by
+    :func:`_extract_portable_variables`); this is the import-side backstop that
+    catches a bundle built before that guarantee existed, or a hand-edited one,
+    at plan/import time instead of importing an account the UI/CLI can't
+    resolve to the right connector.
+    """
+    for name, meta in (variables or {}).items():
+        if str((meta or {}).get("type") or "").lower() != "account":
+            continue
+        if not (meta or {}).get("connector") or not (meta or {}).get("provider"):
+            raise ValueError(
+                f"Variable '{name}' is a connector account reference but is "
+                "missing connector/provider info. Re-export this bundle to "
+                "include it."
+            )
+
+
 def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
-    """Replace non-portable ids in workflows/schedules/surfaces with ``${name}``
-    placeholders and record them under ``pod.json -> variables``. Returns the
-    variables map (possibly empty)."""
+    """Replace non-portable ids in workflows/schedules/surfaces/etc with
+    ``${name}`` placeholders and record them under ``pod.json -> variables``.
+    Returns the variables map (possibly empty)."""
     pod_path = bundle_root / "pod.json"
     if not pod_path.is_file():
         return {}
@@ -90,48 +159,59 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
         for resource_json in sorted((bundle_root).glob(resource_glob)):
             data = loads_jsonc(resource_json.read_text(encoding="utf-8"))
             owner = resource_json.parent.name
-            if _tokenize_ref_fields(data, field_keys, lambda raw, owner=owner: make_ref(owner, raw)):
+            resource_type = resource_json.parent.parent.name
+            if _tokenize_ref_fields(
+                data,
+                field_keys,
+                lambda raw, node, owner=owner, resource_type=resource_type: make_ref(
+                    owner, raw, node, resource_type
+                ),
+            ):
                 resource_json.write_text(
                     json.dumps(data, indent=2) + "\n", encoding="utf-8"
                 )
 
+    def _account_ref_handler(
+        owner: str, raw: str, node: dict[str, Any], resource_type: str
+    ) -> str:
+        connector_id = node.get("connector_id")
+        provider = node.get("provider")
+        if not connector_id or not provider:
+            raise ValueError(
+                f"Bundle resource '{resource_type}/{owner}' has an account_id "
+                "but no connector_id/provider metadata — every exported "
+                "account_id must carry its connector_id and provider so the "
+                "bundle stays portable and the importer can reconnect the "
+                "right connector."
+            )
+        return register(
+            "account",
+            raw,
+            f"{owner}_account",
+            {
+                "description": f"Connector account for {resource_type} '{owner}'",
+                "connector": str(connector_id),
+                "provider": str(provider),
+            },
+        )
+
     rewrite(
         "workflows/*/*.json",
         _MEMBER_REF_FIELDS,
-        lambda owner, raw: register(
+        lambda owner, raw, node, resource_type: register(
             "pod_member",
             raw,
             f"{owner}_assignee",
             {"description": f"Pod member assigned in workflow '{owner}'"},
         ),
     )
-    rewrite(
-        "schedules/*/*.json",
-        _ACCOUNT_REF_FIELDS,
-        lambda owner, raw: register(
-            "account",
-            raw,
-            f"{owner}_account",
-            {"description": f"Connector account for schedule '{owner}'"},
-        ),
-    )
-    rewrite(
-        "surfaces/*/*.json",
-        _ACCOUNT_REF_FIELDS,
-        lambda owner, raw: register(
-            "account",
-            raw,
-            f"{owner}_account",
-            {
-                "description": f"Connector account for the {owner} surface",
-                "platform": owner,
-            },
-        ),
-    )
+    # Generic, resource-type-agnostic: covers surfaces, schedules, and any
+    # future resource type that gains an account_id, with no per-type glue.
+    rewrite("*/*/*.json", _ACCOUNT_REF_FIELDS, _account_ref_handler)
     rewrite(
         "apps/*/*.json",
         _APP_SLUG_FIELDS,
-        lambda owner, raw: register(
+        lambda owner, raw, node, resource_type: register(
             "app_slug",
             raw,
             f"{owner}_slug",
@@ -148,6 +228,8 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
     if variables:
         pod_data["variables"] = variables
         _write_json(pod_path, pod_data)
+
+    _assert_no_literal_account_ids(bundle_root)
     return variables
 
 

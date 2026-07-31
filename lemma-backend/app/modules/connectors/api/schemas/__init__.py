@@ -132,6 +132,10 @@ class AccountResponseSchema(BaseSchema):
     allowed_scopes: Optional[List[str]]
     # Include connector info
     connector: Optional[ConnectorResponseSchema] = None
+    # Auth provider (LEMMA/COMPOSIO) backing this account's auth config. Not on
+    # AccountEntity itself (it lives on the auth config), so the controller
+    # sets it explicitly after model_validate via ConnectorService.get_account_provider.
+    provider: Optional[str] = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
 

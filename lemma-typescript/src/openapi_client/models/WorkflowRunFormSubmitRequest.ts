@@ -15,4 +15,3 @@ export type WorkflowRunFormSubmitRequest = {
      */
     node_id: string;
 };
-

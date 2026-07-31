@@ -385,19 +385,14 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             entity = model.to_entity()
             try:
                 config = entity.datastore_config
-            except ValueError as exc:
-                logger.warning(
-                    "DATASTORE schedule %s has invalid config, skipping: %s",
-                    entity.id,
-                    exc,
+            except ValueError:
+                logger.debug(
+                    'schedule.schedule_repository.datastore_schedule_s_has_invalid.diagnostic'
                 )
                 continue
             if config is None or not config.operations:
-                logger.warning(
-                    "DATASTORE schedule %s declares no operations; operations are "
-                    "required and the schedule will never fire. Update it with "
-                    "explicit operations (INSERT, UPDATE, DELETE).",
-                    entity.id,
+                logger.debug(
+                    'schedule.schedule_repository.datastore_schedule_s_declares_no.diagnostic'
                 )
                 continue
             if operation_value in config.operations:
@@ -424,8 +419,32 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         }
         if run_id is not None:
             values["last_run_id"] = run_id
-        stmt = (
-            update(Schedule).where(Schedule.id == schedule_id).values(**values)
-        )
+        stmt = update(Schedule).where(Schedule.id == schedule_id).values(**values)
         await self.session.execute(stmt)
         await self.session.flush()
+
+    async def increment_consecutive_failures(self, schedule_id: UUID) -> int:
+        """Atomically increment the durable circuit-breaker counter."""
+        count = await self.session.scalar(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=Schedule.consecutive_failures + 1)
+            .returning(Schedule.consecutive_failures)
+        )
+        return int(count or 0)
+
+    async def reset_consecutive_failures(self, schedule_id: UUID) -> None:
+        """Reset the durable circuit-breaker counter after success/reactivation."""
+        await self.session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=0)
+        )
+
+    async def set_consecutive_failures(self, schedule_id: UUID, count: int) -> None:
+        """Set the streak derived from distinct terminal schedule runs."""
+        await self.session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=max(0, count))
+        )

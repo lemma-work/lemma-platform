@@ -10,21 +10,21 @@ from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
     UnitOfWorkFactory,
 )
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
-from app.modules.datastore.infrastructure.schema_manager import SchemaManager
-from app.modules.identity.domain.ports import IdentityEmailPort
-from app.modules.identity.infrastructure.adapters.email_adapter import (
-    SmtpIdentityEmailAdapter,
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
 )
-from app.modules.identity.infrastructure.organization_repositories import (
-    OrganizationRepository,
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
 )
-from app.modules.identity.infrastructure.user_repositories import UserRepository
-from app.modules.pod.domain.events import (
-    PodCreatedEvent,
-    PodEvents,
-    PodJoinRequestedEvent,
+from app.core.log.log import get_logger
+from app.modules.identity.contracts import IdentityEmailPort
+from app.composition.pod_identity_wiring import (
+    create_identity_email_port,
+    create_organization_repository,
+    create_user_repository,
 )
+from app.modules.pod.domain.events import PodEvents, PodJoinRequestedEvent
 from app.modules.pod.domain.pod_entities import PodRole
 from app.modules.pod.domain.visibility import roles_allow_required
 from app.modules.pod.infrastructure.pod_repositories import (
@@ -33,6 +33,7 @@ from app.modules.pod.infrastructure.pod_repositories import (
 )
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 def provide_uow_factory() -> UnitOfWorkFactory:
@@ -40,71 +41,70 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def provide_identity_email_port() -> IdentityEmailPort:
-    return SmtpIdentityEmailAdapter()
+    return create_identity_email_port()
 
 
-@router.subscriber(stream=redis_stream_sub(PodEvents.STREAM))
-async def on_pod_created(
-    event: dict,
-    fs_logger: Logger,
-):
-    """Handle pod creation event by provisioning pod-scoped data storage.
-
-    This is a system-level operation, so we use repositories directly
-    instead of going through the service layer (which enforces user-level
-    ACL checks that are not applicable here).
-    """
-    event_type = event.get("event_type")
-    if event_type != PodCreatedEvent.get_event_type():
-        return
-
-    parsed = PodCreatedEvent.model_validate(event)
-    fs_logger.info(f"Processing PodCreatedEvent for pod {parsed.pod_id}")
-
-    schema_manager = SchemaManager()
-    try:
-        await schema_manager.create_datastore_schema(parsed.pod_id)
-        fs_logger.info(f"Created pod data schema for pod {parsed.pod_id}")
-    except Exception as e:
-        fs_logger.error(f"Failed to create pod data schema: {e}")
-
-
-@router.subscriber(stream=redis_stream_sub(PodEvents.STREAM))
+@reliable_redis_stream_subscriber(
+    router,
+    PodEvents.STREAM,
+    group="pod-join-request-events",
+    consumer="pod-join-request-events-consumer",
+)
 async def on_pod_join_requested(
     event: dict,
     fs_logger: Logger,
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     email_port: IdentityEmailPort = Depends(provide_identity_email_port),
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     """Notify pod admins by email when a user requests to join a pod."""
     if event.get("event_type") != PodJoinRequestedEvent.get_event_type():
         return
 
-    parsed = PodJoinRequestedEvent.model_validate(event)
-    fs_logger.info(
-        f"Processing PodJoinRequestedEvent for pod {parsed.pod_id} "
-        f"(request {parsed.join_request_id})"
-    )
+    async def process() -> None:
+        parsed = PodJoinRequestedEvent.model_validate(event)
+        await _process_pod_join_requested(
+            parsed,
+            fs_logger,
+            uow_factory=uow_factory,
+            email_port=email_port,
+        )
+
+    await inbox.process("pod.join-request-email", event, process)
+
+
+async def _process_pod_join_requested(
+    parsed: PodJoinRequestedEvent,
+    fs_logger: Logger,
+    *,
+    uow_factory: UnitOfWorkFactory,
+    email_port: IdentityEmailPort,
+) -> None:
 
     async with uow_factory() as uow:
         pod_repository = PodRepository(uow)
         pod_member_repository = PodMemberRepository(uow)
-        user_repository = UserRepository(uow)
-        organization_repository = OrganizationRepository(uow)
+        user_repository = create_user_repository(uow)
+        organization_repository = create_organization_repository(uow)
 
         pod = await pod_repository.get(parsed.pod_id)
         if not pod:
-            fs_logger.warning(f"Pod {parsed.pod_id} not found; skipping notification")
+            logger.debug(
+                'pod.pod_handlers.pod_not_found_skipping_notification.diagnostic',
+                pod_id=parsed.pod_id,
+            )
             return
 
         requester = await user_repository.get(parsed.requester_user_id)
         if not requester:
-            fs_logger.warning(
-                f"Requester {parsed.requester_user_id} not found; skipping notification"
+            logger.debug(
+                'pod.pod_handlers.requester_not_found_skipping_notification.diagnostic'
             )
             return
         requester_name = (
-            " ".join(part for part in [requester.first_name, requester.last_name] if part)
+            " ".join(
+                part for part in [requester.first_name, requester.last_name] if part
+            )
             or ""
         )
 
@@ -117,12 +117,13 @@ async def on_pod_join_requested(
         admin_emails = [
             member.user_email
             for member in members
-            if member.user_email
-            and roles_allow_required(member.roles, PodRole.ADMIN)
+            if member.user_email and roles_allow_required(member.roles, PodRole.ADMIN)
         ]
 
     if not admin_emails:
-        fs_logger.info(f"No pod admins to notify for pod {parsed.pod_id}")
+        logger.debug(
+            "pod.pod_handlers.no_pod_admins_notify_pod.observed", pod_id=parsed.pod_id
+        )
         return
 
     for admin_email in admin_emails:
@@ -133,7 +134,3 @@ async def on_pod_join_requested(
             requester_name=requester_name,
             requester_email=str(requester.email),
         )
-    fs_logger.info(
-        f"Sent pod join request emails to {len(admin_emails)} admin(s) "
-        f"for pod {parsed.pod_id}"
-    )

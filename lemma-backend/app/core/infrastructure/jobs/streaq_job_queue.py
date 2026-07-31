@@ -5,16 +5,29 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack
 from datetime import datetime
+import json
 from typing import Any, Callable
 
+from opentelemetry import trace
+from opentelemetry.propagate import inject
+from opentelemetry.trace import SpanKind
 from streaq.task import Task, TaskStatus
 from streaq.worker import Worker
 
 from app.core.config import settings
 from app.core.domain.job_queue import JobQueuePort
 from app.core.log.log import get_logger
+from app.core.request_context import current_observability_context
 
 logger = get_logger(__name__)
+tracer = trace.get_tracer(__name__)
+
+_JOB_CONTEXT_PREFIX = "lemma:observability:job-context:"
+_JOB_CONTEXT_MIN_TTL_SECONDS = 48 * 60 * 60
+
+
+def job_context_key(job_id: str) -> str:
+    return f"{_JOB_CONTEXT_PREFIX}{job_id}"
 
 
 def create_streaq_client(*, queue_name: str = "default") -> Worker[None]:
@@ -66,9 +79,8 @@ class SharedStreaqJobQueue(JobQueuePort):
             except ValueError as exc:
                 if "different Context" not in str(exc):
                     raise
-                logger.warning(
-                    "Ignoring streaq queue shutdown context mismatch",
-                    error=str(exc),
+                logger.debug(
+                    "infrastructure.streaq_job_queue.ignoring_streaq_queue_shutdown_context.diagnostic"
                 )
         self._reset_worker()
 
@@ -79,12 +91,42 @@ class SharedStreaqJobQueue(JobQueuePort):
         task = worker.enqueue_unsafe(job_name, **kwargs)
         if task_id is not None:
             task.id = str(task_id)
+        ttl_seconds = _JOB_CONTEXT_MIN_TTL_SECONDS
         if defer_until is not None:
             task.start(schedule=defer_until)
-        # streaq v7: awaiting the Task publishes it (Task.__await__ -> _chain ->
-        # Worker.publish_task), which applies priority/expire/schedule/delay. This
-        # replaces the removed v6 internal `worker.lib.publish_task(...)`.
-        await task
+            now = (
+                datetime.now(defer_until.tzinfo)
+                if defer_until.tzinfo
+                else datetime.now()
+            )
+            ttl_seconds = max(
+                ttl_seconds,
+                int((defer_until - now).total_seconds()) + _JOB_CONTEXT_MIN_TTL_SECONDS,
+            )
+        with tracer.start_as_current_span(
+            "lemma.worker.enqueue",
+            kind=SpanKind.PRODUCER,
+            attributes={"lemma.task_name": job_name, "lemma.job_id": task.id},
+        ):
+            inherited = current_observability_context().as_transport()
+            inject(inherited)
+            if inherited:
+                try:
+                    await worker.redis.set(
+                        job_context_key(task.id),
+                        json.dumps(inherited, separators=(",", ":")),
+                        ex=ttl_seconds,
+                    )
+                except Exception as exc:  # context never changes job semantics
+                    logger.debug(
+                        "worker.context.persist_failed",
+                        job_id=task.id,
+                        task_name=job_name,
+                        error_type=type(exc).__name__,
+                    )
+            # streaq v7: awaiting the Task publishes it (Task.__await__ ->
+            # _chain -> Worker.publish_task), applying schedule/TTL/priority.
+            await task
         return task
 
     async def abort(self, job_id: str, *, timeout_seconds: float | None = None) -> bool:

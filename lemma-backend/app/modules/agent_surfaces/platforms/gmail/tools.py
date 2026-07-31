@@ -5,7 +5,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.email_models import (
     GmailReplyEmailParams,
     GmailReplyEmailResult,
@@ -29,8 +29,11 @@ def build_gmail_surface_toolset(
         """Reply to the current Gmail thread with formatted content and optional pod-file attachments."""
         try:
             return await service.reply_email(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("Gmail tool gmail_reply_email failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.email.reply_failed",
+                exc_info=True,
+            )
             return GmailReplyEmailResult(
                 success=False,
                 error="Gmail reply failed unexpectedly.",

@@ -10,7 +10,7 @@ import {
     Plus,
     Sparkles,
     Workflow,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { FlowTemplate, flowTemplates, getTemplateById } from '@/components/flows/flow-templates';
@@ -168,42 +168,41 @@ export default function NewFlowPage({
         <div className="agent-builder-root flex h-full min-h-0 flex-col">
             <PodPageHeader
                 podId={podId}
-                variant="bar"
                 title="Create workflow"
                 eyebrow="Guided builder"
                 backHref={`/pod/${podId}/flows`}
                 backLabel="Workflows"
-                productIconTone="workflows"
                 meta={<PodHeaderMetrics items={[
                     { label: 'Status', value: hasName ? 'Ready' : 'Draft', tone: hasName ? 'ready' : 'muted' },
                     { label: 'Starter', value: selectedTemplateName, tone: selectedTemplate ? 'ready' : 'muted' },
                 ]} />}
             />
 
-            <main className="min-h-0 flex-1 overflow-y-auto">
-                <div className="agent-builder-canvas mx-auto w-full max-w-[76rem] px-6 pb-24 pt-6">
-                    <section className="agent-builder-hero">
-                        <div className="min-w-0">
-                            <p className="section-label">{activeStep.eyebrow}</p>
-                            <h1 className="agent-builder-title mt-2">{activeStep.label}</h1>
-                            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{activeStep.description}</p>
+            <main className="resource-page-scroll min-h-0 flex-1">
+                <div className="agent-builder-canvas resource-page-column">
+                    <section className="resource-card">
+                        <div className="agent-builder-hero">
+                            <div className="min-w-0">
+                                <p className="resource-card-eyebrow mb-0">{activeStep.eyebrow}</p>
+                                <h1 className="agent-builder-title mt-1">{activeStep.label}</h1>
+                            </div>
+                            <span className="text-xs text-[var(--text-tertiary)]">
+                                {formData.name.trim() || 'Unnamed workflow'}
+                            </span>
                         </div>
-                        <div className="hidden text-right text-sm text-[var(--text-secondary)] sm:block">
-                            <span className="type-eyebrow">Draft</span>
-                            <span className="ml-2 text-[var(--text-primary)]">{formData.name.trim() || 'Unnamed workflow'}</span>
-                        </div>
+                        <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{activeStep.description}</p>
+
+                        <CompactStepProgress
+                            steps={BUILDER_STEPS}
+                            currentStep={currentStep}
+                            stepDone={stepDone}
+                            onSelect={setCurrentStep}
+                        />
                     </section>
 
-                    <CompactStepProgress
-                        steps={BUILDER_STEPS}
-                        currentStep={currentStep}
-                        stepDone={stepDone}
-                        onSelect={setCurrentStep}
-                    />
-
-                    <section className="agent-builder-stage" data-step={currentStep}>
+                    <section className="resource-card agent-builder-stage" data-step={currentStep}>
                         {currentStep === 'details' ? (
-                            <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
+                            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
                                     <div className="space-y-4">
                                         <div>
                                             <Label htmlFor="flow-name" className="type-eyebrow">
@@ -288,8 +287,8 @@ export default function NewFlowPage({
                 </div>
             </main>
 
-            <footer className="resource-footer-glass shrink-0 px-5 py-2.5 backdrop-blur-md">
-                <div className="mx-auto flex w-full max-w-[86rem] items-center justify-between gap-3">
+            <footer className="agent-builder-footer shrink-0">
+                <div className="agent-builder-footer-inner">
                     <div className="min-w-0">
                         <p className="type-eyebrow">
                             Step {currentIndex + 1} of {BUILDER_STEPS.length}
@@ -476,7 +475,7 @@ function WorkflowPreview({
                     <img src={iconUrl} alt="" className="h-14 w-14 shrink-0 rounded-md object-cover" />
                 ) : (
                     <span className="flex h-14 w-14 shrink-0 items-center justify-center">
-                        <ProductIcon tone="workflows" size="lg" />
+                        <ProductIcon kind="workflows" size="lg" />
                     </span>
                 )}
                 <div className="min-w-0">

@@ -11,4 +11,3 @@ export type BulkDeleteRecordsRequest = {
      */
     record_ids: Array<(string | number)>;
 };
-

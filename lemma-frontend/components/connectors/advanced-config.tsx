@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Loader2 } from 'lucide-react';
+import { Loader2 } from '@/components/ui/icons';
 import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 import type { Connector } from '@/lib/types';

@@ -6,4 +6,3 @@ import type { AvailableSurfaceChannelResponse } from './AvailableSurfaceChannelR
 export type AvailableSurfaceChannelsResponse = {
     channels?: Array<AvailableSurfaceChannelResponse>;
 };
-

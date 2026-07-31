@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ToolSearch
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import ModelResponse, SystemPromptPart, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -228,6 +228,100 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     assert result["todos"][0] == "- [ ] ship it"
     assert store["is_sub_agent"] is True
 
+    # Once the current plan is fully complete, new unchecked work starts a
+    # fresh plan instead of retaining completed history forever.
+    result = await call("write_todos", {"todos": ["- [x] ship it"]})
+    assert all(line.startswith("- [x]") for line in result["todos"])
+    result = await call("write_todos", {"todos": ["- [ ] start the next plan"]})
+    assert result["todos"] == ["- [ ] start the next plan"]
+
+    # Multiple lines are an authoritative snapshot, so renamed/replanned tasks
+    # replace the old list rather than accumulating conversation-wide history.
+    result = await call(
+        "write_todos",
+        {"todos": ["- [x] New research", "- [ ] New report"]},
+    )
+    assert result["todos"] == ["- [x] New research", "- [ ] New report"]
+
+    # Some XML-oriented model/tool parsers flatten a string array into one value.
+    # Recover the individual items and their inner checkbox state before storing.
+    result = await call(
+        "write_todos",
+        {
+            "todos": [
+                "- [x] Research</td>\n"
+                "<item>- [x] Build deck</item></item>\n"
+                "<item>- [ ] Upload</item>\n</todos>"
+            ]
+        },
+    )
+    assert result["todos"] == [
+        "- [x] Research",
+        "- [x] Build deck",
+        "- [ ] Upload",
+    ]
+
+    # Status prose from the observed malformed payload is also normalized.
+    result = await call(
+        "write_todos",
+        {
+            "todos": [
+                "RESEARCH DONE</item>\n"
+                "<item>DECK DONE</item>\n"
+                "<item>WRITE HTML DONE</item>\n"
+                "<item>RENDER PDF DONE</item>\n"
+                "<item>UPLOAD DONE"
+            ]
+        },
+    )
+    assert result["todos"] == [
+        "- [x] RESEARCH",
+        "- [x] DECK",
+        "- [x] WRITE HTML",
+        "- [x] RENDER PDF",
+        "- [x] UPLOAD",
+    ]
+
+
+def test_normalize_stored_todos_recovers_observed_corrupt_history():
+    from app.modules.agent.capabilities.todo import _normalize_stored
+
+    stored = [
+        {
+            "done": False,
+            "content": (
+                "[ ] Research Hermes Agent</td>\n"
+                "<item>- [ ] Build deck</td>\n"
+                "<item>- [ ] Upload</td>"
+            ),
+        },
+        {
+            "done": False,
+            "content": (
+                "[x] Research Hermes Agent</item>\n"
+                "<item>- [x] Build deck</item>\n"
+                "<item>- [ ] Upload</item>"
+            ),
+        },
+        {"done": False, "content": "RESEARCH DONE"},
+        {"done": False, "content": "DECK DONE"},
+        {"done": False, "content": "UPLOAD"},
+        {
+            "done": False,
+            "content": (
+                "RESEARCH DONE</item>\n"
+                "<item>DECK DONE</item>\n"
+                "<item>UPLOAD DONE"
+            ),
+        },
+    ]
+
+    assert _normalize_stored(stored) == [
+        {"content": "RESEARCH", "done": True},
+        {"content": "DECK", "done": True},
+        {"content": "UPLOAD", "done": True},
+    ]
+
 
 @pytest.mark.anyio
 async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
@@ -308,6 +402,7 @@ async def test_current_time_and_deferral_in_real_run():
         captured["settings"] = dict(info.model_settings or {})
         parts = messages[-1].parts
         captured["last_text"] = " ".join(getattr(part, "content", "") for part in parts)
+        captured["last_part"] = parts[-1]
         return ModelResponse(parts=[TextPart("done")])
 
     conversation_id = uuid4()
@@ -328,6 +423,10 @@ async def test_current_time_and_deferral_in_real_run():
     assert captured["defer"]["hidden_tool"] is True
     # Current time rides as the trailing (system) message, not the system prompt.
     assert "Current date and time:" in captured["last_text"]
+    last_part = captured["last_part"]
+    assert isinstance(last_part, SystemPromptPart)
+    assert last_part.content.startswith("<notes>")
+    assert last_part.content.endswith("</notes>")
     # Prompt-cache session affinity is applied to the request settings.
     assert captured["settings"].get("openai_user") == str(conversation_id)
 

@@ -276,6 +276,120 @@ async def test_approve_join_request_adds_org_and_pod_membership_when_missing():
     pod_member_repo.create.assert_awaited_once()
 
 
+def _approve_setup(*, approver_role, requester_pod_roles=None):
+    """Wire mocks for an approve_join_request call that creates a NEW member.
+
+    ``approver_role`` is the approver's org role; ``requester_pod_roles`` (when
+    given) makes them a pod member with those roles so an ORG_MEMBER approver can
+    still pass ``_require_manage_permission`` via the pod-admin tier.
+    """
+    pod_id = uuid4()
+    org_id = uuid4()
+    requester_id = uuid4()
+    target_user_id = uuid4()
+
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = PodEntity(
+        id=pod_id, user_id=requester_id, organization_id=org_id, name="Pod"
+    )
+
+    join_request = PodJoinRequestEntity(
+        id=uuid4(),
+        pod_id=pod_id,
+        organization_id=org_id,
+        user_id=target_user_id,
+        status=PodJoinRequestStatus.PENDING,
+    )
+    join_repo = AsyncMock()
+    join_repo.get.return_value = join_request
+    join_repo.update.side_effect = lambda entity: entity
+
+    requester_org_member = _org_member(
+        member_id=uuid4(), role=approver_role, org_id=org_id, user_id=requester_id
+    )
+
+    pod_member_repo = AsyncMock()
+    if requester_pod_roles is not None:
+        pod_member_repo.get_by_pod_and_org_member.return_value = PodMemberEntity(
+            pod_id=pod_id,
+            organization_member_id=requester_org_member.id,
+            roles=requester_pod_roles,
+        )
+    else:
+        pod_member_repo.get_by_pod_and_org_member.return_value = None
+
+    org_repo = AsyncMock()
+    # First get_member: the approver (in _require_manage_permission); second: the
+    # target user (not yet an org member, so a new membership would be created).
+    org_repo.get_member.side_effect = [requester_org_member, None]
+    org_repo.add_member.side_effect = lambda entity: entity
+
+    service = PodJoinRequestService(
+        pod_join_request_repository=join_repo,
+        pod_member_repository=pod_member_repo,
+        pod_repository=pod_repo,
+        organization_repository=org_repo,
+    )
+    return service, join_request, requester_id, org_repo
+
+
+@pytest.mark.asyncio
+async def test_approve_join_request_org_editor_cannot_grant_org_owner():
+    service, join_request, requester_id, org_repo = _approve_setup(
+        approver_role=OrganizationRole.ORG_EDITOR
+    )
+
+    with pytest.raises(PodAccessDeniedError):
+        await service.approve_join_request(
+            join_request.pod_id,
+            join_request.id,
+            requester_id,
+            org_role=OrganizationRole.ORG_OWNER,
+            pod_role=PodRole.USER,
+        )
+    org_repo.add_member.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_approve_join_request_pod_admin_org_member_cannot_grant_org_owner():
+    # A pod admin who is only an ORG_MEMBER can approve join requests, but must
+    # not be able to mint an org owner through the approval.
+    service, join_request, requester_id, org_repo = _approve_setup(
+        approver_role=OrganizationRole.ORG_MEMBER,
+        requester_pod_roles=[PodRole.ADMIN.value],
+    )
+
+    with pytest.raises(PodAccessDeniedError):
+        await service.approve_join_request(
+            join_request.pod_id,
+            join_request.id,
+            requester_id,
+            org_role=OrganizationRole.ORG_OWNER,
+            pod_role=PodRole.USER,
+        )
+    org_repo.add_member.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_approve_join_request_org_owner_may_grant_org_owner():
+    service, join_request, requester_id, org_repo = _approve_setup(
+        approver_role=OrganizationRole.ORG_OWNER
+    )
+
+    result = await service.approve_join_request(
+        join_request.pod_id,
+        join_request.id,
+        requester_id,
+        org_role=OrganizationRole.ORG_OWNER,
+        pod_role=PodRole.USER,
+    )
+
+    assert result.status == PodJoinRequestStatus.APPROVED
+    org_repo.add_member.assert_awaited_once()
+    created = org_repo.add_member.await_args.args[0]
+    assert created.role == OrganizationRole.ORG_OWNER
+
+
 def _org_member(*, member_id, role, org_id, user_id):
     return OrganizationMemberEntity(
         id=member_id, user_id=user_id, organization_id=org_id, role=role

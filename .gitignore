@@ -10,6 +10,10 @@ build/
 .env.*
 !.env.example
 
+# Local runtime data (object storage, generated files, model caches)
+/.local/
+/.benchmark-results/
+
 # Coverage reports
 .coverage
 .coverage.*
@@ -17,6 +21,10 @@ coverage.xml
 coverage-*.xml
 htmlcov/
 coverage/
+coverage-agent-surfaces/
+coverage-backend/
+lemma-backend/coverage-agent-surfaces/
+lemma-backend/coverage-backend/
 lcov.info
 *.lcov
 
@@ -29,3 +37,13 @@ __pycache__/
 *.dev-backend.pid
 *.dev-frontend.pid
 *.dev-infra.pid
+.dev-cloudflared-*.pid
+.dev-logs/
+# Rust build outputs (desktop and local daemon)
+**/target/
+**/.build/
+
+# Local scratch output from screenshot/PDF tooling
+/out/
+/output/
+/tmp/

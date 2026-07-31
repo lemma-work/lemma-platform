@@ -1,0 +1,7 @@
+{
+  "name": "on_ticket",
+  "schedule_type": "WEBHOOK",
+  "config": {},
+  "account_id": "${on_ticket_account}",
+  "connector_trigger_id": "jira_new_issue"
+}

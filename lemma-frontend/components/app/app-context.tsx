@@ -6,12 +6,13 @@ import type { AppPageRef } from '@/lib/types/app';
 
 interface AppContextType {
     pages: AppPageRef[];
+    isLoading: boolean;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export function AppProvider({ children, podId }: { children: ReactNode; podId: string }) {
-    const { data: config } = useAppConfig(podId);
+    const { data: config, isLoading } = useAppConfig(podId);
 
     const pages = useMemo(() => {
         const items = config?.pages || [];
@@ -21,6 +22,7 @@ export function AppProvider({ children, podId }: { children: ReactNode; podId: s
     return (
         <AppContext.Provider value={{
             pages,
+            isLoading,
         }}>
             {children}
         </AppContext.Provider>
@@ -30,7 +32,7 @@ export function AppProvider({ children, podId }: { children: ReactNode; podId: s
 export function useApp() {
     const context = useContext(AppContext);
     if (context === undefined) {
-        throw new Error('useApp must be used within a AppProvider');
+        throw new Error('useApp must be used within an AppProvider');
     }
     return context;
 }

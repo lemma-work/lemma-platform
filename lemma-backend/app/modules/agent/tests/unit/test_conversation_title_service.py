@@ -13,6 +13,7 @@ from app.modules.agent.services.conversation_title_service import (
     _sanitize_title,
 )
 from app.modules.agent.services.realtime import title_updated_payload
+from app.modules.usage.domain.entities import UsageReservation
 
 
 # --- fakes ---------------------------------------------------------------
@@ -87,15 +88,21 @@ def _patch_llm(
             capture["model"] = model
             capture["system_prompt"] = system_prompt
 
-        async def run(self, prompt):
+        async def run(self, prompt, *, usage_limits=None):
             capture["run_calls"] = int(capture["run_calls"]) + 1
             capture["prompt"] = prompt
+            capture["usage_limits"] = usage_limits
             if raise_on_run:
                 raise RuntimeError("llm boom")
             return SimpleNamespace(output=output)
 
     async def _reserve(*, organization_id, user_id, runtime_profile):
-        return None
+        del runtime_profile
+        return UsageReservation(
+            organization_id=organization_id,
+            user_id=user_id,
+            amount_usd=0.01,
+        )
 
     async def _record(*, ctx, runtime_profile, result, status, reservation, metadata):
         capture["usage"].append(status)  # type: ignore[union-attr]
@@ -106,7 +113,7 @@ def _patch_llm(
     # LLM titling is opt-in via CONVERSATION_TITLE_MODEL; enable it for the
     # LLM-path tests regardless of the ambient .env value.
     monkeypatch.setattr(
-        cts.settings,
+        cts.agent_settings,
         "conversation_title_model",
         "accounts/fireworks/models/test-title-model",
     )
@@ -242,7 +249,7 @@ async def test_no_model_configured_uses_first_message_without_llm(
 ) -> None:
     capture = _patch_llm(monkeypatch, output="Should Not Be Used")
     # Opt OUT of LLM titling: no model configured.
-    monkeypatch.setattr(cts.settings, "conversation_title_model", None)
+    monkeypatch.setattr(cts.agent_settings, "conversation_title_model", None)
     conv = _conversation()
     uow = _FakeUow(conv)
     monkeypatch.setattr(cts, "ConversationRepository", _FakeRepo)

@@ -31,15 +31,21 @@ class RuntimeProfileKind(str, Enum):
 
 
 class RuntimeProfileProtocol(str, Enum):
+    """How a profile reaches its runtime.
+
+    The retired local daemon needed one protocol per coding tool
+    (``CODEX_APP_SERVER``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``,
+    ``ANTIGRAVITY``). Agent Host needs one: the tool is identified by the
+    profile's ``harness_id``. Stored rows can still carry a retired value, so
+    the profile repository skips protocols this enum no longer knows rather
+    than failing the whole listing.
+    """
+
     OPENAI_COMPATIBLE = "OPENAI_COMPATIBLE"
     ANTHROPIC_COMPATIBLE = "ANTHROPIC_COMPATIBLE"
     AZURE_OPENAI = "AZURE_OPENAI"
     GOOGLE_VERTEX = "GOOGLE_VERTEX"
-    CODEX_APP_SERVER = "CODEX_APP_SERVER"
-    CLAUDE_CODE = "CLAUDE_CODE"
-    OPENCODE = "OPENCODE"
-    CURSOR = "CURSOR"
-    ANTIGRAVITY = "ANTIGRAVITY"
+    AGENT_HOST = "AGENT_HOST"
 
 
 class RuntimeProfileStatus(str, Enum):
@@ -66,15 +72,7 @@ MODEL_PROVIDER_PROTOCOLS = frozenset(
     }
 )
 
-HARNESS_PROTOCOLS = frozenset(
-    {
-        RuntimeProfileProtocol.CODEX_APP_SERVER,
-        RuntimeProfileProtocol.CLAUDE_CODE,
-        RuntimeProfileProtocol.OPENCODE,
-        RuntimeProfileProtocol.CURSOR,
-        RuntimeProfileProtocol.ANTIGRAVITY,
-    }
-)
+HARNESS_PROTOCOLS = frozenset({RuntimeProfileProtocol.AGENT_HOST})
 
 
 class RuntimeModelCatalogEntry(BaseModel):
@@ -156,19 +154,17 @@ class GoogleVertexRuntimeConfig(BaseModel):
     model_settings: JsonObject = Field(default_factory=dict)
 
 
-class CodexAppServerRuntimeConfig(BaseModel):
-    endpoint_url: HttpUrl | str | None = None
-    binary: str = "codex"
+class HarnessRuntimeConfig(BaseModel):
+    """Everything an Agent Host run needs beyond the harness binding itself.
 
+    ``harness_snapshot_revision`` pins the configuration the profile was saved
+    against, so a harness that changes underneath is caught at dispatch instead
+    of silently running a different configuration.
+    """
 
-class ClaudeCodeRuntimeConfig(BaseModel):
-    endpoint_url: HttpUrl | str | None = None
-    binary: str = "claude"
-
-
-class OpenCodeRuntimeConfig(BaseModel):
-    endpoint_url: HttpUrl | str | None = None
-    binary: str = "opencode"
+    harness_snapshot_revision: str = Field(min_length=1)
+    config_selections: JsonObject = Field(default_factory=dict)
+    host_wait_timeout_seconds: int = Field(default=300, ge=1)
 
 
 RuntimeProfileConfig = (
@@ -176,9 +172,7 @@ RuntimeProfileConfig = (
     | AnthropicCompatibleRuntimeConfig
     | AzureOpenAIRuntimeConfig
     | GoogleVertexRuntimeConfig
-    | CodexAppServerRuntimeConfig
-    | ClaudeCodeRuntimeConfig
-    | OpenCodeRuntimeConfig
+    | HarnessRuntimeConfig
     | JsonObject
 )
 
@@ -191,7 +185,7 @@ class AgentRuntimeProfile(BaseModel):
     id: str
     organization_id: UUID | None = None
     user_id: UUID | None = None
-    daemon_id: UUID | None = None
+    harness_id: UUID | None = None
     scope: RuntimeProfileScope
     kind: RuntimeProfileKind
     protocol: RuntimeProfileProtocol
@@ -223,6 +217,10 @@ class AgentRuntimeProfile(BaseModel):
         if self.kind is RuntimeProfileKind.HARNESS:
             if self.protocol not in HARNESS_PROTOCOLS:
                 raise ValueError("HARNESS profile has invalid protocol")
+            if self.harness_id is None:
+                raise ValueError("HARNESS profile requires harness_id")
+        elif self.harness_id is not None:
+            raise ValueError("Only a HARNESS profile may bind a harness_id")
         if (
             self.scope in {RuntimeProfileScope.ORGANIZATION, RuntimeProfileScope.PERSONAL}
             and self.organization_id is None
@@ -230,8 +228,6 @@ class AgentRuntimeProfile(BaseModel):
             raise ValueError(f"{self.scope.value} profile requires organization_id")
         if self.scope is RuntimeProfileScope.PERSONAL and self.user_id is None:
             raise ValueError("PERSONAL profile requires user_id")
-        if self.daemon_id is not None and self.user_id is None:
-            raise ValueError("Daemon runtime profile requires user_id")
         return self
 
     @property
@@ -241,16 +237,8 @@ class AgentRuntimeProfile(BaseModel):
     def derived_harness_kind(self) -> HarnessKind:
         if self.protocol in MODEL_PROVIDER_PROTOCOLS:
             return HarnessKind.LEMMA
-        if self.protocol is RuntimeProfileProtocol.CODEX_APP_SERVER:
-            return HarnessKind.CODEX
-        if self.protocol is RuntimeProfileProtocol.CLAUDE_CODE:
-            return HarnessKind.CLAUDE_CODE
-        if self.protocol is RuntimeProfileProtocol.OPENCODE:
-            return HarnessKind.OPENCODE
-        if self.protocol is RuntimeProfileProtocol.CURSOR:
-            return HarnessKind.CURSOR
-        if self.protocol is RuntimeProfileProtocol.ANTIGRAVITY:
-            return HarnessKind.ANTIGRAVITY
+        if self.protocol is RuntimeProfileProtocol.AGENT_HOST:
+            return HarnessKind.HARNESS
         raise ValueError(f"Unsupported runtime profile protocol: {self.protocol}")
 
     def public_dict(self) -> dict[str, Any]:

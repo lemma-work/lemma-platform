@@ -4,6 +4,7 @@ import type { ReactNode, RefObject } from "react";
 import { cn } from "@/lib/utils";
 import { InlineLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
+import { ArrowDown, RotateCcw } from "@/components/ui/icons";
 import {
   collectCompletedRunTraceGroups,
   messageHasToolActivity,
@@ -141,6 +142,7 @@ export interface AssistantExperienceConversationProps {
   showAssistantErrorInTranscript: boolean;
   assistantErrorTitle: string;
   assistantErrorDetails: string;
+  onRetryFailedMessage?: () => void;
   showScrollToBottom: boolean;
   onScrollToBottom: () => void;
   isConversationBusy: boolean;
@@ -171,6 +173,7 @@ export function AssistantExperienceConversation({
   showAssistantErrorInTranscript,
   assistantErrorTitle,
   assistantErrorDetails,
+  onRetryFailedMessage,
   showScrollToBottom,
   onScrollToBottom,
   isConversationBusy,
@@ -252,12 +255,26 @@ export function AssistantExperienceConversation({
 
       {showAssistantErrorInTranscript ? (
         <div className="state-surface-error rounded-md px-3.5 py-3 text-xs">
-          <div className="min-w-0">
-            <p className="break-words text-sm font-semibold leading-5">{assistantErrorTitle}</p>
-            {assistantErrorDetails && assistantErrorDetails !== assistantErrorTitle ? (
-              <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[var(--text-secondary)]">
-                {assistantErrorDetails}
-              </pre>
+          <div className="flex min-w-0 items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="break-words text-sm font-semibold leading-5">{assistantErrorTitle}</p>
+              {assistantErrorDetails && assistantErrorDetails !== assistantErrorTitle ? (
+                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-[var(--text-secondary)]">
+                  {assistantErrorDetails}
+                </pre>
+              ) : null}
+            </div>
+            {onRetryFailedMessage ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onRetryFailedMessage}
+                className="h-8 shrink-0 gap-1.5 bg-transparent px-2.5"
+              >
+                <RotateCcw className="size-3.5" aria-hidden="true" />
+                Retry
+              </Button>
             ) : null}
           </div>
         </div>
@@ -272,7 +289,7 @@ export function AssistantExperienceConversation({
         className="sticky bottom-2 z-10 ml-auto size-8 shadow-md"
         aria-label="Scroll to latest messages"
       >
-        ↓
+        <ArrowDown className="size-4" aria-hidden="true" />
       </Button>
       ) : null}
       {(hasMessages || isConversationBusy || showAssistantErrorInTranscript) ? (

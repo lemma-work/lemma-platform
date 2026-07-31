@@ -19,8 +19,10 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from lemma_pod_bundle import load_resource_payload
+from lemma_pod_bundle.apply_fields import SCHEDULE_APPLY_FIELDS
 from lemma_pod_bundle.layout import TABLE_DATA_FILE
 
+from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import PodBundleDomainError
 from app.modules.pod_bundle.domain.state import PlanStep, StepKind
@@ -61,7 +63,6 @@ class BundleApplier:
         handler = {
             StepKind.TABLE: self._apply_table,
             StepKind.TABLE_DATA: self._apply_table_data,
-            StepKind.FUNCTION: self._apply_function,
             StepKind.AGENT: self._apply_agent,
             StepKind.AGENT_GRANTS: self._apply_agent_grants,
             StepKind.SCHEDULE: self._apply_schedule,
@@ -70,8 +71,8 @@ class BundleApplier:
             StepKind.FILE: self._apply_file,
         }.get(step.kind)
         if handler is None:
-            # APP is applied by the self-scoped AppStepRunner (it builds in the
-            # agentbox with no pooled connection held), so it never reaches here.
+            # APP and FUNCTION are applied by self-scoped runners because they
+            # perform AgentBox/storage I/O with no pooled connection held.
             raise StepNotApplicableError(
                 f"{step.kind.value} import is not supported yet; skipped."
             )
@@ -89,8 +90,8 @@ class BundleApplier:
     # --- tables ----------------------------------------------------------
 
     async def _apply_table(self, step: PlanStep) -> None:
-        from app.modules.datastore.api.dependencies import build_table_service
-        from app.modules.datastore.domain.datastore_entities import ColumnSchema
+        from app.composition.pod_bundle_resources import build_table_service
+        from app.modules.datastore.contracts import ColumnSchema
 
         service = build_table_service(self._uow)
         payload = self._load("tables", step.name)
@@ -127,11 +128,11 @@ class BundleApplier:
                 await service.remove_column(self._pod_id, step.name, name, self._ctx)
 
     async def _apply_table_data(self, step: PlanStep) -> None:
-        from app.modules.datastore.api.dependencies import (
+        from app.composition.pod_bundle_resources import (
             build_record_service,
             build_table_service,
         )
-        from app.modules.datastore.services.table_context import TableContext
+        from app.modules.datastore.contracts import TableContext
 
         data_path = self._root / "tables" / step.name / TABLE_DATA_FILE
         if not data_path.is_file():
@@ -163,7 +164,7 @@ class BundleApplier:
         """Create a bundled folder or file. Idempotent: an existing path is left
         as-is (create-once by path), so a replayed step converges. Folders are
         planned parent-first, so the parent exists by the time a child runs."""
-        from app.modules.datastore.api.dependencies import build_file_service
+        from app.composition.pod_bundle_resources import build_file_service
 
         parts = [p for p in str(step.name or "").split("/") if p]
         if not parts:
@@ -191,10 +192,11 @@ class BundleApplier:
             return
         meta = _file_manifest_entry(files_root, pod_path)
         directory_path = "/" + "/".join(parts[:-1]) if len(parts) > 1 else "/"
+        file_content = await run_blocking(source.read_bytes, limiter="cpu_bound")
         await service.create_file(
             self._pod_id,
             parts[-1],
-            source.read_bytes(),
+            file_content,
             self._ctx,
             description=meta.get("description"),
             directory_path=directory_path,
@@ -202,72 +204,10 @@ class BundleApplier:
             visibility=meta.get("visibility") or "POD",
         )
 
-    # --- functions -------------------------------------------------------
-
-    async def _apply_function(self, step: PlanStep) -> None:
-        from app.modules.function.api.dependencies import build_function_service
-        from app.modules.function.domain.entities import (
-            FunctionEntity,
-            FunctionUpdateEntity,
-        )
-
-        service = build_function_service(self._uow)
-        payload = self._load("functions", step.name)
-        code = payload.get("code")
-        code = code if isinstance(code, str) else None
-        existing = await service.get_function_by_name(
-            self._pod_id, step.name, self._user_id, raise_not_found=False, ctx=self._ctx
-        )
-        if existing is None:
-            entity = FunctionEntity(
-                pod_id=self._pod_id,
-                user_id=self._user_id,
-                name=step.name,
-                description=payload.get("description"),
-                icon_url=payload.get("icon_url"),
-                config=payload.get("config"),
-                visibility=payload.get("visibility") or "POD",
-            )
-            function = await service.create_function(
-                entity, self._user_id, code=code, ctx=self._ctx
-            )
-        else:
-            function = await service.update_function(
-                self._pod_id,
-                step.name,
-                FunctionUpdateEntity(
-                    description=payload.get("description"),
-                    icon_url=payload.get("icon_url"),
-                    code=code,
-                    config=payload.get("config"),
-                    visibility=payload.get("visibility"),
-                ),
-                self._user_id,
-                ctx=self._ctx,
-            )
-
-        # Resource grants (e.g. datastore-table read/write) are what let the
-        # function's LemmaDataStoreClient actually reach its tables at run time.
-        # Apply them in the same short UoW as the create/update so an imported
-        # function is executable immediately, then drop the delegated-token env
-        # cache so the new scopes take effect on the next run.
-        grants = _grants_from_payload(payload)
-        if grants and function.id is not None:
-            from app.modules.workspace.services.workspace_tool_runtime import (
-                invalidate_function_workspace_env_cache,
-            )
-
-            await self._apply_grants(
-                grantee_type="FUNCTION", grantee_id=function.id, grants=grants
-            )
-            await invalidate_function_workspace_env_cache(
-                pod_id=self._pod_id, function_id=function.id
-            )
-
     # --- agents ----------------------------------------------------------
 
     async def _apply_agent(self, step: PlanStep) -> None:
-        from app.modules.agent.api.dependencies import get_agent_service
+        from app.composition.pod_bundle_resources import get_agent_service
 
         service = get_agent_service(self._uow)
         payload = self._load("agents", step.name)
@@ -312,7 +252,7 @@ class BundleApplier:
     async def _apply_agent_grants(self, step: PlanStep) -> None:
         """Deferred grant step: replace an agent's resource permission grants once
         every resource it references (tables, functions) has been applied."""
-        from app.modules.agent.api.dependencies import get_agent_service
+        from app.composition.pod_bundle_resources import get_agent_service
 
         payload = self._load("agents", step.name)
         grants = _grants_from_payload(payload)
@@ -361,9 +301,62 @@ class BundleApplier:
 
     # --- schedules -------------------------------------------------------
 
+    async def _validate_account_binding(
+        self,
+        *,
+        account_id: object,
+        expected_connector: object,
+        expected_provider: object,
+        resource_label: str,
+    ) -> None:
+        """Guard against a surface/schedule being wired to the wrong connector
+        account on import.
+
+        The bundle stamps every account reference with the ``connector_id`` (and
+        ``provider``) it was exported against; the importer supplies one of *their
+        own* org's account ids for the ``${..._account}`` variable. Here we confirm
+        that supplied account actually exists in the target org and belongs to the
+        expected connector — otherwise the resource is created pointing at a
+        missing/mismatched account and only fails opaquely when it next runs. The
+        connector match mirrors the surface account-binding rule
+        (``SurfaceAccountBindingResolver``), so an imported surface is held to the
+        same contract as a hand-configured one.
+        """
+        if not account_id or not expected_connector:
+            return
+        try:
+            account_uuid = (
+                account_id if isinstance(account_id, UUID) else UUID(str(account_id))
+            )
+        except (ValueError, TypeError) as exc:
+            raise PodBundleDomainError(
+                f"{resource_label} was given an invalid connector account id "
+                f"'{account_id}'.",
+                code="POD_BUNDLE_ACCOUNT_INVALID",
+            ) from exc
+
+        from app.composition.pod_bundle_resources import get_connector_service
+
+        service = get_connector_service(self._uow)
+        account = await service.account_repository.get(account_uuid)
+        if account is None:
+            raise PodBundleDomainError(
+                f"{resource_label} references a connector account that does not "
+                f"exist in this org. Connect a '{expected_connector}' account and "
+                "supply its id for this import.",
+                code="POD_BUNDLE_ACCOUNT_NOT_FOUND",
+            )
+        if str(account.connector_id).lower() != str(expected_connector).lower():
+            raise PodBundleDomainError(
+                f"{resource_label} needs a '{expected_connector}' account, but the "
+                f"supplied account is for '{account.connector_id}'. Connect a "
+                f"'{expected_connector}' account and re-run the import.",
+                code="POD_BUNDLE_ACCOUNT_CONNECTOR_MISMATCH",
+            )
+
     async def _apply_schedule(self, step: PlanStep) -> None:
-        from app.modules.schedule.api.dependencies import get_schedule_service
-        from app.modules.schedule.domain.schedule import (
+        from app.composition.pod_bundle_resources import get_schedule_service
+        from app.modules.schedule.contracts import (
             ScheduleCreateEntity,
             ScheduleType,
         )
@@ -373,28 +366,39 @@ class BundleApplier:
         existing = await _get_schedule(service, self._pod_id, step.name, self._ctx)
         if existing is not None:
             return  # schedules are treated as create-once by name for this slice
+        # Build from the shared allow-list (also used by lemma-cli's direct
+        # import) so the two importers can't silently drift on which exported
+        # fields survive — this is what previously dropped account_id,
+        # connector_trigger_id, filter_instruction and filter_output_schema.
+        fields = {
+            key: value for key, value in payload.items() if key in SCHEDULE_APPLY_FIELDS
+        }
+        fields["name"] = step.name
+        fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
+        fields["config"] = payload.get("config") or {}
+        await self._validate_account_binding(
+            account_id=fields.get("account_id"),
+            expected_connector=payload.get("connector_id"),
+            expected_provider=payload.get("provider"),
+            resource_label=f"Schedule '{step.name}'",
+        )
         entity = ScheduleCreateEntity(
             user_id=self._user_id,
             pod_id=self._pod_id,
-            name=step.name,
-            schedule_type=ScheduleType(str(payload.get("schedule_type"))),
-            config=payload.get("config") or {},
-            workflow_name=payload.get("workflow_name"),
-            agent_name=payload.get("agent_name"),
-            visibility=payload.get("visibility"),
+            **fields,
         )
         await service.create_schedule(entity, self._ctx)
 
     # --- workflows (best-effort) -----------------------------------------
 
     async def _apply_workflow(self, step: PlanStep) -> None:
-        from app.modules.workflow.api.dependencies import get_flow_service
+        from app.composition.pod_bundle_resources import get_workflow_service
 
-        service = get_flow_service(self._uow)
+        service = get_workflow_service(self._uow)
         payload = self._load("workflows", step.name)
         if await _flow_exists(service, self._pod_id, step.name, self._ctx):
             return
-        await service.create_flow(
+        await service.create_workflow(
             pod_id=self._pod_id,
             name=step.name,
             description=payload.get("description"),
@@ -418,23 +422,32 @@ class BundleApplier:
         upsert keyed by that name — mirroring the surface create/update
         controllers (reusing their config helpers) so an imported connector
         behaves exactly like a hand-configured one."""
-        from app.modules.agent.api.dependencies import get_agent_service
-        from app.modules.agent_surfaces.api.controllers.surface_controller import (
+        from app.composition.pod_bundle_resources import get_agent_service
+        from app.composition.pod_bundle_resources import (
             _merge_surface_config,
             _resolve_surface_config,
         )
-        from app.modules.agent_surfaces.api.dependencies import get_surface_service
-        from app.modules.agent_surfaces.api.schemas import SurfaceCreateRequest
-        from app.modules.agent_surfaces.domain.entities import (
+        from app.composition.pod_bundle_resources import get_surface_service
+        from app.modules.agent_surfaces.contracts import SurfaceCreateRequest
+        from app.modules.agent_surfaces.contracts import (
             AgentSurfaceEntity,
             SurfacePlatform,
         )
-        from app.modules.agent_surfaces.domain.errors import AgentSurfaceNotFoundError
+        from app.modules.agent_surfaces.contracts import AgentSurfaceNotFoundError
 
         payload = self._load("surfaces", step.name)
-        platform_raw = str(payload.get("platform") or step.name)
+        platform_raw = payload.get("platform")
+        if not platform_raw:
+            # An up-to-date exporter always writes platform explicitly; a
+            # missing value means a stale/hand-edited bundle, not something to
+            # silently paper over by guessing from the directory name.
+            raise PodBundleDomainError(
+                f"Surface '{step.name}' is missing its platform — re-export "
+                "this bundle.",
+                code="POD_BUNDLE_SURFACE_PLATFORM",
+            )
         try:
-            platform = SurfacePlatform(platform_raw.upper())
+            platform = SurfacePlatform(str(platform_raw).upper())
         except ValueError as exc:
             raise PodBundleDomainError(
                 f"Unsupported surface platform '{platform_raw}'.",
@@ -444,10 +457,9 @@ class BundleApplier:
         # The surface's pod-unique name (defaults to the lowercased platform);
         # the upsert is keyed by it so several surfaces of the same platform
         # round-trip.
-        resolved_name = (
-            str(payload.get("name") or "").strip()
-            or AgentSurfaceEntity.default_name_for(platform)
-        )
+        resolved_name = str(
+            payload.get("name") or ""
+        ).strip() or AgentSurfaceEntity.default_name_for(platform)
 
         # Only the create-request fields (extra='forbid'); drop export-only keys.
         # account_id has already been substituted from the provided account
@@ -471,11 +483,20 @@ class BundleApplier:
             }
         )
 
+        await self._validate_account_binding(
+            account_id=request.account_id,
+            expected_connector=payload.get("connector_id"),
+            expected_provider=payload.get("provider"),
+            resource_label=f"Surface '{resolved_name}'",
+        )
+
         agent_service = get_agent_service(self._uow)
         service = get_surface_service(self._uow)
 
         agent = (
-            await _get_agent(agent_service, self._pod_id, request.default_agent_name, self._ctx)
+            await _get_agent(
+                agent_service, self._pod_id, request.default_agent_name, self._ctx
+            )
             if request.default_agent_name
             else None
         )
@@ -489,7 +510,7 @@ class BundleApplier:
 
         if existing is None:
             config = await _resolve_surface_config(
-                pod_id=self._pod_id,
+                uow=self._uow, pod_id=self._pod_id, platform=platform,
                 config_input=request.config,
                 agent_service=agent_service,
                 ctx=self._ctx,
@@ -511,8 +532,8 @@ class BundleApplier:
             return
 
         config = await _merge_surface_config(
+            uow=self._uow, pod_id=self._pod_id, platform=platform,
             existing=existing.config,
-            pod_id=self._pod_id,
             config_input=request.config,
             agent_service=agent_service,
             ctx=self._ctx,
@@ -568,11 +589,11 @@ def _grants_from_payload(payload: dict[str, Any]) -> list[_GrantInput]:
         try:
             resource_type = ResourceType(str(raw_type))
         except ValueError:
-            logger.warning("Skipping grant with unknown resource_type %r", raw_type)
+            logger.debug('pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic', raw_type=raw_type)
             continue
         resource_name = entry.get("resource_name")
         if not resource_name:
-            logger.warning("Skipping grant without a resource_name: %r", entry)
+            logger.debug('pod_bundle.applier.skipping_grant_without_resource_name.diagnostic')
             continue
         grants.append(
             _GrantInput(
@@ -591,7 +612,7 @@ def _is_system_column(column: dict[str, Any]) -> bool:
 
 
 def _agent_runtime(payload: dict[str, Any]):
-    from app.modules.agent.domain.value_objects import AgentRuntimeConfig
+    from app.core.domain.runtime import AgentRuntimeConfig
 
     raw = payload.get("agent_runtime")
     if isinstance(raw, dict) and raw.get("profile_id"):
@@ -603,14 +624,14 @@ def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
     """Map the manifest's ``toolsets`` list to :class:`AgentToolset` values,
     dropping any the runtime doesn't recognize (forward-compat) and the reserved
     ``VIEW_IMAGE`` toolset, which is never persisted."""
-    from app.modules.agent.domain.value_objects import AgentToolset
+    from app.modules.agent.contracts import AgentToolset
 
     toolsets: list[AgentToolset] = []
     for raw in payload.get("toolsets") or []:
         try:
             toolset = AgentToolset(str(raw))
         except ValueError:
-            logger.warning("Skipping unknown agent toolset %r", raw)
+            logger.debug('pod_bundle.applier.skipping_unknown_agent_toolset_r.diagnostic')
             continue
         if toolset is AgentToolset.VIEW_IMAGE:
             continue
@@ -631,7 +652,7 @@ def _read_json_file(path: Path) -> dict[str, Any]:
 
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
 
@@ -673,10 +694,10 @@ async def _get_schedule(service, pod_id, name, ctx):
 
 
 async def _flow_exists(service, pod_id, name, ctx) -> bool:
-    # get_flow_by_name RETURNS None for a missing flow (it does not raise), so a
+    # get_workflow_by_name RETURNS None for a missing flow (it does not raise), so a
     # bare try/except would treat "not found" as "exists" and skip the create.
     try:
-        return await service.get_flow_by_name(pod_id, name, ctx=ctx) is not None
+        return await service.get_workflow_by_name(pod_id, name, ctx=ctx) is not None
     except Exception:
         return False
 

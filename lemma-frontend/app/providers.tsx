@@ -6,6 +6,7 @@ import { useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
 import { Toaster } from 'sonner';
 import { OrganizationProvider } from '@/components/dashboard/org-context';
+import { SoundFeedbackRuntime } from '@/components/feedback/sound-feedback-runtime';
 
 export function Providers({ children }: { children: ReactNode }) {
     const [queryClient] = useState(
@@ -39,6 +40,7 @@ export function Providers({ children }: { children: ReactNode }) {
             disableTransitionOnChange
         >
             <QueryClientProvider client={queryClient}>
+                <SoundFeedbackRuntime />
                 {appTree}
                 <Toaster
                     position="bottom-right"

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Plus, Search } from 'lucide-react';
+import { ArrowRight, Plus, Search } from '@/components/ui/icons';
 import { toast } from 'sonner';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';

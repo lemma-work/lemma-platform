@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -25,50 +27,18 @@ from app.modules.agent.domain.entities import (
     Conversation as ConversationEntity,
     Message as MessageEntity,
 )
-from app.modules.agent.domain.runtime_profiles import (
-    AgentRuntimeProfile,
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
-    RuntimeProfileScope,
-    RuntimeProfileStatus,
-)
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
-    AgentToolset,
     ConversationStatus,
     ConversationType,
     MessageKind,
 )
-from app.modules.identity.infrastructure.models.organization_models import Organization
-from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.pod.infrastructure.models.pod_models import Pod
-
-
-def _default_agent_runtime() -> dict:
-    return {"profile_id": "system:lemma"}
-
-
-def _agent_runtime_from_json(data: dict | None) -> AgentRuntimeConfig | None:
-    if data is None:
-        return None
-    return AgentRuntimeConfig.model_validate(data)
-
-
-def _coerce_toolsets(raw: list[str] | None) -> list[AgentToolset]:
-    """Convert stored toolset values, dropping any no longer in the enum.
-
-    Toolsets can be retired from the product (e.g. FILE_SYSTEM); existing agent
-    rows may still reference them. Reads must degrade gracefully rather than
-    crash the whole list/get endpoint on a stale value.
-    """
-    result: list[AgentToolset] = []
-    for value in raw or []:
-        try:
-            result.append(AgentToolset(value))
-        except ValueError:
-            continue
-    return result
+from app.modules.agent.infrastructure.model_converters import (
+    agent_runtime_from_json,
+    coerce_toolsets,
+    default_agent_runtime,
+)
 
 
 class AgentModel(UUIDAuditBase):
@@ -76,6 +46,10 @@ class AgentModel(UUIDAuditBase):
 
     __tablename__ = "agents"
     __table_args__ = (
+        CheckConstraint(
+            "name NOT IN ('POD_DEFAULT', 'pod_default')",
+            name="ck_agents_name_not_pod_default_selector",
+        ),
         UniqueConstraint("pod_id", "name", name="uq_agent_pod_name"),
         Index("ix_agent_pod_name", "pod_id", "name"),
     )
@@ -101,8 +75,8 @@ class AgentModel(UUIDAuditBase):
     output_schema: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    pod: Mapped[Pod] = relationship(Pod, foreign_keys=[pod_id])
-    owner: Mapped[User] = relationship(User, foreign_keys=[user_id])
+    pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
+    owner: Mapped[Any] = relationship("User", foreign_keys=[user_id])
 
     def __str__(self) -> str:
         return self.name or str(self.id)
@@ -119,147 +93,13 @@ class AgentModel(UUIDAuditBase):
             icon_url=self.icon_url,
             visibility=self.visibility,
             instruction=self.instruction,
-            agent_runtime=_agent_runtime_from_json(self.agent_runtime),
-            toolsets=_coerce_toolsets(self.toolsets),
+            agent_runtime=agent_runtime_from_json(self.agent_runtime),
+            toolsets=coerce_toolsets(self.toolsets),
             input_schema=self.input_schema,
             output_schema=self.output_schema,
             metadata=self.agent_metadata,
         )
 
-
-class AgentRuntimeProfileModel(UUIDAuditBase):
-    """Organization-owned agent runtime profile."""
-
-    __tablename__ = "agent_runtime_profiles"
-    __table_args__ = (
-        Index(
-            "ix_agent_runtime_profile_org_scope_status",
-            "organization_id",
-            "scope",
-            "status",
-        ),
-        Index("ix_agent_runtime_profile_org_status", "organization_id", "status"),
-        Index(
-            "uq_agent_runtime_profile_org_name",
-            "organization_id",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'ORGANIZATION'"),
-        ),
-        Index(
-            "uq_agent_runtime_profile_personal_name",
-            "organization_id",
-            "user_id",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'PERSONAL'"),
-        ),
-    )
-
-    organization_id: Mapped[UUID] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    daemon_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runtime_daemons.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    scope: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    protocol: Mapped[str] = mapped_column(String(32), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    default_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    model_catalog: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    credentials: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default=RuntimeProfileStatus.ACTIVE.value,
-        index=True,
-    )
-    profile_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    organization: Mapped[Organization | None] = relationship(
-        Organization,
-        foreign_keys=[organization_id],
-    )
-    user: Mapped[User | None] = relationship(User, foreign_keys=[user_id])
-    daemon: Mapped["AgentRuntimeDaemonModel | None"] = relationship(
-        "AgentRuntimeDaemonModel",
-        foreign_keys=[daemon_id],
-    )
-
-    def to_entity(self) -> AgentRuntimeProfile:
-        return AgentRuntimeProfile(
-            id=str(self.id),
-            organization_id=self.organization_id,
-            user_id=self.user_id,
-            daemon_id=self.daemon_id,
-            scope=RuntimeProfileScope(self.scope),
-            kind=RuntimeProfileKind(self.kind),
-            protocol=RuntimeProfileProtocol(self.protocol),
-            name=self.name,
-            description=self.description,
-            default_model_name=self.default_model_name,
-            model_catalog=self.model_catalog or [],
-            config=self.config or {},
-            credentials=self.credentials,
-            status=RuntimeProfileStatus(self.status),
-            metadata=self.profile_metadata or {},
-        )
-
-
-class AgentRuntimeDaemonModel(UUIDAuditBase):
-    """User-owned host daemon connection/catalog state."""
-
-    __tablename__ = "agent_runtime_daemons"
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "device_key",
-            name="uq_agent_runtime_daemon_user_device",
-        ),
-        Index("ix_agent_runtime_daemons_user_status", "user_id", "status"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    device_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default="OFFLINE",
-        index=True,
-    )
-    device_info: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    harness_catalog: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    connected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    disconnected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    user: Mapped[User] = relationship(User, foreign_keys=[user_id])
 
 
 class ConversationModel(UUIDAuditBase):
@@ -268,26 +108,34 @@ class ConversationModel(UUIDAuditBase):
     __tablename__ = "agent_conversations"
     __table_args__ = (
         Index(
-            "ix_agent_conv_pod_assistant_roots",
+            "ix_agent_conv_user_pod_roots",
             "user_id",
-            "agent_id",
             "pod_id",
-            "parent_id",
             "id",
+            postgresql_where=text("parent_id IS NULL"),
         ),
         Index(
-            "ix_agent_conv_pod_agent_roots",
-            "pod_id",
-            "agent_id",
+            "ix_agent_conv_user_pod_agent_roots",
             "user_id",
-            "parent_id",
+            "pod_id",
+            text(
+                "COALESCE(agent_id, "
+                "'00000000-0000-0000-0000-000000000001'::uuid)"
+            ),
             "id",
+            postgresql_where=text("parent_id IS NULL"),
         ),
-        Index("ix_agent_conv_parent", "parent_id"),
         Index(
             "ix_agent_conv_metadata",
             "conversation_metadata",
             postgresql_using="gin",
+        ),
+        Index(
+            "uq_agent_conversation_origin",
+            "origin_type",
+            "origin_id",
+            unique=True,
+            postgresql_where=text("origin_id IS NOT NULL"),
         ),
     )
 
@@ -314,6 +162,8 @@ class ConversationModel(UUIDAuditBase):
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     instructions: Mapped[str | None] = mapped_column(Text, nullable=True)
     agent_runtime: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    origin_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    origin_id: Mapped[UUID | None] = mapped_column(nullable=True)
     conversation_type: Mapped[str] = mapped_column(
         String(32),
         nullable=False,
@@ -329,10 +179,10 @@ class ConversationModel(UUIDAuditBase):
     )
     conversation_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
-    owner: Mapped[User] = relationship(User, foreign_keys=[user_id])
-    pod: Mapped[Pod] = relationship(Pod, foreign_keys=[pod_id])
-    organization: Mapped[Organization | None] = relationship(
-        Organization,
+    owner: Mapped[Any] = relationship("User", foreign_keys=[user_id])
+    pod: Mapped[Any] = relationship("Pod", foreign_keys=[pod_id])
+    organization: Mapped[Any] = relationship(
+        "Organization",
         foreign_keys=[organization_id],
     )
     agent: Mapped["AgentModel | None"] = relationship(
@@ -371,7 +221,9 @@ class ConversationModel(UUIDAuditBase):
             agent_id=self.agent_id,
             title=self.title,
             instructions=self.instructions,
-            agent_runtime=_agent_runtime_from_json(self.agent_runtime),
+            agent_runtime=agent_runtime_from_json(self.agent_runtime),
+            origin_type=self.origin_type,
+            origin_id=self.origin_id,
             parent_id=self.parent_id,
             type=ConversationType(
                 self.conversation_type or ConversationType.CHAT.value
@@ -432,7 +284,7 @@ class AgentRunModel(UUIDAuditBase):
     agent_runtime: Mapped[dict] = mapped_column(
         JSONB,
         nullable=False,
-        default=_default_agent_runtime,
+        default=default_agent_runtime,
     )
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -622,7 +474,7 @@ class AgentFeedbackModel(UUIDAuditBase):
     actual_behavior: Mapped[str] = mapped_column(Text, nullable=False)
     suggested_next_steps: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    reporter: Mapped[User] = relationship(User, foreign_keys=[user_id])
+    reporter: Mapped[Any] = relationship("User", foreign_keys=[user_id])
     agent: Mapped["AgentModel | None"] = relationship(
         AgentModel,
         foreign_keys=[agent_id],

@@ -22,6 +22,7 @@ class StreaqScheduleFilterTaskQueue(ScheduleFilterTaskQueue):
         schedule_id: UUID | None = None,
         payload: Dict[str, Any],
         metadata: Dict[str, Any],
+        source_event_id: str,
     ) -> None:
         if schedule_id is None:
             raise ValueError("schedule_id is required")
@@ -30,4 +31,6 @@ class StreaqScheduleFilterTaskQueue(ScheduleFilterTaskQueue):
             schedule_id=str(schedule_id),
             payload=payload,
             metadata=metadata,
+            source_event_id=source_event_id,
+            _job_id=f"schedule-filter:{schedule_id}:{source_event_id}",
         )

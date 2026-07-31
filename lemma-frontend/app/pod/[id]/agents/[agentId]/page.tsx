@@ -1,31 +1,43 @@
 'use client';
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { CalendarClock, Loader2, Save, Share2 } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { Loader2, MessageSquare, Save } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { AgentEditor } from '@/components/agents/agent-editor';
+import { AgentIdentityHeader } from '@/components/agents/agent-identity-header';
+import { AgentInstructions } from '@/components/agents/agent-instructions';
 import { AgentTestPanel } from '@/components/agents/agent-test-panel';
+import { AgentWiringRows } from '@/components/agents/agent-wiring-rows';
+import { TourLayer } from '@/components/education/coachmark';
 import {
-    ResourceDetailHeader,
+    ResourceHeader,
     ResourceDetailShell,
     ResourceDetailViewport,
-    ResourceTabPane,
+    ResourceWorkSplit,
 } from '@/components/pod/resource-layout';
 import { ResourceArrivalNotice } from '@/components/shared/resource-feedback';
-import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
+import type { ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { getAgentOverviewState } from '@/lib/agents/overview-state';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useAgent, useUpdateAgent } from '@/lib/hooks/use-agents';
+import { useConversations } from '@/lib/hooks/use-assistants';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
-import { useSchedules } from '@/lib/hooks/use-schedules';
+import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { Agent, UpdateAgentData } from '@/lib/types';
+import { formatAgentName } from '@/lib/utils/agents';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
-type AgentDetailMode = 'runs' | 'edit';
-
+/**
+ * One agent, one page.
+ *
+ * There used to be an Overview/Edit switch here, which split one job — making
+ * the agent good — across two screens: what it can reach lived in the editor,
+ * who can reach it lived in the overview, and the identity was stated in both.
+ * Now the page reads top to bottom as who it is, how it is wired, and how it
+ * behaves, with a dock on the right for actually running it.
+ */
 export default function AgentDetailPage({
     params,
 }: {
@@ -33,25 +45,35 @@ export default function AgentDetailPage({
 }) {
     const { id: podId, agentId: agentNameParam } = use(params);
     const agentName = agentNameParam;
-    const pathname = usePathname();
-    const router = useRouter();
     const searchParams = useSearchParams();
     const podAccess = usePodAccess(podId);
     const canUpdateAgent = podAccess.can('agent.update');
-    const canExecuteAgent = podAccess.can('agent.execute');
     const canUseSchedules = podAccess.canAny(['schedule.read', 'schedule.create']);
+    const canCreateSchedule = podAccess.can('schedule.create');
+    const canUpdateSchedule = podAccess.can('schedule.update');
+    const canDeleteSchedule = podAccess.can('schedule.delete');
+    const canUseSurfaces = podAccess.canAccessRoute('surfaces');
 
     const { data: agentData, isLoading } = useAgent(podId, agentName);
-    const { data: schedulesData } = useSchedules(canUseSchedules ? podId : undefined, {
-        agentName,
-        limit: 20,
+    // Pod-wide automation, grouped client-side — shares one cache entry with the
+    // schedules page and agents list instead of a per-agent filtered fetch.
+    const automation = usePodAutomation(podId, {
+        schedules: canUseSchedules,
+        surfaces: canUseSurfaces,
     });
+    const agentSchedules = automation.schedulesForAgent(agentName);
+    const agentSurfaces = automation.surfacesForAgent(agentName);
+    const { data: conversationsPage } = useConversations(podId, agentName, { limit: 4 });
+    const recentConversations = conversationsPage?.items ?? [];
     const updateAgent = useUpdateAgent();
     const { mutateAsync: updateAgentAsync } = updateAgent;
 
     const [localAgent, setLocalAgent] = useState<Agent | null>(null);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-    const [isRunFullView, setIsRunFullView] = useState(false);
+    const [isDockOpen, setIsDockOpen] = useState<boolean | null>(null);
+    const [dockView, setDockView] = useState<'conversation' | 'history'>('conversation');
+    const [layoutWidth, setLayoutWidth] = useState(0);
+    const layoutObserverRef = useRef<ResizeObserver | null>(null);
     const lastSavedHashRef = useRef('');
 
     const buildUpdatePayload = useCallback((agent: Agent) => ({
@@ -77,6 +99,25 @@ export default function AgentDetailPage({
             lastSavedHashRef.current = JSON.stringify(buildUpdatePayload(agentData));
         }
     }, [agentData, buildUpdatePayload, hasUnsavedChanges]);
+
+    /**
+     * A callback ref, not an effect: this page renders a loading state until the
+     * agent arrives, so on mount there is no node to measure yet and a
+     * mount-only effect would attach nothing and never retry — leaving the
+     * width at zero and the split permanently side-by-side.
+     */
+    const measureLayout = useCallback((node: HTMLDivElement | null) => {
+        layoutObserverRef.current?.disconnect();
+        layoutObserverRef.current = null;
+        if (!node) return;
+
+        const syncWidth = () => setLayoutWidth(node.getBoundingClientRect().width);
+        syncWidth();
+
+        const observer = new ResizeObserver(syncWidth);
+        observer.observe(node);
+        layoutObserverRef.current = observer;
+    }, []);
 
     const isEqualValue = (currentValue: unknown, nextValue: unknown): boolean => {
         if (Object.is(currentValue, nextValue)) return true;
@@ -120,13 +161,10 @@ export default function AgentDetailPage({
         }
 
         try {
-            await updateAgentAsync({
-                podId,
-                agentName,
-                data: payload,
-            });
+            await updateAgentAsync({ podId, agentName, data: payload });
             lastSavedHashRef.current = payloadHash;
             setHasUnsavedChanges(false);
+            playSoundFeedback('action-success');
         } catch (error) {
             console.error('Failed to save agent:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to save agent. Please try again.');
@@ -139,11 +177,7 @@ export default function AgentDetailPage({
         if (!resourceAllows(currentAgent, 'agent.update', canUpdateAgent)) return;
 
         try {
-            await updateAgentAsync({
-                podId,
-                agentName,
-                data: { visibility: visibility as UpdateAgentData['visibility'] },
-            });
+            await updateAgentAsync({ podId, agentName, data: { visibility: visibility as UpdateAgentData['visibility'] } });
         } catch (error) {
             console.error('Failed to update agent visibility:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to update visibility. Please try again.');
@@ -152,107 +186,56 @@ export default function AgentDetailPage({
 
         const nextAgent = { ...currentAgent, visibility };
         setLocalAgent((prev) => prev ? { ...prev, visibility } : prev);
-
         if (!hasUnsavedChanges) {
             lastSavedHashRef.current = JSON.stringify(buildUpdatePayload(nextAgent));
         }
     }, [agentName, buildUpdatePayload, canUpdateAgent, hasUnsavedChanges, localAgent, podId, updateAgentAsync]);
 
     const canUpdateCurrentAgent = resourceAllows(localAgent, 'agent.update', canUpdateAgent);
-    const canExecuteCurrentAgent = resourceAllows(localAgent, 'agent.execute', canExecuteAgent);
-    const activeScheduleCount = (schedulesData?.items || []).filter((schedule) => schedule.is_active !== false).length;
-    const activeMode: AgentDetailMode = canUpdateCurrentAgent && searchParams.get('mode') === 'edit' ? 'edit' : 'runs';
+    const openConversationId = searchParams.get('conversation');
 
-    const setActiveMode = useCallback((nextMode: AgentDetailMode) => {
-        if (nextMode === 'edit' && !canUpdateCurrentAgent) return;
-        const nextParams = new URLSearchParams(searchParams.toString());
-        if (nextMode === 'edit') {
-            nextParams.set('mode', 'edit');
-            setIsRunFullView(false);
-        } else {
-            nextParams.delete('mode');
-        }
-        const nextQuery = nextParams.toString();
-        router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
-    }, [canUpdateCurrentAgent, pathname, router, searchParams, setIsRunFullView]);
-
-    if (isLoading) {
+    if (isLoading || !localAgent) {
         return (
-            <div className="flex h-full overflow-hidden bg-transparent">
-                <div className="flex min-w-0 flex-1 flex-col">
-                    <div className="sticky top-0 z-10 flex items-center justify-between bg-[color:color-mix(in_srgb,var(--card-bg)_88%,transparent)] px-4 py-2 shadow-[var(--shadow-xs)]">
-                        <div className="flex items-center gap-2">
-                            <div className="h-5 w-5 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                            <div className="h-5 w-32 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                        </div>
-                        <div className="flex gap-2">
-                            <div className="h-7 w-16 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                            <div className="h-7 w-8 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                        </div>
-                    </div>
-
-                    <div className="flex-1 space-y-8 p-12">
-                        <div className="h-16 w-16 animate-pulse rounded-xl bg-[var(--bg-subtle)]" />
-                        <div className="h-10 max-w-md animate-pulse rounded bg-[var(--bg-subtle)]" />
-                        <div className="space-y-4">
-                            <div className="h-8 w-full animate-pulse rounded bg-[var(--bg-subtle)]" />
-                            <div className="h-24 w-full animate-pulse rounded bg-[var(--bg-subtle)]" />
-                        </div>
-                    </div>
-                </div>
-
-                <div className="hidden w-[500px] bg-[var(--card-bg)] shadow-[var(--shadow-sm)] lg:block">
-                    <div className="p-4">
-                        <div className="h-8 w-32 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                    </div>
-                    <div className="space-y-4 p-4">
-                        <div className="h-32 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                        <div className="h-10 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                    </div>
-                </div>
+            <div className="flex h-full items-center justify-center">
+                <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
             </div>
         );
     }
 
-    if (!localAgent) {
-        return (
-            <div className="flex h-full items-center justify-center bg-transparent">
-                <div className="text-center">
-                    <h2 className="font-display text-2xl font-semibold text-[var(--text-primary)]">Agent not found</h2>
-                </div>
-            </div>
-        );
-    }
-
+    const displayName = localAgent.name || agentName;
+    const label = formatAgentName(displayName);
     const agentShareUrl = typeof window === 'undefined'
         ? undefined
-        : `${window.location.origin}/pod/${podId}/agents/${encodeURIComponent(localAgent.name || agentName)}`;
+        : `${window.location.origin}/pod/${podId}/agents/${encodeURIComponent(displayName)}`;
+
+    // A brand-new agent has nothing to read and everything to try, so the dock
+    // starts open on it. One that already runs opens quiet — you came to change
+    // something, and its real conversations live on the conversations page.
+    const isDraft = getAgentOverviewState({
+        surfaceCount: agentSurfaces.length,
+        scheduleCount: agentSchedules.length,
+        conversationCount: recentConversations.length,
+        canUseSurfaces,
+        canUseSchedules,
+        canCreateSchedule,
+    }) === 'draft';
+    // A conversation id in the URL is a request to look at that run, so it opens
+    // the dock too — until the reader closes it themselves.
+    const dockOpen = isDockOpen ?? (isDraft || Boolean(openConversationId));
+    const isStackedLayout = dockOpen && layoutWidth > 0 && layoutWidth < 1040;
 
     return (
         <ResourceDetailShell>
-            <ResourceDetailHeader
-                title={localAgent.name}
-                productIconTone="agents"
+            <TourLayer tour="agent-editor" />
+            <ResourceHeader
+                title={label}
+                // The identity block below owns the name; the bar takes it back
+                // only once that block scrolls out of the pane.
+                titleOwner="page"
                 backHref={`/pod/${podId}/ai`}
                 backLabel="Agents"
-                meta={(
-                    <div className="flex flex-wrap items-center gap-2">
-                        <ResourceVisibilityBadge visibility={localAgent.visibility} resourceLabel="agents" />
-                        <span className="chip chip-sm chip-muted">
-                            {activeScheduleCount ? `${activeScheduleCount} active schedule${activeScheduleCount === 1 ? '' : 's'}` : 'No schedules'}
-                        </span>
-                    </div>
-                )}
-                fullscreen={activeMode === 'runs' && isRunFullView}
-                tabs={(
-                    <AgentModeSwitch
-                        value={activeMode}
-                        onChange={setActiveMode}
-                        canEdit={canUpdateCurrentAgent}
-                    />
-                )}
+                fullscreen={false}
                 actions={(
-                    <TooltipProvider>
                     <>
                         {canUpdateCurrentAgent && (hasUnsavedChanges || updateAgent.isPending) ? (
                             <Button
@@ -263,127 +246,137 @@ export default function AgentDetailPage({
                                 disabled={updateAgent.isPending || !hasUnsavedChanges}
                             >
                                 {updateAgent.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                                {updateAgent.isPending ? 'Saving...' : 'Save changes'}
+                                {updateAgent.isPending ? 'Saving…' : 'Save changes'}
                             </Button>
                         ) : null}
-                        {canUseSchedules ? (
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button asChild variant="ghost" size="icon" className="h-8 w-8 rounded" aria-label={activeScheduleCount ? 'Schedules' : 'Schedule'}>
-                                        <Link href={`/pod/${podId}/schedules?agent=${encodeURIComponent(localAgent.name || agentName)}`}>
-                                            <CalendarClock className="h-4 w-4" />
-                                        </Link>
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>{activeScheduleCount ? 'Schedules' : 'Schedule'}</TooltipContent>
-                            </Tooltip>
-                        ) : null}
-                        {canUpdateCurrentAgent ? (
-                            <ResourceShareButton
-                                value={localAgent.visibility}
-                                podId={podId}
-                                resourceType="agent"
-                                resourceId={localAgent.id}
-                                resourceLabel="agents"
-                                resourceName={localAgent.name}
-                                shareUrl={agentShareUrl}
-                                onChange={handleShareVisibilityChange}
-                                trigger={({ openShare, disabled }) => (
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="icon"
-                                                className="h-8 w-8 rounded"
-                                                onClick={openShare}
-                                                disabled={disabled}
-                                                aria-label="Share"
-                                            >
-                                                <Share2 className="h-4 w-4" />
-                                            </Button>
-                                        </TooltipTrigger>
-                                        <TooltipContent>Share</TooltipContent>
-                                    </Tooltip>
-                                )}
-                            />
-                        ) : null}
+                        <Button
+                            type="button"
+                            variant={dockOpen ? 'secondary' : 'outline'}
+                            size="sm"
+                            className="h-8 gap-1.5 px-2.5 text-xs font-medium"
+                            onClick={() => setIsDockOpen(!dockOpen)}
+                            aria-pressed={dockOpen}
+                        >
+                            <MessageSquare className="h-3.5 w-3.5" />
+                            Try it
+                        </Button>
                     </>
-                    </TooltipProvider>
                 )}
-            />
-            <ResourceArrivalNotice
-                resource="agent"
-                title="Agent created"
-                description="Ready for a first run. Try it here, then tune setup or add a schedule."
-                celebrate
-                actions={[
-                    ...(canUpdateCurrentAgent ? [{ label: 'Edit setup', onClick: () => setActiveMode('edit'), variant: 'primary' as const }] : []),
-                    ...(canUseSchedules ? [{ label: 'Schedule', href: `/pod/${podId}/schedules?agent=${encodeURIComponent(localAgent.name || agentName)}` }] : []),
-                ]}
-                className="mx-4 mt-3"
             />
 
             <ResourceDetailViewport>
-                <ResourceTabPane active={activeMode === 'edit'}>
-                    {activeMode === 'edit' ? (
-                        <AgentEditor
-                            podId={podId}
-                            agent={localAgent}
-                            onUpdate={handleUpdate}
-                            isNameEditable={false}
-                            shareUrl={agentShareUrl}
-                            onShareVisibilityChange={handleShareVisibilityChange}
-                        />
-                    ) : null}
-                </ResourceTabPane>
+                <div ref={measureLayout} className="h-full min-h-0">
+                <ResourceWorkSplit
+                    // Measured off the split itself, not the window: a pod
+                    // sidebar or a docked assistant narrows this long before the
+                    // viewport says anything. Side by side needs room for a
+                    // readable prompt *and* the dock; below that they stack.
+                    isStacked={isStackedLayout}
+                    main={(
+                        <div className="resource-page-scroll">
+                            <div className="resource-page-column">
+                                {/* Who it is and how it is wired are one card: both
+                                    answer "what is this thing", and neither is the
+                                    work. The prompt gets its own. */}
+                                <section className="resource-card">
+                                    <AgentIdentityHeader
+                                        podId={podId}
+                                        agent={localAgent}
+                                        onUpdate={handleUpdate}
+                                        canEdit={canUpdateCurrentAgent}
+                                        shareUrl={agentShareUrl}
+                                        onShareVisibilityChange={handleShareVisibilityChange}
+                                    />
 
-                <ResourceTabPane active={activeMode === 'runs'}>
-                    {activeMode === 'runs' && canExecuteCurrentAgent ? (
-                        <div className="h-full min-h-0 bg-[var(--card-bg)]">
-                            <AgentTestPanel
-                                podId={podId}
-                                agentName={localAgent.name || agentName}
-                                agentOverride={localAgent}
-                                isFullView={isRunFullView}
-                                onToggleFullView={() => setIsRunFullView((prev) => !prev)}
-                            />
+                                    <AgentWiringRows
+                                        podId={podId}
+                                        agent={localAgent}
+                                        onUpdate={handleUpdate}
+                                        canEdit={canUpdateCurrentAgent}
+                                        surfaces={agentSurfaces}
+                                        schedules={agentSchedules}
+                                        canUseSurfaces={canUseSurfaces}
+                                        canUseSchedules={canUseSchedules}
+                                        canCreateSchedule={canCreateSchedule}
+                                        canUpdateSchedule={canUpdateSchedule}
+                                        canDeleteSchedule={canDeleteSchedule}
+                                    />
+                                </section>
+
+                                <AgentInstructions
+                                    agent={localAgent}
+                                    onUpdate={handleUpdate}
+                                    canEdit={canUpdateCurrentAgent}
+                                />
+                            </div>
                         </div>
-                    ) : activeMode === 'runs' ? (
-                        <div className="flex h-full items-center justify-center bg-[var(--card-bg)] px-6 text-center text-sm text-[var(--text-secondary)]">
-                            You can view this agent, but running it is outside your current permissions.
+                    )}
+                    aside={dockOpen ? (
+                        <div className="agent-dock">
+                            <div className="agent-dock-bar">
+                                <div className="segmented-control">
+                                    <button
+                                        type="button"
+                                        className="segmented-control-item"
+                                        data-active={dockView === 'conversation'}
+                                        onClick={() => setDockView('conversation')}
+                                    >
+                                        Run
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="segmented-control-item"
+                                        data-active={dockView === 'history'}
+                                        onClick={() => setDockView('history')}
+                                    >
+                                        History
+                                    </button>
+                                </div>
+
+                                {/* Runs go through the server, which only knows the
+                                    saved agent — so an unsaved draft would be tested
+                                    as the old version. Say so rather than let the
+                                    result quietly disagree with the editor. */}
+                                {hasUnsavedChanges ? (
+                                    <button
+                                        type="button"
+                                        className="agent-dock-stale"
+                                        onClick={() => void handleSave()}
+                                        disabled={updateAgent.isPending}
+                                    >
+                                        Testing the saved version — save first
+                                    </button>
+                                ) : null}
+                            </div>
+
+                            <div className="agent-dock-body">
+                                <AgentTestPanel
+                                    podId={podId}
+                                    agentName={displayName}
+                                    agentOverride={localAgent}
+                                    view={dockView}
+                                    openConversationId={openConversationId}
+                                    onClose={() => setIsDockOpen(false)}
+                                />
+                            </div>
                         </div>
                     ) : null}
-                </ResourceTabPane>
+                    /* `border-l-0`/`border-t-0`: the dock carries its own card
+                       border, and the split's edge rule would double it. */
+                    asideClassName={isStackedLayout
+                        ? 'agent-dock-shell agent-dock-shell-stacked w-full border-t-0'
+                        : 'agent-dock-shell w-[min(30rem,42%)] border-l-0'}
+                />
+                </div>
             </ResourceDetailViewport>
-        </ResourceDetailShell>
-    );
-}
 
-function AgentModeSwitch({
-    value,
-    onChange,
-    canEdit,
-}: {
-    value: AgentDetailMode;
-    onChange: (value: AgentDetailMode) => void;
-    canEdit: boolean;
-}) {
-    const items: AgentDetailMode[] = canEdit ? ['runs', 'edit'] : ['runs'];
-    return (
-        <div className="segmented-control">
-            {items.map((item) => (
-                <button
-                    key={item}
-                    type="button"
-                    onClick={() => onChange(item)}
-                    className="segmented-control-item custom-focus-ring"
-                    data-active={value === item}
-                    aria-pressed={value === item}
-                >
-                    {item === 'runs' ? 'Runs' : 'Edit'}
-                </button>
-            ))}
-        </div>
+            <ResourceArrivalNotice
+                resource="agent"
+                title="Agent created"
+                description="Write its instructions, wire up what it can use, then try it in the panel on the right."
+                celebrate
+                className="mx-4 mt-3"
+            />
+        </ResourceDetailShell>
     );
 }

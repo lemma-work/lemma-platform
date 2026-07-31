@@ -8,11 +8,14 @@ import {
   findPendingUserApprovalInvocation,
   formatDurationCompact,
   isRunClosingMessage,
+  isPlanToolName,
   isToolInvocationActive,
   latestUserIndex,
   messageHasToolActivity,
   messageTextContent,
   messageTimeMs,
+  normalizeAgentToolName,
+  planStepsFromToolInvocation,
   preferToolInvocation,
   prepareMessagesForDisplay,
   rowIsAfterIndex,
@@ -174,7 +177,6 @@ export function toolCallPrimaryLabel(toolName: string, args: ToolCardArgs): stri
 }
 
 export function formatActiveToolSummary(toolName: string, args: ToolCardArgs): string {
-  const lowerName = toolName.toLowerCase();
   const normalizedName = normalizeToolNameForDisplay(toolName);
   const comment = commentLabelFromArgs(args);
 
@@ -193,8 +195,8 @@ export function formatActiveToolSummary(toolName: string, args: ToolCardArgs): s
     return displayResource ? `Showing ${displayResourceLabel(displayResource.request)}` : "Showing resource";
   }
 
-  if (lowerName === "update_plan") {
-    const plan = asArray(toolArg(args, "plan"));
+  if (isPlanToolName(toolName)) {
+    const plan = planStepsFromToolInvocation({ toolName, args });
     return `Updating plan (${plan.length} step${plan.length === 1 ? "" : "s"})`;
   }
 
@@ -271,7 +273,7 @@ export function formatFriendlyToolStatus(toolName: string, args: ToolCardArgs): 
     return displayResource ? `Showing ${displayResourceLabel(displayResource.request)}` : "Showing resource";
   }
 
-  if (lowerName === "update_plan" || lowerName === "write_todos") return "Updating plan";
+  if (isPlanToolName(toolName)) return "Updating plan";
   if (lowerName === "say") return "Generating speech";
   if (lowerName === "listen") return "Transcribing audio";
   if (lowerName === "spawn_subagent") return "Spawning sub-agent";
@@ -388,8 +390,8 @@ export function currentToolStatusLabel({
 }: {
   messages: AssistantRenderableMessage[];
   isConversationBusy: boolean;
-  streamingTool?: { toolName: string; args?: Record<string, unknown> } | null;
-}): { label: string; shimmer: boolean } | null {
+  streamingTool?: { toolCallId?: string; toolName: string; args?: Record<string, unknown> } | null;
+}): InlineToolStatus | null {
   if (!isConversationBusy) return null;
 
   if (streamingTool) {
@@ -397,6 +399,8 @@ export function currentToolStatusLabel({
     return {
       label: friendlyLabel || formatActiveToolSummary(streamingTool.toolName, streamingTool.args || {}),
       shimmer: true,
+      toolCallId: streamingTool.toolCallId,
+      toolName: streamingTool.toolName,
     };
   }
 
@@ -414,12 +418,63 @@ export function currentToolStatusLabel({
         return {
           label: friendlyLabel || formatActiveToolSummary(invocation.toolName, invocation.args),
           shimmer: true,
+          toolCallId: invocation.toolCallId,
+          toolName: invocation.toolName,
         };
       }
     }
   }
 
   return { label: "Thinking", shimmer: true };
+}
+
+export interface InlineToolStatus {
+  label: string;
+  shimmer: boolean;
+  toolCallId?: string;
+  toolName?: string;
+}
+
+/**
+ * The streaming status is a low-latency placeholder. Once the same call is in
+ * the current run's durable rows, that row owns the UI so the handoff happens
+ * in one render without briefly showing both representations.
+ */
+export function isInlineToolStatusAlreadyVisible({
+  rows,
+  latestUser,
+  status,
+}: {
+  rows: DisplayMessageRow[];
+  latestUser: number;
+  status: InlineToolStatus | null | undefined;
+}): boolean {
+  if (!status) return false;
+
+  for (let rowIndex = rows.length - 1; rowIndex >= 0; rowIndex -= 1) {
+    const row = rows[rowIndex];
+    if (!rowIsAfterIndex(row, latestUser)) continue;
+
+    const invocations = dedupToolInvocations(row.message);
+    for (let invocationIndex = invocations.length - 1; invocationIndex >= 0; invocationIndex -= 1) {
+      const invocation = invocations[invocationIndex];
+      if (status.toolCallId && invocation.toolCallId === status.toolCallId) return true;
+
+      // Partial stream tokens may expose the tool name before the call id. In
+      // that short window, an active row with the same name is the same handoff
+      // candidate; completed rows do not suppress a genuinely new call.
+      if (
+        !status.toolCallId
+        && status.toolName
+        && invocation.toolName === status.toolName
+        && isToolInvocationActive(invocation)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 export function getActiveToolBanner(messages: AssistantRenderableMessage[]): ActiveToolBanner | null {
@@ -541,13 +596,12 @@ export function pickPreferredEntries(
 }
 
 export function normalizeToolNameForDisplay(toolName: string): string {
-  const normalized = toolName
+  return normalizeAgentToolName(toolName)
     .trim()
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2")
     .toLowerCase()
     .replace(/[.\-:\s]+/g, "_");
-  return normalized.startsWith("lemma_") ? normalized.slice("lemma_".length) : normalized;
 }
 
 function normalizedPayloadKey(key: string): string {
@@ -677,35 +731,14 @@ export interface TodoItem { state: TodoItemState; text: string; }
 /** Normalize a `write_todos` / `update_plan` invocation into checklist items,
  * accepting either structured task objects or markdown checklist lines. */
 export function parseTodoItems(args: Record<string, unknown>, result: Record<string, unknown>): TodoItem[] {
-  const structured = firstArrayOfRecords(result, ["todos", "tasks", "items", "plan"]).length
-    ? firstArrayOfRecords(result, ["todos", "tasks", "items", "plan"])
-    : firstArrayOfRecords(args, ["todos", "tasks", "plan"]);
-
-  if (structured.length) {
-    const mapped = structured
-      .map<TodoItem>((entry) => {
-        const text = firstRecordString(entry, ["content", "text", "title", "task", "step", "label", "name"]) || "";
-        const statusRaw = (firstRecordString(entry, ["status", "state"]) || "").toLowerCase();
-        const done = statusRaw === "completed" || statusRaw === "done" || entry.done === true || entry.completed === true;
-        const active = statusRaw === "in_progress" || statusRaw === "active" || statusRaw === "running";
-        return { state: done ? "done" : active ? "active" : "todo", text };
-      })
-      .filter((item) => item.text);
-    if (mapped.length) return mapped;
-  }
-
-  // Markdown checklist lines: "- [ ] todo" / "- [x] done" / "- [~] in-progress".
-  return asArray(toolArg(args, "todos"))
-    .map((value) => String(value))
-    .map<TodoItem>((line) => {
-      const match = /^\s*[-*]?\s*\[([ xX~\-])\]\s*(.*)$/.exec(line);
-      if (match) {
-        const mark = match[1].toLowerCase();
-        return { state: mark === "x" ? "done" : mark === "~" || mark === "-" ? "active" : "todo", text: match[2].trim() };
-      }
-      return { state: "todo", text: line.replace(/^\s*[-*]\s*/, "").trim() };
-    })
-    .filter((item) => item.text);
+  return planStepsFromToolInvocation({
+    toolName: "write_todos",
+    args,
+    result,
+  }).map((step) => ({
+    state: step.status === "completed" ? "done" : step.status === "in_progress" ? "active" : "todo",
+    text: step.step,
+  }));
 }
 
 export function readableToolEntityName(normalizedName: string, prefix: "function_" | "agent_"): string {

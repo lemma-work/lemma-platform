@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import datetime
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
+from dateutil.parser import isoparse
 
 from ..models.import_status import ImportStatus
 from ..types import UNSET, Unset
@@ -20,7 +22,7 @@ T = TypeVar("T", bound="ImportStatusResponse")
 
 @_attrs_define
 class ImportStatusResponse:
-    """Status of a pod import job (pure Redis read).
+    """Status of a durable pod import job.
 
     Attributes:
         events_url (str):
@@ -28,9 +30,15 @@ class ImportStatusResponse:
         pod_id (UUID):
         source_kind (str):
         status (ImportStatus):
+        cancel_requested_at (datetime.datetime | None | Unset):
+        committed_steps (list[int] | Unset):
+        current_step (int | None | Unset):
         error (None | str | Unset):
+        error_code (None | str | Unset):
         plan (ImportPlanResponse | None | Unset):
         progress (ExportProgressResponse | Unset):
+        retryable (bool | Unset):  Default: False.
+        warnings (list[str] | Unset):
     """
 
     events_url: str
@@ -38,9 +46,15 @@ class ImportStatusResponse:
     pod_id: UUID
     source_kind: str
     status: ImportStatus
+    cancel_requested_at: datetime.datetime | None | Unset = UNSET
+    committed_steps: list[int] | Unset = UNSET
+    current_step: int | None | Unset = UNSET
     error: None | str | Unset = UNSET
+    error_code: None | str | Unset = UNSET
     plan: ImportPlanResponse | None | Unset = UNSET
     progress: ExportProgressResponse | Unset = UNSET
+    retryable: bool | Unset = False
+    warnings: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,11 +70,35 @@ class ImportStatusResponse:
 
         status = self.status.value
 
+        cancel_requested_at: None | str | Unset
+        if isinstance(self.cancel_requested_at, Unset):
+            cancel_requested_at = UNSET
+        elif isinstance(self.cancel_requested_at, datetime.datetime):
+            cancel_requested_at = self.cancel_requested_at.isoformat()
+        else:
+            cancel_requested_at = self.cancel_requested_at
+
+        committed_steps: list[int] | Unset = UNSET
+        if not isinstance(self.committed_steps, Unset):
+            committed_steps = self.committed_steps
+
+        current_step: int | None | Unset
+        if isinstance(self.current_step, Unset):
+            current_step = UNSET
+        else:
+            current_step = self.current_step
+
         error: None | str | Unset
         if isinstance(self.error, Unset):
             error = UNSET
         else:
             error = self.error
+
+        error_code: None | str | Unset
+        if isinstance(self.error_code, Unset):
+            error_code = UNSET
+        else:
+            error_code = self.error_code
 
         plan: dict[str, Any] | None | Unset
         if isinstance(self.plan, Unset):
@@ -74,6 +112,12 @@ class ImportStatusResponse:
         if not isinstance(self.progress, Unset):
             progress = self.progress.to_dict()
 
+        retryable = self.retryable
+
+        warnings: list[str] | Unset = UNSET
+        if not isinstance(self.warnings, Unset):
+            warnings = self.warnings
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -85,12 +129,24 @@ class ImportStatusResponse:
                 "status": status,
             }
         )
+        if cancel_requested_at is not UNSET:
+            field_dict["cancel_requested_at"] = cancel_requested_at
+        if committed_steps is not UNSET:
+            field_dict["committed_steps"] = committed_steps
+        if current_step is not UNSET:
+            field_dict["current_step"] = current_step
         if error is not UNSET:
             field_dict["error"] = error
+        if error_code is not UNSET:
+            field_dict["error_code"] = error_code
         if plan is not UNSET:
             field_dict["plan"] = plan
         if progress is not UNSET:
             field_dict["progress"] = progress
+        if retryable is not UNSET:
+            field_dict["retryable"] = retryable
+        if warnings is not UNSET:
+            field_dict["warnings"] = warnings
 
         return field_dict
 
@@ -110,6 +166,38 @@ class ImportStatusResponse:
 
         status = ImportStatus(d.pop("status"))
 
+        def _parse_cancel_requested_at(
+            data: object,
+        ) -> datetime.datetime | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                cancel_requested_at_type_0 = isoparse(data)
+
+                return cancel_requested_at_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(datetime.datetime | None | Unset, data)
+
+        cancel_requested_at = _parse_cancel_requested_at(
+            d.pop("cancel_requested_at", UNSET)
+        )
+
+        committed_steps = cast(list[int], d.pop("committed_steps", UNSET))
+
+        def _parse_current_step(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        current_step = _parse_current_step(d.pop("current_step", UNSET))
+
         def _parse_error(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -118,6 +206,15 @@ class ImportStatusResponse:
             return cast(None | str | Unset, data)
 
         error = _parse_error(d.pop("error", UNSET))
+
+        def _parse_error_code(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        error_code = _parse_error_code(d.pop("error_code", UNSET))
 
         def _parse_plan(data: object) -> ImportPlanResponse | None | Unset:
             if data is None:
@@ -130,7 +227,7 @@ class ImportStatusResponse:
                 plan_type_0 = ImportPlanResponse.from_dict(data)
 
                 return plan_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ImportPlanResponse | None | Unset, data)
 
@@ -143,15 +240,25 @@ class ImportStatusResponse:
         else:
             progress = ExportProgressResponse.from_dict(_progress)
 
+        retryable = d.pop("retryable", UNSET)
+
+        warnings = cast(list[str], d.pop("warnings", UNSET))
+
         import_status_response = cls(
             events_url=events_url,
             import_id=import_id,
             pod_id=pod_id,
             source_kind=source_kind,
             status=status,
+            cancel_requested_at=cancel_requested_at,
+            committed_steps=committed_steps,
+            current_step=current_step,
             error=error,
+            error_code=error_code,
             plan=plan,
             progress=progress,
+            retryable=retryable,
+            warnings=warnings,
         )
 
         import_status_response.additional_properties = d

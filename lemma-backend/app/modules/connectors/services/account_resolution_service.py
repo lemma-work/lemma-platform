@@ -50,25 +50,42 @@ class AccountResolutionService:
         self.authz_read_port = authz_read_port
         self.authorization_service = authorization_service
 
+    @staticmethod
+    def _context_org_id(auth_ctx: Context | None) -> UUID | None:
+        return getattr(auth_ctx, "organization_id", None)
+
     async def _get_owned_account(
         self,
         *,
         user_id: UUID,
         connector_id: str,
         account_id: UUID | None,
+        organization_id: UUID | None = None,
     ) -> AccountEntity:
         if account_id is not None:
             account = await self._get_account_for_connector(
                 account_id=account_id,
                 connector_id=connector_id,
             )
-            if account.user_id != user_id:
+            if account.user_id != user_id or (
+                organization_id is not None
+                and account.organization_id != organization_id
+            ):
                 raise AccountResolutionError(
                     f"Account '{account_id}' is not available for this user."
                 )
             return account
 
-        account = await self.account_repo.get_by_user_and_app(user_id, connector_id)
+        # Scope to the caller's organization when known: a user may connect the
+        # same connector under several orgs, and one org's run must not resolve
+        # another org's account.
+        account = (
+            await self.account_repo.get_by_user_org_and_app(
+                user_id, organization_id, connector_id
+            )
+            if organization_id is not None
+            else await self.account_repo.get_by_user_and_app(user_id, connector_id)
+        )
         if not account:
             raise AccountResolutionError(
                 f"No account connected for '{connector_id}'. Connect your account first."
@@ -82,20 +99,34 @@ class AccountResolutionService:
         connector_id: str,
         auth_config_id: UUID,
         account_id: UUID | None,
+        organization_id: UUID | None = None,
     ) -> AccountEntity:
         if account_id is not None:
             account = await self._get_account_for_connector(
                 account_id=account_id,
                 connector_id=connector_id,
             )
-            if account.user_id != user_id or account.auth_config_id != auth_config_id:
+            if (
+                account.user_id != user_id
+                or account.auth_config_id != auth_config_id
+                or (
+                    organization_id is not None
+                    and account.organization_id != organization_id
+                )
+            ):
                 raise AccountResolutionError(
                     f"Account '{account_id}' is not available for this auth config."
                 )
             return account
 
-        account = await self.account_repo.get_by_user_and_auth_config(
-            user_id, auth_config_id
+        account = (
+            await self.account_repo.get_by_user_org_and_auth_config(
+                user_id, organization_id, auth_config_id
+            )
+            if organization_id is not None
+            else await self.account_repo.get_by_user_and_auth_config(
+                user_id, auth_config_id
+            )
         )
         if not account:
             raise AccountResolutionError(
@@ -129,12 +160,14 @@ class AccountResolutionService:
         auth_ctx = auth_actor or get_current_context()
         if auth_ctx is None or auth_ctx.delegated_by_user_id is None:
             raise ConnectorAccessDeniedError("Missing delegated workload context")
+        organization_id = self._context_org_id(auth_ctx)
 
         if self._is_default_pod_agent_delegation(auth_ctx):
             return await self._get_owned_account(
                 user_id=user_id,
                 connector_id=connector_id,
                 account_id=account_id,
+                organization_id=organization_id,
             )
 
         await self._require_delegated_access(
@@ -151,6 +184,15 @@ class AccountResolutionService:
                 account_id=account_id,
                 connector_id=connector_id,
             )
+            # A workload runs inside one pod (hence one org); an account from a
+            # different org is never in scope, even the invoker's own.
+            if (
+                organization_id is not None
+                and requested_account.organization_id != organization_id
+            ):
+                raise AccountResolutionError(
+                    f"Account '{account_id}' is not available in this organization."
+                )
             if requested_account.user_id == user_id:
                 return requested_account
             await self._require_delegated_access(
@@ -167,6 +209,7 @@ class AccountResolutionService:
             user_id=user_id,
             connector_id=connector_id,
             account_id=None,
+            organization_id=organization_id,
         )
 
     @staticmethod
@@ -217,6 +260,7 @@ class AccountResolutionService:
             user_id=user_id,
             connector_id=connector_id,
             account_id=account_id,
+            organization_id=self._context_org_id(auth_ctx),
         )
 
     async def resolve_account_for_auth_config(
@@ -247,4 +291,5 @@ class AccountResolutionService:
             connector_id=connector_id,
             auth_config_id=auth_config_id,
             account_id=account_id,
+            organization_id=self._context_org_id(auth_ctx),
         )

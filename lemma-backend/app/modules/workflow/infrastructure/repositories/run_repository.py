@@ -1,4 +1,4 @@
-"""Flow run repository."""
+"""Workflow run repository."""
 
 from uuid import UUID
 from typing import List, Optional
@@ -8,23 +8,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.workflow.domain.ports import FlowRunRepository
+from app.modules.workflow.domain.ports import WorkflowRunRepository
 from app.modules.workflow.domain.run import (
-    FlowRunEntity,
-    FlowRunStatus,
+    WorkflowRunEntity,
+    WorkflowRunStatus,
 )
-from app.modules.workflow.infrastructure.models import FlowRunModel
+from app.modules.workflow.infrastructure.models import WorkflowRunModel
 
 
-class SqlAlchemyFlowRunRepository(FlowRunRepository):
+class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
     def __init__(self, uow: SqlAlchemyUnitOfWork):
         self.session: AsyncSession = uow.session
 
-    def _to_entity(self, model: FlowRunModel) -> FlowRunEntity:
+    def _to_entity(self, model: WorkflowRunModel) -> WorkflowRunEntity:
         return model.to_entity()
 
-    def _to_summary_entity(self, model: FlowRunModel) -> FlowRunEntity:
-        return FlowRunEntity(
+    def _to_summary_entity(self, model: WorkflowRunModel) -> WorkflowRunEntity:
+        return WorkflowRunEntity(
             id=model.id,
             created_at=model.created_at,
             updated_at=model.updated_at,
@@ -33,7 +33,7 @@ class SqlAlchemyFlowRunRepository(FlowRunRepository):
             user_id=model.user_id,
             start_type=model.start_type,
             schedule_event_id=model.schedule_event_id,
-            status=FlowRunStatus(model.status),
+            status=WorkflowRunStatus(model.status),
             current_node_id=model.current_node_id,
             error=model.error,
             failed_node_id=model.failed_node_id,
@@ -41,7 +41,7 @@ class SqlAlchemyFlowRunRepository(FlowRunRepository):
             completed_at=model.completed_at,
         )
 
-    def _to_dict(self, entity: FlowRunEntity) -> dict:
+    def _to_dict(self, entity: WorkflowRunEntity) -> dict:
         return {
             "flow_id": entity.flow_id,
             "pod_id": entity.pod_id,
@@ -68,37 +68,37 @@ class SqlAlchemyFlowRunRepository(FlowRunRepository):
             ),
         }
 
-    async def create(self, run: FlowRunEntity) -> FlowRunEntity:
+    async def create(self, run: WorkflowRunEntity) -> WorkflowRunEntity:
         data = self._to_dict(run)
         if run.id:
             data["id"] = run.id
-        model = FlowRunModel(**data)
+        model = WorkflowRunModel(**data)
         self.session.add(model)
         await self.session.flush()
         run.id = model.id
         return self._to_entity(model)
 
-    async def get(self, run_id: UUID) -> Optional[FlowRunEntity]:
-        stmt = select(FlowRunModel).where(FlowRunModel.id == run_id)
+    async def get(self, run_id: UUID) -> Optional[WorkflowRunEntity]:
+        stmt = select(WorkflowRunModel).where(WorkflowRunModel.id == run_id)
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
-    async def get_for_update(self, run_id: UUID) -> Optional[FlowRunEntity]:
+    async def get_for_update(self, run_id: UUID) -> Optional[WorkflowRunEntity]:
         """Row-locked read — serializes concurrent resumes/cancels."""
         stmt = (
-            select(FlowRunModel)
-            .where(FlowRunModel.id == run_id)
+            select(WorkflowRunModel)
+            .where(WorkflowRunModel.id == run_id)
             .with_for_update()
         )
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None
 
-    async def update(self, run: FlowRunEntity) -> FlowRunEntity:
+    async def update(self, run: WorkflowRunEntity) -> WorkflowRunEntity:
         stmt = (
-            update(FlowRunModel)
-            .where(FlowRunModel.id == run.id)
+            update(WorkflowRunModel)
+            .where(WorkflowRunModel.id == run.id)
             .values(**self._to_dict(run))
         )
         await self.session.execute(stmt)
@@ -110,33 +110,33 @@ class SqlAlchemyFlowRunRepository(FlowRunRepository):
         *,
         limit: int = 100,
         cursor: UUID | None = None,
-    ) -> tuple[List[FlowRunEntity], UUID | None]:
+    ) -> tuple[List[WorkflowRunEntity], UUID | None]:
         stmt = (
-            select(FlowRunModel)
+            select(WorkflowRunModel)
             .options(
                 load_only(
-                    FlowRunModel.id,
-                    FlowRunModel.flow_id,
-                    FlowRunModel.pod_id,
-                    FlowRunModel.user_id,
-                    FlowRunModel.start_type,
-                    FlowRunModel.schedule_event_id,
-                    FlowRunModel.status,
-                    FlowRunModel.current_node_id,
-                    FlowRunModel.error,
-                    FlowRunModel.failed_node_id,
-                    FlowRunModel.started_at,
-                    FlowRunModel.completed_at,
-                    FlowRunModel.created_at,
-                    FlowRunModel.updated_at,
+                    WorkflowRunModel.id,
+                    WorkflowRunModel.flow_id,
+                    WorkflowRunModel.pod_id,
+                    WorkflowRunModel.user_id,
+                    WorkflowRunModel.start_type,
+                    WorkflowRunModel.schedule_event_id,
+                    WorkflowRunModel.status,
+                    WorkflowRunModel.current_node_id,
+                    WorkflowRunModel.error,
+                    WorkflowRunModel.failed_node_id,
+                    WorkflowRunModel.started_at,
+                    WorkflowRunModel.completed_at,
+                    WorkflowRunModel.created_at,
+                    WorkflowRunModel.updated_at,
                 )
             )
-            .where(FlowRunModel.flow_id == flow_id)
-            .order_by(FlowRunModel.id.desc())
+            .where(WorkflowRunModel.flow_id == flow_id)
+            .order_by(WorkflowRunModel.id.desc())
             .limit(limit + 1)
         )
         if cursor is not None:
-            stmt = stmt.where(FlowRunModel.id < cursor)
+            stmt = stmt.where(WorkflowRunModel.id < cursor)
         result = await self.session.execute(stmt)
         models = list(result.scalars().all())
 
@@ -153,11 +153,11 @@ class SqlAlchemyFlowRunRepository(FlowRunRepository):
         flow_id: UUID,
         user_id: UUID,
         schedule_event_id: str,
-    ) -> FlowRunEntity | None:
-        stmt = select(FlowRunModel).where(
-            FlowRunModel.flow_id == flow_id,
-            FlowRunModel.user_id == user_id,
-            FlowRunModel.schedule_event_id == schedule_event_id,
+    ) -> WorkflowRunEntity | None:
+        stmt = select(WorkflowRunModel).where(
+            WorkflowRunModel.flow_id == flow_id,
+            WorkflowRunModel.user_id == user_id,
+            WorkflowRunModel.schedule_event_id == schedule_event_id,
         )
         result = await self.session.execute(stmt)
         model = result.scalar_one_or_none()

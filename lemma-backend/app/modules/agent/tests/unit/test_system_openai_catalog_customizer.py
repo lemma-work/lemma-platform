@@ -54,6 +54,18 @@ def test_default_catalog_uses_names_verbatim(openai_env):
         assert RuntimeModelCapability.VISION not in entry.capabilities
 
 
+def test_pricing_catalog_is_empty_when_no_models_are_configured(monkeypatch):
+    from app.core.config import settings
+
+    monkeypatch.setattr(runtime_profile_service, "_load_runtime_env", lambda: None)
+    monkeypatch.setattr(settings, "lemma_openai_model_names", "")
+    monkeypatch.setattr(settings, "lemma_openai_default_model", "")
+    monkeypatch.delenv("LEMMA_OPENAI_MODEL_NAMES", raising=False)
+    monkeypatch.delenv("LEMMA_OPENAI_DEFAULT_MODEL", raising=False)
+
+    assert system_lemma_openai_catalog_model_names() == []
+
+
 def test_customizer_remaps_provider_and_vision(openai_env):
     mapping = {
         "minimax-m3": ("accounts/fireworks/models/minimax-m3", True),

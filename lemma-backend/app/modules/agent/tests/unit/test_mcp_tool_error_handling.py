@@ -1,8 +1,8 @@
-"""Tool errors on the daemon path must come back as recoverable results.
+"""Tool errors on the remote-harness path must come back as recoverable results.
 
 The per-conversation / pod MCP services and the approval executor all dispatch
 through ``AgentToolDispatcher``. When a tool raises (unknown tool, invalid args,
-or an execution error) the daemon must receive an MCP tool error (``isError``) /
+or an execution error) the harness must receive an MCP tool error (``isError``) /
 a structured error payload — never an exception that aborts the run. Control-flow
 exceptions still propagate.
 """

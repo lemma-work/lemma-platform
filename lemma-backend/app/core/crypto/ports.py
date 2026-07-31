@@ -125,6 +125,16 @@ class SecretCipher(Protocol):
 
     def decrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
 
+    # Async variants offload the (possibly KMS-backed, blocking) crypto off the
+    # event loop; used by repositories that run on the worker loop.
+    async def encrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
+
+    async def decrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
+
     def encrypt_str(self, value: str | None) -> str | None: ...
 
     def decrypt_str(self, value: str | None) -> str | None: ...

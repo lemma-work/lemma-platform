@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
 import obstore as obs
 from obstore.exceptions import NotFoundError as ObstoreNotFoundError
-from obstore.store import GCSStore, LocalStore
+from obstore.store import LocalStore, ObjectStore
 
 
 class FunctionFileManager:
@@ -17,20 +16,20 @@ class FunctionFileManager:
         function_id: UUID,
         *,
         root_path: str | Path | None = None,
-        bucket_name: str | None = None,
+        store: ObjectStore | None = None,
     ):
-        if bool(root_path) == bool(bucket_name):
-            raise ValueError("Provide exactly one of root_path or bucket_name")
+        if (root_path is None) == (store is None):
+            raise ValueError("Provide exactly one of root_path or store")
 
         self.function_id = function_id
         self.prefix = f"functions/{function_id}/"
         self._local_base: Path | None = Path(root_path) / self.prefix if root_path else None
-        self.store = None
 
         if root_path is not None:
             self.store = LocalStore(prefix=self._local_base, mkdir=True)
         else:
-            self.store = GCSStore(bucket=bucket_name, prefix=self.prefix)
+            assert store is not None
+            self.store = store
 
     def _local_path(self, path: str) -> Path:
         if self._local_base is None:
@@ -49,14 +48,8 @@ class FunctionFileManager:
         except UnicodeDecodeError:
             return bytes_data
 
-    async def write_file(self, path: str, content: bytes | str):
+    async def write_file(self, path: str, content: bytes | str) -> None:
         if isinstance(content, str):
             content = content.encode("utf-8")
 
         await obs.put_async(self.store, path, content)
-        return {
-            "name": path.split("/")[-1],
-            "path": path,
-            "size": len(content),
-            "last_modified": datetime.now().isoformat(),
-        }

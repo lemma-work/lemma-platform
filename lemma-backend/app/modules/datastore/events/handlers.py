@@ -5,7 +5,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from faststream import Logger
+from faststream import Depends, Logger
 from faststream.redis import RedisRouter
 
 from app.core.config import settings
@@ -14,7 +14,13 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import (
     SessionUnitOfWorkFactory,
 )
-from app.core.infrastructure.events.stream_subscriber import redis_stream_sub
+from app.core.infrastructure.events.stream_subscriber import (
+    reliable_redis_stream_subscriber,
+)
+from app.core.infrastructure.events.inbox import (
+    EventInboxPort,
+    provide_domain_event_inbox,
+)
 from app.modules.datastore.api.dependencies import (
     build_file_service,
 )
@@ -29,13 +35,16 @@ from app.modules.datastore.infrastructure.repositories import (
 from app.modules.datastore.infrastructure.reindex_queue import (
     get_datastore_reindex_queue,
 )
-from app.modules.datastore.services.file_processing_service import (
-    DatastoreFileProcessingService,
-)
+from app.modules.datastore.composition import get_datastore_composition
 from app.modules.datastore.services.file_recovery_service import (
     DatastoreFileRecoveryService,
 )
-from app.core.infrastructure.jobs.streaq_runtime import AppWorkerContext, streaq_cron, streaq_task, streaq_worker
+from app.core.infrastructure.jobs.streaq_runtime import (
+    AppWorkerContext,
+    streaq_cron,
+    streaq_task,
+    streaq_worker,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -65,7 +74,9 @@ def _content_update_defer_until(occurred_at: datetime) -> datetime | None:
         return None
 
     occurred_at_utc = occurred_at.astimezone(timezone.utc)
-    scheduled_epoch = math.ceil(occurred_at_utc.timestamp() / debounce_seconds) * debounce_seconds
+    scheduled_epoch = (
+        math.ceil(occurred_at_utc.timestamp() / debounce_seconds) * debounce_seconds
+    )
     scheduled_at = datetime.fromtimestamp(scheduled_epoch, tz=timezone.utc)
     if scheduled_at <= occurred_at_utc:
         scheduled_at = occurred_at_utc + timedelta(seconds=debounce_seconds)
@@ -84,40 +95,50 @@ async def _enqueue_file_processing(
     if event.event_type == DatastoreFileUpdatedEvent.get_event_type():
         defer_until = _content_update_defer_until(event.occurred_at)
 
-    queued = await get_datastore_reindex_queue().enqueue(
+    await get_datastore_reindex_queue().enqueue(
         file_id=event.file_id,
         pod_id=event.pod_id,
         metadata=event.metadata,
         defer_until=defer_until,
     )
-    if queued:
-        fs_logger.info("Enqueued process_datastore_file_task for %s", event.file_id)
-    else:
-        fs_logger.info(
-            "Skipped enqueue for %s because it was duplicate or not eligible",
-            event.file_id,
-        )
 
 
-@router.subscriber(stream=redis_stream_sub(DATASTORE_EVENTS_STREAM))
-async def on_datastore_file_event(event: dict, fs_logger: Logger):
+@reliable_redis_stream_subscriber(
+    router,
+    DATASTORE_EVENTS_STREAM,
+    group="datastore-file-events",
+    consumer="datastore-file-events-consumer",
+)
+async def on_datastore_file_event(
+    event: dict,
+    fs_logger: Logger,
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+):
     # The unified datastore stream also carries table/record events; ignore
     # everything that is not a file event.
     event_type = event.get("event_type")
-    try:
-        if event_type == DatastoreFileCreatedEvent.get_event_type():
-            parsed = DatastoreFileCreatedEvent.model_validate(event)
-            await _enqueue_file_processing(parsed, fs_logger)
-            return
+    if event_type not in {
+        DatastoreFileCreatedEvent.get_event_type(),
+        DatastoreFileUpdatedEvent.get_event_type(),
+    }:
+        return
 
-        if event_type == DatastoreFileUpdatedEvent.get_event_type():
-            parsed = DatastoreFileUpdatedEvent.model_validate(event)
-            await _enqueue_file_processing(parsed, fs_logger)
-    except Exception as exc:
-        fs_logger.error("Failed to handle datastore file event %s: %s", event_type, exc)
+    async def process() -> None:
+        event_class = (
+            DatastoreFileCreatedEvent
+            if event_type == DatastoreFileCreatedEvent.get_event_type()
+            else DatastoreFileUpdatedEvent
+        )
+        parsed = event_class.model_validate(event)
+        await _enqueue_file_processing(parsed, fs_logger)
+
+    await inbox.process("datastore.file-processing", event, process)
 
 
-@streaq_task(name="process_datastore_file_task")
+# The datastore row state machine owns retries: a failure records FAILED and the
+# recovery cron re-drives it after backoff. An immediate Streaq retry would see a
+# non-PENDING row and no-op, so keep this task single-attempt.
+@streaq_task(name="process_datastore_file_task", max_tries=1)
 async def process_datastore_file_task(
     _task_context=None,
     *,
@@ -132,7 +153,6 @@ async def process_datastore_file_task(
     file_uuid = UUID(file_id)
     pod_uuid = UUID(pod_id)
 
-    logger.info("STARTING process_datastore_file_task for %s", file_uuid)
 
     try:
         async with _get_document_processing_semaphore():
@@ -146,13 +166,12 @@ async def process_datastore_file_task(
                 if worker_ctx is not None
                 else SessionUnitOfWorkFactory(async_session_maker)
             )
-            service = DatastoreFileProcessingService(
+            service = get_datastore_composition().build_processing_service(
                 pod_uuid, uow_factory=uow_factory
             )
             await service.process_file_async(file_uuid, metadata or {})
-        logger.info("FINISHED process_datastore_file_task for %s", file_uuid)
-    except Exception as exc:
-        logger.error("process_datastore_file_task failed for %s: %s", file_uuid, exc)
+    except Exception:
+        logger.debug('datastore.handlers.process_datastore_file_task_s.propagated', exc_info=True)
         raise
 
 
@@ -179,12 +198,6 @@ async def cleanup_deleted_datastore_paths_task(
         else SessionUnitOfWorkFactory(async_session_maker)
     )
     pod_uuid = UUID(pod_id)
-    logger.info(
-        "STARTING cleanup_deleted_datastore_paths for pod %s (is_folder=%s, files=%d)",
-        pod_uuid,
-        is_folder,
-        len(files or []),
-    )
     try:
         async with uow_factory() as uow:
             service = build_file_service(uow)
@@ -194,17 +207,16 @@ async def cleanup_deleted_datastore_paths_task(
                 folder_prefix=folder_prefix,
                 files=files or [],
             )
-        logger.info("FINISHED cleanup_deleted_datastore_paths for pod %s", pod_uuid)
-    except Exception as exc:
-        logger.error(
-            "cleanup_deleted_datastore_paths failed for pod %s: %s", pod_uuid, exc
+        logger.debug(
+            "datastore.handlers.finished_cleanup_deleted_datastore_paths.observed"
         )
+    except Exception:
+        logger.debug('datastore.handlers.cleanup_deleted_datastore_paths_pod.propagated', exc_info=True)
         raise
 
 
 @streaq_cron("*/15 * * * *", name="recover_stuck_processing_files")
-async def recover_stuck_processing_files(
-) -> None:
+async def recover_stuck_processing_files() -> None:
     """
     Find files stuck in PENDING or PROCESSING and make sure they get queued.
 
@@ -224,23 +236,20 @@ async def recover_stuck_processing_files(
                 reindex_queue=get_datastore_reindex_queue(),
                 uow=uow,
             )
-            summary = await recovery_service.recover_stale_files(now=datetime.now(timezone.utc))
+            summary = await recovery_service.recover_stale_files(
+                now=datetime.now(timezone.utc)
+            )
 
-        logger.info(
-            "Running datastore file recovery (pending_cutoff=%s, processing_cutoff=%s)",
-            summary.pending_cutoff,
-            summary.processing_cutoff,
-        )
+
+        if summary.terminal_count:
+            logger.warning(
+                "datastore.handlers.datastore_file_recovery_terminally_d.degraded",
+                terminal_count=summary.terminal_count,
+            )
 
         if summary.examined_count == 0:
-            logger.info("No stale datastore files found.")
+            logger.debug("datastore.handlers.no_stale_datastore_files_re.observed")
             return
 
-        logger.info(
-            "Datastore file recovery examined %d stale files, reset %d PROCESSING files to PENDING, enqueued %d.",
-            summary.examined_count,
-            summary.reset_count,
-            summary.enqueued_count,
-        )
-    except Exception as exc:
-        logger.error("Stuck file recovery cron failed: %s", exc)
+    except Exception:
+        logger.error("datastore.handlers.stuck_file_recovery_cron_s.failed", exc_info=True)

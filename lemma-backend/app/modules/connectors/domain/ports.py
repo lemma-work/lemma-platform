@@ -48,6 +48,10 @@ class AccountRepositoryPort(Protocol):
         self, user_id: UUID, auth_config_id: UUID
     ) -> Optional[AccountEntity]: ...
 
+    async def get_by_user_org_and_auth_config(
+        self, user_id: UUID, organization_id: UUID, auth_config_id: UUID
+    ) -> Optional[AccountEntity]: ...
+
     async def get_by_user_auth_config_and_provider_account(
         self,
         user_id: UUID,
@@ -197,6 +201,16 @@ class SecretEncryptionPort(Protocol):
     def encrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
 
     def decrypt_json(self, value: dict[str, Any] | None) -> dict[str, Any] | None: ...
+
+    # Async variants offload the (possibly blocking, KMS-backed) crypto off the
+    # event loop. Callers on the worker loop must use these, not the sync ones.
+    async def encrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
+
+    async def decrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None: ...
 
 
 class SystemOAuthConfigPort(Protocol):

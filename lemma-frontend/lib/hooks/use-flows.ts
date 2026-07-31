@@ -4,6 +4,7 @@ import { useCallback, useMemo } from 'react';
 import { useInfiniteQuery, useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { normalizeFlowNodeConfig } from '@/lib/utils/flow-node-config';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import type {
     Workflow,
     WorkflowCreateRequest,
@@ -34,7 +35,7 @@ export type WorkflowRunWaitAssignment = {
     wait: {
         id?: string;
         run_id: string;
-        flow_id: string;
+        workflow_id: string;
         node_id: string;
         wait_type: string;
         status?: string;
@@ -163,7 +164,7 @@ function normalizeFlow(raw: Record<string, unknown>): Workflow {
 function normalizeFlowRun(raw: Record<string, unknown>): WorkflowRun {
     return {
         id: String(raw.id || ''),
-        flow_id: String(raw.flow_id || ''),
+        workflow_id: String(raw.workflow_id || ''),
         pod_id: String(raw.pod_id || ''),
         user_id: String(raw.user_id || ''),
         trigger_type: (raw.trigger_type as string | undefined) ?? undefined,
@@ -190,7 +191,7 @@ function normalizeWait(raw: Record<string, unknown>): WorkflowRunWaitAssignment 
         wait: {
             id: typeof wait.id === 'string' ? wait.id : undefined,
             run_id: String(wait.run_id || run.id || ''),
-            flow_id: String(wait.flow_id || run.flow_id || ''),
+            workflow_id: String(wait.workflow_id || run.workflow_id || ''),
             node_id: String(wait.node_id || run.current_node_id || ''),
             wait_type: String(wait.wait_type || ''),
             status: typeof wait.status === 'string' ? wait.status : undefined,
@@ -221,13 +222,17 @@ function sortFlowRuns(runs: WorkflowRun[]): WorkflowRun[] {
     });
 }
 
-export const useFlows = (podId: string | undefined) => {
-    return useQuery({
+export const flowsQueryOptions = (podId: string | undefined) => ({
         queryKey: ['flows', podId],
         queryFn: async () => {
             const response = await getLemmaClient(podId).workflows.list();
             return (response.items || []).map((item) => normalizeFlow(item as unknown as Record<string, unknown>));
         },
+});
+
+export const useFlows = (podId: string | undefined) => {
+    return useQuery({
+        ...flowsQueryOptions(podId),
         enabled: !!podId,
     });
 };
@@ -641,8 +646,12 @@ export const useRunFlow = () => {
             const response = await getLemmaClient(podId).workflows.runs.create(flowId);
             return normalizeFlowRun(response as unknown as Record<string, unknown>);
         },
-        onSuccess: (_, variables) => {
+        onSuccess: (run, variables) => {
+            playSoundFeedback('work-start', { onceKey: `workflow:${run.id}:started` });
             queryClient.invalidateQueries({ queryKey: ['flow-runs', variables.podId, variables.flowId] });
+        },
+        onError: () => {
+            playSoundFeedback('work-fail');
         },
     });
 };

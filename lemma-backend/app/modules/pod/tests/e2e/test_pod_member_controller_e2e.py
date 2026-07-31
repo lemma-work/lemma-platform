@@ -5,31 +5,14 @@ from uuid import uuid4
 import pytest
 from httpx import AsyncClient
 
+from app.modules.test_support.e2e_authz import signup_user
+
 pytestmark = pytest.mark.e2e
 
 
 async def _signup_user(async_client: AsyncClient) -> tuple[str, str]:
-    email = f"test+pod-member-{uuid4().hex[:10]}@example.com"
-    password = "TestPassword@123"
-
-    response = await async_client.post(
-        "/st/auth/signup",
-        json={
-            "formFields": [
-                {"id": "email", "value": email},
-                {"id": "password", "value": password},
-            ]
-        },
-    )
-    assert response.status_code == 200, response.text
-    data = response.json()
-    assert data.get("status") == "OK", data
-
-    token = response.headers.get("st-access-token") or response.cookies.get(
-        "sAccessToken"
-    )
-    assert token
-    return email, token
+    user = await signup_user(async_client, f"pod-member-{uuid4().hex[:10]}")
+    return user["email"], user["token"]
 
 
 async def _update_profile(

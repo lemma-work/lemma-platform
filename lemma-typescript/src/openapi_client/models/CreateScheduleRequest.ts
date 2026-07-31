@@ -33,4 +33,3 @@ export type CreateScheduleRequest = {
     visibility?: (string | null);
     workflow_name?: (string | null);
 };
-

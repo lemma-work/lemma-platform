@@ -14,4 +14,3 @@ export type FormNode = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

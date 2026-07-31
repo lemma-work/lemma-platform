@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from io import BytesIO
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -69,6 +70,34 @@ def test_write_text_creates_missing_via_upload(monkeypatch):
     assert calls == [("upload", "/me/new.md", b"fresh")]
 
 
+def test_upload_file_translates_full_path_to_streaming_form_fields(monkeypatch):
+    captured: dict = {}
+    pf = _pod_files(captured)
+    monkeypatch.setattr(
+        files_mod.FileDetailResponse,
+        "from_dict",
+        classmethod(lambda cls, data: data),
+    )
+
+    result = pf.upload_file(
+        BytesIO(b"content"),
+        path="/me/notes/new.md",
+        filename="local-name.md",
+    )
+
+    assert captured["method"] == "post"
+    assert captured["data"] == {
+        "directory_path": "/me/notes",
+        "name": "new.md",
+        "search_enabled": "true",
+    }
+    assert "path" not in captured["data"]
+    uploaded_name, uploaded_file = captured["files"]["data"]
+    assert uploaded_name == "local-name.md"
+    assert uploaded_file.read() == b"content"
+    assert result == {"ok": True}
+
+
 def test_append_text_reads_then_writes_concatenated(monkeypatch):
     pf = _pod_files({})
     written: list = []
@@ -78,3 +107,29 @@ def test_append_text_reads_then_writes_concatenated(monkeypatch):
     pf.append_text("/me/log.md", "second\n")
 
     assert written == [("/me/log.md", "first\nsecond\n")]
+
+
+def test_attach_markdown_builds_real_multipart_files(monkeypatch, tmp_path):
+    image = tmp_path / "figure.png"
+    image.write_bytes(b"png-bytes")
+    captured: dict = {}
+    pod_files = _pod_files({})
+
+    def _capture(operation, pod_id, *, body):
+        captured.update(operation=operation, pod_id=pod_id, body=body)
+        captured["markdown"] = body.data.payload.read()
+        captured["image"] = body.images[0].payload.read()
+        return {"ok": True}
+
+    monkeypatch.setattr(pod_files, "_call", _capture)
+
+    result = pod_files.attach_markdown(
+        "/docs/report.pdf",
+        "# Replacement",
+        images=[image],
+    )
+
+    assert result == {"ok": True}
+    assert captured["body"].path == "/docs/report.pdf"
+    assert captured["markdown"] == b"# Replacement"
+    assert captured["image"] == b"png-bytes"

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -26,6 +26,7 @@ from app.modules.agent.services.agent_runner_service import (
 from app.modules.agent.tools.callable_tool_factory import AgentCallableToolFactory
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.pod import pod_toolset
+from app.modules.agent.tools.skills import skills_toolset
 from app.modules.agent.tools.registry import (
     POD_DEFAULT_AGENT_TOOLSETS,
     resolve_agent_toolsets,
@@ -38,6 +39,7 @@ from app.modules.agent.tools.user_interaction.models import (
     validate_display_payload,
 )
 from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
+from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.modules.agent.tools.user_interaction.pydantic_adapter import (
     ask_user,
@@ -167,7 +169,7 @@ async def test_user_created_agent_gets_only_its_selected_toolsets():
 
 @pytest.mark.asyncio
 async def test_todo_toolset_gated_by_agent_definition(monkeypatch):
-    # RunToolAssembler feeds BOTH the in-process harness and the daemon MCP path,
+    # RunToolAssembler feeds BOTH the in-process harness and the remote MCP path,
     # so a user-created agent gets the todo tools only when its toolsets include
     # TODO — never implicitly.
     from app.modules.agent.tools import callable_tool_factory as ctf
@@ -287,7 +289,9 @@ async def test_display_resource_email_surface_not_delivered_by_tool(monkeypatch)
 async def test_display_resource_no_surface_does_not_deliver(monkeypatch):
     # Web/app/subagent runs carry no surface_platform → pure return, no send.
     calls = _patch_surface_delivery(monkeypatch)
-    ctx = SimpleNamespace(tool_call_id="tc-1", deps=SimpleNamespace(conversation_id=uuid4()))
+    ctx = SimpleNamespace(
+        tool_call_id="tc-1", deps=SimpleNamespace(conversation_id=uuid4())
+    )
 
     response = await display_resource(
         ctx,  # type: ignore[arg-type]
@@ -299,30 +303,23 @@ async def test_display_resource_no_surface_does_not_deliver(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_display_resource_returns_browser_access_url(monkeypatch: pytest.MonkeyPatch):
+async def test_display_resource_returns_browser_access_url(
+    monkeypatch: pytest.MonkeyPatch,
+):
     user_id = uuid4()
     calls: list[tuple[str, object]] = []
 
-    class FakeAgentBoxClient:
-        def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float):
-            calls.append(("init", (base_url, api_key, timeout_seconds)))
-
-        async def ensure_sandbox(self, sandbox_id: str, *, env: dict[str, str]):
-            calls.append(("ensure_sandbox", (sandbox_id, env)))
-            return SimpleNamespace(id=sandbox_id)
-
-        async def get_app_access_url(
+    class FakeWorkspaceSandboxService:
+        async def create_browser_access(
             self,
-            sandbox_id: str,
-            app_name: str,
+            requested_user_id: UUID,
             *,
             ttl_seconds: int,
         ):
-            calls.append(("get_app_access_url", (sandbox_id, app_name, ttl_seconds)))
+            calls.append(("create_browser_access", (requested_user_id, ttl_seconds)))
             return SimpleNamespace(
-                app="browser",
                 url="https://browser.example/access-token",
-                expires_at=1893456000,
+                expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
             )
 
         async def close(self):
@@ -330,22 +327,9 @@ async def test_display_resource_returns_browser_access_url(monkeypatch: pytest.M
 
     monkeypatch.setattr(
         user_interaction_adapter,
-        "AgentBoxClient",
-        FakeAgentBoxClient,
+        "WorkspaceSandboxService",
+        FakeWorkspaceSandboxService,
     )
-    monkeypatch.setattr(
-        user_interaction_adapter.WorkspaceSandboxService,
-        "_resolve_runtime",
-        lambda: "docker",
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.WorkspaceSandboxService,
-        "resolve_workspace_host_url_for_runtime",
-        lambda runtime, api_url: f"{runtime}:{api_url}",
-    )
-    monkeypatch.setattr(user_interaction_adapter.settings, "agentbox_api_url", "https://agentbox.test")
-    monkeypatch.setattr(user_interaction_adapter.settings, "agentbox_api_key", "agentbox-key")
-    monkeypatch.setattr(user_interaction_adapter.settings, "api_url", "https://api.test")
 
     ctx = SimpleNamespace(deps=SimpleNamespace(user_id=user_id))
 
@@ -360,15 +344,7 @@ async def test_display_resource_returns_browser_access_url(monkeypatch: pytest.M
     assert response.url == "https://browser.example/access-token"
     assert response.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
     assert calls == [
-        ("init", ("https://agentbox.test", "agentbox-key", 300.0)),
-        (
-            "ensure_sandbox",
-            (
-                user_id.hex,
-                {"LEMMA_BASE_URL": "docker:https://api.test"},
-            ),
-        ),
-        ("get_app_access_url", (user_id.hex, "browser", 1800)),
+        ("create_browser_access", (user_id, 1800)),
         ("close", None),
     ]
 
@@ -405,6 +381,10 @@ def test_display_resource_validates_widget_form_and_table_payloads():
         )
         is None
     )
+    assert "absolute http or https URL" in _payload_error(
+        type=DisplayResourceType.WIDGET,
+        public_url="javascript:alert(1)",
+    )
     assert (
         validate_display_payload(
             DisplayResourceRequest(
@@ -426,10 +406,11 @@ def test_display_resource_validates_widget_form_and_table_payloads():
         content="<div>chart</div>",
     )
 
-    # FORM has been removed: the enum no longer carries it, and structured input
-    # is collected via ask_user (choices) or an interactive WIDGET.
+    # FORM has been removed: the enum no longer carries it, and user input is
+    # collected via ask_user (choices) or a normal conversational turn.
     assert not hasattr(DisplayResourceType, "FORM")
     assert "json_schema" not in DisplayResourceRequest.model_fields
+    assert "interactive" not in DisplayResourceRequest.model_fields
 
     table = DisplayResourceRequest(
         type=DisplayResourceType.TABLE,
@@ -474,6 +455,24 @@ async def test_display_resource_invalid_payload_returns_success_false():
     assert "exactly one" in (response.error or "")
 
 
+@pytest.mark.asyncio
+async def test_display_resource_rejects_nonportable_widget_html():
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(surface_platform=None, conversation_id=uuid4()),
+        tool_call_id="tc",
+    )
+    response = await display_resource(
+        ctx,
+        DisplayResourceRequest(
+            type=DisplayResourceType.WIDGET,
+            content='<script src="/public/sdk/lemma-client.js"></script>',
+        ),
+    )
+    assert response.success is False
+    assert "Invalid WIDGET content" in (response.error or "")
+    assert "relative" in (response.error or "")
+
+
 def _approval_ctx(approval_id: str, *, supports_pause_signal: bool = True):
     return SimpleNamespace(
         deps=SimpleNamespace(
@@ -508,23 +507,121 @@ async def test_request_approval_pauses_the_run():
 
 
 @pytest.mark.asyncio
-async def test_interaction_tools_guide_instead_of_pausing_on_daemon_harness():
-    """On daemon/MCP runs (no pause signal) the tools never raise or block; they
+async def test_request_approval_auto_executes_on_exact_session_match(monkeypatch):
+    """A request_approval call identical to one already approved for session
+    runs immediately with no pause, executing the wrapped tool as the user."""
+    from app.core.authorization import session_approvals
+    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+
+    async def fake_has_session_approval(**kwargs):
+        return True
+
+    captured: dict[str, object] = {}
+
+    async def fake_execute_as_user(self, *, deps, tool_name, args):
+        captured["tool_name"] = tool_name
+        captured["args"] = args
+        return {"stdout": "hi", "success": True}
+
+    monkeypatch.setattr(
+        session_approvals, "has_session_approval", fake_has_session_approval
+    )
+    monkeypatch.setattr(ApprovalExecutor, "execute_as_user", fake_execute_as_user)
+
+    ctx = _approval_ctx("approval-repeat")
+    ctx.deps.workload_id = uuid4()
+
+    result = await request_approval(
+        ctx,  # type: ignore[arg-type]
+        tool_name="exec_command",
+        args={"cmd": "ls"},
+        title="List files?",
+    )
+
+    assert result.success is True
+    assert result.executed is True
+    assert result.decision == "APPROVE_FOR_SESSION"
+    assert result.result == {"stdout": "hi", "success": True}
+    assert captured["tool_name"] == "exec_command"
+    assert captured["args"] == {"cmd": "ls"}
+
+
+@pytest.mark.asyncio
+async def test_request_approval_falls_through_to_pause_without_exact_match(monkeypatch):
+    """No prior exact-match approval for this call -> normal pause, unchanged."""
+    from app.core.authorization import session_approvals
+
+    async def fake_has_session_approval(**kwargs):
+        return False
+
+    monkeypatch.setattr(
+        session_approvals, "has_session_approval", fake_has_session_approval
+    )
+
+    ctx = _approval_ctx("approval-fresh")
+    ctx.deps.workload_id = uuid4()
+    with pytest.raises(AgentInputRequired):
+        await request_approval(
+            ctx,  # type: ignore[arg-type]
+            tool_name="exec_command",
+            args={"cmd": "ls"},
+            title="List files?",
+        )
+
+
+@pytest.mark.asyncio
+async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
+    """If the auto-executed tool itself fails, that's reported back — never a
+    silent success and never a fall-through to re-pausing."""
+    from app.core.authorization import session_approvals
+    from app.modules.agent.tools.approval.executor import ApprovalExecutor
+
+    async def fake_has_session_approval(**kwargs):
+        return True
+
+    async def fake_execute_as_user(self, *, deps, tool_name, args):
+        raise RuntimeError("workspace unreachable")
+
+    monkeypatch.setattr(
+        session_approvals, "has_session_approval", fake_has_session_approval
+    )
+    monkeypatch.setattr(ApprovalExecutor, "execute_as_user", fake_execute_as_user)
+
+    ctx = _approval_ctx("approval-repeat-fails")
+    ctx.deps.workload_id = uuid4()
+
+    result = await request_approval(
+        ctx,  # type: ignore[arg-type]
+        tool_name="exec_command",
+        args={"cmd": "ls"},
+        title="List files?",
+    )
+
+    assert result.success is False
+    assert result.executed is False
+    assert "workspace unreachable" in (result.error or "")
+
+
+@pytest.mark.asyncio
+async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness():
+    """On remote/MCP runs (no pause signal) the tools never raise or block; they
     return guidance so the model falls back to a conversational ask."""
     ask = await ask_user(
         _ask_ctx(supports_pause_signal=False),  # type: ignore[arg-type]
         _one_question(),
     )
     assert ask.success is False
+    assert ask.interaction_fallback is True
     assert "continue this conversation" in (ask.message or "")
 
     approval = await request_approval(
-        _approval_ctx("approval-daemon", supports_pause_signal=False),  # type: ignore[arg-type]
+        _approval_ctx("approval-remote", supports_pause_signal=False),  # type: ignore[arg-type]
         tool_name="exec_command",
         args={"cmd": "ls"},
         title="List files?",
     )
     assert approval.success is False
+    assert approval.interaction_fallback is True
     assert "can't run a tool with the user's approval" in (approval.message or "")
 
 
@@ -563,6 +660,27 @@ def test_user_interaction_toolset_includes_ask_user():
     assert "ask_user" in user_interaction_toolset.tools
     assert "display_resource" in user_interaction_toolset.tools
     assert "request_approval" in user_interaction_toolset.tools
+
+
+@pytest.mark.asyncio
+async def test_user_interaction_implicitly_adds_skills_at_run_time():
+    agent = Agent(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="widget-author",
+        instruction="Show useful widgets.",
+        toolsets=[AgentToolset.USER_INTERACTION],
+    )
+    toolsets = await RunToolAssembler(object()).assemble(
+        agent=agent,
+        conversation=Conversation(
+            pod_id=agent.pod_id,
+            user_id=agent.user_id,
+            agent_id=agent.id,
+        ),
+    )
+    assert user_interaction_toolset in toolsets
+    assert skills_toolset in toolsets
 
 
 def _ask_ctx(*, supports_pause_signal: bool = True):
@@ -636,8 +754,8 @@ def test_runtime_context_brief_is_appended_to_agent_prompt():
     assert prompt.index("Answer briefly.") < prompt.index("# Runtime Context")
 
 
-def test_daemon_prompt_includes_surface_platform_fragment():
-    # Daemon harnesses (include_toolset_prompts=True) get per-platform guidance
+def test_remote_harness_prompt_includes_surface_platform_fragment():
+    # Remote harnesses (include_toolset_prompts=True) get per-platform guidance
     # appended in build_agent_instructions; the in-process harness gets it from
     # SurfacePlatformCapability instead.
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
@@ -813,7 +931,9 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
     captured: dict[str, object] = {}
 
     class _FakeService:
-        async def execute_function(self, *, pod_id, name, input_data, user_id, ctx=None, run_as_workload=None):
+        async def execute_function(
+            self, *, pod_id, name, input_data, user_id, ctx=None, run_as_workload=None
+        ):
             captured["input_data"] = input_data
             captured["user_id"] = user_id
             return SimpleNamespace(
@@ -870,7 +990,7 @@ async def test_callable_function_tool_passes_flat_model_args_as_input(
             )
 
     monkeypatch.setattr(
-        "app.modules.agent.tools.callable_tool_factory.build_function_use_cases",
+        "app.modules.agent.tools.callable_tool_factory.create_function_use_cases",
         lambda uow_factory: _FakeUseCases(),
     )
 
@@ -1040,7 +1160,9 @@ async def test_agent_tool_returns_dict_when_output_schema_set(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_agent_tool_timeout_returns_handle_dict_even_no_output_schema(monkeypatch):
+async def test_agent_tool_timeout_returns_handle_dict_even_no_output_schema(
+    monkeypatch,
+):
     _patch_subagent(
         monkeypatch,
         await_result={"timed_out": True, "status": "RUNNING"},
@@ -1263,6 +1385,72 @@ def test_runner_keeps_last_five_agent_runs_in_full_and_elides_older_runs():
         assert len(grouped[recent_run.id]) == 5
 
 
+def _surface_conversation():
+    return Conversation(
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        metadata={"surface_platform": "WHATSAPP"},
+    )
+
+
+def _run_with_age(*, run_index: int, hours_ago: float, message_count: int = 5):
+    run = _agent_run_with_messages(run_index, message_count=message_count)
+    stamp = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    for message in run.messages:
+        message.created_at = stamp
+    return run
+
+
+def test_surface_history_window_trims_by_message_count(monkeypatch):
+    # Small budget so only the most recent run fits (5 msgs each, budget 6).
+    monkeypatch.setattr(
+        "app.composition.agent_surface_runtime.surface_history_limits",
+        lambda: (6, 0),
+    )
+    runs = [_agent_run_with_messages(i) for i in range(4)]
+    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+
+    selected = runner._select_runtime_history(runs, _surface_conversation())
+    grouped = _messages_by_run(selected)
+
+    # Only the most recent run survives the count budget.
+    assert set(grouped) == {runs[-1].id}
+    assert len(grouped[runs[-1].id]) == 5
+
+
+def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
+    monkeypatch.setattr(
+        "app.composition.agent_surface_runtime.surface_history_limits",
+        lambda: (40, 24),
+    )
+    old = _run_with_age(run_index=0, hours_ago=48)
+    recent = _run_with_age(run_index=1, hours_ago=1)
+    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+
+    selected = runner._select_runtime_history(
+        runs=[old, recent], conversation=_surface_conversation()
+    )
+    grouped = _messages_by_run(selected)
+
+    # The 48h-old run is outside the 24h window; only the recent run remains.
+    assert set(grouped) == {recent.id}
+
+
+def test_surface_history_window_ignored_for_non_surface_conversation(monkeypatch):
+    monkeypatch.setattr(
+        "app.composition.agent_surface_runtime.surface_history_limits",
+        lambda: (6, 0),
+    )
+    runs = [_agent_run_with_messages(i) for i in range(4)]
+    runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
+
+    # A plain (non-surface) conversation is unaffected by the surface window.
+    non_surface = Conversation(pod_id=uuid4(), user_id=uuid4())
+    selected = runner._select_runtime_history(runs, non_surface)
+    grouped = _messages_by_run(selected)
+    assert len(grouped) == 4
+
+
 def test_history_processors_add_100k_summarizer_by_default():
     processors = build_history_processors(
         HarnessOptions(model_name="kimi-k2.6"),
@@ -1397,10 +1585,10 @@ def test_persisted_agent_prompt_includes_web_search_with_toolset():
     assert "save-webpage https://example.com/article" in prompt
 
 
-def test_daemon_instructions_include_todo_guidance_only_with_toolset():
-    # Daemon harnesses get toolset prompts folded into instructions (no capability
+def test_remote_harness_instructions_include_todo_guidance_only_with_toolset():
+    # Remote harnesses get toolset prompts folded into instructions (no capability
     # layer). The todo task-list guidance must ride along — but only when the agent
-    # actually has TODO — so daemons behave like the in-process LEMMA harness.
+    # actually has TODO — so they behave like the in-process LEMMA harness.
     pod_id, user_id = uuid4(), uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=user_id, agent_id=uuid4())
 
@@ -1418,10 +1606,10 @@ def test_daemon_instructions_include_todo_guidance_only_with_toolset():
         instruction="x",
         toolsets=[AgentToolset.TODO],
     )
-    daemon_prompt = build_agent_instructions(
+    remote_prompt = build_agent_instructions(
         agent=with_todo, conversation=conversation, ctx=object()
     )
-    assert "# Task list" in daemon_prompt and "write_todos" in daemon_prompt
+    assert "# Task list" in remote_prompt and "write_todos" in remote_prompt
 
     # The in-process LEMMA harness suppresses toolset prompts (the TodoCapability
     # supplies the same guidance), so it's not double-included here.
@@ -1496,7 +1684,12 @@ def test_user_agent_without_toolsets_has_no_tool_fragments():
     )
 
     assert prompt.startswith("You are a Lemma agent")
-    for fragment_marker in ("## Lemma CLI", "## Web Search", "## Skills", "# Task list"):
+    for fragment_marker in (
+        "## Lemma CLI",
+        "## Web Search",
+        "## Skills",
+        "# Task list",
+    ):
         assert fragment_marker not in prompt
 
 
@@ -1555,3 +1748,91 @@ def test_latest_user_prompt_includes_metadata_state_without_changing_content():
     assert "UI state:" in user_prompt
     assert '"screen": "pod_runs"' in user_prompt
     assert message.text == "What should I do next?"
+
+
+def _tool_call_message(
+    *,
+    conversation_id: UUID,
+    sequence: int,
+    tool_name: str = "ask_user",
+    tool_call_id: str = "call-1",
+    tool_args: dict | None = None,
+) -> Message:
+    return Message(
+        conversation_id=conversation_id,
+        sequence=sequence,
+        agent_run_id=uuid4(),
+        role=MessageRole.ASSISTANT.value,
+        kind=MessageKind.TOOL_CALL,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        tool_args=tool_args or {"questions": []},
+        metadata={"tool_name": tool_name},
+    )
+
+
+def _tool_return_message(
+    *,
+    conversation_id: UUID,
+    sequence: int,
+    tool_name: str = "ask_user",
+    tool_call_id: str = "call-1",
+    tool_result: dict | None = None,
+) -> Message:
+    return Message(
+        conversation_id=conversation_id,
+        sequence=sequence,
+        agent_run_id=uuid4(),
+        role=MessageRole.TOOL.value,
+        kind=MessageKind.TOOL_RETURN,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+        tool_result=tool_result or {"success": True},
+    )
+
+
+def test_pausing_tool_call_without_matching_return_is_dropped_from_history():
+    """A left-unresolved ask_user/request_approval call must not reach the
+    model as a dangling ToolCallPart — pydantic-ai requires every tool call to
+    have a matching return in the same request. Without a synthesized return
+    (see ConversationService._supersede_stale_pending_interactions), the
+    harness intentionally drops the orphaned call rather than sending an
+    invalid request; this test locks in that fallback behavior."""
+    conversation_id = uuid4()
+    orphaned_call = _tool_call_message(
+        conversation_id=conversation_id, sequence=0, tool_call_id="orphan-1"
+    )
+
+    history, _ = PydanticAIHarness()._history_and_prompt([orphaned_call])
+
+    assert history == []
+
+
+def test_pausing_tool_call_with_synthesized_return_is_paired_in_history():
+    """Once a return exists for a pausing call (whether from a real user
+    decision or an auto-deny superseding it), history reconstruction pairs the
+    call with its return like any other tool round-trip — nothing is dropped
+    and the model sees exactly what happened."""
+    conversation_id = uuid4()
+    call = _tool_call_message(
+        conversation_id=conversation_id, sequence=0, tool_call_id="resolved-1"
+    )
+    tool_return = _tool_return_message(
+        conversation_id=conversation_id,
+        sequence=1,
+        tool_call_id="resolved-1",
+        tool_result={
+            "success": False,
+            "message": "User dismissed the questions without answering.",
+        },
+    )
+
+    history, _ = PydanticAIHarness()._history_and_prompt([call, tool_return])
+
+    assert len(history) == 2
+    response_message, request_message = history
+    assert len(response_message.parts) == 1
+    assert response_message.parts[0].tool_call_id == "resolved-1"
+    assert len(request_message.parts) == 1
+    assert request_message.parts[0].tool_call_id == "resolved-1"
+    assert request_message.parts[0].content["success"] is False

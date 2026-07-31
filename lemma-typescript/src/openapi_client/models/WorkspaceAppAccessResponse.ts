@@ -7,4 +7,3 @@ export type WorkspaceAppAccessResponse = {
     expires_at: string;
     url: string;
 };
-

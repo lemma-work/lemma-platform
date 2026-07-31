@@ -4,6 +4,7 @@ import asyncio
 
 import httpx
 import pytest
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 from app.modules.agent_surfaces.services import event_receiver_service
@@ -14,7 +15,9 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.platforms.telegram.client import normalize_bot_base_url
 from app.modules.agent_surfaces.services.event_receiver_service import (
     NativeReceiverCandidate,
+    NativeSurfaceReceiverCoordinator,
     TelegramPollingReceiverRunner,
+    _assemble_telegram_updates,
     _candidate_from_surface,
     _publish_native_receiver_event,
     _receiver_key,
@@ -52,6 +55,88 @@ def test_slack_candidate_uses_app_token_and_account_scoped_key():
     assert candidate.platform is SurfacePlatform.SLACK
     assert candidate.credential_label == str(account_id)
     assert candidate.key.startswith(f"slack:{account_id}:")
+
+
+def test_telegram_update_assembly_coalesces_same_sender_burst():
+    updates = [
+        {
+            "update_id": 10,
+            "message": {
+                "message_id": 1,
+                "date": 100,
+                "chat": {"id": 20},
+                "from": {"id": 30},
+                "text": "first",
+            },
+        },
+        {
+            "update_id": 11,
+            "message": {
+                "message_id": 2,
+                "date": 101,
+                "chat": {"id": 20},
+                "from": {"id": 30},
+                "text": "second",
+            },
+        },
+    ]
+
+    assembled = _assemble_telegram_updates(updates)
+
+    assert len(assembled) == 1
+    assert assembled[0]["update_id"] == 11
+    assert [message["text"] for message in assembled[0]["_lemma_batch_messages"]] == [
+        "first",
+        "second",
+    ]
+
+
+def test_telegram_update_assembly_keeps_different_chats_separate():
+    updates = [
+        {
+            "update_id": 10,
+            "message": {
+                "message_id": 1,
+                "date": 100,
+                "chat": {"id": 20},
+                "from": {"id": 30},
+            },
+        },
+        {
+            "update_id": 11,
+            "message": {
+                "message_id": 2,
+                "date": 100,
+                "chat": {"id": 21},
+                "from": {"id": 30},
+            },
+        },
+    ]
+
+    assert len(_assemble_telegram_updates(updates)) == 2
+
+
+@pytest.mark.asyncio
+async def test_coordinator_stop_signals_before_run_loop_releases_redis():
+    coordinator = NativeSurfaceReceiverCoordinator(
+        uow_factory=lambda: None,
+        scan_interval_seconds=1,
+        redis_url="redis://unused",
+    )
+    redis_client = AsyncMock()
+    coordinator._redis = redis_client
+
+    await coordinator.stop()
+
+    assert coordinator._stopping is True
+    assert coordinator._wakeup.is_set()
+    assert coordinator._redis is redis_client
+    redis_client.aclose.assert_not_awaited()
+
+    await coordinator._shutdown()
+    assert coordinator._redis is None
+    # Shared client: the coordinator releases it rather than closing the pool.
+    redis_client.aclose.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -98,14 +183,13 @@ async def test_telegram_polling_retries_transient_conflict_after_resetting_webho
 async def test_publish_native_receiver_event_emits_surface_webhook_event(monkeypatch):
     published = []
 
-    class MessageBus:
-        async def publish(self, *, stream, event):
-            published.append((stream, event))
+    async def publish(stream, event):
+        published.append((stream, event))
 
     monkeypatch.setattr(
-        event_receiver_service,
-        "get_message_bus",
-        lambda: MessageBus(),
+        event_receiver_service.EventPublisher,
+        "publish",
+        publish,
     )
 
     await _publish_native_receiver_event(

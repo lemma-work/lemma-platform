@@ -21,13 +21,24 @@ def _event_routers():
         datastore_consumer,
         pod_lifecycle_consumer,
         schedule_consumer,
+        schedule_notification_consumer,
     )
 
     return [
         schedule_consumer.router,
         datastore_consumer.router,
         pod_lifecycle_consumer.router,
+        schedule_notification_consumer.router,
     ]
 
 
-module = LemmaModule(name="schedule", routers=_routers, event_routers=_event_routers)
+module = LemmaModule(
+    name="schedule",
+    routers=_routers,
+    event_routers=_event_routers,
+    stream_groups=(
+        ("schedule_events", "schedule-notifications"),
+        ("datastore.events", "schedule-datastore-events"),
+        ("pod_events", "schedule-pod-events"),
+    ),
+)

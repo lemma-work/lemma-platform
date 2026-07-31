@@ -11,4 +11,3 @@ export type RuntimeModelCatalogEntry = {
     name: string;
     provider_model_name: string;
 };
-

@@ -11,8 +11,8 @@ import {
   PlayCircle,
   Terminal,
   Workflow,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+} from '@/components/ui/icons';
+import type { LemmaIcon } from '@/components/ui/icons';
 
 import {
   conceptDocsGroup,
@@ -67,7 +67,7 @@ export type DocsPage = {
   eyebrow: string;
   description: string;
   group: string;
-  icon: LucideIcon;
+  icon: LemmaIcon;
   blocks: DocsBlock[];
 };
 
@@ -131,6 +131,7 @@ lemma auth login`,
         language: 'bash',
         code: `git clone https://github.com/lemma-work/lemma-platform.git
 cd lemma-platform
+make init
 make dev
 
 uv tool install --force --editable lemma-cli
@@ -532,7 +533,11 @@ const currentUser = await podClient.users.current();`,
 
 export function App({ client }: { client: LemmaClient }) {
   return (
-    <AuthGuard client={client} appName="Support Triage">
+    <AuthGuard
+      client={client}
+      appName="Support Triage"
+      appDescription="Route and resolve incoming customer requests."
+    >
       <SupportTriageApp client={client} />
     </AuthGuard>
   );
@@ -544,9 +549,11 @@ export function App({ client }: { client: LemmaClient }) {
         items: [
           'Checks signed-in state through Lemma auth.',
           'Uses pod membership when the client has a pod id.',
-          'Shows a branded sign-in fallback when unauthenticated.',
-          'Shows request-access UI when signed in but not a pod member.',
-          'Lets you pass custom loading, unauthenticated, or access-request fallbacks.',
+          'Shows a polished app loader while auth and membership resolve.',
+          'Uses the host-injected app or widget name by default.',
+          'Shows app-aware sign-in, access request, pending, and retry states.',
+          'Rechecks pending access automatically and supports account switching.',
+          'Lets you theme or replace loading, unauthenticated, and access-request surfaces.',
         ],
       },
       {
@@ -993,13 +1000,13 @@ lemma workflow run-resume expense-review <run-id> --pod-id <pod-id> --payload-fi
     group: 'CLI',
     icon: LayoutDashboard,
     description:
-      'Clone, build, and deploy operator workbenches while preserving the app shell and routing.',
+      'Clone, build, and deploy apps while preserving the app shell and routing.',
     blocks: [
       {
         type: 'list',
         title: 'App rules',
         items: [
-          'An app is a workbench, not a landing page.',
+          'An app is a working tool, not a landing page.',
           'The first visible screen should start with work.',
           'One active work object should usually anchor the interface.',
           'Actions should sit close to the object they affect.',
@@ -1078,12 +1085,12 @@ lemma connector operation-execute gmail messages_send \
   },
   {
     slug: 'guides/build-a-app',
-    title: 'Build a App',
+    title: 'Build an App',
     eyebrow: 'Guide',
     group: 'Guides',
     icon: LayoutDashboard,
     description:
-      'A practical build checklist for turning pod resources into a real operator workbench.',
+      'A practical build checklist for turning pod resources into an app people can work in.',
     blocks: [
       {
         type: 'steps',

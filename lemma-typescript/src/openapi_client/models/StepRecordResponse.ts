@@ -12,4 +12,3 @@ export type StepRecordResponse = {
     status: StepStatus;
     step_index: number;
 };
-

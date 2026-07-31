@@ -15,4 +15,3 @@ export type PodRecipe = {
     name?: (string | null);
     repo_url?: (string | null);
 };
-

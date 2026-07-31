@@ -17,7 +17,7 @@ import {
     Save,
     Share2,
     Trash2,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -27,8 +27,11 @@ import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityVa
 import { usePodTopbar } from '@/components/pod/pod-topbar-context';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { FileIndexStatusBadge } from '@/components/documents/file-index-status-badge';
+import { MarkdownAttachmentControl, canAttachDocumentMarkdown } from '@/components/documents/markdown-attachment-control';
 import { useDatastoreFile, useDeleteDatastoreFile } from '@/lib/hooks/use-datastores';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import {
     getDocumentPreviewType,
     getOfficePreviewKind,
@@ -535,6 +538,7 @@ export function DocumentViewer({
             });
             setOriginalContent(docContent);
             toast.success('File saved');
+            playSoundFeedback('action-success');
         } catch {
             toast.error('Failed to save file');
         }
@@ -562,6 +566,7 @@ export function DocumentViewer({
             if (isTextEditable) {
                 await navigator.clipboard.writeText(docContent);
                 toast.success('Content copied');
+                playSoundFeedback('action-success');
                 return;
             }
 
@@ -579,6 +584,7 @@ export function DocumentViewer({
                 new ClipboardItem({ [fileBlob.type || 'application/octet-stream']: fileBlob }),
             ]);
             toast.success('Content copied');
+            playSoundFeedback('action-success');
         } catch {
             toast.error('Could not copy content');
         }
@@ -588,6 +594,15 @@ export function DocumentViewer({
         <TooltipProvider>
             <div className="flex shrink-0 items-center gap-1">
             {extraActions}
+            {canWriteDocument && canAttachDocumentMarkdown(previewType) ? (
+                <MarkdownAttachmentControl
+                    podId={podId}
+                    datastoreName={datastoreName}
+                    filePath={documentPath}
+                    metadata={doc?.metadata}
+                    disabled={!doc}
+                />
+            ) : null}
             {canWriteDocument && hasUnsavedChanges && (
                 <Button
                     size="sm"
@@ -638,7 +653,12 @@ export function DocumentViewer({
                     resourceId={documentPath}
                     resourceLabel="files"
                     resourceName={doc?.name || documentPath}
-                    shareUrl={typeof window === 'undefined' ? undefined : window.location.href}
+                    shareUrl={typeof window === 'undefined'
+                        ? undefined
+                        : buildResourceShareUrl(
+                            `${window.location.pathname}${window.location.search}${window.location.hash}`,
+                            window.location.origin,
+                        ) ?? undefined}
                     onChange={handleShareVisibilityChange}
                     disabled={!doc}
                     trigger={({ openShare, disabled }) => (
@@ -715,10 +735,12 @@ export function DocumentViewer({
         canDeleteDocument,
         canToggleTextView,
         canWriteDocument,
+        datastoreName,
         doc,
         documentPath,
         documentVisibility,
         extraActions,
+        previewType,
         handleCopyContent,
         handleDownload,
         handleSave,
@@ -867,13 +889,15 @@ export function DocumentViewer({
                                 {pdfPreview.pages.map((page, index) => (
                                     <div
                                         key={`pdf-page-${index + 1}`}
-                                        className="embedded-canvas rounded-md border border-[color:var(--card-border)] p-1.5"
+                                        className="embedded-canvas flex justify-center rounded-md border border-[color:var(--card-border)] p-1.5"
                                     >
                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                         <img
-                                            src={page}
+                                            src={page.src}
                                             alt={`PDF page ${index + 1}`}
-                                            className="w-full h-auto rounded-sm"
+                                            width={page.displayWidth}
+                                            height={page.displayHeight}
+                                            className="h-auto max-w-full rounded-sm"
                                         />
                                     </div>
                                 ))}

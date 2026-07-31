@@ -8,4 +8,3 @@ export type FileSignedUrlResponse = {
     path: string;
     signed_url: string;
 };
-

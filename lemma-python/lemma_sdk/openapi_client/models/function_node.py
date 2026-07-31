@@ -112,7 +112,7 @@ class FunctionNode:
                 position_type_0 = FunctionNodePositionType0.from_dict(data)
 
                 return position_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FunctionNodePositionType0 | None | Unset, data)
 

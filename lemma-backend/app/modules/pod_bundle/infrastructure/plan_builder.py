@@ -19,12 +19,17 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID
 
-from lemma_pod_bundle import diff_table_columns, load_resource_payload
+from lemma_pod_bundle import (
+    diff_table_columns,
+    load_resource_payload,
+    require_account_variable_metadata,
+)
 from lemma_pod_bundle.diff import _order_table_dirs_by_dependency
 from lemma_pod_bundle.jsonc import loads_jsonc
 from lemma_pod_bundle.layout import FILES_MANIFEST, POD_MANIFEST_FILE, TABLE_DATA_FILE
 
 from app.core.log.log import get_logger
+from app.modules.pod_bundle.domain.errors import BundleInvalidError
 from app.modules.pod_bundle.domain.state import (
     ImportPlan,
     PlanStep,
@@ -169,7 +174,9 @@ class PlanBuilder:
         # --- functions -------------------------------------------------------
         existing_functions = await self._existing.function_names()
         for d in _resource_subdirs(bundle_root, "functions"):
-            steps.append(self._simple_step(StepKind.FUNCTION, d.name, existing_functions))
+            steps.append(
+                self._simple_step(StepKind.FUNCTION, d.name, existing_functions)
+            )
 
         # --- agents (+ deferred grants) --------------------------------------
         existing_agents = await self._existing.agent_names()
@@ -180,26 +187,19 @@ class PlanBuilder:
             if _has_grants(payload):
                 grant_agents.append(d.name)
 
-        # --- agent grants (after all resources exist) ------------------------
-        for name in grant_agents:
-            steps.append(
-                PlanStep(
-                    index=0,
-                    kind=StepKind.AGENT_GRANTS,
-                    name=name,
-                    action=StepAction.UPDATE,
-                )
-            )
-
         # --- workflows -------------------------------------------------------
         existing_workflows = await self._existing.workflow_names()
         for d in _resource_subdirs(bundle_root, "workflows"):
-            steps.append(self._simple_step(StepKind.WORKFLOW, d.name, existing_workflows))
+            steps.append(
+                self._simple_step(StepKind.WORKFLOW, d.name, existing_workflows)
+            )
 
         # --- schedules -------------------------------------------------------
         existing_schedules = await self._existing.schedule_names()
         for d in _resource_subdirs(bundle_root, "schedules"):
-            steps.append(self._simple_step(StepKind.SCHEDULE, d.name, existing_schedules))
+            steps.append(
+                self._simple_step(StepKind.SCHEDULE, d.name, existing_schedules)
+            )
 
         # --- surfaces --------------------------------------------------------
         existing_surfaces = await self._existing.surface_platforms()
@@ -227,10 +227,26 @@ class PlanBuilder:
         # --- files (folders parent-first, then file bytes) -------------------
         steps.extend(_file_steps(bundle_root))
 
+        # --- agent grants (after every referenced resource exists) -----------
+        for name in grant_agents:
+            steps.append(
+                PlanStep(
+                    index=0,
+                    kind=StepKind.AGENT_GRANTS,
+                    name=name,
+                    action=StepAction.UPDATE,
+                )
+            )
+
         # --- table data (after tables exist) ---------------------------------
         for name, _ in data_steps:
             steps.append(
-                PlanStep(index=0, kind=StepKind.TABLE_DATA, name=name, action=StepAction.CREATE)
+                PlanStep(
+                    index=0,
+                    kind=StepKind.TABLE_DATA,
+                    name=name,
+                    action=StepAction.CREATE,
+                )
             )
 
         for i, step in enumerate(steps):
@@ -246,9 +262,7 @@ class PlanBuilder:
             warnings=warnings,
         )
 
-    def _simple_step(
-        self, kind: StepKind, name: str, existing: set[str]
-    ) -> PlanStep:
+    def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:
         return PlanStep(
             index=0,
             kind=kind,
@@ -277,15 +291,15 @@ class ServiceExistingResources:
         self._user_id = user_id
 
     async def table_names(self) -> set[str]:
-        from app.modules.datastore.api.dependencies import build_table_service
+        from app.composition.pod_bundle_resources import build_table_service
 
         service = build_table_service(self._uow)
         tables, _ = await service.list_tables(self._pod_id, self._ctx, limit=1000)
         return {str(t.name or "") for t in tables}
 
     async def table_manifest(self, name: str) -> dict[str, Any] | None:
-        from app.modules.datastore.api.dependencies import build_table_service
-        from app.modules.datastore.api.schemas.datastore_schemas import TableResponse
+        from app.composition.pod_bundle_resources import build_table_service
+        from app.modules.datastore.contracts import TableResponse
 
         service = build_table_service(self._uow)
         table = await service.get_table(self._pod_id, name, self._ctx)
@@ -294,7 +308,7 @@ class ServiceExistingResources:
         return TableResponse.model_validate(table).model_dump(mode="json")
 
     async def function_names(self) -> set[str]:
-        from app.modules.function.api.dependencies import build_function_service
+        from app.composition.pod_bundle_resources import build_function_service
 
         service = build_function_service(self._uow)
         functions, _ = await service.list_functions(
@@ -303,25 +317,28 @@ class ServiceExistingResources:
         return {str(f.name or "") for f in functions}
 
     async def agent_names(self) -> set[str]:
-        from app.modules.agent.api.dependencies import get_agent_service
+        from app.composition.pod_bundle_resources import get_agent_service
 
         service = get_agent_service(self._uow)
         agents, _ = await service.list_agents(
-            pod_id=self._pod_id, limit=1000, requester_user_id=self._user_id, ctx=self._ctx
+            pod_id=self._pod_id,
+            limit=1000,
+            requester_user_id=self._user_id,
+            ctx=self._ctx,
         )
         return {str(a.name or "") for a in agents}
 
     async def workflow_names(self) -> set[str]:
-        from app.modules.workflow.api.dependencies import get_flow_service
+        from app.composition.pod_bundle_resources import get_workflow_service
 
-        service = get_flow_service(self._uow)
-        flows, _ = await service.list_flows(
+        service = get_workflow_service(self._uow)
+        flows, _ = await service.list_workflows(
             self._pod_id, limit=1000, requester_user_id=self._user_id, ctx=self._ctx
         )
         return {str(f.name or "") for f in flows}
 
     async def schedule_names(self) -> set[str]:
-        from app.modules.schedule.api.dependencies import get_schedule_service
+        from app.composition.pod_bundle_resources import get_schedule_service
 
         service = get_schedule_service(self._uow)
         schedules, _ = await service.list_schedules(
@@ -330,7 +347,7 @@ class ServiceExistingResources:
         return {str(s.name or "") for s in schedules}
 
     async def app_names(self) -> set[str]:
-        from app.modules.apps.api.dependencies import build_app_service
+        from app.composition.pod_bundle_resources import build_app_service
 
         service = build_app_service(self._uow)
         apps, _ = await service.list_apps(
@@ -340,16 +357,21 @@ class ServiceExistingResources:
 
     async def surface_platforms(self) -> set[str]:
         try:
-            from app.modules.agent_surfaces.api.dependencies import get_surface_service
+            from app.composition.pod_bundle_resources import get_surface_service
 
             service = get_surface_service(self._uow)
             surfaces, _ = await service.list_surfaces_by_pod(self._pod_id, limit=100)
             return {
-                str(getattr(s, "surface_type", getattr(s, "platform", "")) or "").upper()
+                str(
+                    getattr(s, "surface_type", getattr(s, "platform", "")) or ""
+                ).upper()
                 for s in surfaces
             }
-        except Exception as exc:  # noqa: BLE001 - surfaces are best-effort in the plan
-            logger.warning("Skipping surface snapshot for pod %s: %s", self._pod_id, exc)
+        except Exception:  # noqa: BLE001 - surfaces are best-effort in the plan
+            logger.debug(
+                'pod_bundle.plan_builder.skipping_surface_snapshot_pod_s.diagnostic',
+                pod_id=self._pod_id,
+            )
             return set()
 
 
@@ -360,10 +382,18 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
     exporting org and cannot be reused, so the importer must supply one of their own
     accounts (validated at apply). A ``pod_member`` variable auto-resolves to the
     importing user, and a ``free`` variable (e.g. an app slug) is required only when
-    it has no default."""
+    it has no default.
+
+    Every ``account`` variable must carry ``connector``/``provider`` metadata —
+    a bundle missing it predates that guarantee (or was hand-edited) and must
+    be re-exported rather than imported half-resolvable."""
     raw = pod_manifest.get("variables")
     if not isinstance(raw, dict):
         return []
+    try:
+        require_account_variable_metadata(raw)
+    except ValueError as exc:
+        raise BundleInvalidError(str(exc)) from exc
     specs: list[VariableSpec] = []
     for name, meta in raw.items():
         vtype = str((meta or {}).get("type") or "").lower()
@@ -374,7 +404,8 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
         else:
             kind = "free"
         default = (meta or {}).get("default")
-        platform = (meta or {}).get("platform")
+        connector = (meta or {}).get("connector")
+        provider = (meta or {}).get("provider")
         specs.append(
             VariableSpec(
                 name=str(name),
@@ -382,7 +413,8 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
                 description=(meta or {}).get("description"),
                 required=(kind == "account") or (kind == "free" and default is None),
                 default=str(default) if default is not None else None,
-                platform=str(platform) if platform else None,
+                connector=str(connector) if connector else None,
+                provider=str(provider) if provider else None,
             )
         )
     return specs

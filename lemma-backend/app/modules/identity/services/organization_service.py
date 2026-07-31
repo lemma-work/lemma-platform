@@ -14,6 +14,7 @@ from app.modules.identity.domain.errors import (
     OrganizationNotFoundError,
     UserNotFoundError,
 )
+from app.modules.identity.domain.organization_slugs import normalize_organization_slug
 from app.modules.identity.domain.organization_entities import (
     OrganizationEntity,
     OrganizationInvitationEntity,
@@ -165,8 +166,7 @@ class OrganizationService:
                 "Organization with this name already exists"
             )
 
-        if not entity.slug:
-            entity.slug = slugify(entity.name)
+        entity.slug = normalize_organization_slug(entity.slug, entity.name)
 
         existing_slug = await self.organization_repository.get_by_slug(entity.slug)
         if existing_slug:
@@ -380,16 +380,17 @@ class OrganizationService:
                 "User is already a member of this organization"
             )
 
-        existing_invitation = (
-            await self.organization_repository.get_invitation_by_email(
-                entity.organization_id,
-                entity.email,
-            )
+        existing_invitation = await self.organization_repository.get_invitation_by_email(
+            entity.organization_id, entity.email
         )
         if existing_invitation:
-            raise OrganizationConflictError(
-                "An invitation already exists for this email"
+            existing_invitation = await self._mark_invitation_expired_if_needed(
+                existing_invitation
             )
+            if existing_invitation.status == OrganizationInvitationStatus.PENDING:
+                raise OrganizationConflictError(
+                    "An invitation already exists for this email"
+                )
 
         pod_name: str | None = None
         pod_description: str | None = None
@@ -467,10 +468,7 @@ class OrganizationService:
             raise UserNotFoundError()
 
         invitations, next_cursor = await self.organization_repository.list_user_invitations(
-            user_email=str(user.email),
-            status=status,
-            limit=limit,
-            cursor=cursor,
+            user_email=str(user.email), status=status, limit=limit, cursor=cursor
         )
         return (
             await self._enrich_invitation_list_display_fields(invitations),

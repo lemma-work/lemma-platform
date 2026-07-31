@@ -64,6 +64,12 @@ async def test_app_step_not_dispatched_by_applier(tmp_path):
         await applier.apply_step(_step(StepKind.APP, "dashboard"))
 
 
+async def test_function_step_not_dispatched_by_applier(tmp_path):
+    applier = _applier(tmp_path)
+    with pytest.raises(StepNotApplicableError):
+        await applier.apply_step(_step(StepKind.FUNCTION, "triage"))
+
+
 class FakeTableService:
     def __init__(self):
         self.created = []
@@ -211,7 +217,6 @@ async def test_table_update_adds_new_columns_only(tmp_path, monkeypatch):
 # --- grants ------------------------------------------------------------------
 
 
-_FUNC_ID = uuid4()
 _AGENT_ID = uuid4()
 
 
@@ -316,89 +321,6 @@ def test_grants_from_payload_accepts_bare_grants_list():
     assert _grants_from_payload({}) == []
 
 
-class FakeFunctionService:
-    def __init__(self):
-        self.created = []
-        self.updated = []
-
-    async def get_function_by_name(
-        self, pod_id, name, user_id, *, raise_not_found=False, ctx=None
-    ):
-        return None
-
-    async def create_function(self, entity, user_id, code=None, ctx=None):
-        entity.id = _FUNC_ID
-        self.created.append(entity.name)
-        return entity
-
-
-async def test_function_apply_applies_grants_and_invalidates(tmp_path, monkeypatch):
-    from app.core.authorization.context import ResourceType
-
-    root = tmp_path / "bundle"
-    _write(
-        root / "functions" / "triage" / "triage.json",
-        {
-            "name": "triage",
-            "code": "def main():\n    return {}\n",
-            "permissions": {
-                "grants": [
-                    {
-                        "resource_type": "datastore_table",
-                        "resource_name": "tickets",
-                        "permission_ids": ["datastore.record.read"],
-                    }
-                ]
-            },
-        },
-    )
-    fake = FakeFunctionService()
-    monkeypatch.setattr(
-        "app.modules.function.api.dependencies.build_function_service",
-        lambda uow: fake,
-    )
-    calls = _patch_grant_layer(monkeypatch)
-    invalidated: dict = {}
-
-    async def _invalidate(*, pod_id, function_id):
-        invalidated["function_id"] = function_id
-
-    monkeypatch.setattr(
-        "app.modules.workspace.services.workspace_tool_runtime."
-        "invalidate_function_workspace_env_cache",
-        _invalidate,
-    )
-
-    await _grant_applier(root).apply_step(_step(StepKind.FUNCTION, "triage"))
-
-    assert fake.created == ["triage"]
-    assert calls["replace"]["grantee_type"] == "FUNCTION"
-    assert calls["replace"]["grantee_id"] == _FUNC_ID
-    assert calls["replace"]["grants"] == ["NORMALIZED"]
-    grant = calls["validated"][0]
-    assert grant.resource_type == ResourceType.DATASTORE_TABLE
-    assert grant.resource_name == "tickets"
-    # Cache dropped so the new scopes take effect on the next run.
-    assert invalidated["function_id"] == _FUNC_ID
-
-
-async def test_function_apply_without_grants_skips_grant_layer(tmp_path, monkeypatch):
-    root = tmp_path / "bundle"
-    _write(
-        root / "functions" / "noop" / "noop.json",
-        {"name": "noop", "code": "def main():\n    return {}\n"},
-    )
-    fake = FakeFunctionService()
-    monkeypatch.setattr(
-        "app.modules.function.api.dependencies.build_function_service",
-        lambda uow: fake,
-    )
-    calls = _patch_grant_layer(monkeypatch)
-    await _grant_applier(root).apply_step(_step(StepKind.FUNCTION, "noop"))
-    assert fake.created == ["noop"]
-    assert "replace" not in calls  # no grants -> grant layer untouched
-
-
 class FakeAgentService:
     class _Agent:
         id = _AGENT_ID
@@ -442,16 +364,16 @@ async def test_agent_grants_step_applies_grants(tmp_path, monkeypatch):
 # --- workflows + schedules ---------------------------------------------------
 
 
-class FakeFlowService:
+class FakeWorkflowService:
     def __init__(self):
         self.created = []
 
-    async def get_flow_by_name(self, pod_id, name, requester_user_id=None, ctx=None):
+    async def get_workflow_by_name(self, pod_id, name, requester_user_id=None, ctx=None):
         # A missing flow returns None (does NOT raise) — the applier must treat
         # that as "create", not "already exists".
         return None
 
-    async def create_flow(self, **kwargs):
+    async def create_workflow(self, **kwargs):
         self.created.append(kwargs["name"])
 
 
@@ -466,12 +388,12 @@ async def test_workflow_apply_creates_when_absent(tmp_path, monkeypatch):
             "edges": [],
         },
     )
-    fake = FakeFlowService()
+    fake = FakeWorkflowService()
     monkeypatch.setattr(
-        "app.modules.workflow.api.dependencies.get_flow_service", lambda uow: fake
+        "app.modules.workflow.api.dependencies.get_workflow_service", lambda uow: fake
     )
     await _grant_applier(root).apply_step(_step(StepKind.WORKFLOW, "score_flow"))
-    # Regression: get_flow_by_name returning None must not be read as "exists".
+    # Regression: get_workflow_by_name returning None must not be read as "exists".
     assert fake.created == ["score_flow"]
 
 
@@ -509,6 +431,40 @@ async def test_schedule_apply_maps_manifest_to_entity(tmp_path, monkeypatch):
     assert entity.schedule_type.value == "TIME"
     assert entity.workflow_name == "score_flow"
     assert entity.config == {"cron": "0 2 * * *"}
+
+
+async def test_schedule_apply_carries_account_and_trigger_fields(tmp_path, monkeypatch):
+    """Regression test: account_id, connector_trigger_id, filter_instruction and
+    filter_output_schema were previously dropped on apply even when the bundle
+    had them resolved."""
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "schedules" / "on_ticket" / "on_ticket.json",
+        {
+            "name": "on_ticket",
+            "schedule_type": "WEBHOOK",
+            "config": {},
+            "account_id": "${on_ticket_account}",
+            "connector_trigger_id": "jira_new_issue",
+            "filter_instruction": "only urgent tickets",
+            "filter_output_schema": {"type": "object"},
+        },
+    )
+    fake = FakeScheduleService()
+    monkeypatch.setattr(
+        "app.modules.schedule.api.dependencies.get_schedule_service",
+        lambda uow: fake,
+    )
+    applier = _applier(root, replacements={"on_ticket_account": str(account)})
+    await applier.apply_step(_step(StepKind.SCHEDULE, "on_ticket"))
+
+    assert len(fake.created) == 1
+    entity = fake.created[0]
+    assert entity.account_id == account
+    assert entity.connector_trigger_id == "jira_new_issue"
+    assert entity.filter_instruction == "only urgent tickets"
+    assert entity.filter_output_schema == {"type": "object"}
 
 
 # --- surfaces (connectors) ---------------------------------------------------
@@ -587,3 +543,147 @@ async def test_surface_apply_creates_with_resolved_account(tmp_path, monkeypatch
     assert surface_fake.created["platform"] == "SLACK"
     assert surface_fake.created["account_id"] == account
     assert surface_fake.updated is None  # created, not updated
+
+
+async def test_surface_apply_rejects_missing_platform(tmp_path, monkeypatch):
+    """A surface manifest with no platform must fail loudly, not silently fall
+    back to guessing the platform from the resource's directory name."""
+    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "slack" / "slack.json",
+        {"name": "slack", "account_id": str(uuid4()), "is_enabled": True},
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
+        lambda uow: FakeSurfaceService(),
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    with pytest.raises(PodBundleDomainError, match="platform"):
+        await _applier(root).apply_step(_step(StepKind.SURFACE, "slack"))
+
+
+# --- account-binding validation on import ------------------------------------
+
+
+class _FakeConnectorService:
+    """Stand-in for the connectors service the applier consults to confirm a
+    supplied account matches the connector the bundle declared."""
+
+    def __init__(self, account, provider: str = "LEMMA"):
+        from types import SimpleNamespace
+
+        self.account_repository = SimpleNamespace(get=self._get_account)
+        self.auth_config_repository = SimpleNamespace(get=self._get_auth_config)
+        self._account = account
+        self._provider = provider
+
+    async def _get_account(self, account_id):
+        return self._account
+
+    async def _get_auth_config(self, auth_config_id):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(provider=SimpleNamespace(value=self._provider))
+
+
+def _patch_surface_deps(monkeypatch, surface_service, connector_service) -> None:
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.api.dependencies.get_surface_service",
+        lambda uow: surface_service,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.api.dependencies.get_agent_service",
+        lambda uow: FakeAgentService(),
+    )
+    monkeypatch.setattr(
+        "app.modules.connectors.api.dependencies.get_connector_service",
+        lambda uow: connector_service,
+    )
+
+
+async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkeypatch):
+    """A supplied account whose connector matches the bundle's declared
+    connector_id passes validation and the surface is created."""
+    from types import SimpleNamespace
+
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "provider": "LEMMA",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    connector_account = SimpleNamespace(connector_id="microsoft_teams", auth_config_id=uuid4())
+    _patch_surface_deps(monkeypatch, surface_fake, _FakeConnectorService(connector_account))
+
+    applier = _applier(root, replacements={"teams_account": str(account)})
+    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+    assert surface_fake.created is not None
+    assert surface_fake.created["account_id"] == account
+
+
+async def test_surface_apply_rejects_wrong_connector_account(tmp_path, monkeypatch):
+    """A supplied account for the wrong connector is rejected with a clear error
+    instead of silently binding a mismatched account."""
+    from types import SimpleNamespace
+
+    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "provider": "LEMMA",
+            "is_enabled": True,
+        },
+    )
+    # User supplied a slack account for a teams surface.
+    connector_account = SimpleNamespace(connector_id="slack", auth_config_id=uuid4())
+    _patch_surface_deps(
+        monkeypatch, FakeSurfaceService(), _FakeConnectorService(connector_account)
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(uuid4())})
+    with pytest.raises(PodBundleDomainError, match="teams"):
+        await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+
+
+async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
+    """A supplied account id that doesn't exist in the target org is rejected."""
+    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "provider": "LEMMA",
+            "is_enabled": True,
+        },
+    )
+    _patch_surface_deps(
+        monkeypatch, FakeSurfaceService(), _FakeConnectorService(None)
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(uuid4())})
+    with pytest.raises(PodBundleDomainError, match="does not exist"):
+        await applier.apply_step(_step(StepKind.SURFACE, "teams"))

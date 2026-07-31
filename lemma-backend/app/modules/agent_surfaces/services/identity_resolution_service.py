@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from uuid import UUID
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -12,7 +13,16 @@ from app.modules.agent_surfaces.domain.models import SurfaceSenderProfile
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
 )
-from app.modules.identity.infrastructure.user_repositories import UserRepository
+from app.composition.surface_identity import UserRepository
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class _UserMatch:
+    user_id: UUID | None
+    cacheable: bool = True
 
 
 class SurfaceIdentityResolutionService:
@@ -47,8 +57,7 @@ class SurfaceIdentityResolutionService:
     ) -> ResolvedSurfaceUser:
         profile = sender_profile or SurfaceSenderProfile()
         external_user_id = (
-            str(profile.external_user_id or event.sender_external_user_id or "")
-            or None
+            str(profile.external_user_id or event.sender_external_user_id or "") or None
         )
         email = profile.email or event.sender_email
         phone = _normalize_phone_number(profile.phone or event.sender_phone)
@@ -64,7 +73,9 @@ class SurfaceIdentityResolutionService:
                 email=email,
                 phone=phone,
                 display_name=display_name,
-                raw_profile=profile.raw_profile or profile.model_dump(exclude_none=True) or event.raw_payload,
+                raw_profile=profile.raw_profile
+                or profile.model_dump(exclude_none=True)
+                or event.raw_payload,
             )
             # Cache hit — previously resolved, skip DB lookup.
             if external_user.resolved_user_id:
@@ -78,14 +89,15 @@ class SurfaceIdentityResolutionService:
 
         # ── 2-4. Match against Lemma users: telegram username, then email,
         #         then phone ─────────────────────────────────────────────────
-        user_id = await self._match_user(
+        match = await self._match_user_result(
             email=email,
             phone=phone,
             telegram_username=_telegram_username(event),
         )
+        user_id = match.user_id
 
         # Persist the resolved_user_id so the next message is a cache hit.
-        if external_user_id:
+        if external_user_id and match.cacheable:
             external_user = await self.external_user_repository.upsert(
                 platform=event.platform,
                 tenant_id=event.tenant_id,
@@ -93,7 +105,9 @@ class SurfaceIdentityResolutionService:
                 email=email,
                 phone=phone,
                 display_name=display_name,
-                raw_profile=profile.raw_profile or profile.model_dump(exclude_none=True) or event.raw_payload,
+                raw_profile=profile.raw_profile
+                or profile.model_dump(exclude_none=True)
+                or event.raw_payload,
                 resolved_user_id=user_id,
             )
 
@@ -102,7 +116,8 @@ class SurfaceIdentityResolutionService:
             external_user_id=external_user_id,
             email=email,
             phone=phone,
-            display_name=display_name or (external_user.display_name if external_user else None),
+            display_name=display_name
+            or (external_user.display_name if external_user else None),
         )
 
     async def _match_user(
@@ -113,24 +128,39 @@ class SurfaceIdentityResolutionService:
         telegram_username: str | None = None,
     ) -> UUID | None:
         """Return the internal user_id for this sender, or None if not found."""
+        return (
+            await self._match_user_result(
+                email=email,
+                phone=phone,
+                telegram_username=telegram_username,
+            )
+        ).user_id
+
+    async def _match_user_result(
+        self,
+        *,
+        email: str | None,
+        phone: str | None,
+        telegram_username: str | None = None,
+    ) -> _UserMatch:
         # Telegram username first: a direct @username match links the sender
         # without the contact-share (phone) flow.
         if telegram_username:
             user_id = await self._match_user_by_telegram_username(telegram_username)
             if user_id:
-                return user_id
+                return _UserMatch(user_id)
 
         if email:
             user_id = await self._users.get_id_by_email_insensitive(email)
             if user_id:
-                return user_id
+                return _UserMatch(user_id)
 
         if phone:
-            user_id = await self._match_user_by_phone(phone)
-            if user_id:
-                return user_id
+            phone_match = await self._match_user_by_phone(phone)
+            if phone_match.user_id:
+                return phone_match
 
-        return None
+        return _UserMatch(None)
 
     async def _match_user_by_telegram_username(self, username: str) -> UUID | None:
         cleaned = str(username or "").strip().lstrip("@").lower()
@@ -138,13 +168,35 @@ class SurfaceIdentityResolutionService:
             return None
         return await self._users.get_id_by_telegram_lower(cleaned)
 
-    async def _match_user_by_phone(self, phone: str) -> UUID | None:
+    async def _match_user_by_phone(self, phone: str) -> _UserMatch:
         candidates = _phone_lookup_candidates(phone)
         if not candidates:
-            return None
-        # Only a unique phone match is trusted (avoid linking shared numbers).
-        ids = await self._users.get_ids_by_mobile_numbers(candidates)
-        return ids[0] if len(ids) == 1 else None
+            return _UserMatch(None)
+        # Prefer verified ownership. If verification is optional or has not yet
+        # happened, a single eligible profile match still routes the surface.
+        ids = await self._users.get_ids_by_mobile_numbers(candidates, verified=True)
+        if len(ids) == 1:
+            return _UserMatch(ids[0])
+        if len(ids) > 1:
+            logger.error(
+                "agent_surfaces.identity.ambiguous_mobile_match",
+                verification_state="verified",
+                candidate_count=len(ids),
+            )
+            return _UserMatch(None)
+
+        unverified_ids = await self._users.get_ids_by_mobile_numbers(
+            candidates, verified=False
+        )
+        if len(unverified_ids) == 1:
+            return _UserMatch(unverified_ids[0])
+        if len(unverified_ids) > 1:
+            logger.error(
+                "agent_surfaces.identity.ambiguous_mobile_match",
+                verification_state="unverified",
+                candidate_count=len(unverified_ids),
+            )
+        return _UserMatch(None)
 
 
 def _telegram_username(event: ParsedInboundSurfaceEvent) -> str | None:
@@ -160,11 +212,13 @@ def _normalize_phone_number(phone: str | None) -> str | None:
     raw = str(phone or "").strip()
     if not raw:
         return None
-    has_plus = raw.startswith("+")
     digits = re.sub(r"\D", "", raw)
     if not digits:
         return None
-    return f"+{digits}" if has_plus else digits
+    # Meta wa_id is E.164 without '+'. Telegram contacts may include or omit
+    # it. Store one canonical representation while matching profile data by
+    # digits so legacy formatting remains compatible.
+    return f"+{digits}"
 
 
 def _phone_lookup_candidates(phone: str) -> list[str]:

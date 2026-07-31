@@ -5,7 +5,11 @@
 
 import type { AuthManager } from "./auth.js";
 import { retryDelayForStatus, serverRetryAfterMs, sleep } from "./run-utils.js";
-import { CLIENT_HEADER_NAME, CLIENT_HEADER_VALUE } from "./version.js";
+import {
+  CLIENT_HEADER_NAME,
+  CLIENT_HEADER_VALUE,
+  shouldSendClientHeader,
+} from "./version.js";
 
 type RequestParams = Record<string, string | number | boolean | undefined | null>;
 
@@ -223,19 +227,11 @@ export class HttpClient {
       signal: options.signal,
     };
 
-    // For FormData, let the browser set Content-Type with boundary.
-    const withAuth = options.isFormData
-      ? {
-          ...this.auth.getRequestInit(initBase),
-          headers: Object.fromEntries(
-            Object.entries(
-              (this.auth.getRequestInit(initBase).headers as Record<string, string>) ?? {},
-            ).filter(([key]) => key.toLowerCase() !== "content-type"),
-          ),
-        }
-      : this.auth.getRequestInit(initBase);
+    const withAuth = this.auth.getRequestInit(initBase);
 
-    const withClient = this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE });
+    const withClient = shouldSendClientHeader(this.apiUrl, method)
+      ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE })
+      : withAuth;
     return this.mergeHeaders(withClient, options.headers);
   }
 

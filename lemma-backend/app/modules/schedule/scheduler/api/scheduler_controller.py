@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hmac
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import Response
 
 from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
@@ -15,11 +16,43 @@ from app.modules.schedule.scheduler.api.schemas import (
     JobListResponse,
     JobStatusResponse,
 )
+from app.core.config import reveal_secret
 from app.core.log.log import get_logger
+from app.modules.schedule.config import schedule_settings
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/scheduler/jobs", tags=["Scheduler"])
+
+async def require_scheduler_token(
+    authorization: str | None = Header(default=None),
+) -> None:
+    """Service-to-service auth for the scheduler sidecar's job API.
+
+    The sidecar is an internal singleton reached only by the backend's
+    ``SchedulerAPIClient``. When ``scheduler_internal_token`` is configured the
+    caller must present it as a bearer token; when it is unset (e.g. local
+    single-process dev) the check is skipped so nothing breaks out of the box.
+    """
+    expected = reveal_secret(schedule_settings.scheduler_internal_token)
+    if not expected:
+        return
+
+    provided: str | None = None
+    if authorization and authorization.lower().startswith("bearer "):
+        provided = authorization[7:]
+
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing scheduler token",
+        )
+
+
+router = APIRouter(
+    prefix="/scheduler/jobs",
+    tags=["Scheduler"],
+    dependencies=[Depends(require_scheduler_token)],
+)
 
 
 @router.post(
@@ -61,8 +94,8 @@ async def schedule_cron_job(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid cron expression: {e}",
         )
-    except Exception as e:
-        logger.error(f"Failed to schedule cron job: {e}", exc_info=True)
+    except Exception:
+        logger.debug('schedule.scheduler_controller.cron_job.propagated', exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule cron job",
@@ -103,8 +136,8 @@ async def schedule_once_job(
             schedule_id=data.schedule_id,
             next_run_time=next_run_time,
         )
-    except Exception as e:
-        logger.error(f"Failed to schedule one-time job: {e}", exc_info=True)
+    except Exception:
+        logger.debug('schedule.scheduler_controller.one_time_job.propagated', exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule one-time job",

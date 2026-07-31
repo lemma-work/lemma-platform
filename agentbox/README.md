@@ -1,234 +1,75 @@
 # AgentBox
 
-AgentBox is Lemma's sandbox manager. It exposes one typed HTTP API for creating
-ephemeral code sandboxes, creating sessions inside them, and running Python,
-shell, or long-lived process commands. The same manager API is used locally and
-in cloud.
+AgentBox is Lemma's provider-neutral sandbox fabric for Docker, Kubernetes, and E2B.
 
-## Architecture
+**Status:** Implemented and verified for Docker and E2B; Kubernetes deferred
 
-```text
-lemma-backend
-  |
-  | HTTP + API key
-  v
-AgentBox Manager
-  |
-  +-- AGENTBOX_PROVIDER=docker       -> local Docker containers
-  |
-  +-- AGENTBOX_PROVIDER=podman       -> managed local Podman containers
-  |
-  +-- AGENTBOX_PROVIDER=kubernetes   -> cloud Kubernetes pods
-        |
-        v
-agentbox runtime container
-  |
-  v
-runtime HTTP server on port 8080
-```
+The canonical AgentBox design is maintained in:
 
-The main backend never talks to Docker or Kubernetes directly. Provider-specific
-logic lives under `agentbox/providers`.
+- [AgentBox overview](../docs/design/agentbox/README.md)
+- [Sandbox protocol](../docs/design/agentbox/sandbox-protocol.md)
+- [Provider adapters](../docs/design/agentbox/provider-adapters.md)
+- [Function execution](../docs/design/agentbox/function-execution.md)
+- [Testing strategy](../docs/design/agentbox/testing-strategy.md)
+- [Verification and rollout](../docs/design/agentbox/verification-and-rollout.md)
 
-## Runtime Image
+Those documents are the source of truth for the architecture and remaining acceptance
+gates. The canonical implementation is the typed `/api` fabric in `agentbox/api/fabric.py`,
+the SQLAlchemy state package, and the adapters under `agentbox/adapters/`.
 
-There is one runtime image: `lemma-agentbox-runtime`. It is the development-capable
-image and includes Python, Node/npm/pnpm, Chromium, Agent Browser, frontend
-tooling, the Lemma Python SDK/CLI, and the AgentBox runtime server.
+## Runtime standards
 
-The API accepts an optional exact `image` on sandbox create/update. If omitted,
-the provider uses `AGENTBOX_RUNTIME_IMAGE`.
+- Python projects are locked and installed with `uv`. Runtime images do not invoke
+  `pip`, and function invocation never resolves or installs dependencies.
+- Node projects are locked and installed with `pnpm`. `npm` and `npx` are not part of
+  the supported workspace toolchain.
+- The workspace profile pins Python 3.14, Node 24 LTS, `uv` 0.11.31, and `pnpm`
+  11.15.1 on every provider. The E2B template points its managed Code Interpreter
+  service at the profile-owned Python 3.14 kernel, retains the base image's system
+  Node for provider services, and exposes the pinned Node 24 runtime to agent login
+  shells.
+- The function profile contains a locked Python environment and no Node runtime,
+  browser, package manager, or invocation-time installer.
 
-## Sandbox Model
+## Required manager secrets
 
-- A sandbox is an ephemeral container/pod boundary.
-- A session is a per-workload context inside the sandbox. Use session env for
-  request-scoped values such as `LEMMA_TOKEN`.
-- Sandbox files are not a product API. If a caller needs to read or write files,
-  it should do so through command execution in a session.
-- The manager stores only lightweight lifecycle state needed for cleanup and
-  recreating an active sandbox.
+`AGENTBOX_API_KEY` authenticates backend calls. A separate
+`AGENTBOX_RUNTIME_CREDENTIAL_KEY` of at least 32 bytes derives private,
+per-allocation workspace-runtime credentials. The runtime key must be independently
+generated and stable across AgentBox replicas and restarts; AgentBox does not derive
+it from the API key or silently generate an ephemeral replacement.
 
-## Configuration
+The repository development and load-test launchers provide explicit non-production
+values. Deployed environments must provide their own secret values.
 
-Manager:
+## Verification
 
-```bash
-AGENTBOX_PROVIDER=docker              # docker, podman, or kubernetes
-AGENTBOX_API_KEY=dev-agentbox-key
-AGENTBOX_API_URL=http://127.0.0.1:8721
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest
-AGENTBOX_RUNTIME_PORT=8080
-AGENTBOX_STATE_DB_PATH=/data/agentbox-manager/state.db
-AGENTBOX_SESSION_IDLE_TIMEOUT_SECONDS=300
-AGENTBOX_SANDBOX_IDLE_TIMEOUT_SECONDS=300
-```
-
-Local container provider:
-
-```bash
-AGENTBOX_STORAGE_ROOT=/tmp/agentbox-workspaces
-AGENTBOX_STORAGE_HOST_ROOT=
-AGENTBOX_ENDPOINT_HOST=127.0.0.1
-AGENTBOX_PLATFORM=linux/arm64/v8
-AGENTBOX_MEMORY_LIMIT=2g
-AGENTBOX_CPU_LIMIT=1
-```
-
-Kubernetes provider:
-
-```bash
-AGENTBOX_NAMESPACE=agentbox
-AGENTBOX_RUNTIME_CLASS_NAME=gvisor
-AGENTBOX_NODE_SELECTOR_POOL=sandbox
-AGENTBOX_SANDBOX_CPU_REQUEST=250m
-AGENTBOX_SANDBOX_CPU_LIMIT=1000m
-AGENTBOX_SANDBOX_MEMORY_REQUEST=500Mi
-AGENTBOX_SANDBOX_MEMORY_LIMIT=2Gi
-```
-
-## HTTP API
-
-All endpoints except `/health` require either:
-
-- `Authorization: Bearer <AGENTBOX_API_KEY>`
-- `X-API-Key: <AGENTBOX_API_KEY>`
-
-Create a sandbox:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123 \
-  -H "Authorization: Bearer $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "disk_size_gb": 1,
-    "wait_ready": true
-  }'
-```
-
-Create a session:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/sessions/task-a \
-  -H "Authorization: Bearer $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "cwd": "/workspace",
-    "env": {
-      "LEMMA_TOKEN": "...",
-      "LEMMA_BASE_URL": "https://api.lemma.work"
-    }
-  }'
-```
-
-Run Python in a session:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/exec \
-  -H "Authorization: Bearer $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "task-a",
-    "code": "x = 41\nx + 1",
-    "timeout_seconds": 60
-  }'
-```
-
-Run a shell command in a session:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/exec \
-  -H "Authorization: Bearer $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "task-a",
-    "command": ["sh", "-lc", "lemma --help && pwd"],
-    "cwd": "/workspace",
-    "timeout_seconds": 60
-  }'
-```
-
-Run a long-lived process:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/sessions/task-a/exec-command \
-  -H "Authorization: Bearer $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "cmd": "python -m http.server 3000",
-    "yield_time_ms": 1000,
-    "timeout": 300
-  }'
-```
-
-Write stdin or poll a process:
-
-```bash
-curl -X POST http://127.0.0.1:8711/sandboxes/user-123/sessions/task-a/write-stdin \
-  -H "Authorization: Bearer $AGENTBOX_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "process_id": "proc-...",
-    "chars": "hello\n",
-    "yield_time_ms": 1000
-  }'
-```
-
-Delete the sandbox:
-
-```bash
-curl -X DELETE http://127.0.0.1:8711/sandboxes/user-123 \
-  -H "Authorization: Bearer $AGENTBOX_API_KEY"
-```
-
-## Local Docker Run
-
-Start the manager with the Docker provider:
+Ordinary tests do not spend provider resources:
 
 ```bash
 cd agentbox
-AGENTBOX_PROVIDER=docker \
-AGENTBOX_API_KEY=dev-agentbox-key \
-AGENTBOX_API_URL=http://127.0.0.1:8711 \
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:latest \
-AGENTBOX_STATE_DB_PATH=/tmp/agentbox-state.db \
-uv run uvicorn agentbox.server:app --host 127.0.0.1 --port 8711
+.venv/bin/pytest -q
 ```
 
-Use the same manager settings for the main backend:
+Real Docker conformance is opt-in:
 
 ```bash
-AGENTBOX_API_URL=http://127.0.0.1:8711
-AGENTBOX_API_KEY=dev-agentbox-key
+AGENTBOX_RUN_DOCKER_TESTS=1 \
+  .venv/bin/pytest -q tests/adapters/test_docker_real.py
 ```
 
-For managed local Podman execution only, set:
+Real E2B conformance requires the API key plus exact immutable template and build IDs.
+The suite creates uniquely scoped sandboxes and cleans up only exact provider IDs:
 
 ```bash
-AGENTBOX_PROVIDER=podman
-LOCAL_PODMAN_MACHINE_NAME=lemma-runtime
+AGENTBOX_RUN_E2B_TESTS=1 \
+AGENTBOX_E2B_WORKSPACE_TEMPLATE=<template-id> \
+AGENTBOX_E2B_WORKSPACE_BUILD_ID=<build-id> \
+AGENTBOX_E2B_FUNCTION_TEMPLATE=<template-id> \
+AGENTBOX_E2B_FUNCTION_BUILD_ID=<build-id> \
+  .venv/bin/pytest -q tests/adapters/test_e2b_real.py
 ```
 
-## Build And Push Images
-
-Use the Makefile from this directory:
-
-```bash
-cd agentbox
-make print-images
-make build
-make push TAG=2026-05-30-single-runtime
-```
-
-Published images:
-
-```text
-lemma-agentbox:<tag>
-lemma-agentbox-runtime:<tag>
-```
-
-Set the runtime image in the manager environment:
-
-```bash
-AGENTBOX_RUNTIME_IMAGE=ghcr.io/lemma-work/lemma-agentbox-runtime:<tag>
-```
+The backend-owned full-path API/JOB table benchmark and its scheduled quality gates
+are documented in the
+[function execution benchmark runbook](../docs/operators/agentbox-function-benchmark.md).

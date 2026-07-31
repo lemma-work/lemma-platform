@@ -113,6 +113,7 @@ async def cancellable_worker(e2e_settings):
             "EMAIL_TRANSPORT": "filesystem",
             "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
             "GCS_STORAGE_BUCKET": "",
+            "STORAGE_BUCKET": "",
             "PUBLIC_BUCKET_NAME": "",
             "STORAGE_BACKEND": "local",
             "EMBEDDING_PROVIDER": "local",
@@ -137,7 +138,11 @@ async def cancellable_worker(e2e_settings):
                 pytest.fail(
                     f"worker exited before startup (code={proc.returncode}).\n{_logs()}"
                 )
-            if "Worker starting..." in _logs():
+            logs = _logs()
+            if (
+                '"logger": "app.core.infrastructure.jobs.streaq_runtime"' in logs
+                and '"event": "service.started"' in logs
+            ):
                 startup_ok = True
                 break
             await asyncio.sleep(0.1)
@@ -309,7 +314,10 @@ async def test_sigterm_midrun_shuts_down_cleanly_and_finalizes_run(
     for marker in _CANCEL_SCOPE_CRASH_MARKERS:
         assert marker not in logs, f"worker crashed on cancel scope: {marker!r}\n{logs[-3000:]}"
     # 2) Clean shutdown path ran.
-    assert "Worker shutting down..." in logs, f"worker did not shut down cleanly\n{logs[-3000:]}"
+    assert (
+        '"logger": "app.core.infrastructure.jobs.streaq_runtime"' in logs
+        and '"event": "service.stopped"' in logs
+    ), f"worker did not shut down cleanly\n{logs[-3000:]}"
 
     # 3) The interrupted run is finalized (not stuck RUNNING) — the grace_period
     #    lets the shielded finalization commit before engine disposal.

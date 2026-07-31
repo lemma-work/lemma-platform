@@ -127,7 +127,7 @@ class FileSearchResultSchema:
                 metadata_type_0 = FileSearchResultSchemaMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FileSearchResultSchemaMetadataType0 | None | Unset, data)
 

@@ -10,10 +10,11 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.infrastructure.models import AgentRuntimeProfileModel
+from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.services.runtime_profile_service import _load_runtime_env
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     SYSTEM_LEMMA_SKIP_REASON,
+    system_lemma_env_overlay,
     system_lemma_api_key,
     system_lemma_available,
     system_lemma_default_model,
@@ -21,7 +22,7 @@ from app.modules.agent.tests.e2e.system_lemma_helpers import (
 )
 from app.modules.usage.infrastructure.models import UsageRecord
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider]
 
 # Resolved at import time from backend/.env or environment — never hardcoded.
 SYSTEM_LEMMA_DEFAULT_MODEL = system_lemma_default_model()
@@ -315,29 +316,35 @@ async def test_non_default_model_run_records_nonzero_cost(
     os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
     reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run real provider-backed e2e tests.",
 )
-async def test_agent_run_uses_user_added_fireworks_openai_compatible_profile(
+async def test_agent_run_uses_user_added_openai_compatible_profile(
     authenticated_client,
     fixed_test_org,
     worker,
     db_session,
-    monkeypatch,
 ):
     _ = worker
     _load_runtime_env()
-    fireworks_api_key = os.getenv("FIREWORKS_API_KEY")
-    if not fireworks_api_key:
-        pytest.skip("FIREWORKS_API_KEY is required for real Fireworks profile e2e.")
-    monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
+    provider_env = system_lemma_env_overlay()
+    api_key = system_lemma_api_key()
+    if not api_key:
+        pytest.skip(SYSTEM_LEMMA_SKIP_REASON)
+    base_url = provider_env.get("LEMMA_OPENAI_BASE_URL")
+    if not base_url:
+        pytest.skip("LEMMA_OPENAI_BASE_URL is required for provider profile e2e.")
+    model_names = system_lemma_model_names()
+    if not model_names:
+        pytest.skip("LEMMA_OPENAI_MODEL_NAMES is required for provider profile e2e.")
+    default_model = system_lemma_default_model()
     pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
     create_profile = await authenticated_client.post(
         f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
         json={
             "source": "OPENAI_COMPATIBLE",
-            "name": f"Fireworks Custom {uuid4().hex[:8]}",
-            "base_url": "https://api.fireworks.ai/inference/v1",
-            "api_key": fireworks_api_key,
-            "default_model_name": "accounts/fireworks/models/kimi-k2p6",
-            "model_names": ["accounts/fireworks/models/kimi-k2p6"],
+            "name": f"Custom System Lemma Compatible {uuid4().hex[:8]}",
+            "base_url": base_url,
+            "api_key": api_key,
+            "default_model_name": default_model,
+            "model_names": model_names,
         },
     )
     assert create_profile.status_code == 201, create_profile.text
@@ -353,12 +360,12 @@ async def test_agent_run_uses_user_added_fireworks_openai_compatible_profile(
     )
     assert stored_profile is not None
     assert stored_profile.credentials["_encrypted"] == "lemma-secret-v2"
-    assert fireworks_api_key not in str(stored_profile.credentials)
+    assert api_key not in str(stored_profile.credentials)
 
     create_agent = await authenticated_client.post(
         f"/pods/{pod_id}/agents",
         json={
-            "name": "Custom Fireworks Agent",
+            "name": "Custom Provider Agent",
             "instruction": "Answer briefly and directly.",
             "agent_runtime": {"profile_id": profile_id},
         },
@@ -367,7 +374,7 @@ async def test_agent_run_uses_user_added_fireworks_openai_compatible_profile(
 
     create_conversation = await authenticated_client.post(
         f"/pods/{pod_id}/conversations",
-        json={"agent_name": "custom_fireworks_agent", "title": "Custom Fireworks"},
+        json={"agent_name": "custom_provider_agent", "title": "Custom Provider"},
     )
     assert create_conversation.status_code == 201, create_conversation.text
     conversation_id = create_conversation.json()["id"]
@@ -375,7 +382,7 @@ async def test_agent_run_uses_user_added_fireworks_openai_compatible_profile(
     events = await _post_sse(
         authenticated_client,
         f"/pods/{pod_id}/conversations/{conversation_id}/messages",
-        {"content": "Say only: custom fireworks profile works."},
+        {"content": "Say only: custom provider profile works."},
     )
 
     assert events[-1]["type"] == "completed", events

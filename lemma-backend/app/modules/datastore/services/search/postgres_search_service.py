@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import time
 from uuid import UUID
 
 from sqlalchemy.sql import text
@@ -10,6 +11,7 @@ from app.modules.datastore.domain.file_entities import (
     DatastoreFileSearchResult,
     SearchMethod,
 )
+from app.modules.datastore.domain.document_processing import IndexingMetrics
 from app.modules.datastore.infrastructure.file_chunk_repository import (
     DatastoreFileChunkRepository,
 )
@@ -18,12 +20,11 @@ from app.modules.datastore.infrastructure.session import (
     get_datastore_session_maker,
 )
 from app.core.embeddings.embeddings import Embedder
-from app.core.embeddings.factory import create_embedder
 from app.modules.datastore.domain.ports import RerankerPort
 from app.modules.datastore.infrastructure.reranker import create_reranker
-import logging
+from app.core.log.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PostgresSearchService:
@@ -33,18 +34,18 @@ class PostgresSearchService:
         *,
         engine=None,
         session_factory=None,
-        embedder: Embedder | None = None,
+        embedder: Embedder,
         reranker: RerankerPort | None = None,
     ):
         self.pod_id = pod_id
         self.engine = engine or get_datastore_engine()
         self.session_factory = session_factory or get_datastore_session_maker()
-        self.schema_name = f'pod_{str(pod_id).replace("-", "_")}'
+        self.schema_name = f"pod_{str(pod_id).replace('-', '_')}"
         self.chunk_repo = DatastoreFileChunkRepository(
             self.session_factory,
             self.schema_name,
         )
-        self.embedder = embedder or create_embedder()
+        self.embedder = embedder
         self.reranker = reranker or create_reranker()
         self._initialized = False
 
@@ -63,8 +64,23 @@ class PostgresSearchService:
                 text("SELECT pg_advisory_xact_lock(:key)"),
                 {"key": self._ENSURE_SCHEMA_LOCK_KEY},
             )
-            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"'))
+            # Azure Database for PostgreSQL checks CREATE EXTENSION privileges
+            # even when IF NOT EXISTS would otherwise be a no-op. The runtime
+            # datastore role is intentionally not an azure_pg_admin member, so
+            # first check the database-scoped catalog and only attempt creation
+            # for self-hosted installations where the extension is absent.
+            vector_installed = await conn.scalar(
+                text(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
+                    ")"
+                )
+            )
+            if not vector_installed:
+                await conn.execute(text("CREATE EXTENSION vector"))
+            await conn.execute(
+                text(f'CREATE SCHEMA IF NOT EXISTS "{self.schema_name}"')
+            )
             await conn.execute(
                 text(
                     f'''
@@ -134,14 +150,19 @@ class PostgresSearchService:
         dim = settings.embedding_dimension
         # Retire the older full-precision hnsw / ivfflat indexes (lazy per-schema
         # migration — this runs on next access for each existing pod schema).
-        for legacy in ("ix_reserved_chunks_embedding_hnsw", "ix_reserved_chunks_embedding_ivfflat"):
+        for legacy in (
+            "ix_reserved_chunks_embedding_hnsw",
+            "ix_reserved_chunks_embedding_ivfflat",
+        ):
             try:
                 async with self.engine.begin() as conn:
                     await conn.execute(
                         text(f'DROP INDEX IF EXISTS "{self.schema_name}".{legacy}')
                     )
-            except Exception as exc:
-                logger.info("Could not drop legacy index %s for %s: %s", legacy, self.schema_name, exc)
+            except Exception:
+                logger.debug(
+                    "datastore.postgres_search_service.could_not_drop_legacy_index.observed"
+                )
         try:
             async with self.engine.begin() as conn:
                 await conn.execute(
@@ -156,17 +177,13 @@ class PostgresSearchService:
                 )
         except Exception as exc:
             lower_msg = str(exc).lower()
-            if "extension" in lower_msg and ("does not exist" in lower_msg or "not installed" in lower_msg):
-                logger.info(
-                    "Skipping halfvec vector index for %s: extension not available",
-                    self.schema_name,
-                )
-            else:
-                logger.warning(
-                    "Failed to create halfvec vector index for %s; vector search "
-                    "will use sequential scan: %s",
-                    self.schema_name,
-                    exc,
+            extension_missing = "extension" in lower_msg and (
+                "does not exist" in lower_msg or "not installed" in lower_msg
+            )
+            if not extension_missing:
+                logger.debug(
+                    "datastore.postgres_search_service.create_halfvec_vector_index_s.diagnostic",
+                    error_type=type(exc).__name__,
                 )
 
     async def index_file_chunks(
@@ -174,21 +191,55 @@ class PostgresSearchService:
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
-    ) -> bool:
+    ) -> IndexingMetrics:
+        schema_started = time.perf_counter()
         await self.ensure_schema()
-        await self.remove_file(file_id)
+        schema_seconds = time.perf_counter() - schema_started
 
         if not chunks:
-            logger.warning("No chunks for %s", file_id)
-            return False
+            logger.debug(
+                'datastore.postgres_search_service.no_chunks_s.diagnostic',
+                file_id=file_id,
+            )
+            return IndexingMetrics(
+                chunk_count=0,
+                schema_seconds=schema_seconds,
+                embedding_seconds=0.0,
+                persistence_seconds=0.0,
+            )
 
         try:
             texts = [c["text"] for c in chunks]
+            embedding_started = time.perf_counter()
             embeddings = await self.embedder.embed_batch(texts)
+            embedding_seconds = time.perf_counter() - embedding_started
+            if len(embeddings) != len(chunks):
+                raise ValueError(
+                    f"Embedding provider returned {len(embeddings)} vectors for "
+                    f"{len(chunks)} chunks"
+                )
+            # add_chunks replaces the prior revision in one transaction. The old
+            # searchable revision remains intact if embedding generation fails.
+            persistence_started = time.perf_counter()
             await self.chunk_repo.add_chunks(file_id, chunks, embeddings, metadata)
-            return True
-        except Exception as exc:
-            logger.error("Failed to add file to search: %s", exc)
+            persistence_seconds = time.perf_counter() - persistence_started
+            metrics = IndexingMetrics(
+                chunk_count=len(chunks),
+                schema_seconds=schema_seconds,
+                embedding_seconds=embedding_seconds,
+                persistence_seconds=persistence_seconds,
+            )
+            logger.debug(
+                "datastore.postgres_search_service.datastore_indexing_stages_file_s.observed",
+                file_id=file_id,
+                count=len(chunks),
+                schema_seconds=schema_seconds,
+                embedding_seconds=embedding_seconds,
+                persistence_seconds=persistence_seconds,
+            )
+            return metrics
+        except Exception:
+            logger.debug('datastore.postgres_search_service.add_file_search_s.propagated', exc_info=True)
             raise
 
     async def remove_file(self, file_id: UUID):

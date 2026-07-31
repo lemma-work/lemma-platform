@@ -430,6 +430,93 @@ async def test_sync_composio_catalog_keeps_composio_operations_for_non_native_ap
 
 
 @pytest.mark.asyncio
+async def test_sync_composio_catalog_imports_apollo_api_key_and_contact_operations():
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = SimpleNamespace()
+    trigger_repository = SimpleNamespace()
+
+    toolkit_item = _toolkit("apollo", name="Apollo")
+    toolkit_item.auth_schemes = ["API_KEY"]
+    api_key_field = SimpleNamespace(
+        name="generic_api_key",
+        display_name="API Key",
+        description="Apollo API key",
+        type="string",
+        default=None,
+        is_secret=True,
+        required=True,
+    )
+    toolkit_detail = SimpleNamespace(
+        auth_config_details=[
+            SimpleNamespace(
+                mode="API_KEY",
+                fields=SimpleNamespace(
+                    connected_account_initiation=SimpleNamespace(
+                        required=[api_key_field],
+                        optional=[],
+                    )
+                ),
+            )
+        ]
+    )
+    operation_names = [
+        "APOLLO_SEARCH_CONTACTS",
+        "APOLLO_PEOPLE_SEARCH",
+        "APOLLO_PEOPLE_ENRICHMENT",
+        "APOLLO_LIST_EMAIL_ACCOUNTS",
+    ]
+    composio = SimpleNamespace(
+        toolkits=SimpleNamespace(get=MagicMock(return_value=toolkit_detail))
+    )
+
+    with (
+        patch.dict(os.environ, {"COMPOSIO_API_KEY": "test-api-key"}, clear=False),
+        patch.object(importer, "Composio", return_value=composio),
+        patch.object(importer, "_list_composio_toolkits", return_value=[toolkit_item]),
+        patch.object(
+            importer,
+            "_paginate_tools",
+            return_value=iter([_tool(name) for name in operation_names]),
+        ),
+        patch.object(importer, "_paginate_triggers", return_value=iter([])),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+        patch.object(importer, "_upsert_operation", AsyncMock()) as upsert_operation,
+    ):
+        totals = await importer._sync_composio_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"apollo"},
+            managed_by="composio",
+            page_size=100,
+            max_composio_apps=10,
+        )
+
+    assert totals == (1, 4, 0)
+    entity = upsert_connector.await_args.args[1]
+    assert entity.id == "apollo"
+    capability = _capability(entity, AuthProvider.COMPOSIO)
+    assert capability.auth_scheme == AuthMethod.API_KEY
+    assert capability.auth_config_schema == {
+        "type": "object",
+        "properties": {
+            "generic_api_key": {
+                "type": "string",
+                "title": "API Key",
+                "description": "Apollo API key",
+                "format": "password",
+            }
+        },
+        "additionalProperties": False,
+        "required": ["generic_api_key"],
+    }
+    imported_operations = {
+        call.kwargs["public_name"] for call in upsert_operation.await_args_list
+    }
+    assert imported_operations == set(operation_names)
+
+
+@pytest.mark.asyncio
 async def test_sync_composio_catalog_preserves_exact_composio_app_and_operation_names():
     connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
     operation_repository = SimpleNamespace()
@@ -579,6 +666,133 @@ async def test_sync_composio_catalog_uses_lemma_auth_provider_for_native_auth_ap
 
     upsert_operation.assert_not_awaited()
     upsert_trigger.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_composio_catalog_applies_curated_profile_operation_names():
+    """A connector with a curated entry in the profile-operations override
+    gets it threaded onto its ComposioProviderCapability during sync."""
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = SimpleNamespace()
+    trigger_repository = SimpleNamespace()
+
+    toolkit_item = _toolkit("testapp", name="TestApp")
+    composio = SimpleNamespace(
+        toolkits=SimpleNamespace(get=MagicMock(return_value=_toolkit_detail()))
+    )
+
+    with (
+        patch.dict(os.environ, {"COMPOSIO_API_KEY": "test-api-key"}, clear=False),
+        patch.object(importer, "Composio", return_value=composio),
+        patch.object(importer, "_list_composio_toolkits", return_value=[toolkit_item]),
+        patch.object(importer, "_paginate_tools", return_value=iter([])),
+        patch.object(importer, "_paginate_triggers", return_value=iter([])),
+        patch.object(
+            importer,
+            "_load_connector_profile_operations",
+            return_value={"testapp": {"COMPOSIO": ["TESTAPP_GET_CURRENT_USER"]}},
+        ),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+        patch.object(importer, "_upsert_operation", AsyncMock()),
+        patch.object(importer, "_upsert_trigger", AsyncMock()),
+    ):
+        await importer._sync_composio_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"testapp"},
+            managed_by="composio",
+            page_size=100,
+            max_composio_apps=10,
+        )
+
+    entity = upsert_connector.await_args.args[1]
+    capability = _capability(entity, AuthProvider.COMPOSIO)
+    assert capability.profile_operation_names == ["TESTAPP_GET_CURRENT_USER"]
+
+
+@pytest.mark.asyncio
+async def test_sync_composio_catalog_leaves_profile_operation_names_none_without_override():
+    """No regression for the ~50 apps with no curated entry yet: the field
+    stays None, identical to today's behavior before this feature existed."""
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = SimpleNamespace()
+    trigger_repository = SimpleNamespace()
+
+    toolkit_item = _toolkit("uncurated_app", name="Uncurated App")
+    composio = SimpleNamespace(
+        toolkits=SimpleNamespace(get=MagicMock(return_value=_toolkit_detail()))
+    )
+
+    with (
+        patch.dict(os.environ, {"COMPOSIO_API_KEY": "test-api-key"}, clear=False),
+        patch.object(importer, "Composio", return_value=composio),
+        patch.object(importer, "_list_composio_toolkits", return_value=[toolkit_item]),
+        patch.object(importer, "_paginate_tools", return_value=iter([])),
+        patch.object(importer, "_paginate_triggers", return_value=iter([])),
+        patch.object(importer, "_load_connector_profile_operations", return_value={}),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+        patch.object(importer, "_upsert_operation", AsyncMock()),
+        patch.object(importer, "_upsert_trigger", AsyncMock()),
+    ):
+        await importer._sync_composio_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"uncurated_app"},
+            managed_by="composio",
+            page_size=100,
+            max_composio_apps=10,
+        )
+
+    entity = upsert_connector.await_args.args[1]
+    capability = _capability(entity, AuthProvider.COMPOSIO)
+    assert capability.profile_operation_names is None
+
+
+@pytest.mark.asyncio
+async def test_sync_native_catalog_applies_curated_profile_operation_names():
+    """JSON-config Lemma apps (Slack, Jira, Confluence, ...) also get curated
+    profile operations threaded onto their LemmaProviderCapability."""
+    connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
+    operation_repository = SimpleNamespace()
+    trigger_repository = SimpleNamespace()
+    schema_compiler = SimpleNamespace(
+        to_json_schema=MagicMock(return_value={"type": "object"})
+    )
+
+    with (
+        patch.object(
+            importer,
+            "_load_lemma_apps_config",
+            return_value=[
+                {
+                    "name": "testapp",
+                    "title": "TestApp",
+                    "description": "TestApp connector",
+                    "auth_method": "OAUTH2",
+                    "triggers": [],
+                }
+            ],
+        ),
+        patch.object(
+            importer,
+            "_load_connector_profile_operations",
+            return_value={"testapp": {"LEMMA": ["get_profile"]}},
+        ),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+    ):
+        await importer._sync_native_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"testapp"},
+            schema_compiler=schema_compiler,
+        )
+
+    entity = upsert_connector.await_args.args[1]
+    capability = _capability(entity, AuthProvider.LEMMA)
+    assert capability.profile_operation_names == ["get_profile"]
 
 
 @pytest.mark.asyncio
@@ -780,6 +994,7 @@ def test_list_composio_toolkits_uses_curated_allowlist_and_env_append():
     assert "metaads" in fetched_slugs
     assert "zoho_mail" in fetched_slugs
     assert "asana" in fetched_slugs
+    assert "apollo" in fetched_slugs
     assert "custom_app" in fetched_slugs
     assert "composio" not in fetched_slugs
     composio.toolkits.get.assert_any_call("custom_app")
@@ -975,3 +1190,69 @@ async def test_sync_openapi_operations_imports_github_curated_ops():
 def test_list_native_sync_targets_includes_github():
     assert "github" in importer._list_native_sync_targets(None)
     assert importer._list_native_sync_targets({"github"}) == ["github"]
+
+
+# --- connector id rename migration -------------------------------------------
+
+
+class _FakeRenameResult:
+    rowcount = 1
+
+
+class _FakeRenameSession:
+    """Records executed statements so tests can assert the re-point-then-delete
+    order without a real database."""
+
+    def __init__(self) -> None:
+        self.executed: list = []
+
+    async def execute(self, statement, params=None):
+        self.executed.append((str(statement), params))
+        return _FakeRenameResult()
+
+
+class _FakeConnectorRepoForRename:
+    def __init__(self, existing_ids: set[str]) -> None:
+        self._existing = existing_ids
+
+    async def get(self, connector_id: str):
+        return object() if connector_id in self._existing else None
+
+
+def _rename_ops(session: _FakeRenameSession) -> list[str]:
+    return [" ".join(sql.split()[:2]) for sql, _ in session.executed]
+
+
+async def test_apply_connector_renames_repoints_then_deletes():
+    session = _FakeRenameSession()
+    repo = _FakeConnectorRepoForRename({"teams", "microsoft_teams"})
+    with patch.object(importer, "CONNECTOR_ID_RENAMES", {"teams": "microsoft_teams"}):
+        renamed = await importer._apply_connector_renames(repo, session)
+    assert renamed == 1
+    # Accounts + auth_configs are re-pointed BEFORE the old connector is deleted;
+    # deleting first would cascade-delete every connected account.
+    assert _rename_ops(session) == ["UPDATE accounts", "UPDATE auth_configs", "DELETE FROM"]
+    for _, params in session.executed:
+        assert params["old"] == "teams"
+        assert params.get("new", "microsoft_teams") == "microsoft_teams"
+
+
+async def test_apply_connector_renames_skips_when_old_absent():
+    session = _FakeRenameSession()
+    repo = _FakeConnectorRepoForRename({"microsoft_teams"})  # already migrated
+    with patch.object(importer, "CONNECTOR_ID_RENAMES", {"teams": "microsoft_teams"}):
+        renamed = await importer._apply_connector_renames(repo, session)
+    assert renamed == 0
+    assert session.executed == []
+
+
+async def test_apply_connector_renames_skips_when_target_not_synced():
+    # Safety: if the new connector isn't in the catalog yet, do NOT touch/delete
+    # the old one — re-pointing to a missing FK target or deleting the old row
+    # (ON DELETE CASCADE) would break or destroy live accounts.
+    session = _FakeRenameSession()
+    repo = _FakeConnectorRepoForRename({"teams"})
+    with patch.object(importer, "CONNECTOR_ID_RENAMES", {"teams": "microsoft_teams"}):
+        renamed = await importer._apply_connector_renames(repo, session)
+    assert renamed == 0
+    assert session.executed == []

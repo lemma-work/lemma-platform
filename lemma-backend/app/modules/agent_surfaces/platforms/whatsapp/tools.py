@@ -5,7 +5,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.whatsapp.models import (
     WhatsAppCurrentContactParams,
     WhatsAppCurrentContactResult,
@@ -31,8 +31,11 @@ def build_whatsapp_surface_toolset(
         """Get the current WhatsApp contact and destination details for this conversation."""
         try:
             return await service.get_current_contact(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("WhatsApp tool whatsapp_get_current_contact failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.whatsapp.history_failed",
+                exc_info=True,
+            )
             return WhatsAppCurrentContactResult(
                 success=False,
                 error="Could not load current WhatsApp contact details.",

@@ -29,6 +29,10 @@ from app.modules.pod_bundle.domain.errors import (
 )
 from app.modules.pod_bundle.domain.state import ExportState, ExportStatus
 from app.modules.pod_bundle.infrastructure.download_url import verify_download_token
+from app.modules.pod_bundle.infrastructure.rate_limiter import (
+    BundleRateLimiter,
+    get_bundle_rate_limiter,
+)
 from app.modules.pod_bundle.infrastructure.staging import BundleStagingStorage
 from app.modules.pod_bundle.infrastructure.state_store import (
     PodBundleStateStore,
@@ -53,11 +57,13 @@ class ExportUseCases:
         state_store: PodBundleStateStore | None = None,
         staging: BundleStagingStorage | None = None,
         job_queue=None,
+        rate_limiter: BundleRateLimiter | None = None,
     ):
         self._uow_factory = uow_factory
         self._state_store = state_store or get_pod_bundle_state_store()
         self._staging = staging or BundleStagingStorage()
         self._job_queue = job_queue or get_streaq_job_queue()
+        self._rate_limiter = rate_limiter or get_bundle_rate_limiter()
 
     async def start_export(
         self,
@@ -79,6 +85,14 @@ class ExportUseCases:
             )
             async with context_scope(ctx):
                 await ctx.require(Permissions.POD_READ)
+
+        # Abuse guard: count this export against the user's daily cap only after
+        # they've proven POD_READ, so an unauthorized probe never burns quota.
+        await self._rate_limiter.check_and_increment(
+            user_id=user_id,
+            operation="export",
+            limit=pod_bundle_settings.pod_bundle_daily_export_limit,
+        )
 
         resolved_ttl = _clamp_ttl(ttl_seconds)
         export_id = uuid4()

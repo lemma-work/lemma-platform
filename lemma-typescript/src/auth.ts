@@ -337,12 +337,40 @@ export function resolveSafeRedirectUri(
   }
 }
 
+function toHeaderRecord(headers?: HeadersInit): Record<string, string> {
+  if (!headers) return {};
+
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    const result: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      result[key] = value;
+    });
+    return result;
+  }
+
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers);
+  }
+
+  return { ...(headers as Record<string, string>) };
+}
+
+function setHeader(headers: Record<string, string>, name: string, value: string): void {
+  const existingName = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
+  headers[existingName ?? name] = value;
+}
+
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
+}
+
 export class AuthManager {
   private readonly apiUrl: string;
   private readonly authUrl: string;
   private injectedToken: string | null;
   private state: AuthState = { status: "loading", user: null };
   private listeners: Set<AuthListener> = new Set();
+  private authCheckPromise: Promise<AuthState> | null = null;
 
   constructor(apiUrl: string, authUrl: string) {
     this.apiUrl = apiUrl;
@@ -565,14 +593,18 @@ export class AuthManager {
    * and lets cookies carry the session.
    */
   getRequestInit(init: RequestInit = {}): RequestInit {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      ...(init.headers as Record<string, string> | undefined),
-    };
+    const headers = toHeaderRecord(init.headers);
+    if (!hasHeader(headers, "Accept")) {
+      setHeader(headers, "Accept", "application/json");
+    }
+
+    const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData;
+    if (init.body !== undefined && !isFormData && !hasHeader(headers, "Content-Type")) {
+      setHeader(headers, "Content-Type", "application/json");
+    }
 
     if (this.injectedToken) {
-      headers["Authorization"] = `Bearer ${this.injectedToken}`;
+      setHeader(headers, "Authorization", `Bearer ${this.injectedToken}`);
     }
 
     return {
@@ -586,7 +618,18 @@ export class AuthManager {
    * Call GET /users/me to determine auth state.
    * Sets internal state and notifies listeners.
    */
-  async checkAuth(): Promise<AuthState> {
+  checkAuth(): Promise<AuthState> {
+    if (this.authCheckPromise) {
+      return this.authCheckPromise;
+    }
+
+    this.authCheckPromise = this.performAuthCheck().finally(() => {
+      this.authCheckPromise = null;
+    });
+    return this.authCheckPromise;
+  }
+
+  private async performAuthCheck(): Promise<AuthState> {
     this.setState({ status: "loading", user: null });
 
     // Cookie mode: short-circuit when no session exists locally instead of

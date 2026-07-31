@@ -1,3 +1,9 @@
+export interface LemmaAppConfig {
+  name?: string;
+  description?: string;
+  iconUrl?: string;
+}
+
 export interface LemmaConfig {
   /** API base URL, e.g. https://api.lemma.work */
   apiUrl: string;
@@ -5,6 +11,7 @@ export interface LemmaConfig {
   authUrl: string;
   /** Pod ID to scope all pod-level API calls */
   podId?: string;
+  app?: LemmaAppConfig;
   /** Per-request timeout in ms (default 30000). */
   timeoutMs?: number;
   /** Max automatic retries on 429/502/503/504 (default 2). */
@@ -77,6 +84,7 @@ export function resolveConfig(overrides: Partial<LemmaConfig> = {}): LemmaConfig
     apiUrl: apiUrl.replace(/\/$/, ""),
     authUrl: authUrl.replace(/\/$/, ""),
     podId,
+    app: overrides.app ?? win.app,
     timeoutMs: overrides.timeoutMs ?? win.timeoutMs,
     maxRetries: overrides.maxRetries ?? win.maxRetries,
   };

@@ -66,6 +66,10 @@ function patchKnownGeneratorIssues(source, filePath) {
   if (filePath.endsWith("services/AgentConversationsService.ts")) {
     patched = patched
       .replaceAll(
+        "'agent_name': agentName,",
+        "'agent_name': agentName === null ? 'POD_DEFAULT' : agentName,",
+      )
+      .replaceAll(
         "Create or continue a pod-scoped assistant or agent conversation and stream runtime events over Server-Sent Events until the active run completes. Provide agent_name to target a pod agent; omit it for the default pod assistant.",
         "Create or continue a pod-scoped assistant or agent conversation and stream runtime events over Server-Sent Events until the active turn completes. Provide agent_name to target a pod agent; omit it for the default pod assistant.",
       )
@@ -101,7 +105,9 @@ function patchKnownGeneratorIssues(source, filePath) {
     );
   }
 
-  return patched;
+  // The generator has emitted either one or two final newlines across runtime
+  // versions. Canonicalize the ending so codegen drift checks are byte-stable.
+  return patched.replace(/\n+$/, "\n");
 }
 
 let updated = 0;

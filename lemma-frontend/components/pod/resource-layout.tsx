@@ -1,11 +1,9 @@
 'use client';
 
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { forwardRef } from 'react';
-import { useLayoutEffect } from 'react';
+import { forwardRef, useLayoutEffect, useRef } from 'react';
 
-import type { ProductIconTone } from '@/components/pod/product-icon';
-import { usePodTopbar } from '@/components/pod/pod-topbar-context';
+import { usePodTopbar, type PodTopbarTitleOwner } from '@/components/pod/pod-topbar-context';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
 
@@ -72,115 +70,125 @@ export function ResourceIndexShell({
 }) {
     if (mode === 'workbench') {
         return (
-            <div className={cn('context-shell flex h-full min-h-0 flex-col bg-transparent', className)}>
+            <div className={cn('resource-workbench-shell context-shell flex h-full min-h-0 flex-col bg-transparent', className)}>
                 {children}
             </div>
         );
     }
 
     return (
-        <div className={cn('context-shell min-h-full bg-transparent', className)}>
+        <div className={cn('resource-index-shell context-shell min-h-full bg-transparent', className)}>
             {children}
         </div>
     );
 }
 
-export function ResourceIndexHeader({
-    title,
-    productIconTone,
-    icon,
-    backHref,
-    backLabel,
-    eyebrow,
-    meta,
-    actions,
-}: {
+export type ResourceHeaderProps = {
     title: ReactNode;
-    productIconTone?: ProductIconTone;
+    /** Workspace tab label. Defaults to `title` when it is a plain string. */
+    tabTitle?: string;
+    /** Who prints the name — see `PodTopbarTitleOwner`. Defaults to `'bar'`. */
+    titleOwner?: PodTopbarTitleOwner;
     icon?: ReactNode;
     backHref?: string;
     backLabel?: string;
     eyebrow?: ReactNode;
     meta?: ReactNode;
-    actions?: ReactNode;
-    className?: string;
-}) {
-    const topbar = usePodTopbar();
-
-    useLayoutEffect(() => {
-        topbar?.setTopbar({ title, backHref, backLabel, eyebrow, meta, actions });
-        return () => topbar?.setTopbar({});
-    }, [actions, backHref, backLabel, eyebrow, meta, title, topbar]);
-
-    void icon;
-    void productIconTone;
-
-    return null;
-}
-
-export function ResourceObjectHeader({
-    title,
-    productIconTone,
-    icon,
-    backHref,
-    backLabel,
-    meta,
-    switcher,
-    tabs,
-    actions,
-    fullscreen,
-}: {
-    title: ReactNode;
-    productIconTone?: ProductIconTone;
-    icon?: ReactNode;
-    backHref: string;
-    backLabel: string;
-    meta?: ReactNode;
     switcher?: ReactNode;
     tabs?: ReactNode;
     actions?: ReactNode;
     fullscreen?: boolean;
-    className?: string;
-}) {
-    const topbar = usePodTopbar();
+};
 
-    useLayoutEffect(() => {
-        topbar?.setTopbar({ title, backHref, backLabel, meta, switcher, tabs, actions, fullscreen });
-        return () => topbar?.setTopbar({});
-    }, [actions, backHref, backLabel, fullscreen, meta, switcher, tabs, title, topbar]);
-
-    void icon;
-    void productIconTone;
-
-    return null;
-}
-
-export function ResourceDetailHeader({
+/**
+ * Declares this route's chrome — title, back target, mode switch, actions — to
+ * the pod shell. Renders nothing itself; the shell owns the markup so the
+ * context bar stays one element across route changes instead of remounting.
+ */
+export function ResourceHeader({
     title,
-    productIconTone,
+    tabTitle,
+    titleOwner,
     icon,
     backHref,
     backLabel,
+    eyebrow,
     meta,
     switcher,
     tabs,
     actions,
     fullscreen,
+}: ResourceHeaderProps) {
+    const topbar = usePodTopbar();
+
+    useLayoutEffect(() => {
+        topbar?.setTopbar({
+            title,
+            tabTitle,
+            titleOwner,
+            icon,
+            backHref,
+            backLabel,
+            eyebrow,
+            meta,
+            switcher,
+            tabs,
+            actions,
+            fullscreen,
+        });
+        return () => topbar?.setTopbar({});
+    }, [actions, backHref, backLabel, eyebrow, fullscreen, icon, meta, switcher, tabTitle, tabs, title, titleOwner, topbar]);
+
+    return null;
+}
+
+/**
+ * The page's own heading, for routes that pass `titleOwner="page"`.
+ *
+ * Reports its visibility to the shell so the context bar knows when to take the
+ * name over. Two things drive that: scrolling the heading out of the pane, and
+ * unmounting it — the latter is what makes a tab with no hero (an editor pane,
+ * say) fall back to a bar title without the page having to say so.
+ */
+export function ResourceHeroTitle({
+    children,
     className,
 }: {
-    title: ReactNode;
-    productIconTone?: ProductIconTone;
-    icon?: ReactNode;
-    backHref: string;
-    backLabel: string;
-    meta?: ReactNode;
-    switcher?: ReactNode;
-    tabs?: ReactNode;
-    actions?: ReactNode;
-    fullscreen?: boolean;
+    children: ReactNode;
     className?: string;
 }) {
-    return <ResourceObjectHeader title={title} productIconTone={productIconTone} icon={icon} backHref={backHref} backLabel={backLabel} meta={meta} switcher={switcher} tabs={tabs} actions={actions} fullscreen={fullscreen} className={className} />;
+    const topbar = usePodTopbar();
+    const headingRef = useRef<HTMLHeadingElement>(null);
+    const setHeroTitleVisible = topbar?.setHeroTitleVisible;
+
+    useLayoutEffect(() => {
+        const node = headingRef.current;
+        if (!node || !setHeroTitleVisible) return;
+
+        // Claim the title before paint, so the bar never flashes the name in the
+        // gap between mounting and the observer's first callback.
+        setHeroTitleVisible(true);
+
+        // A null root still honours clipping by ancestor scroll containers, so
+        // this fires when the heading leaves its own scrollable pane rather than
+        // only when it leaves the window.
+        const observer = new IntersectionObserver(
+            ([entry]) => setHeroTitleVisible(entry.isIntersecting),
+            { threshold: 0 },
+        );
+        observer.observe(node);
+
+        return () => {
+            observer.disconnect();
+            setHeroTitleVisible(false);
+        };
+    }, [setHeroTitleVisible]);
+
+    return (
+        <h1 ref={headingRef} className={className}>
+            {children}
+        </h1>
+    );
 }
 
 export function ResourceHeaderTabs<TValue extends string>({
@@ -237,7 +245,7 @@ export function ResourceTabPane({
     return (
         <div
             className={cn(
-                'absolute inset-0 bg-[var(--bg-canvas)] transition-opacity duration-200',
+                'absolute inset-0 bg-[var(--bg-canvas)] transition-opacity duration-[var(--dur-panel)] ease-[var(--ease-standard)]',
                 active ? 'z-10 opacity-100' : 'pointer-events-none z-0 opacity-0',
                 className
             )}
@@ -268,7 +276,7 @@ export function ResourceContentFrame({
 
     return (
         <div className="h-full overflow-y-auto">
-            <div className={cn('mx-auto px-5 py-6', maxWidthClass, className)}>
+            <div className={cn('mx-auto px-5 py-4', maxWidthClass, className)}>
                 {children}
             </div>
         </div>
@@ -316,7 +324,12 @@ export function ResourceLayoutGrid({
             <div className={cn('surface-split-2 grid min-h-0 gap-8 xl:grid-cols-[minmax(0,1fr)_19rem]', className)}>
                 <main className={cn('min-w-0', mainClassName)}>{main}</main>
                 {aside ? (
-                    <aside className={cn('min-w-0 border-l border-[color:color-mix(in_srgb,var(--border-subtle)_54%,transparent)] pl-5', asideClassName)}>
+                    // The divider separates two columns, so it only exists when there
+                    // are two. Below `xl` the grid stacks and an unqualified border-l
+                    // would hang off the left of the stacked rail; the matching
+                    // container query in primitives.css covers the other way this
+                    // stacks, when a docked assistant narrows the pod surface.
+                    <aside className={cn('min-w-0 xl:border-l xl:border-[color:color-mix(in_srgb,var(--border-subtle)_54%,transparent)] xl:pl-5', asideClassName)}>
                         {aside}
                     </aside>
                 ) : null}
@@ -361,7 +374,7 @@ export function ResourcePanel({
     className?: string;
 }) {
     return (
-        <section className={cn('rounded-lg border border-[var(--card-border-subtle)] bg-[var(--card-bg)] shadow-[var(--card-shadow)]', className)}>
+        <section className={cn('resource-panel rounded-lg border border-[var(--card-border-subtle)] bg-[var(--card-bg)] shadow-[var(--card-shadow)]', className)}>
             {children}
         </section>
     );
@@ -431,6 +444,7 @@ export function ResourceMetricButton({
             type="button"
             className={cn('resource-metric-button lemma-index-tab', className)}
             data-active={active}
+            aria-pressed={active}
             onClick={onClick}
         >
             <span className="font-medium">{label}</span>

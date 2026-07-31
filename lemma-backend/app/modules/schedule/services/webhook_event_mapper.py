@@ -43,6 +43,9 @@ class WebhookEventMapper:
                     "bot_id": event.get("bot_id"),
                     "channel_type": event.get("channel_type"),
                     "text": event.get("text", ""),
+                    "source_event_id": payload.get("event_id")
+                    or event.get("client_msg_id")
+                    or event.get("ts"),
                 }
             )
         elif source == "composio":
@@ -57,6 +60,9 @@ class WebhookEventMapper:
                     "connected_account_id": metadata_payload.get("connected_account_id"),
                     "webhook_event_type": payload.get("webhook_type")
                     or payload.get("type"),
+                    "source_event_id": payload.get("id")
+                    or metadata_payload.get("log_id")
+                    or data.get("event_id"),
                 }
             )
         elif source == "jira":
@@ -76,6 +82,7 @@ class WebhookEventMapper:
                 {
                     "thread_id": data.get("thread_id"),
                     "message_id": data.get("message_id"),
+                    "source_event_id": data.get("message_id"),
                     "sender_email": data.get("sender"),
                 }
             )

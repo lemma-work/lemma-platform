@@ -8,4 +8,3 @@ export type CreateAppRequest = {
     public_slug?: (string | null);
     visibility?: (string | null);
 };
-

@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { CreateAgentInput, UpdateAgentInput } from 'lemma-sdk';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
-import { ConnectorMode, ResourceType, TableAccessMode, type Agent, type ConnectorAccessConfig, type CreateAgentData, type ResourcePermissionGrant, type TableAccessEntry, type UpdateAgentData } from '@/lib/types';
+import { ConnectorMode, ResourceType, AccessMode, type Agent, type ConnectorAccessConfig, type CreateAgentData, type FolderAccessEntry, type ResourcePermissionGrant, type TableAccessEntry, type UpdateAgentData } from '@/lib/types';
 
 interface AgentListResponse {
     items: Agent[];
@@ -27,8 +27,8 @@ function toSdkAgentPayload<T extends CreateAgentData | UpdateAgentData>(data: T)
     };
 }
 
-function tablePermissionIds(mode: TableAccessMode | string | undefined): string[] {
-    if (mode === TableAccessMode.READ) {
+function tablePermissionIds(mode: AccessMode | string | undefined): string[] {
+    if (mode === AccessMode.READ) {
         return ['datastore.table.read', 'datastore.record.read'];
     }
     return ['datastore.table.read', 'datastore.record.read', 'datastore.record.write'];
@@ -39,14 +39,37 @@ function grantsToTableAccess(grants: ResourcePermissionGrant[] | undefined): Tab
         .filter((grant) => grant.resource_type === ResourceType.DATASTORE_TABLE)
         .map((grant) => ({
             table_name: grant.resource_name,
-            mode: grant.permission_ids?.includes('datastore.record.write') ? TableAccessMode.WRITE : TableAccessMode.READ,
+            mode: grant.permission_ids?.includes('datastore.record.write') ? AccessMode.WRITE : AccessMode.READ,
         }));
 }
 
-function grantsToFolderAccess(grants: ResourcePermissionGrant[] | undefined): string[] {
+function folderPermissionIds(mode: AccessMode | string | undefined): string[] {
+    if (mode === AccessMode.READ) {
+        return ['folder.read'];
+    }
+    return ['folder.read', 'folder.write'];
+}
+
+function grantsToFolderAccess(grants: ResourcePermissionGrant[] | undefined): FolderAccessEntry[] {
     return (grants || [])
         .filter((grant) => grant.resource_type === ResourceType.FOLDER)
-        .map((grant) => grant.resource_name);
+        .map((grant) => ({
+            folder_path: grant.resource_name,
+            mode: grant.permission_ids?.includes('folder.write') ? AccessMode.WRITE : AccessMode.READ,
+        }));
+}
+
+/**
+ * Folder grants used to be a bare list of paths that always meant read+write.
+ * Anything still carrying that shape keeps the access it was given.
+ */
+function normalizeFolderAccess(raw: unknown): FolderAccessEntry[] | undefined {
+    if (!Array.isArray(raw)) return undefined;
+    return raw.map((entry) => (
+        typeof entry === 'string'
+            ? { folder_path: entry, mode: AccessMode.WRITE }
+            : entry as FolderAccessEntry
+    ));
 }
 
 function grantsToConnectorAccess(grants: ResourcePermissionGrant[] | undefined): ConnectorAccessConfig[] {
@@ -95,11 +118,11 @@ async function buildResourceGrants(
         });
     }
 
-    for (const folderName of data.accessible_folders || []) {
+    for (const folder of data.accessible_folders || []) {
         grants.push({
             resource_type: ResourceType.FOLDER,
-            resource_name: folderName,
-            permission_ids: ['folder.read', 'folder.write'],
+            resource_name: folder.folder_path,
+            permission_ids: folderPermissionIds(folder.mode),
         });
     }
 
@@ -161,7 +184,7 @@ function normalizeAgent(raw: Record<string, unknown>): Agent {
         allowed_actions: Array.isArray(raw.allowed_actions) ? raw.allowed_actions.filter((action): action is string => typeof action === 'string') : undefined,
         permissions,
         accessible_tables: (raw.accessible_tables as Agent['accessible_tables'] | undefined) || grantsToTableAccess(grants),
-        accessible_folders: (raw.accessible_folders as string[] | undefined) || grantsToFolderAccess(grants),
+        accessible_folders: normalizeFolderAccess(raw.accessible_folders) || grantsToFolderAccess(grants),
         accessible_connectors: (raw.accessible_connectors as Agent['accessible_connectors'] | undefined) || grantsToConnectorAccess(grants),
         function_names: (raw.function_names as string[] | undefined) || grantsToFunctionAccess(grants),
         agent_names: (raw.agent_names as string[] | undefined) || grantsToAgentAccess(grants),
@@ -170,8 +193,7 @@ function normalizeAgent(raw: Record<string, unknown>): Agent {
     };
 }
 
-export const useAgents = (podId: string | undefined) => {
-    return useQuery({
+export const agentsQueryOptions = (podId: string | undefined) => ({
         queryKey: ['agents', podId],
         queryFn: async (): Promise<AgentListResponse> => {
             const response = await getLemmaClient(podId).agents.list();
@@ -182,9 +204,14 @@ export const useAgents = (podId: string | undefined) => {
                 next_page_token: response.next_page_token,
             };
         },
-        enabled: !!podId,
         refetchOnWindowFocus: true,
         staleTime: 30000,
+});
+
+export const useAgents = (podId: string | undefined) => {
+    return useQuery({
+        ...agentsQueryOptions(podId),
+        enabled: !!podId,
     });
 };
 

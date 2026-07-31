@@ -11,13 +11,10 @@ import type { RuntimeProfileStatus } from './RuntimeProfileStatus.js';
 export type AgentRuntimeProfileResponse = {
     availability_status?: (string | null);
     config?: Record<string, any>;
-    daemon_display_name?: (string | null);
-    daemon_harness_available?: (boolean | null);
-    daemon_id?: (string | null);
-    daemon_status?: (string | null);
     default_model_name?: (string | null);
     derived_harness_kind: HarnessKind;
     description?: (string | null);
+    harness_id?: (string | null);
     has_credentials?: boolean;
     id: string;
     kind: RuntimeProfileKind;
@@ -30,4 +27,3 @@ export type AgentRuntimeProfileResponse = {
     status: RuntimeProfileStatus;
     user_id?: (string | null);
 };
-

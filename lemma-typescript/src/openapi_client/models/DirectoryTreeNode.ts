@@ -10,4 +10,3 @@ export type DirectoryTreeNode = {
     path: string;
     visibility?: (string | null);
 };
-

@@ -3,42 +3,91 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
-from functools import partial
-from pathlib import Path
 
 from faststream.redis import RedisBroker
+from opentelemetry import context as otel_context
+from opentelemetry import metrics, trace
+from opentelemetry.propagate import extract
+from opentelemetry.trace import SpanKind
 from streaq import Worker
 
 from app.core.config import settings
 from app.core.infrastructure.channels.channel_service import channel_service
-from app.core.infrastructure.db.session import async_session_maker, get_engine, close_engine
+from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
+from app.core.infrastructure.redis.client import close_redis_clients, get_redis
+from app.core.infrastructure.db.session import (
+    async_session_maker,
+    get_engine,
+    close_engine,
+)
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
-from app.core.infrastructure.events.message_bus import close_message_bus, get_message_bus
+from app.core.infrastructure.events.message_bus import (
+    close_message_bus,
+    get_message_bus,
+)
+from app.core.infrastructure.events.outbox import outbox_dispatcher_lifespan
+from app.core.infrastructure.events.stream_observability import (
+    redis_stream_snapshot_loop,
+)
 from app.core.infrastructure.jobs.streaq_job_queue import (
     SharedStreaqJobQueue,
     close_streaq_job_queue,
     get_streaq_job_queue,
+    job_context_key,
 )
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
-from app.core.log.log import get_logger, setup_logging
-from app.core.observability.telemetry import init_telemetry, instrument_database_engine
+from app.core.log.log import (
+    get_dependency_logger,
+    get_logger,
+    setup_logging,
+    validate_release_identity,
+)
+from app.core.observability.telemetry import (
+    init_telemetry,
+    instrument_database_engine,
+    shutdown_telemetry,
+)
+from app.core.request_context import bind_job_context, create_background_task
 
 logger = get_logger(__name__)
+tracer = trace.get_tracer(__name__)
+meter = metrics.get_meter(__name__)
+job_counter = meter.create_counter("lemma.worker.jobs")
+job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
 
 JOB_TIMEOUT_SECONDS = 1800
+# An agent run is the one task whose ceiling is not ours to pick freely: it
+# advertises a deadline to something outside this process (an Agent Host on a
+# user's machine) and hands it a credential that expires. If the task dies
+# first, Lemma reports the run failed while the remote agent keeps executing
+# tools for it. This must therefore stay strictly above the Agent Host run
+# window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS, 50 min) with enough margin
+# for the harness to cancel the host run and finalize, and strictly below the
+# one-hour validity of the MCP credential minted at dispatch.
+AGENT_RUN_JOB_TIMEOUT_SECONDS = 3300
 JOB_MAX_RETRIES = 3
 # Keep completed task metadata around long enough for the UI to be useful.
 JOB_RESULT_TTL_SECONDS = 60 * 60 * 24
 WORKER_CONCURRENCY = settings.worker_concurrency
 
 
-broker = RedisBroker(settings.redis_url)
+broker = RedisBroker(
+    settings.redis_url,
+    logger=get_dependency_logger("faststream.redis"),
+    # FastStream uses this as the severity for routine startup narration. Keep
+    # it at INFO and let the supplied WARNING logger drop those records while
+    # still forwarding explicitly actionable warning/error calls.
+    log_level=logging.INFO,
+)
 
 
 @dataclass(slots=True)
@@ -52,16 +101,11 @@ class AppWorkerContext:
         return self.uow_factory()
 
     def build_function_storage_factory(self):
-        from app.modules.function.services.function_file_manager import FunctionFileManager
-
-        if settings.effective_storage_backend() == "gcs":
-            if not settings.gcs_storage_bucket:
-                raise ValueError("GCS storage requires GCS_STORAGE_BUCKET")
-            return partial(FunctionFileManager, bucket_name=settings.gcs_storage_bucket)
-        return partial(
-            FunctionFileManager,
-            root_path=Path(settings.local_file_storage_root) / "common",
+        from app.modules.function.api.dependencies import (
+            get_function_storage_factory,
         )
+
+        return get_function_storage_factory()
 
     def build_function_service(self, uow: SqlAlchemyUnitOfWork):
         from app.core.infrastructure.events.message_bus import get_message_bus
@@ -70,19 +114,12 @@ class AppWorkerContext:
             FunctionRunRepository,
         )
         from app.modules.function.services.function_service import FunctionService
-        from app.modules.pod.services.authorization_factory import create_authorization_service
-        from app.modules.workspace.services.workspace_tool_runtime import (
-            get_function_workspace_runtime,
-        )
 
         message_bus = get_message_bus()
         return FunctionService(
             function_repository=FunctionRepository(uow, message_bus=message_bus),
             run_repository=FunctionRunRepository(uow, message_bus=message_bus),
-            workspace_service=get_function_workspace_runtime(),
             storage_factory=self.build_function_storage_factory(),
-            job_queue=self.job_queue,
-            authorization_service=create_authorization_service(uow),
         )
 
     def build_function_use_cases(self):
@@ -141,13 +178,11 @@ class AppWorkerContext:
         )
 
 
-async def _safe_shutdown_step(
-    name: str, fn: Callable[[], Awaitable[None]]
-) -> None:
+async def _safe_shutdown_step(name: str, fn: Callable[[], Awaitable[None]]) -> None:
     try:
         await fn()
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Worker shutdown step failed", step=name, error=str(exc))
+    except Exception:  # pragma: no cover
+        logger.debug("infrastructure.streaq_runtime.worker_shutdown_step.diagnostic")
 
 
 async def _ensure_consumer_groups_once() -> None:
@@ -157,26 +192,21 @@ async def _ensure_consumer_groups_once() -> None:
     group, gets NOGROUP, and stops permanently. Idempotent (BUSYGROUP is a
     no-op) and never raises — group plumbing must not block worker startup.
     """
-    import redis.asyncio as redis
-
     from app.core.infrastructure.events.stream_subscriber import (
         ensure_consumer_groups,
         registered_stream_groups,
     )
 
-    client = redis.from_url(settings.redis_url, decode_responses=False)
+    # FastStream and streaq speak raw bytes, so this shares the
+    # decode_responses=False pool rather than the application one.
+    client = get_redis(decode_responses=False)
     try:
-        registered = len(registered_stream_groups())
-        created = await ensure_consumer_groups(client, warn_on_create=False)
-        logger.info(
-            "Pre-created Redis consumer groups before broker start",
-            registered=registered,
-            created=created,
+        len(registered_stream_groups())
+        await ensure_consumer_groups(client, warn_on_create=False)
+    except Exception:  # pragma: no cover - defensive
+        logger.debug(
+            "infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic"
         )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Initial consumer group ensure failed", error=str(exc))
-    finally:
-        await client.aclose()
 
 
 async def _consumer_group_reconcile_loop() -> None:
@@ -188,21 +218,34 @@ async def _consumer_group_reconcile_loop() -> None:
     subscriber resume — no manual restart. Cheap (one Redis connection, a handful
     of idempotent XGROUP CREATE calls per tick).
     """
-    import redis.asyncio as redis
-
+    from app.core.infrastructure.events.config import event_transport_settings
     from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
 
-    interval = settings.consumer_group_reconcile_interval_seconds
-    client = redis.from_url(settings.redis_url, decode_responses=False)
+    interval = event_transport_settings.consumer_group_reconcile_interval_seconds
+    client = get_redis(decode_responses=False)
     try:
         while True:
             try:
                 await ensure_consumer_groups(client)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Consumer group reconcile failed", error=str(exc))
+            except Exception:  # pragma: no cover - defensive
+                logger.debug(
+                    "infrastructure.streaq_runtime.consumer_group_reconcile.diagnostic"
+                )
             await asyncio.sleep(interval)
     finally:
         await client.aclose()
+
+
+# Low-rate structured heartbeat for remote absence detection. At 5 min this is
+# <600 records/48h. service.version is attached by the logging context.
+_WORKER_HEARTBEAT_INTERVAL_SECONDS = 300.0
+
+
+async def _worker_heartbeat_loop() -> None:
+    """Emit ``worker.heartbeat`` every 5 min while the worker loop is healthy."""
+    while True:
+        await asyncio.sleep(_WORKER_HEARTBEAT_INTERVAL_SECONDS)
+        logger.info("worker.heartbeat")
 
 
 @asynccontextmanager
@@ -213,8 +256,24 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         json_logs=settings.json_logs_enabled,
         log_level=settings.log_level,
     )
+    validate_release_identity(settings.environment)
     init_telemetry(service_name="lemma-worker")
     instrument_database_engine(get_engine())
+    # Size the thread-offload pool before any task runs blocking work off-loop.
+    from app.core.concurrency.offload import configure_thread_pool
+
+    configure_thread_pool()
+
+    # Guardrail: each task that opens a DB session holds a pooled connection for
+    # its duration, so concurrency above the pool capacity means tasks block on
+    # connection checkout — which looks like the whole worker hanging. Warn (not
+    # fail, to keep dev flexible) when the margin is too thin so it can't
+    # silently regress.
+    pool_capacity = settings.db_pool_size + settings.db_max_overflow
+    if pool_capacity and settings.worker_concurrency > pool_capacity * 0.8:
+        logger.warning(
+            "infrastructure.streaq_runtime.worker_concurrency_exceeds_safe_db.degraded"
+        )
     # Pre-create Redis consumer groups BEFORE the broker starts its subscribers.
     # Several subscribers share a stream (e.g. workflow + surface both consume
     # `schedule_events`); at broker.start FastStream races to create each group,
@@ -232,7 +291,6 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         job_queue=job_queue,
         uow_factory=SessionUnitOfWorkFactory(async_session_maker),
     )
-    logger.info("Worker starting...")
     # Imported lazily to avoid an import cycle: the registry imports module
     # `module.py` files whose worker hooks reference AppWorkerContext (defined
     # in this file).
@@ -240,33 +298,80 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
     from app.core.registry.installed import OSS_MODULES
 
     reconcile_task: asyncio.Task[None] | None = None
-    if settings.consumer_group_reconcile_interval_seconds > 0:
-        reconcile_task = asyncio.create_task(_consumer_group_reconcile_loop())
+    from app.core.infrastructure.events.config import event_transport_settings
 
+    if event_transport_settings.consumer_group_reconcile_interval_seconds > 0:
+        reconcile_task = create_background_task(
+            _consumer_group_reconcile_loop(), name="consumer-group-reconcile"
+        )
+
+    # Loop-lag watchdog: measures event-loop lag and refreshes the liveness
+    # heartbeat the k8s probe reads, so a wedged worker gets restarted instead of
+    # hanging silently (the worker has no HTTP server for a /livez probe).
+    from app.core.observability.loop_watchdog import loop_lag_watchdog
+
+    watchdog_task = create_background_task(
+        loop_lag_watchdog(
+            service_name="lemma-worker",
+            heartbeat_path=settings.worker_heartbeat_path or None,
+        ),
+        name="worker-loop-lag-watchdog",
+    )
+    # Low-rate structured heartbeat for remote absence detection of this
+    # singleton background process. At 5 min this is <600 records/48h. The
+    # worker has no HTTP server, so the heartbeat event + the watchdog's
+    # heartbeat file are its liveness signals.
+    heartbeat_task = create_background_task(
+        _worker_heartbeat_loop(), name="worker-heartbeat"
+    )
+    stream_snapshot_task = create_background_task(
+        redis_stream_snapshot_loop(get_message_bus()),
+        name="redis-stream-snapshot",
+    )
+
+    started = False
     try:
         # Module-contributed worker lifespans (e.g. agent_surfaces native event
         # receiver + dedupe-store close; datastore reindex-queue close). Entered
         # after core startup and unwound before the core closers below.
         async with AsyncExitStack() as module_stack:
+            await module_stack.enter_async_context(
+                outbox_dispatcher_lifespan(async_session_maker, get_message_bus())
+            )
             await enter_worker_lifespans(module_stack, OSS_MODULES, context)
+            # Emit only after every core and module lifespan has entered.
+            logger.info("service.started")
+            started = True
             yield context
     finally:
-        if reconcile_task is not None and not reconcile_task.done():
-            reconcile_task.cancel()
-            try:
-                await reconcile_task
-            except BaseException:
-                pass
+        for background_task in (
+            reconcile_task,
+            watchdog_task,
+            heartbeat_task,
+            stream_snapshot_task,
+        ):
+            if background_task is not None and not background_task.done():
+                background_task.cancel()
+                try:
+                    await background_task
+                except BaseException:
+                    pass
         await _safe_shutdown_step("broker.stop", broker.stop)
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
+        await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)
+        await _safe_shutdown_step("close_redis_clients", close_redis_clients)
         await _safe_shutdown_step("close_engine", close_engine)
-        await _safe_shutdown_step("channel_service.disconnect", channel_service.disconnect)
+        await _safe_shutdown_step(
+            "channel_service.disconnect", channel_service.disconnect
+        )
 
         from app.modules.datastore.infrastructure.session import close_datastore_engine
 
         await _safe_shutdown_step("close_datastore_engine", close_datastore_engine)
-        logger.info("Worker shutting down...")
+        if started:
+            logger.info("service.stopped")
+        shutdown_telemetry()
 
 
 def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
@@ -286,6 +391,92 @@ def create_streaq_worker(*, handle_signals: bool) -> Worker[AppWorkerContext]:
 
 
 streaq_worker = create_streaq_worker(handle_signals=True)
+
+
+async def load_job_observability_context(redis, job_id: str) -> dict[str, str]:
+    """Best-effort read of the rolling-deployment-compatible sidecar."""
+    try:
+        raw = await redis.get(job_context_key(job_id))
+        parsed = json.loads(raw) if raw else {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {
+            str(key): str(value)
+            for key, value in parsed.items()
+            if isinstance(key, str) and isinstance(value, str | int)
+        }
+    except Exception:
+        return {}
+
+
+@streaq_worker.middleware
+def observability_context_middleware(call_next):
+    """Recover correlation stored beside a task without changing its payload."""
+
+    async def run(*args, **kwargs):
+        task = observability_context_middleware.context
+        inherited = await load_job_observability_context(
+            streaq_worker.redis, task.task_id
+        )
+        token = otel_context.attach(extract(inherited))
+        started_at = time.perf_counter()
+        outcome = "succeeded"
+        try:
+            with tracer.start_as_current_span(
+                "lemma.worker.job",
+                kind=SpanKind.CONSUMER,
+                attributes={
+                    "lemma.job_id": task.task_id,
+                    "lemma.task_name": task.fn_name,
+                    "lemma.attempt": task.tries,
+                },
+            ) as span:
+                with bind_job_context(
+                    job_id=task.task_id,
+                    task_name=task.fn_name,
+                    attempt=task.tries,
+                    inherited=inherited,
+                ):
+                    try:
+                        result = await call_next(*args, **kwargs)
+                        span.set_attribute("lemma.outcome", outcome)
+                        return result
+                    except asyncio.CancelledError:
+                        outcome = "cancelled"
+                        span.set_attribute("lemma.outcome", outcome)
+                        raise
+                    except Exception as exc:
+                        terminal = task.tries >= JOB_MAX_RETRIES
+                        outcome = "failed" if terminal else "retrying"
+                        span.set_attribute("lemma.outcome", outcome)
+                        duration_ms = round(
+                            (time.perf_counter() - started_at) * 1000, 1
+                        )
+                        if terminal:
+                            logger.error(
+                                "worker.job.failed",
+                                attempt=task.tries,
+                                retryable=False,
+                                duration_ms=duration_ms,
+                                error_type=type(exc).__name__,
+                                exc_info=True,
+                            )
+                        else:
+                            logger.debug(
+                                "worker.job.retrying",
+                                attempt=task.tries,
+                                retryable=True,
+                                error_type=type(exc).__name__,
+                            )
+                        raise
+        finally:
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            labels = {"task_name": task.fn_name, "outcome": outcome}
+            job_counter.add(1, labels)
+            job_duration.record(duration_ms, labels)
+            otel_context.detach(token)
+
+    return run
 
 
 def streaq_task(*args, **kwargs):

@@ -79,8 +79,10 @@ async def get_org_context(
     user: CurrentUser,
     uow: UoWDep,
 ) -> Context:
-    raw_org_id = request.path_params.get("org_id") or request.query_params.get(
-        "organization_id"
+    raw_org_id = (
+        request.path_params.get("org_id")
+        or request.path_params.get("organization_id")
+        or request.query_params.get("organization_id")
     )
     if raw_org_id is None:
         raise HTTPException(
@@ -196,6 +198,28 @@ def reject_delegated_workload(action_label: str):
     """
 
     async def _dependency(ctx: OrgContextDep) -> None:
+        if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD:
+            from app.core.domain.errors import DomainError
+
+            raise DomainError(
+                f"Delegated workloads may not {action_label}.",
+                code="DESTRUCTIVE_ACTION_REQUIRES_APPROVAL",
+                status_code=403,
+            )
+
+    return Depends(_dependency)
+
+
+def reject_delegated_workload_pod(action_label: str):
+    """Pod-scoped counterpart of :func:`reject_delegated_workload`.
+
+    For pod-routed ownership actions that mint membership (approving a join
+    request grants org/pod membership). There is no per-resource grant or session
+    approval that should let a workload confer membership on someone, so deny it
+    outright. Humans are unaffected.
+    """
+
+    async def _dependency(ctx: PodContextDep) -> None:
         if ctx.actor_type == ActorType.DELEGATED_USER_WORKLOAD:
             from app.core.domain.errors import DomainError
 

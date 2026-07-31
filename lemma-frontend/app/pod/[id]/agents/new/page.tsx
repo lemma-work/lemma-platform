@@ -20,7 +20,7 @@ import {
     Search,
     UserRound,
     Wand2,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { SchemaBuilder } from '@/components/agents/schema-builder';
@@ -34,13 +34,14 @@ import { ResourceVisibilityBadge, ResourceVisibilitySelect } from '@/components/
 import { showResourceCreatedToast, showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useCreateAgent } from '@/lib/hooks/use-agents';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod } from '@/lib/hooks/use-pods';
 import { AGENT_MASCOTS } from '@/lib/data/agent-mascots';
 import { cn } from '@/lib/utils';
-import { Agent, TableAccessMode, ToolSet } from '@/lib/types';
+import { formatAgentName } from '@/lib/utils/agents';
+import { Agent, AccessMode, ToolSet } from '@/lib/types';
 
 type SchemaProperty = Record<string, unknown>;
 type SchemaFieldEntry = [string, SchemaProperty];
@@ -124,8 +125,7 @@ export default function NewAgentPage({
     const createAgent = useCreateAgent();
     const { data: pod } = usePod(podId);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
-    const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+    const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
     const [currentStep, setCurrentStep] = useState<BuilderStepId>('identity');
     const [showTaskFields, setShowTaskFields] = useState(false);
     const [showOutputFields, setShowOutputFields] = useState(false);
@@ -237,12 +237,10 @@ export default function NewAgentPage({
         <div className="agent-builder-root flex h-full min-h-0 flex-col">
             <PodPageHeader
                 podId={podId}
-                variant="bar"
                 title="Create agent"
                 eyebrow="Guided builder"
                 backHref={`/pod/${podId}/ai`}
                 backLabel="Agents"
-                productIconTone="agents"
                 meta={(
                     <span className="text-xs text-[var(--text-secondary)]">
                         {hasName ? 'Ready to create' : 'Draft'} · {draftAgent.tool_sets.length} tools
@@ -250,30 +248,33 @@ export default function NewAgentPage({
                 )}
             />
 
-            <main className="min-h-0 flex-1 overflow-y-auto">
-                <div className="agent-builder-canvas mx-auto w-full max-w-[76rem] px-6 pb-24 pt-6">
-                    <section className="agent-builder-hero">
-                        <div className="min-w-0">
-                            <p className="section-label">{activeStep.eyebrow}</p>
-                            <h1 className="agent-builder-title mt-2">{activeStep.label}</h1>
-                            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{activeStep.description}</p>
+            <main className="resource-page-scroll min-h-0 flex-1">
+                {/* Same column and cards as the agent's own page: where you are in
+                    the build, then the step you are on. */}
+                <div className="agent-builder-canvas resource-page-column">
+                    <section className="resource-card">
+                        <div className="agent-builder-hero">
+                            <div className="min-w-0">
+                                <p className="resource-card-eyebrow mb-0">{activeStep.eyebrow}</p>
+                                <h1 className="agent-builder-title mt-1">{activeStep.label}</h1>
+                            </div>
+                            <span className="text-xs text-[var(--text-tertiary)]">
+                                {draftAgent.name.trim() || 'Unnamed agent'}
+                            </span>
                         </div>
-                        <div className="hidden text-right text-sm text-[var(--text-secondary)] sm:block">
-                            <span className="type-eyebrow">Draft</span>
-                            <span className="ml-2 text-[var(--text-primary)]">{draftAgent.name.trim() || 'Unnamed agent'}</span>
-                        </div>
+                        <p className="mt-1 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{activeStep.description}</p>
+
+                        <CompactStepProgress
+                            steps={BUILDER_STEPS}
+                            currentStep={currentStep}
+                            stepDone={stepDone}
+                            onSelect={(stepId) => setCurrentStep(stepId)}
+                        />
                     </section>
 
-                    <CompactStepProgress
-                        steps={BUILDER_STEPS}
-                        currentStep={currentStep}
-                        stepDone={stepDone}
-                        onSelect={(stepId) => setCurrentStep(stepId)}
-                    />
-
-                    <section className="agent-builder-stage" data-step={currentStep}>
+                    <section className="resource-card agent-builder-stage" data-step={currentStep}>
                         {currentStep === 'identity' ? (
-                            <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
+                            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
                                 <div className="space-y-6">
                                     <div>
                                         <label className="text-sm font-medium text-[var(--text-secondary)]">
@@ -283,7 +284,7 @@ export default function NewAgentPage({
                                             value={draftAgent.name}
                                             onChange={(event) => updateDraft({ name: event.target.value })}
                                             placeholder="Customer Thread Briefing"
-                                            className="form-field-control mt-2 h-11 w-full px-3 text-base font-medium tracking-normal text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+                                            className="form-field-control mt-2 h-9 w-full px-3 text-sm font-medium tracking-normal text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
                                         />
                                     </div>
                                     <div>
@@ -294,7 +295,7 @@ export default function NewAgentPage({
                                             value={draftAgent.description || ''}
                                             onChange={(event) => updateDraft({ description: event.target.value.slice(0, 200) })}
                                             placeholder="What should this agent help the pod do?"
-                                            className="form-field-control mt-2 min-h-32 w-full resize-y px-3 py-2.5 text-sm leading-6 text-[var(--text-secondary)] outline-none placeholder:text-[var(--text-tertiary)]"
+                                            className="form-field-control mt-2 min-h-24 w-full resize-y px-3 py-2.5 text-sm leading-6 text-[var(--text-secondary)] outline-none placeholder:text-[var(--text-tertiary)]"
                                         />
                                     </div>
                                 </div>
@@ -332,13 +333,13 @@ export default function NewAgentPage({
                                     value={draftAgent.instruction}
                                     onChange={(event) => updateDraft({ instruction: event.target.value })}
                                     placeholder="Tell the agent what it does, what information it can use, what to avoid, when to ask a follow-up question, and what good work looks like..."
-                                    className="form-field-control mt-4 min-h-[20rem] w-full resize-y px-5 py-4 text-base leading-7 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+                                    className="form-field-control mt-3 min-h-[18rem] w-full resize-y px-3 py-2.5 text-sm leading-6 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
                                 />
                             </div>
                         ) : null}
 
                         {currentStep === 'shape' ? (
-                            <div className="space-y-8">
+                            <div className="space-y-5">
                                 <div className="agent-builder-section">
                                     <div className="settings-title-row mb-3">
                                         <Bot className="h-4 w-4 text-[var(--text-tertiary)]" />
@@ -346,7 +347,6 @@ export default function NewAgentPage({
                                     </div>
                                     <RuntimeModelPicker
                                         catalog={runtimeCatalog}
-                                        availableHarnesses={availableHarnesses}
                                         defaultRuntime={defaultRuntime}
                                         value={draftAgent.agent_runtime ?? null}
                                         onChange={(agentRuntime) => updateDraft({ agent_runtime: agentRuntime })}
@@ -412,12 +412,12 @@ export default function NewAgentPage({
                         ) : null}
 
                         {currentStep === 'access' ? (
-                            <div className="space-y-8">
+                            <div className="space-y-5">
                                 <div className="agent-builder-section">
                                     <ResourceVisibilitySelect
                                         value={draftAgent.visibility}
                                         resourceLabel="agents"
-                                        resourceName={draftAgent.name || 'New agent'}
+                                        resourceName={draftAgent.name ? formatAgentName(draftAgent.name) : 'New agent'}
                                         onChange={(visibility) => updateDraft({ visibility })}
                                     />
                                 </div>
@@ -475,7 +475,7 @@ export default function NewAgentPage({
                                                 updateDraft({
                                                     accessible_tables: names.map((table_name) => ({
                                                         table_name,
-                                                        mode: modeByTable.get(table_name) ?? TableAccessMode.READ,
+                                                        mode: modeByTable.get(table_name) ?? AccessMode.READ,
                                                     })),
                                                 });
                                             }}
@@ -492,8 +492,28 @@ export default function NewAgentPage({
                                     <AccessBlock icon={<Folder className="h-4 w-4" />} title="Folders">
                                         <FoldersSelector
                                             podId={podId}
-                                            selected={draftAgent.accessible_folders || []}
-                                            onChange={(folderIds) => updateDraft({ accessible_folders: folderIds })}
+                                            selected={(draftAgent.accessible_folders || []).map((entry) => entry.folder_path)}
+                                            modeByPath={Object.fromEntries(
+                                                (draftAgent.accessible_folders || []).map((entry) => [entry.folder_path, entry.mode])
+                                            )}
+                                            onChange={(folderPaths) => {
+                                                const modeByFolder = new Map(
+                                                    (draftAgent.accessible_folders || []).map((entry) => [entry.folder_path, entry.mode])
+                                                );
+                                                updateDraft({
+                                                    accessible_folders: folderPaths.map((folder_path) => ({
+                                                        folder_path,
+                                                        mode: modeByFolder.get(folder_path) ?? AccessMode.READ,
+                                                    })),
+                                                });
+                                            }}
+                                            onModeChange={(folderPath, mode) => {
+                                                updateDraft({
+                                                    accessible_folders: (draftAgent.accessible_folders || []).map((entry) =>
+                                                        entry.folder_path === folderPath ? { ...entry, mode } : entry
+                                                    ),
+                                                });
+                                            }}
                                             showLabel={false}
                                         />
                                     </AccessBlock>
@@ -533,8 +553,8 @@ export default function NewAgentPage({
                 </div>
             </main>
 
-            <footer className="shrink-0 bg-[color:color-mix(in_srgb,var(--surface-1)_78%,transparent)] px-5 py-2.5 backdrop-blur-md">
-                <div className="mx-auto flex w-full max-w-[76rem] items-center justify-between gap-3">
+            <footer className="agent-builder-footer shrink-0">
+                <div className="agent-builder-footer-inner">
                     <div className="min-w-0">
                         <p className="type-eyebrow">
                             Step {safeStepIndex + 1} of {BUILDER_STEPS.length}
@@ -683,7 +703,7 @@ function ModeChoice({
                 {icon}
             </span>
             <span>
-                <span className="block text-base font-medium text-[var(--text-primary)]">{title}</span>
+                <span className="block text-sm font-medium text-[var(--text-primary)]">{title}</span>
                 <span className="mt-2 block text-sm leading-6 text-[var(--text-secondary)]">{text}</span>
             </span>
         </button>
@@ -771,7 +791,7 @@ function LaunchReview({
                 <div className="flex flex-col gap-5 sm:flex-row sm:items-start">
                     <ResourceIcon
                         iconUrl={iconUrl}
-                        alt={`${displayName} profile picture`}
+                        alt={`${formatAgentName(displayName)} profile picture`}
                         label={displayName}
                         imageClassName="object-contain p-1"
                         className="h-20 w-20 shrink-0 !border-0 !bg-transparent"
@@ -780,7 +800,7 @@ function LaunchReview({
                     <div className="min-w-0 flex-1">
                         <p className="section-label">Agent</p>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-2xl font-medium text-[var(--text-primary)]">{displayName}</h3>
+                            <h3 className="truncate text-2xl font-medium text-[var(--text-primary)]">{formatAgentName(displayName)}</h3>
                             {!hasName ? (
                                 <span className="state-badge-error rounded-md px-2 py-0.5 text-xs font-medium">
                                     Name missing

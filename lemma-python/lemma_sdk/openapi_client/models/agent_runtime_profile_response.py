@@ -32,20 +32,35 @@ class AgentRuntimeProfileResponse:
     """
     Attributes:
         derived_harness_kind (HarnessKind): Runtime framework used to execute an agent.
+
+            Two kinds, not one per coding tool: ``LEMMA`` runs in-process, ``HARNESS``
+            dispatches through Agent Host. Which tool Agent Host runs is identified by
+            ``harness_id`` on the runtime profile, so the retired per-tool values
+            (``CODEX``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``, ``ANTIGRAVITY``) went
+            away with the local daemon that needed them.
+
+            No stored row is read back through this enum — a persisted runtime profile
+            names a ``RuntimeProfileProtocol``, and the kind is derived from that — so
+            dropping those values cannot fail a history read. Back-compat for retired
+            *protocols* is handled where it belongs, in the profile repository.
         id (str):
         kind (RuntimeProfileKind):
         name (str):
-        protocol (RuntimeProfileProtocol):
+        protocol (RuntimeProfileProtocol): How a profile reaches its runtime.
+
+            The retired local daemon needed one protocol per coding tool
+            (``CODEX_APP_SERVER``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``,
+            ``ANTIGRAVITY``). Agent Host needs one: the tool is identified by the
+            profile's ``harness_id``. Stored rows can still carry a retired value, so
+            the profile repository skips protocols this enum no longer knows rather
+            than failing the whole listing.
         scope (RuntimeProfileScope):
         status (RuntimeProfileStatus):
         availability_status (None | str | Unset):
         config (AgentRuntimeProfileResponseConfig | Unset):
-        daemon_display_name (None | str | Unset):
-        daemon_harness_available (bool | None | Unset):
-        daemon_id (None | Unset | UUID):
-        daemon_status (None | str | Unset):
         default_model_name (None | str | Unset):
         description (None | str | Unset):
+        harness_id (None | Unset | UUID):
         has_credentials (bool | Unset):  Default: False.
         metadata (AgentRuntimeProfileResponseMetadata | Unset):
         model_catalog (list[RuntimeModelCatalogEntry] | Unset):
@@ -62,12 +77,9 @@ class AgentRuntimeProfileResponse:
     status: RuntimeProfileStatus
     availability_status: None | str | Unset = UNSET
     config: AgentRuntimeProfileResponseConfig | Unset = UNSET
-    daemon_display_name: None | str | Unset = UNSET
-    daemon_harness_available: bool | None | Unset = UNSET
-    daemon_id: None | Unset | UUID = UNSET
-    daemon_status: None | str | Unset = UNSET
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
+    harness_id: None | Unset | UUID = UNSET
     has_credentials: bool | Unset = False
     metadata: AgentRuntimeProfileResponseMetadata | Unset = UNSET
     model_catalog: list[RuntimeModelCatalogEntry] | Unset = UNSET
@@ -100,32 +112,6 @@ class AgentRuntimeProfileResponse:
         if not isinstance(self.config, Unset):
             config = self.config.to_dict()
 
-        daemon_display_name: None | str | Unset
-        if isinstance(self.daemon_display_name, Unset):
-            daemon_display_name = UNSET
-        else:
-            daemon_display_name = self.daemon_display_name
-
-        daemon_harness_available: bool | None | Unset
-        if isinstance(self.daemon_harness_available, Unset):
-            daemon_harness_available = UNSET
-        else:
-            daemon_harness_available = self.daemon_harness_available
-
-        daemon_id: None | str | Unset
-        if isinstance(self.daemon_id, Unset):
-            daemon_id = UNSET
-        elif isinstance(self.daemon_id, UUID):
-            daemon_id = str(self.daemon_id)
-        else:
-            daemon_id = self.daemon_id
-
-        daemon_status: None | str | Unset
-        if isinstance(self.daemon_status, Unset):
-            daemon_status = UNSET
-        else:
-            daemon_status = self.daemon_status
-
         default_model_name: None | str | Unset
         if isinstance(self.default_model_name, Unset):
             default_model_name = UNSET
@@ -137,6 +123,14 @@ class AgentRuntimeProfileResponse:
             description = UNSET
         else:
             description = self.description
+
+        harness_id: None | str | Unset
+        if isinstance(self.harness_id, Unset):
+            harness_id = UNSET
+        elif isinstance(self.harness_id, UUID):
+            harness_id = str(self.harness_id)
+        else:
+            harness_id = self.harness_id
 
         has_credentials = self.has_credentials
 
@@ -184,18 +178,12 @@ class AgentRuntimeProfileResponse:
             field_dict["availability_status"] = availability_status
         if config is not UNSET:
             field_dict["config"] = config
-        if daemon_display_name is not UNSET:
-            field_dict["daemon_display_name"] = daemon_display_name
-        if daemon_harness_available is not UNSET:
-            field_dict["daemon_harness_available"] = daemon_harness_available
-        if daemon_id is not UNSET:
-            field_dict["daemon_id"] = daemon_id
-        if daemon_status is not UNSET:
-            field_dict["daemon_status"] = daemon_status
         if default_model_name is not UNSET:
             field_dict["default_model_name"] = default_model_name
         if description is not UNSET:
             field_dict["description"] = description
+        if harness_id is not UNSET:
+            field_dict["harness_id"] = harness_id
         if has_credentials is not UNSET:
             field_dict["has_credentials"] = has_credentials
         if metadata is not UNSET:
@@ -252,54 +240,6 @@ class AgentRuntimeProfileResponse:
         else:
             config = AgentRuntimeProfileResponseConfig.from_dict(_config)
 
-        def _parse_daemon_display_name(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        daemon_display_name = _parse_daemon_display_name(
-            d.pop("daemon_display_name", UNSET)
-        )
-
-        def _parse_daemon_harness_available(data: object) -> bool | None | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(bool | None | Unset, data)
-
-        daemon_harness_available = _parse_daemon_harness_available(
-            d.pop("daemon_harness_available", UNSET)
-        )
-
-        def _parse_daemon_id(data: object) -> None | Unset | UUID:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                daemon_id_type_0 = UUID(data)
-
-                return daemon_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
-                pass
-            return cast(None | Unset | UUID, data)
-
-        daemon_id = _parse_daemon_id(d.pop("daemon_id", UNSET))
-
-        def _parse_daemon_status(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        daemon_status = _parse_daemon_status(d.pop("daemon_status", UNSET))
-
         def _parse_default_model_name(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -319,6 +259,23 @@ class AgentRuntimeProfileResponse:
             return cast(None | str | Unset, data)
 
         description = _parse_description(d.pop("description", UNSET))
+
+        def _parse_harness_id(data: object) -> None | Unset | UUID:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, str):
+                    raise TypeError()
+                harness_id_type_0 = UUID(data)
+
+                return harness_id_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | Unset | UUID, data)
+
+        harness_id = _parse_harness_id(d.pop("harness_id", UNSET))
 
         has_credentials = d.pop("has_credentials", UNSET)
 
@@ -351,7 +308,7 @@ class AgentRuntimeProfileResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -368,7 +325,7 @@ class AgentRuntimeProfileResponse:
                 user_id_type_0 = UUID(data)
 
                 return user_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -384,12 +341,9 @@ class AgentRuntimeProfileResponse:
             status=status,
             availability_status=availability_status,
             config=config,
-            daemon_display_name=daemon_display_name,
-            daemon_harness_available=daemon_harness_available,
-            daemon_id=daemon_id,
-            daemon_status=daemon_status,
             default_model_name=default_model_name,
             description=description,
+            harness_id=harness_id,
             has_credentials=has_credentials,
             metadata=metadata,
             model_catalog=model_catalog,

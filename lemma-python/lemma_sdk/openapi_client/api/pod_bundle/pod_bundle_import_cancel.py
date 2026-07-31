@@ -1,5 +1,5 @@
 from http import HTTPStatus
-from typing import Any, cast
+from typing import Any
 from urllib.parse import quote
 from uuid import UUID
 
@@ -8,6 +8,7 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
+from ...models.import_status_response import ImportStatusResponse
 from ...types import Response
 
 
@@ -29,10 +30,11 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Any | ErrorResponse | None:
-    if response.status_code == 204:
-        response_204 = cast(Any, None)
-        return response_204
+) -> ErrorResponse | ImportStatusResponse | None:
+    if response.status_code == 202:
+        response_202 = ImportStatusResponse.from_dict(response.json())
+
+        return response_202
 
     if response.status_code == 422:
         response_422 = ErrorResponse.from_dict(response.json())
@@ -47,7 +49,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[Any | ErrorResponse]:
+) -> Response[ErrorResponse | ImportStatusResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -61,7 +63,7 @@ def sync_detailed(
     import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+) -> Response[ErrorResponse | ImportStatusResponse]:
     """Cancel Pod Import
 
      Abort a running import and delete its state + staged archive.
@@ -75,7 +77,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | ImportStatusResponse]
     """
 
     kwargs = _get_kwargs(
@@ -95,7 +97,7 @@ def sync(
     import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+) -> ErrorResponse | ImportStatusResponse | None:
     """Cancel Pod Import
 
      Abort a running import and delete its state + staged archive.
@@ -109,7 +111,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | ImportStatusResponse
     """
 
     return sync_detailed(
@@ -124,7 +126,7 @@ async def asyncio_detailed(
     import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Response[Any | ErrorResponse]:
+) -> Response[ErrorResponse | ImportStatusResponse]:
     """Cancel Pod Import
 
      Abort a running import and delete its state + staged archive.
@@ -138,7 +140,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Any | ErrorResponse]
+        Response[ErrorResponse | ImportStatusResponse]
     """
 
     kwargs = _get_kwargs(
@@ -156,7 +158,7 @@ async def asyncio(
     import_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-) -> Any | ErrorResponse | None:
+) -> ErrorResponse | ImportStatusResponse | None:
     """Cancel Pod Import
 
      Abort a running import and delete its state + staged archive.
@@ -170,7 +172,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Any | ErrorResponse
+        ErrorResponse | ImportStatusResponse
     """
 
     return (

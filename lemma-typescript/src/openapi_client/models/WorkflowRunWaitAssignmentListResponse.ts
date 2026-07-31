@@ -8,4 +8,3 @@ export type WorkflowRunWaitAssignmentListResponse = {
     limit: number;
     next_page_token?: (string | null);
 };
-

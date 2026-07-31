@@ -83,7 +83,7 @@ def sync_detailed(
 
      Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes
     immediately when the conversation has no active run. Optionally filter to a specific internal run id
-    for reconnects.
+    for reconnects; terminal runs replay their persisted terminal event.
 
     Args:
         pod_id (UUID):
@@ -122,7 +122,7 @@ def sync(
 
      Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes
     immediately when the conversation has no active run. Optionally filter to a specific internal run id
-    for reconnects.
+    for reconnects; terminal runs replay their persisted terminal event.
 
     Args:
         pod_id (UUID):
@@ -156,7 +156,7 @@ async def asyncio_detailed(
 
      Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes
     immediately when the conversation has no active run. Optionally filter to a specific internal run id
-    for reconnects.
+    for reconnects; terminal runs replay their persisted terminal event.
 
     Args:
         pod_id (UUID):
@@ -193,7 +193,7 @@ async def asyncio(
 
      Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes
     immediately when the conversation has no active run. Optionally filter to a specific internal run id
-    for reconnects.
+    for reconnects; terminal runs replay their persisted terminal event.
 
     Args:
         pod_id (UUID):

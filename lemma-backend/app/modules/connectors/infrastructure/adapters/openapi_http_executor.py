@@ -133,8 +133,12 @@ class OpenApiHttpExecutor:
             follow_redirects = True
 
         want_binary = bool((execution.get("response") or {}).get("binary"))
-        logger.info(
-            "openapi-exec %s %s %s (mode=%s)", connector_id, operation_name, method, mode
+        logger.debug(
+            "connectors.openapi_http_executor.calling_http_operation.observed",
+            connector_id=connector_id,
+            operation_name=operation_name,
+            http_method=method,
+            mode=mode,
         )
         async with httpx.AsyncClient(
             follow_redirects=follow_redirects, timeout=_DEFAULT_TIMEOUT_SECONDS

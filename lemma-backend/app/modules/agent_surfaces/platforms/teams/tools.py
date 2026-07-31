@@ -5,7 +5,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.teams.models import (
     TeamsGetRecentMessagesParams,
     TeamsGetRecentMessagesResult,
@@ -29,8 +29,10 @@ def build_teams_surface_toolset(
         """Get recent messages from the current Teams channel or thread, including shared files."""
         try:
             return await service.get_recent_channel_messages(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("Teams tool teams_get_recent_channel_messages failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.teams.history_failed", exc_info=True
+            )
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Teams channel history lookup failed unexpectedly.",

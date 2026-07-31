@@ -45,12 +45,20 @@ def _connector(app_id: str = "google_calendar") -> ConnectorEntity:
     )
 
 
-def _provider(connection_state: BaseModel, status: str = "ACTIVE") -> ComposioAuthProvider:
+def _provider(
+    connection_state: BaseModel,
+    status: str = "ACTIVE",
+    *,
+    word_id: str | None = None,
+    alias: str | None = None,
+) -> ComposioAuthProvider:
     connected_accounts = SimpleNamespace(
         get=lambda _: SimpleNamespace(
             id="ca_test_connection",
             status=status,
             state=SimpleNamespace(val=connection_state),
+            word_id=word_id,
+            alias=alias,
         )
     )
     composio = SimpleNamespace(connected_accounts=connected_accounts)
@@ -92,6 +100,41 @@ async def test_exchange_code_uses_composio_expires_in_for_google_accounts():
     assert credentials.expires_at is not None
     assert credentials.expires_at > datetime.now(timezone.utc) + timedelta(minutes=50)
     provider._get_google_token_expiration.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_exchange_code_surfaces_word_id_and_alias_for_account_labeling():
+    """word_id/alias live on the connected account, not state.val -- they must
+    be threaded into raw_response so account_identity can use them as a
+    toolkit-agnostic display-name fallback (most toolkits have no email)."""
+    provider = _provider(
+        _FakeConnectionState(access_token="access-token"),
+        word_id="github_red-castle",
+        alias="Work GitHub",
+    )
+
+    credentials = await provider.exchange_code_for_credentials(
+        connector=_connector("github"),
+        redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
+        user_id=uuid4(),
+    )
+
+    assert credentials.raw_response["word_id"] == "github_red-castle"
+    assert credentials.raw_response["alias"] == "Work GitHub"
+
+
+@pytest.mark.asyncio
+async def test_exchange_code_raw_response_omits_word_id_and_alias_when_absent():
+    provider = _provider(_FakeConnectionState(access_token="access-token"))
+
+    credentials = await provider.exchange_code_for_credentials(
+        connector=_connector("github"),
+        redirect_uri="https://app.example.com/callback?connectedAccountId=ca_test_connection",
+        user_id=uuid4(),
+    )
+
+    assert "word_id" not in credentials.raw_response
+    assert "alias" not in credentials.raw_response
 
 
 @pytest.mark.asyncio

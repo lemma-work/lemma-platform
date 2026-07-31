@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AgentRunStartResponse } from '../models/AgentRunStartResponse.js';
 import type { ApprovalDecisionResponse } from '../models/ApprovalDecisionResponse.js';
 import type { ConversationListResponse } from '../models/ConversationListResponse.js';
 import type { ConversationResponse } from '../models/ConversationResponse.js';
@@ -19,7 +20,7 @@ import { request as __request } from '../core/request.js';
 export class AgentConversationsService {
     /**
      * List Pod Agent Conversations
-     * List root conversations for the current user in a pod. Use agent_name to list conversations for a specific pod agent; omit it to list default pod assistant conversations. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead.
+     * List root conversations for the current user in a pod. Omit agent_name to list conversations across the pod, pass POD_DEFAULT (or pod_default) to list default pod assistant conversations, or pass a name to list conversations for a specific pod agent. Child (sub-agent) conversations are omitted by default; pass parent_id to list the children of a specific conversation instead.
      * @param podId
      * @param agentName
      * @param status
@@ -46,7 +47,7 @@ export class AgentConversationsService {
                 'pod_id': podId,
             },
             query: {
-                'agent_name': agentName,
+                'agent_name': agentName === null ? 'POD_DEFAULT' : agentName,
                 'status': status,
                 'type': type,
                 'parent_id': parentId,
@@ -257,6 +258,33 @@ export class AgentConversationsService {
         });
     }
     /**
+     * Retry Failed Pod Conversation Run
+     * Start a new run from the latest failed run's persisted conversation history without appending a duplicate user message. Retry is allowed only when the failed run produced no assistant, tool, or system activity. Attach to the returned run with the conversation stream endpoint.
+     * @param podId
+     * @param conversationId
+     * @returns AgentRunStartResponse Successful Response
+     * @throws ApiError
+     */
+    public static agentConversationRetry(
+        podId: string,
+        conversationId: string,
+    ): CancelablePromise<AgentRunStartResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/conversations/{conversation_id}/retry',
+            path: {
+                'pod_id': podId,
+                'conversation_id': conversationId,
+            },
+            errors: {
+                404: `Conversation was not found or is not visible`,
+                409: `The latest run is not safely retryable`,
+                422: `Validation Error`,
+                429: `The account usage limit was exceeded`,
+            },
+        });
+    }
+    /**
      * Stop Pod Conversation
      * Request cancellation of the active conversation work.
      * @param podId
@@ -282,7 +310,7 @@ export class AgentConversationsService {
     }
     /**
      * Stream Pod Conversation
-     * Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes immediately when the conversation has no active work.
+     * Subscribe to Server-Sent Events for an existing pod-scoped conversation. The stream closes immediately when the conversation has no active run. Optionally filter to a specific internal run id for reconnects; terminal runs replay their persisted terminal event.
      * @param podId
      * @param conversationId
      * @returns any Successful Response

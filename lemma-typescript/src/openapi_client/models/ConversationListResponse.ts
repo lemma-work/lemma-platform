@@ -8,4 +8,3 @@ export type ConversationListResponse = {
     limit: number;
     next_page_token?: (string | null);
 };
-

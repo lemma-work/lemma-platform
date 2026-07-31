@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
 from app.core.infrastructure.db.base import Base
+from app.core.infrastructure.events import models as event_models  # noqa: F401
 
 # Import all models to ensure they are attached to Base.metadata
 # Datastore
@@ -27,6 +28,9 @@ from app.modules.pod.infrastructure import models as pod_models  # noqa: F401
 
 # Agent
 from app.modules.agent.infrastructure import models as agent_models  # noqa: F401
+from app.modules.agent.infrastructure import (  # noqa: F401
+    runtime_models as agent_runtime_models,
+)
 
 # Trigger
 from app.modules.schedule.infrastructure import models as trigger_models  # noqa: F401
@@ -40,6 +44,7 @@ from app.modules.agent_surfaces.infrastructure import models as surface_models  
 
 # Usage / metering (usage_records, usage_limit_counters)
 from app.modules.usage.infrastructure import models as usage_models  # noqa: F401
+from app.modules.pod_bundle.infrastructure import models as pod_bundle_models  # noqa: F401
 
 config = context.config
 

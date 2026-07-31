@@ -11,4 +11,3 @@ export type OperationDetail = {
     name: string;
     output_schema?: (Record<string, any> | null);
 };
-

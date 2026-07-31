@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ExternalLink, Loader2 } from 'lucide-react';
+import { ExternalLink, Loader2 } from '@/components/ui/icons';
 
 import {
     absolutizeReadmeAssetUrls,
@@ -89,7 +89,7 @@ export function RecipeReadme({ kit }: { kit: KitDefinition }) {
             <div className="mb-5 flex flex-col gap-2 border-b border-[var(--border-subtle)] pb-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <p className="type-eyebrow-mono">README</p>
-                    <h2 className="mt-1 text-lg font-semibold text-[var(--text-primary)]">What this recipe sets up</h2>
+                    <h2 className="mt-1 text-lg font-semibold text-[var(--text-primary)]">What this kit sets up</h2>
                 </div>
                 <span className="rounded-md border border-[color:var(--chip-border)] bg-[var(--chip-bg)] px-2 py-1 font-mono text-xs text-[var(--chip-fg)]">
                     branch: {readmeState.branch}

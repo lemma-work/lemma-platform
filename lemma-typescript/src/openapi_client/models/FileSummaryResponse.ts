@@ -27,4 +27,3 @@ export type FileSummaryResponse = {
     updated_at: string;
     visibility?: string;
 };
-

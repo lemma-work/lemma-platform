@@ -14,7 +14,7 @@ from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
 from pydantic_core import SchemaValidator
 
-from app.core.config import settings
+from app.modules.agent.config import agent_settings
 from app.core.log.log import get_logger
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.permissions import Permissions
@@ -24,18 +24,18 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
 )
 from app.modules.agent.tools.context import BaseAgentContext
-from app.modules.function.domain.entities import (
+from app.modules.function.contracts import (
     FunctionEntity,
     FunctionRunEntity,
     FunctionRunStatus,
     FunctionStatus,
     FunctionType,
 )
-from app.modules.function.infrastructure.repositories import (
-    FunctionRepository,
-    FunctionRunRepository,
+from app.composition.agent_functions import (
+    create_function_repository,
+    create_function_run_repository,
+    create_function_use_cases,
 )
-from app.modules.function.api.dependencies import build_function_use_cases
 
 
 logger = get_logger(__name__)
@@ -65,7 +65,7 @@ def inline_tool_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     ``$ref`` -> ``#/$defs/...`` server-side and reject the request with
     ``Error resolving schema reference ... AttributeError("'NoneType' ... lookup")``.
     The pydantic-ai model path already inlines refs via a model profile, but tool
-    schemas served over MCP to daemon harnesses (Claude Code, Cursor, OpenCode,
+    schemas served over MCP to remote harnesses (Claude Code, Cursor, OpenCode,
     ...) were passed through raw. Inline them here too. Best-effort: a schema the
     transformer can't process falls back to the original.
     """
@@ -117,7 +117,7 @@ class AgentCallableToolFactory:
 
         tools: list[Tool] = []
         async with self.uow_factory() as uow:
-            function_repo = FunctionRepository(uow)
+            function_repo = create_function_repository(uow)
             agent_repo = AgentRepository(uow)
             function_ids, agent_ids = await self._load_callable_resource_ids(
                 uow,
@@ -130,12 +130,12 @@ class AgentCallableToolFactory:
                 if function is None or function.status != FunctionStatus.READY:
                     continue
                 try:
-                    tools.append(self._build_function_tool(function, parent_agent=agent))
+                    tools.append(
+                        self._build_function_tool(function, parent_agent=agent)
+                    )
                 except Exception:
-                    logger.warning(
-                        "Skipping function tool %s for agent %s: build failed",
-                        function.name,
-                        agent.name,
+                    logger.debug(
+                        'agent.callable_tool_factory.skipping_function_tool_s_agent.diagnostic'
                     )
 
             # agent_<name> tools spawn child conversations, so they only exist on
@@ -146,7 +146,9 @@ class AgentCallableToolFactory:
                     child_agent = await agent_repo.get(child_agent_id)
                     if child_agent is None:
                         continue
-                    tools.append(self._build_agent_tool(child_agent, parent_agent=agent))
+                    tools.append(
+                        self._build_agent_tool(child_agent, parent_agent=agent)
+                    )
 
         if not tools:
             return []
@@ -189,7 +191,9 @@ class AgentCallableToolFactory:
         ]
         return function_ids, agent_ids
 
-    def _build_function_tool(self, function: FunctionEntity, *, parent_agent: Agent) -> Tool:
+    def _build_function_tool(
+        self, function: FunctionEntity, *, parent_agent: Agent
+    ) -> Tool:
         schema = _inline_schema(_normalize_json_schema(function.input_schema))
         description = self._build_function_description(function)
         function_name = f"function_{function.name}"
@@ -215,7 +219,7 @@ class AgentCallableToolFactory:
             # direct-user and JOB paths. Exposing a function as an agent tool
             # therefore needs exactly ONE grant on the parent (function.execute);
             # the function's resource grants are never mirrored onto the agent.
-            use_cases = build_function_use_cases(self.uow_factory)
+            use_cases = create_function_use_cases(self.uow_factory)
             run = await use_cases.execute_function_as_workload(
                 pod_id=function.pod_id,
                 name=function.name,
@@ -352,11 +356,11 @@ class AgentCallableToolFactory:
             FunctionRunStatus.CANCELLED,
         }
         run: FunctionRunEntity | None = None
-        interval = settings.function_run_poll_interval_seconds
+        interval = agent_settings.function_run_poll_interval_seconds
         attempts = max(1, int(_SUBAGENT_TOOL_TIMEOUT_SECONDS / interval))
         for _ in range(attempts):
             async with self.uow_factory() as uow:
-                run = await FunctionRunRepository(uow).get_run(run_id)
+                run = await create_function_run_repository(uow).get_run(run_id)
             if run is not None and run.status in terminal:
                 return run
             await asyncio.sleep(interval)

@@ -31,4 +31,3 @@ export type WorkflowGraphUpdateRequest = {
      */
     start?: ((ManualWorkflowStartInput | ScheduledWorkflowStartInput | EventWorkflowStartInput | DataStoreWorkflowStartInput) | null);
 };
-

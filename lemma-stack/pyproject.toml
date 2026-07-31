@@ -3,7 +3,7 @@ name = "lemma-stack"
 version = "0.1.0"
 description = "Installer and management tool for a fully-local Lemma stack"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "typer>=0.12.5",
     "rich>=13.9.4",
@@ -21,7 +21,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -32,7 +32,7 @@ lemma_stack = ["data/**"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py314"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

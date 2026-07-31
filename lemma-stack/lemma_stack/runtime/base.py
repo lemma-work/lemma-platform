@@ -97,7 +97,7 @@ class Runtime:
     def start_container(self, name: str) -> None:
         self.run("start", name)
 
-    # --- runtime socket (mounted into the agentbox manager) -----------------
+    # --- runtime socket (mounted into the unified backend) ------------------
 
     def socket_path(self) -> str:
         if self.cli == "docker":
@@ -106,7 +106,6 @@ class Runtime:
         path = (proc.stdout or "").strip()
         if proc.returncode != 0 or not path:
             raise AdminError(
-                "could not discover the podman API socket; "
-                "is the podman machine/service running?"
+                "could not discover the podman API socket; is the podman machine/service running?"
             )
         return path.removeprefix("unix://")

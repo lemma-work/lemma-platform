@@ -113,14 +113,14 @@
   .context-shell {
     width: 100%;
     margin-inline: auto;
-    padding: var(--space-5) var(--space-5) var(--space-10);
+    padding: var(--space-4) var(--space-4) var(--space-8);
   }
 
   .pod-workspace-main > .context-shell,
   .pod-workspace-main > .page-shell {
     width: 100%;
-    padding-inline: var(--space-5);
-    padding-top: var(--space-5);
+    padding-inline: var(--space-4);
+    padding-top: var(--space-4);
   }
 
   .pod-workspace-main > .data-workspace-shell,
@@ -163,7 +163,7 @@
     gap: var(--space-3);
     border-radius: var(--radius-lg);
     background: color-mix(in srgb, var(--bg-surface) 96%, transparent);
-    padding: 0.75rem 0.9rem;
+    padding: var(--space-3) var(--space-3-5);
     box-shadow: var(--shadow-xs);
     transition:
       box-shadow var(--dur-base) var(--ease-out),
@@ -253,7 +253,7 @@
 
   .lemma-label {
     font-family: var(--font-mono-family);
-    font-size: 0.68rem;
+    font-size: var(--text-2xs);
     font-weight: 500;
     letter-spacing: 0.12em;
     text-transform: uppercase;
@@ -347,7 +347,7 @@
     display: flex;
     min-width: 0;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--space-2);
     border-radius: var(--radius-sm);
     color: var(--app-token-text);
     font-weight: 400;
@@ -369,12 +369,12 @@
   }
 
   .app-nav-item-sm {
-    padding: 0.375rem 0.5rem;
+    padding: var(--space-1-5) var(--space-2);
     font-size: var(--text-xs);
   }
 
   .app-nav-item-md {
-    padding: 0.375rem 0.75rem;
+    padding: var(--space-1-5) var(--space-3);
     font-size: var(--text-sm);
   }
 
@@ -445,28 +445,28 @@
 
 .tiptap-editor ul,
 .tiptap-editor ol {
-  padding-left: 1.25rem;
+  padding-left: var(--space-5);
 }
 
 .tiptap-editor blockquote {
   border-left: 3px solid color-mix(in srgb, var(--brand-accent) 45%, transparent);
   color: var(--text-secondary);
-  padding-left: 1rem;
+  padding-left: var(--space-4);
 }
 
 .tiptap-editor code {
-  border-radius: 0.45rem;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-subtle) 88%, transparent);
-  padding: 0.15rem 0.35rem;
+  padding: var(--space-0-5) var(--space-1-5);
   font-family: var(--font-mono-family);
-  font-size: 0.92em;
+  font-size: var(--text-sm);
 }
 
 .tiptap-editor pre {
-  border-radius: 1rem;
+  border-radius: var(--radius-3xl);
   background: color-mix(in srgb, var(--bg-subtle) 92%, transparent);
   color: var(--text-primary);
-  padding: 1rem 1.1rem;
+  padding: var(--space-4) var(--space-4);
   overflow-x: auto;
 }
 
@@ -475,18 +475,18 @@
   padding: 0;
 }
 
-/* Pod badge — indigo-violet gradient for sidebar pod avatar fallback */
+/* Pod badge — a compact, solid fallback when a pod has no uploaded identity. */
 .lemma-pod-badge {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #6366f1 0%, #a78bfa 100%);
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-md);
+  background: var(--action-primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: 800;
-  color: #fff;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  color: var(--text-on-brand);
   letter-spacing: 0.04em;
   flex-shrink: 0;
 }
@@ -494,24 +494,24 @@
 /* Product shell motion: short, shared transitions for navigation context changes. */
 .pod-sidebar-slot {
   transition:
-    width 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms var(--ease-out);
+    width var(--dur-panel) var(--ease-emphasized),
+    opacity var(--dur-control) var(--ease-standard);
   will-change: width, opacity;
 }
 
 .pod-assistant-sidebar {
   transition:
-    width 220ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 180ms var(--ease-out),
-    box-shadow 200ms var(--ease-out);
+    width var(--dur-panel) var(--ease-emphasized),
+    opacity var(--dur-control) var(--ease-standard),
+    box-shadow var(--dur-route) var(--ease-standard);
   contain: layout paint;
   will-change: width, opacity;
 }
 
 .pod-assistant-sidebar-surface {
   transition:
-    opacity 180ms var(--ease-out),
-    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--dur-control) var(--ease-standard),
+    transform var(--dur-route) var(--ease-emphasized);
 }
 
 .pod-assistant-sidebar[aria-hidden="true"] .pod-assistant-sidebar-surface {
@@ -520,7 +520,7 @@
 }
 
 .pod-sidebar-panel {
-  animation: pod-sidebar-enter 220ms var(--ease-out) both;
+  animation: pod-sidebar-enter var(--dur-panel) var(--ease-emphasized) both;
 }
 
 .pod-sidebar-collapsed {
@@ -543,7 +543,7 @@
 
 .pod-shell-topbar-title-cluster,
 .pod-shell-topbar-actions {
-  animation: pod-topbar-content-enter 180ms var(--ease-out) both;
+  animation: pod-topbar-content-enter var(--dur-route) var(--ease-standard) both;
 }
 
 .pod-shell-topbar-actions {
@@ -552,8 +552,14 @@
 }
 
 .pod-shell-topbar-title {
-  font-family: var(--font-display-family);
+  font-family: var(--font-body-family);
+  font-weight: 600;
   letter-spacing: 0;
+}
+
+.dialog-content-motion {
+  animation-duration: var(--dur-panel);
+  animation-timing-function: var(--ease-emphasized);
 }
 
 .pod-page-scroll {
@@ -590,11 +596,19 @@
      can be far narrower than the window, and viewport media queries would
      otherwise lie about how much room the content actually has. */
   container: pod-surface / inline-size;
-  animation: pod-page-enter 180ms var(--ease-out) both;
+  animation: pod-page-enter var(--dur-route) var(--ease-standard) both;
+}
+
+/* Conversations are viewport workspaces: the transcript and any presented
+   resource own their scrolling. Keeping the generic page scroller out of this
+   chain prevents an embedded resource from being intrinsically height-capped. */
+.pod-page-surface.pod-conversation-workspace-surface {
+  min-height: 0;
+  overflow: hidden;
 }
 
 .presented-resource-surface {
-  animation: presented-resource-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: presented-resource-enter var(--dur-panel) var(--ease-emphasized) both;
 }
 
 /* Detail-page layouts reflow to the *surface* width, not the viewport. When the
@@ -605,6 +619,15 @@
 @container pod-surface (max-width: 900px) {
   .surface-split-2 {
     grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  /* A stacked rail has no column to its left, so the divider goes with the
+     column. The viewport case is handled by `xl:` on the aside itself; this
+     covers the surface being narrowed by a docked assistant on a wide screen,
+     where the breakpoint class is still active. */
+  .surface-split-2 > aside {
+    border-left: 0 !important;
+    padding-left: 0 !important;
   }
 
   .surface-split-2-rows {
@@ -627,8 +650,14 @@
    a lone tile across the whole row. */
 .apps-grid {
   display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(260px, 320px));
+}
+
+@container pod-surface (max-width: 620px) {
+  .apps-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .docs-list-toolbar {
@@ -637,7 +666,7 @@
 
 @container (max-width: 1040px) {
   .pod-shell-topbar-actions:has(.docs-topbar-action) {
-    gap: 0.375rem;
+    gap: var(--space-1-5);
   }
 
   .docs-action-label {
@@ -668,7 +697,7 @@
 }
 
 .lemma-product-nav-item {
-  --lemma-nav-tone: var(--brand-accent);
+  --lemma-nav-accent: var(--sidebar-active-accent, var(--action-primary));
   position: relative;
 }
 
@@ -678,7 +707,7 @@
   inset: 3px auto 3px 0;
   width: 2px;
   border-radius: var(--radius-full);
-  background: var(--lemma-nav-tone);
+  background: var(--lemma-nav-accent);
   opacity: 0;
   transform: scaleY(0.36);
   transition:
@@ -686,9 +715,8 @@
     transform var(--dur-base) var(--ease-out);
 }
 
-.lemma-product-nav-item:hover::before,
 .lemma-product-nav-item[data-active="true"]::before {
-  opacity: 0.78;
+  opacity: 0.82;
   transform: scaleY(1);
 }
 
@@ -700,10 +728,8 @@
   align-items: center;
   justify-content: center;
   color: var(--text-tertiary);
-  opacity: 0.55;
-  transition:
-    opacity var(--dur-base) var(--ease-out),
-    transform var(--dur-base) var(--ease-out);
+  opacity: 1;
+  transition: color var(--dur-base) var(--ease-out);
 }
 
 .lemma-product-icon[data-size="sm"] {
@@ -726,79 +752,16 @@
   width: 2.25rem;
 }
 
-.lemma-product-nav-item:hover .lemma-product-icon,
+.lemma-product-icon[data-state="selected"] {
+  color: var(--text-secondary);
+}
+
+.lemma-product-nav-item .lemma-product-icon {
+  color: inherit;
+}
+
 .lemma-product-nav-item[data-active="true"] .lemma-product-icon {
-  opacity: 1;
-  color: var(--lemma-nav-tone);
-  transform: translateY(-1px);
-}
-
-.pod-shell-topbar .lemma-product-icon {
-  opacity: 1;
-}
-
-.lemma-product-icon[data-tone="pods"] { color: var(--action-primary); }
-.lemma-product-icon[data-tone="connectors"] { color: var(--intelligence); }
-.lemma-product-icon[data-tone="apps"] { color: var(--intelligence); }
-.lemma-product-icon[data-tone="agents"] { color: var(--state-success); }
-.lemma-product-icon[data-tone="workflows"] { color: var(--delight); }
-.lemma-product-icon[data-tone="schedules"] { color: var(--state-info); }
-.lemma-product-icon[data-tone="data"],
-.lemma-product-icon[data-tone="tables"],
-.lemma-product-icon[data-tone="functions"] { color: color-mix(in srgb, var(--intelligence) 72%, var(--action-primary)); }
-.lemma-product-icon[data-tone="docs"],
-.lemma-product-icon[data-tone="files"],
-.lemma-product-icon[data-tone="folders"] { color: var(--delight); }
-.lemma-product-icon[data-tone="surfaces"],
-.lemma-product-icon[data-tone="channels"] { color: var(--collaboration); }
-.lemma-product-icon[data-tone="settings"],
-.lemma-product-icon[data-tone="auth-rbac"] { color: var(--text-tertiary); }
-.lemma-product-icon[data-tone="conversation"] { color: var(--action-primary); }
-
-.lemma-product-nav-item[data-tone="pods"] {
-  --lemma-nav-tone: var(--brand-accent);
-}
-
-.lemma-product-nav-item[data-tone="connectors"] {
-  --lemma-nav-tone: var(--brand-blue);
-}
-
-.lemma-product-nav-item[data-tone="apps"] {
-  --lemma-nav-tone: var(--brand-blue);
-}
-
-.lemma-product-nav-item[data-tone="agents"] {
-  --lemma-nav-tone: var(--brand-green);
-}
-
-.lemma-product-nav-item[data-tone="workflows"] {
-  --lemma-nav-tone: var(--brand-warm);
-}
-
-.lemma-product-nav-item[data-tone="schedules"] {
-  --lemma-nav-tone: var(--state-info);
-}
-
-.lemma-product-nav-item[data-tone="data"],
-.lemma-product-nav-item[data-tone="tables"],
-.lemma-product-nav-item[data-tone="functions"] {
-  --lemma-nav-tone: color-mix(in srgb, var(--intelligence) 72%, var(--action-primary));
-}
-
-.lemma-product-nav-item[data-tone="docs"],
-.lemma-product-nav-item[data-tone="files"],
-.lemma-product-nav-item[data-tone="folders"] {
-  --lemma-nav-tone: var(--delight);
-}
-
-.lemma-product-nav-item[data-tone="surfaces"],
-.lemma-product-nav-item[data-tone="channels"] {
-  --lemma-nav-tone: var(--collaboration);
-}
-
-.lemma-product-nav-item[data-tone="settings"],
-.lemma-product-nav-item[data-tone="auth-rbac"] {
-  --lemma-nav-tone: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
 .lemma-sidebar-row {
@@ -815,19 +778,20 @@
 }
 
 .lemma-sidebar-row:hover,
-.lemma-sidebar-row:focus-visible,
-.lemma-sidebar-row[data-active="true"] {
-  background: var(--surface-2);
+.lemma-sidebar-row:focus-visible {
+  background: color-mix(in srgb, var(--surface-1) 58%, transparent);
   color: var(--text-primary);
 }
 
 .lemma-sidebar-row[data-active="true"] {
-  box-shadow: 0 1px 0 var(--row-glint) inset;
+  background: var(--sidebar-active-bg);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
 }
 
 .lemma-sidebar-row-sm {
   height: 1.75rem;
-  gap: 0.625rem;
+  gap: var(--space-2-5);
   padding-inline: 0.5rem;
   font-size: var(--text-xs);
 }
@@ -842,27 +806,27 @@
 
 .workspace-sidebar-file-tree-row[data-depth="0"],
 .workspace-sidebar-file-tree-status[data-depth="0"] {
-  padding-left: 0.5rem;
+  padding-left: var(--space-2);
 }
 
 .workspace-sidebar-file-tree-row[data-depth="1"],
 .workspace-sidebar-file-tree-status[data-depth="1"] {
-  padding-left: 1.25rem;
+  padding-left: var(--space-5);
 }
 
 .workspace-sidebar-file-tree-row[data-depth="2"],
 .workspace-sidebar-file-tree-status[data-depth="2"] {
-  padding-left: 2rem;
+  padding-left: var(--space-8);
 }
 
 .workspace-sidebar-file-tree-row[data-depth="3"],
 .workspace-sidebar-file-tree-status[data-depth="3"] {
-  padding-left: 2.75rem;
+  padding-left: var(--space-10);
 }
 
 .workspace-sidebar-file-tree-row[data-depth="4"],
 .workspace-sidebar-file-tree-status[data-depth="4"] {
-  padding-left: 3.5rem;
+  padding-left: var(--space-12);
 }
 
 .workspace-sidebar-file-tree-disclosure,
@@ -894,15 +858,15 @@
 
 .lemma-sidebar-row-base {
   height: 1.75rem;
-  gap: 0.75rem;
+  gap: var(--space-3);
   padding-inline: 0.625rem;
   font-size: var(--text-sm);
 }
 
 .lemma-sidebar-row-comfy {
   min-height: 2.25rem;
-  gap: 0.75rem;
-  padding: 0.5rem;
+  gap: var(--space-3);
+  padding: var(--space-2);
   font-size: var(--text-sm);
   font-weight: 500;
 }
@@ -955,22 +919,22 @@
 }
 
 .flow-execution-badge {
-  border-radius: 9999px;
-  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--text-xs);
   text-transform: uppercase;
 }
 
 .flow-execution-badge-compact {
-  border-radius: 9999px;
-  padding: 0.125rem 0.375rem;
+  border-radius: var(--radius-full);
+  padding: var(--space-0-5) var(--space-1-5);
   font-size: var(--text-xs);
   text-transform: uppercase;
 }
 
 .flow-execution-badge-meta {
-  border-radius: 9999px;
-  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-full);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--text-xs);
 }
 
@@ -993,9 +957,9 @@
   display: flex;
   cursor: pointer;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
   border-radius: var(--radius-md);
-  padding: 0.5rem;
+  padding: var(--space-2);
   color: var(--text-secondary);
   font-size: var(--text-sm);
   outline: none;
@@ -1046,7 +1010,7 @@
 .lemma-sidebar-empty {
   border-radius: var(--radius-md);
   background: var(--surface-2);
-  padding: 0.75rem 0.5rem;
+  padding: var(--space-3) var(--space-2);
   color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
@@ -1054,9 +1018,9 @@
 .lemma-shell-link {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: var(--space-1);
   border-radius: var(--radius-md);
-  padding: 0.25rem 0.375rem;
+  padding: var(--space-1) var(--space-1-5);
   color: var(--text-secondary);
   font-size: var(--text-sm);
   font-weight: 400;
@@ -1115,7 +1079,7 @@
 .lemma-card-control {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--card-bg);
@@ -1142,12 +1106,12 @@
 }
 
 .lemma-card-control-compact {
-  padding: 0.5rem 0.625rem;
+  padding: var(--space-2) var(--space-2-5);
   font-size: var(--text-sm);
 }
 
 .lemma-card-control-sm {
-  padding: 0.375rem 0.75rem;
+  padding: var(--space-1-5) var(--space-3);
   font-size: var(--text-xs);
   font-weight: 500;
 }
@@ -1234,14 +1198,14 @@
 
 .lemma-quiet-action-sm {
   height: 1.75rem;
-  gap: 0.25rem;
+  gap: var(--space-1);
   padding-inline: 0.375rem;
   font-size: var(--text-xs);
 }
 
 .lemma-quiet-action-md {
   height: 2.25rem;
-  gap: 0.5rem;
+  gap: var(--space-2);
   padding-inline: 0.5rem;
   font-size: var(--text-sm);
 }
@@ -1308,7 +1272,7 @@
 @keyframes pod-page-enter {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(3px);
   }
 
   to {
@@ -1382,7 +1346,7 @@
 .docs-mobile-tools {
   border-bottom: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-canvas) 96%, transparent);
-  padding: 0.75rem 1rem 1rem;
+  padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
 .docs-mobile-menu {
@@ -1396,11 +1360,11 @@
   list-style: none;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: var(--space-3);
   border: 1px solid var(--field-border);
   border-radius: var(--radius-lg);
   background: var(--field-bg);
-  padding: 0.5rem 0.75rem;
+  padding: var(--space-2) var(--space-3);
   color: var(--text-secondary);
   font-size: var(--text-sm);
   font-weight: 500;
@@ -1422,7 +1386,7 @@
   border: 1px solid var(--card-border);
   border-radius: var(--radius-lg);
   background: var(--card-bg);
-  padding: 0.75rem;
+  padding: var(--space-3);
   box-shadow: var(--shadow-xs);
 }
 
@@ -1474,12 +1438,12 @@
 
 @media (max-width: 767px) {
   .docs-header-inner {
-    gap: 0.75rem;
+    gap: var(--space-3);
     padding-inline: 1rem;
   }
 
   .docs-header-nav {
-    gap: 0.25rem;
+    gap: var(--space-1);
   }
 
   .docs-header-nav .lemma-shell-link {
@@ -1496,15 +1460,15 @@
   }
 
   .docs-home-title {
-    font-size: 2.25rem;
+    font-size: var(--text-3xl);
   }
 
   .docs-home-reading-path {
-    padding: 1rem;
+    padding: var(--space-4);
   }
 
   .docs-page-title {
-    font-size: 2rem;
+    font-size: var(--text-2xl);
   }
 
   .docs-section {
@@ -1513,7 +1477,7 @@
 
   .docs-list-item,
   .docs-step-item {
-    gap: 0.625rem;
+    gap: var(--space-2-5);
   }
 
   .docs-adjacent-card {

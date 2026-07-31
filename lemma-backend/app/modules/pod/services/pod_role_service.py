@@ -6,7 +6,9 @@ from uuid import UUID
 
 from fastapi import HTTPException, status
 
+from app.core.authorization.cache import invalidate_role_snapshot_cache
 from app.core.authorization.factory import create_authorization_data_service
+from app.core.authorization.grants import delete_grantee_grants
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.pod.domain.role_entities import PodRoleEntity, SYSTEM_ROLE_NAMES
 from app.modules.pod.domain.roles import PodRole
@@ -144,6 +146,27 @@ class PodRoleService:
             assigned_by_user_id=added_by_user_id,
         )
         return normalized_roles
+
+    async def revoke_member_authorization(
+        self,
+        *,
+        pod_id: UUID,
+        pod_member_id: UUID,
+        user_id: UUID | None,
+    ) -> None:
+        """Drop a removed pod member's role assignments and resource grants and
+        invalidate their cached role snapshot, so pod access is revoked on the
+        next request instead of lingering until the snapshot TTL elapses."""
+        await self._authz.delete_principal_role_assignments(
+            principal_type="POD_MEMBER", principal_id=pod_member_id
+        )
+        await delete_grantee_grants(
+            self._authz.session,
+            pod_id=pod_id,
+            grantee_type="POD_MEMBER",
+            grantee_id=pod_member_id,
+        )
+        await invalidate_role_snapshot_cache(user_id=user_id)
 
     async def get_member_roles_by_user_id(
         self,

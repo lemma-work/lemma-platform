@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from app.core.authorization.context import Context
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
-from app.core.infrastructure.events.message_bus import get_message_bus
-from app.modules.datastore.domain.errors import DatastoreFileNotFoundError
-from app.modules.datastore.infrastructure.repositories import (
-    DatastoreFileRepository,
-)
-from app.modules.datastore.infrastructure.storage import create_datastore_storage
-from app.modules.datastore.services.file_service import DatastoreFileService
-from app.modules.pod.services.authorization_factory import create_authorization_service
+from app.modules.datastore.contracts import DatastoreFileNotFoundError
+from app.composition.agent_datastore import create_agent_skill_file_service
+from app.composition.authorization import create_authorization_service
 
 _FRONTMATTER_NAME_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 _SKILLS_ROOT = "/skills"
@@ -183,10 +178,8 @@ async def _default_file_service(
     user_id: UUID,
 ) -> AsyncIterator[_FileServiceScope]:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        message_bus = get_message_bus()
-        service = DatastoreFileService(
-            file_repository=DatastoreFileRepository(uow, message_bus=message_bus),
-            storage=create_datastore_storage(),
+        service = create_agent_skill_file_service(
+            uow,
             authorization_service=create_authorization_service(uow),
         )
         ctx = await AuthorizationDataService(uow.session).build_user_context(
@@ -247,11 +240,26 @@ async def _download_text_file(
     path: str,
     ctx: Context | None,
 ) -> str:
-    _, content = await file_service.download_file_content_by_path(
-        pod_id=pod_id,
-        path=path,
-        ctx=ctx,
-    )
+    resolve_file = getattr(file_service, "resolve_readable_file", None)
+    read_content = getattr(file_service, "read_file_content", None)
+    if ctx is not None and callable(resolve_file) and callable(read_content):
+        resolve = cast(Callable[[UUID, str, Context], Awaitable[Any]], resolve_file)
+        read = cast(Callable[[Any], Awaitable[bytes]], read_content)
+        file_entity = await resolve(pod_id, path, ctx)
+        repository = getattr(file_service, "file_repository", None)
+        uow = getattr(repository, "uow", None)
+        if uow is not None:
+            # Release the pooled DB connection before object-storage I/O. A
+            # later metadata call can safely autobegin a fresh short transaction.
+            commit = cast(Callable[[], Awaitable[None]], uow.commit)
+            await commit()
+        content = await read(file_entity)
+    else:
+        _, content = await file_service.download_file_content_by_path(
+            pod_id=pod_id,
+            path=path,
+            ctx=ctx,
+        )
     return content.decode("utf-8")
 
 

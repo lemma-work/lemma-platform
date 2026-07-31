@@ -7,19 +7,21 @@ import {
     Boxes,
     CalendarClock,
     ChevronRight,
+    MessageCircle,
     Plus,
     Share2,
     Waypoints,
-    type LucideIcon,
-} from 'lucide-react';
+    type LemmaIcon,
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
+import { LemmaMark } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceIndexHeader, ResourceIndexShell, ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell, ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
@@ -28,9 +30,11 @@ import { useAgents, useDeleteAgent, useUpdateAgent } from '@/lib/hooks/use-agent
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { useFlows } from '@/lib/hooks/use-flows';
+import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { useSchedules } from '@/lib/hooks/use-schedules';
 import type { Agent, UpdateAgentData, Workflow } from '@/lib/types';
 import { NodeType } from '@/lib/types';
+import { formatAgentName } from '@/lib/utils/agents';
 import { getAgentNodeName } from '@/lib/utils/flow-node-config';
 
 type AgentFilter = 'all' | 'workflows' | 'scheduled';
@@ -62,9 +66,13 @@ export default function AgentsPage({
     const canDeleteAgent = podAccess.can('agent.delete');
     const canReadSchedules = podAccess.can('schedule.read');
     const canReadWorkflows = podAccess.can('workflow.read');
+    const canUseSurfaces = podAccess.canAccessRoute('surfaces');
     const { data: agentsData, isLoading } = useAgents(podId);
     const { data: schedulesData } = useSchedules(canReadSchedules ? podId : undefined, { limit: 100 });
     const { data: flowsData } = useFlows(canReadWorkflows ? podId : undefined);
+    // Surfaces that fall to the pod default assistant (the virtual Super Agent).
+    const automation = usePodAutomation(podId, { schedules: false, surfaces: canUseSurfaces });
+    const defaultSurfaceCount = automation.defaultSurfaces.length;
     const { mutate: deleteAgent, isPending: isDeletingAgent } = useDeleteAgent();
     const updateAgent = useUpdateAgent();
     const [agentFilter, setAgentFilter] = useState<AgentFilter>('all');
@@ -116,9 +124,8 @@ export default function AgentsPage({
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title="Agents"
-                productIconTone="agents"
                 meta={<ConceptHint concept="agent" />}
                 actions={(
                     canCreateAgent ? <Link href={`/pod/${podId}/agents/new`}>
@@ -133,13 +140,25 @@ export default function AgentsPage({
             <SectionPrimer concept="agent" className="mb-4" />
 
             {isLoading ? (
-                <div className="space-y-4">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                        {[1, 2, 3, 4].map((item) => (
-                            <div key={`agent-metric-skeleton-${item}`} className="h-28 animate-pulse rounded-lg bg-[var(--surface-2)]" />
+                <div className="space-y-3" role="status" aria-label="Loading agents">
+                    <div className="flex items-center gap-2 py-1">
+                        {[1, 2, 3].map((item) => (
+                            <div key={`agent-metric-skeleton-${item}`} className="lemma-skeleton h-7 w-24 rounded-md" />
                         ))}
                     </div>
-                    <div className="h-80 animate-pulse rounded-lg bg-[var(--surface-2)]" />
+                    <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {[1, 2, 3].map((item) => (
+                            <div key={`resource-card-skeleton-${item}`} className="surface-panel h-48 space-y-4 p-4">
+                                <div className="lemma-skeleton h-11 w-11 rounded-lg" />
+                                <div className="space-y-2">
+                                    <div className="lemma-skeleton h-4 w-32 rounded-md" />
+                                    <div className="lemma-skeleton h-3 w-full rounded-full" />
+                                    <div className="lemma-skeleton h-3 w-4/5 rounded-full" />
+                                </div>
+                                <div className="lemma-skeleton h-3 w-24 rounded-full" />
+                            </div>
+                        ))}
+                    </div>
                 </div>
             ) : agents.length === 0 ? (
                 <EmptyState
@@ -167,6 +186,9 @@ export default function AgentsPage({
                     </ResourceMetricStrip>
 
                     <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {canUseSurfaces && agentFilter === 'all' ? (
+                            <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} />
+                        ) : null}
                         {filteredAgents.map((agent) => (
                             <AgentProfileCard
                                 key={agent.id}
@@ -203,8 +225,8 @@ export default function AgentsPage({
                     if (!open) setAgentPendingDelete(null);
                 }}
                 title="Delete agent"
-                description={`Delete "${agentPendingDelete?.name ?? ''}"? This removes the agent from this pod.`}
-                resourceName={agentPendingDelete?.name ?? ''}
+                description={`Delete "${agentPendingDelete ? formatAgentName(agentPendingDelete.name) : ''}"? This removes the agent from this pod.`}
+                resourceName={agentPendingDelete ? formatAgentName(agentPendingDelete.name) : ''}
                 consequences={[
                     agentPendingDeleteWorkflowCount > 0
                         ? `${agentPendingDeleteWorkflowCount} workflow${agentPendingDeleteWorkflowCount === 1 ? '' : 's'} reference this agent and may fail until updated.`
@@ -253,12 +275,50 @@ function AgentMonogram({ name }: { name: string }) {
     );
 }
 
-function AgentStat({ icon: Icon, value, label }: { icon: LucideIcon; value: number; label: string }) {
+function AgentStat({ icon: Icon, value, label }: { icon: LemmaIcon; value: number; label: string }) {
     return (
         <span className="inline-flex items-center gap-1" title={label} aria-label={label}>
             <Icon className="h-3.5 w-3.5" aria-hidden />
             {value}
         </span>
+    );
+}
+
+// The pod's default responder, rendered as a first-class card even though it
+// has no agent row. Its "channels" are the surfaces not assigned to any agent.
+function PodAssistantCard({ podId, channelCount }: { podId: string; channelCount: number }) {
+    return (
+        <Link
+            href={`/pod/${podId}/ai/assistant`}
+            className="resource-index-card group flex min-h-40 flex-col p-4"
+        >
+            <div className="flex items-start justify-between gap-3">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-[var(--card-bg)] shadow-[var(--shadow-xs)]">
+                    <LemmaMark size="sm" />
+                </span>
+                <span className="chip chip-sm chip-muted shrink-0">Default</span>
+            </div>
+
+            <div className="mt-3 min-w-0">
+                <h2 className="truncate text-base font-semibold tracking-normal text-[var(--text-primary)]">Pod Assistant</h2>
+                <p className="mt-1 line-clamp-2 min-h-10 text-sm leading-6 text-[var(--text-secondary)]">
+                    This pod&apos;s most capable agent — adds tables, builds workflows, spins up agents, and edits data directly.
+                </p>
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2 text-xs text-[var(--text-tertiary)]">
+                {channelCount > 0 ? (
+                    <span className="inline-flex items-center gap-1" title={`${channelCount} unassigned channel${channelCount === 1 ? '' : 's'}`}>
+                        <MessageCircle className="h-3.5 w-3.5" aria-hidden />
+                        {channelCount} channel{channelCount === 1 ? '' : 's'}
+                    </span>
+                ) : null}
+                <span className="inline-flex items-center gap-1 font-medium text-[var(--text-secondary)] transition-gentle group-hover:translate-x-0.5">
+                    Open
+                    <ChevronRight className="h-3.5 w-3.5" />
+                </span>
+            </div>
+        </Link>
     );
 }
 
@@ -299,7 +359,7 @@ function AgentProfileCard({
                 <Link href={`/pod/${podId}/agents/${encodeURIComponent(agent.name)}`} className="min-w-0 flex-1">
                     <ResourceIcon
                         iconUrl={agent.icon_url}
-                        alt={`${agent.name} profile picture`}
+                        alt={`${formatAgentName(agent.name)} profile picture`}
                         label={agent.name}
                         imageClassName="object-contain p-1"
                         className="h-11 w-11 shrink-0 rounded-lg bg-transparent"
@@ -316,7 +376,7 @@ function AgentProfileCard({
 
             <Link href={`/pod/${podId}/agents/${encodeURIComponent(agent.name)}`} className="block">
                 <div className="mt-3 min-w-0">
-                    <h2 className="truncate text-base font-semibold tracking-normal text-[var(--text-primary)]">{agent.name}</h2>
+                    <h2 className="truncate text-base font-semibold tracking-normal text-[var(--text-primary)]">{formatAgentName(agent.name)}</h2>
                     <p className="mt-1 line-clamp-2 min-h-10 text-sm leading-6 text-[var(--text-secondary)]">
                         {summary || 'Ready for instructions, tools, and pod context.'}
                     </p>
@@ -342,7 +402,7 @@ function AgentProfileCard({
                 <div className="flex shrink-0 items-center gap-1">
                 {hasMenuActions ? (
                     <ResourceActionsMenu
-                        ariaLabel={`Open actions for ${agent.name}`}
+                        ariaLabel={`Open actions for ${formatAgentName(agent.name)}`}
                         align="end"
                         triggerClassName="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                     >
@@ -353,7 +413,7 @@ function AgentProfileCard({
                                 resourceType="agent"
                                 resourceId={agent.id}
                                 resourceLabel="agents"
-                                resourceName={agent.name}
+                                resourceName={formatAgentName(agent.name)}
                                 shareUrl={agentShareUrl}
                                 onChange={onShareVisibilityChange}
                                 className="contents"

@@ -10,4 +10,3 @@ export type DecisionNodeResponse = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

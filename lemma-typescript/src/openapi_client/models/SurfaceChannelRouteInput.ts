@@ -7,4 +7,3 @@ export type SurfaceChannelRouteInput = {
     channel_id?: (string | null);
     channel_name?: (string | null);
 };
-

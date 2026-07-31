@@ -1502,6 +1502,15 @@ def test_import_pod_bundle_retries_app_create_with_unique_public_slug_on_conflic
 def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
     client = FakeClient(
         pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "demo-pod"}),
+        connectors=SimpleNamespace(
+            accounts=SimpleNamespace(
+                get=lambda account_id: {
+                    "id": account_id,
+                    "connector_id": "slack",
+                    "provider": "COMPOSIO",
+                }
+            )
+        ),
         surfaces=SimpleNamespace(
             list=lambda pod_id, limit=100: {
                 "items": [
@@ -1564,6 +1573,11 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
         "default_agent_name": "triage-agent",
         "credential_mode": "CUSTOM",
         "account_id": "${slack_account}",
+        # Ground-truth connector identity, resolved via the connectors API and
+        # carried onto the variable so the importer knows exactly which
+        # connector + auth provider to reconnect.
+        "connector_id": "slack",
+        "provider": "COMPOSIO",
         "is_enabled": True,
         "config": {
             "channels": [
@@ -1576,6 +1590,10 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
             "identity": {"allowed_domains": ["example.com"]},
         },
     }
+
+    pod_data = json.loads((tmp_path / "demo-pod" / "pod.json").read_text(encoding="utf-8"))
+    assert pod_data["variables"]["slack_account"]["connector"] == "slack"
+    assert pod_data["variables"]["slack_account"]["provider"] == "COMPOSIO"
 
 
 def test_import_pod_bundle_upserts_surfaces_by_platform(tmp_path: Path):
@@ -2133,8 +2151,8 @@ def test_variable_applier_resolves_and_strips_unresolved(tmp_path: Path):
                 "name": "demo",
                 "variables": {
                     "approver": {"type": "pod_member"},
-                    "slack_account": {"type": "account"},
-                    "ghost_account": {"type": "account"},
+                    "slack_account": {"type": "account", "connector": "slack", "provider": "COMPOSIO"},
+                    "ghost_account": {"type": "account", "connector": "jira", "provider": "LEMMA"},
                 },
             }
         ),

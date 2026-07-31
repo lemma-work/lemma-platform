@@ -9,12 +9,14 @@ from lemma_pod_bundle.limits import (
     MAX_RECORDS_TOTAL,
 )
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.settings_env import dotenv_path
 
 
 class PodBundleSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
 
     pod_bundle_state_ttl_seconds: int = Field(
@@ -55,6 +57,41 @@ class PodBundleSettings(BaseSettings):
     pod_bundle_github_fetch_timeout_seconds: float = Field(
         default=30.0,
         description="HTTP timeout (seconds) for fetching a GitHub repo zipball.",
+    )
+    pod_bundle_github_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Optional server-side GitHub token used before anonymous public "
+            "archive fetching. Selected connector accounts take precedence."
+        ),
+    )
+    pod_bundle_publish_lock_ttl_seconds: int = Field(
+        default=2 * 60 * 60,
+        description=(
+            "Expiry for the distributed account/repository publish lock. "
+            "The worker releases the lock on every terminal outcome; the TTL "
+            "only recovers locks orphaned by a hard worker failure."
+        ),
+    )
+
+    # --- Per-user daily abuse guard --------------------------------------
+    # Export and import are long-running jobs (archive assembly, agentbox app
+    # builds, multi-resource apply). A generous per-user daily cap stops a
+    # single account from hammering the workers; buckets are independent so a
+    # day of exports never blocks imports (and vice versa). 0 disables the cap.
+    pod_bundle_daily_export_limit: int = Field(
+        default=5,
+        description=(
+            "Max export jobs a single user may start per UTC day "
+            "(env: POD_BUNDLE_DAILY_EXPORT_LIMIT). 0 disables the limit."
+        ),
+    )
+    pod_bundle_daily_import_limit: int = Field(
+        default=5,
+        description=(
+            "Max import jobs a single user may start per UTC day "
+            "(env: POD_BUNDLE_DAILY_IMPORT_LIMIT). 0 disables the limit."
+        ),
     )
 
     # --- Export download URL retention -----------------------------------

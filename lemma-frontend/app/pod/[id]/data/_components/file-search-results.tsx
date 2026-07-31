@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2 } from 'lucide-react';
+import { Loader2 } from '@/components/ui/icons';
 
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ResourceList, ResourceRow } from '@/components/pod/resource-layout';
@@ -44,7 +44,7 @@ export function FileSearchResults({
             {!isSearchingFiles && searchResultItems.length === 0 && (
                 <EmptyState
                     variant="compact"
-                    icon={<ProductIcon tone="files" size="sm" />}
+                    icon={<ProductIcon kind="files" size="sm" />}
                     title="No files match this search"
                     description="Try different keywords or search from a higher-level folder."
                 />
@@ -64,7 +64,7 @@ export function FileSearchResults({
                                     onClick={() => onOpenSearchResult(result.path)}
                                 >
                                     <div className="flex min-w-0 items-center gap-2">
-                                        <ProductIcon tone="files" size="sm" />
+                                        <ProductIcon kind="files" size="sm" />
                                         <p className="truncate text-sm font-normal text-[var(--text-primary)]">
                                             {result.fileName}
                                         </p>

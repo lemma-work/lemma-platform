@@ -38,6 +38,9 @@ class AccountResponseSchema:
         updated_at (datetime.datetime):
         user_id (UUID):
         connector (ConnectorResponseSchema | None | Unset):
+        display_name (None | str | Unset):
+        is_default (bool | Unset):  Default: False.
+        provider (None | str | Unset):
         provider_account_id (None | str | Unset):
     """
 
@@ -53,6 +56,9 @@ class AccountResponseSchema:
     updated_at: datetime.datetime
     user_id: UUID
     connector: ConnectorResponseSchema | None | Unset = UNSET
+    display_name: None | str | Unset = UNSET
+    is_default: bool | Unset = False
+    provider: None | str | Unset = UNSET
     provider_account_id: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -102,6 +108,20 @@ class AccountResponseSchema:
         else:
             connector = self.connector
 
+        display_name: None | str | Unset
+        if isinstance(self.display_name, Unset):
+            display_name = UNSET
+        else:
+            display_name = self.display_name
+
+        is_default = self.is_default
+
+        provider: None | str | Unset
+        if isinstance(self.provider, Unset):
+            provider = UNSET
+        else:
+            provider = self.provider
+
         provider_account_id: None | str | Unset
         if isinstance(self.provider_account_id, Unset):
             provider_account_id = UNSET
@@ -127,6 +147,12 @@ class AccountResponseSchema:
         )
         if connector is not UNSET:
             field_dict["connector"] = connector
+        if display_name is not UNSET:
+            field_dict["display_name"] = display_name
+        if is_default is not UNSET:
+            field_dict["is_default"] = is_default
+        if provider is not UNSET:
+            field_dict["provider"] = provider
         if provider_account_id is not UNSET:
             field_dict["provider_account_id"] = provider_account_id
 
@@ -150,7 +176,7 @@ class AccountResponseSchema:
                 allowed_scopes_type_0 = cast(list[str], data)
 
                 return allowed_scopes_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[str] | None, data)
 
@@ -186,7 +212,7 @@ class AccountResponseSchema:
                 )
 
                 return preferences_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AccountResponseSchemaPreferencesType0 | None, data)
 
@@ -209,11 +235,31 @@ class AccountResponseSchema:
                 connector_type_0 = ConnectorResponseSchema.from_dict(data)
 
                 return connector_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ConnectorResponseSchema | None | Unset, data)
 
         connector = _parse_connector(d.pop("connector", UNSET))
+
+        def _parse_display_name(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        display_name = _parse_display_name(d.pop("display_name", UNSET))
+
+        is_default = d.pop("is_default", UNSET)
+
+        def _parse_provider(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        provider = _parse_provider(d.pop("provider", UNSET))
 
         def _parse_provider_account_id(data: object) -> None | str | Unset:
             if data is None:
@@ -239,6 +285,9 @@ class AccountResponseSchema:
             updated_at=updated_at,
             user_id=user_id,
             connector=connector,
+            display_name=display_name,
+            is_default=is_default,
+            provider=provider,
             provider_account_id=provider_account_id,
         )
 

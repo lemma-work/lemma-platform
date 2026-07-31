@@ -10,15 +10,10 @@ from app.modules.schedule.api.dependencies import (
     WebhookHandlerDep,
     ComposioWebhookVerifierDep,
 )
-from app.core.infrastructure.events.message_bus import (
-    FastStreamRedisMessageBus,
-    get_message_bus,
-)
-from fastapi import Depends
 from app.core.domain.events import RawWebhookReceivedEvent
-from app.modules.agent_surfaces.infrastructure.debug.raw_webhook_file_logger import (
-    log_raw_webhook_event,
-)
+from app.core.infrastructure.events.inbox import stable_event_id
+from app.core.infrastructure.events.publisher import EventPublisher
+from app.core.redaction import redact_value
 
 logger = get_logger(__name__)
 
@@ -68,7 +63,6 @@ async def handle_webhook(
     request: Request,
     webhook_handler: WebhookHandlerDep,
     composio_webhook_verifier: ComposioWebhookVerifierDep,
-    message_bus: FastStreamRedisMessageBus = Depends(get_message_bus),
 ) -> Dict[str, Any]:
     """Handle webhook from a source.
 
@@ -96,38 +90,51 @@ async def handle_webhook(
                 if isinstance(normalized_payload, dict)
                 else {"data": verification_result.get("raw_payload")}
             )
-        except Exception as e:
-            logger.error(f"Failed to verify Composio webhook: {e}")
+        except Exception as exc:
+            logger.debug(
+                'schedule.webhook_controller.verify_composio_webhook.diagnostic',
+                error_type=type(exc).__name__,
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Invalid webhook signature",
             )
     else:
-        # For other sources, parse JSON
-        try:
-            payload = await request.json()
-        except Exception:
-            payload = {}  # Maybe just raw body handling if needed? But handler expects dict payload.
-
-    await log_raw_webhook_event(source=source, payload=payload, headers=headers)
+        # SECURITY (interim): every source other than `composio` is unauthenticated
+        # here — the request body is attacker-controllable and flows straight into
+        # schedule matching + the started run's trigger context. Composio is the
+        # only source with real signature verification, so reject everything else
+        # until per-account verified webhook routing lands (see plan Part D). This
+        # deliberately disables the legacy shared Slack/generic ingress path.
+        logger.warning(
+            "schedule.webhook_controller.rejecting_unauthenticated_webhook_source_s.degraded",
+            source=source,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Unsupported or unverified webhook source",
+        )
 
     # Handle Slack URL verification challenge
     if source == "slack" and payload.get("type") == "url_verification":
         return {"challenge": payload.get("challenge")}
 
     # Publish raw webhook event for other modules (e.g. assistant surfaces) to listen to
+    source_event_id = payload.get("id") or payload.get("metadata", {}).get("log_id")
     event = RawWebhookReceivedEvent(
+        event_id=stable_event_id(
+            {"event_id": f"schedule-webhook:{source}:{source_event_id}"}
+        ),
         source=source,
         payload=payload,
-        headers=headers,
+        headers=redact_value(headers),
     )
-    await message_bus.publish(stream=event.stream_name(), event=event)
+    await EventPublisher.publish(event.stream_name(), event)
 
     # Handle webhook
-    schedule_ids = await webhook_handler.handle_webhook(
+    await webhook_handler.handle_webhook(
         source=source, payload=payload, headers=headers
     )
-    logger.info(f"Matched schedules: {schedule_ids} for {source} webhook")
     return {
         "message": "Webhook received",
     }
@@ -151,7 +158,9 @@ async def verify_webhook(
         challenge = params.get("hub.challenge")
 
         if mode == "subscribe" and challenge:
-            logger.info("Verified WhatsApp webhook")
+            logger.debug(
+                "schedule.webhook_controller.verified_whatsapp_webhook.observed"
+            )
             return Response(content=challenge, media_type="text/plain")
 
     raise HTTPException(

@@ -15,7 +15,12 @@ to a live DB yet:
 2. agent_surfaces: add ``name`` — the stable, pod-unique identifier the REST
    API now addresses surfaces by (like agent names), since a pod may have
    several surfaces of the same platform. Existing rows are backfilled to the
-   lowercased platform, with a numeric suffix on any collisions.
+   lowercased platform, with a numeric suffix on any collisions. Also drops
+   ``ux_agent_surfaces_pod_surface_type``, a legacy one-surface-per-platform
+   uniqueness that predates the 2026-06-24 baseline squash (so it isn't
+   defined in migration history) but still exists on any DB carried forward
+   from before that squash — it otherwise blocks the very thing this
+   migration is adding.
 
 3. users: add a nullable ``preferences`` JSONB blob (typed ``UserPreferences``)
    holding per-user surface defaults — used to disambiguate a user reachable via
@@ -28,14 +33,10 @@ Create Date: 2026-07-01
 """
 
 import warnings
-from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 __all__ = ["downgrade", "upgrade", "schema_upgrades", "schema_downgrades", "data_upgrades", "data_downgrades"]
 
@@ -130,6 +131,14 @@ def schema_upgrades() -> None:
     op.create_unique_constraint(
         'uq_agent_surface_pod_name', 'agent_surfaces', ['pod_id', 'name']
     )
+    # Superseded by uq_agent_surface_pod_name above. It's a unique INDEX, not a
+    # table constraint (created via CREATE UNIQUE INDEX pre-squash), so this
+    # must be DROP INDEX, not DROP CONSTRAINT. Not part of any migration here
+    # (pre-dates the baseline squash), so it's only present on DBs carried
+    # forward from before 2026-06-24 — IF EXISTS covers fresh DBs too.
+    op.execute(
+        "DROP INDEX IF EXISTS ux_agent_surfaces_pod_surface_type"
+    )
 
     # --- users: typed JSON preferences blob (e.g. per-platform default surface
     # used to disambiguate a user reachable via a shared system bot across pods
@@ -147,6 +156,13 @@ def schema_upgrades() -> None:
 def schema_downgrades() -> None:
     op.drop_column('users', 'preferences')
 
+    # Restores the legacy unique index dropped in schema_upgrades(). Fails if
+    # any pod now has two surfaces of the same platform — correct: that data
+    # can't be represented under the old one-per-platform rule being restored.
+    op.create_index(
+        'ux_agent_surfaces_pod_surface_type', 'agent_surfaces', ['pod_id', 'surface_type'],
+        unique=True,
+    )
     op.drop_constraint('uq_agent_surface_pod_name', 'agent_surfaces', type_='unique')
     op.drop_index('ix_agent_surfaces_name', table_name='agent_surfaces')
     op.drop_column('agent_surfaces', 'name')

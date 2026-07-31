@@ -2,25 +2,29 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { PublishMode } from './PublishMode.js';
 /**
  * Body for publishing a pod to GitHub.
  */
 export type PublishStartRequest = {
     /**
-     * GitHub connector account to publish as (optional).
+     * GitHub connector account to publish as.
      */
-    account_id?: (string | null);
+    account_id: string;
     /**
      * Polish the generated README with the system model.
      */
     ai_readme?: boolean;
     /**
+     * CREATE refuses an existing repository. UPDATE requires an existing repository and replaces only Lemma-managed files.
+     */
+    mode?: PublishMode;
+    /**
      * Create the repo as private.
      */
     private?: boolean;
     /**
-     * Name for the new GitHub repo.
+     * GitHub repository name (letters, numbers, dot, dash, underscore).
      */
     repo_name: string;
 };
-

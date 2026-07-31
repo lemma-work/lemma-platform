@@ -7,6 +7,7 @@ per-resource payload normalization, and archive pack/extract.
 
 from __future__ import annotations
 
+from .apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
 from .archive import extract_bundle, pack_bundle
 from .diff import TableDiff, diff_table_columns
 from .jsonc import loads_jsonc, strip_jsonc
@@ -27,6 +28,7 @@ from .layout import (
     normalize_resource_dir_name,
 )
 from .normalize import BundleValidationIssue
+from .portability import require_account_variable_metadata
 
 __all__ = [
     "APP_MANIFEST_ALIAS",
@@ -39,6 +41,8 @@ __all__ = [
     "RAW_FILE_REF_KEY",
     "RESOURCE_DIR_ALIASES",
     "RESOURCE_DIRS",
+    "SCHEDULE_APPLY_FIELDS",
+    "SURFACE_APPLY_FIELDS",
     "SYSTEM_TABLE_COLUMNS",
     "TABLE_DATA_FILE",
     "BundleValidationIssue",
@@ -49,5 +53,6 @@ __all__ = [
     "loads_jsonc",
     "normalize_resource_dir_name",
     "pack_bundle",
+    "require_account_variable_metadata",
     "strip_jsonc",
 ]

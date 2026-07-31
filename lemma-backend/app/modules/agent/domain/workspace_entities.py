@@ -1,6 +1,6 @@
 """Workspace entity compatibility exports."""
 
-from app.modules.agent.tools.workspace_entities import (
+from app.modules.workspace.contracts import (
     ContainerInfo,
     ExecutionResult,
     PythonExecutionResult,

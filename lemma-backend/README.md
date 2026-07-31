@@ -6,7 +6,10 @@ The backend lives in `lemma-backend/` inside the `lemma-platform` monorepo. It i
 
 > Engineering conventions (DB sessions/connections, caching, the authorization
 > model, secrets) live in [docs/development.md](docs/development.md); test
-> notes in `docs/tests/`. This README covers setup and running the stack.
+> notes in `docs/tests/`. The runtime module catalog is in
+> [docs/modules/README.md](docs/modules/README.md), with prioritized review
+> findings in [docs/modules/issues.md](docs/modules/issues.md). This README covers
+> setup and running the stack.
 
 ## Stack
 
@@ -82,7 +85,7 @@ uv run alembic upgrade head           # apply migrations
 uv run uvicorn app.app:app --host 0.0.0.0 --port 8000 --reload
 
 # streaq worker — agent runs, file (re)indexing, surface ingest, datastore cleanup tasks
-uv run streaq run app.events:streaq_worker
+uv run python -m app.worker
 
 # scheduler — cron / time / webhook schedules
 uv run python -m app.scheduler
@@ -135,11 +138,11 @@ make test-e2e-runtime   # only the slow/worker/workspace/provider/local_cli subs
 
 ### Markers & modes
 
-Markers: `e2e`, `slow`, `worker` (needs the real streaq worker), `workspace` (needs the Docker workspace image), `provider` (needs the real model), `local_cli`. Mode is selected by env: `E2E_REAL=1`, `E2E_LLM_MODE=real|mock`, `E2E_SANDBOX_MODE=docker|fake` (the mocked gate skips `real_*` tests automatically).
+Markers: `e2e`, `slow`, `worker` (needs the real streaq worker), `workspace` (needs a real sandbox provider), `provider` (needs the real model), `local_cli`. The model can be deterministic or real via `E2E_LLM_MODE=mock|real`; sandbox coverage always uses Docker (`E2E_SANDBOX_MODE=docker`) or credential-gated E2B.
 
 ### Pre-merge e2e gate (CI)
 
-e2e is **not** run on every commit (it's expensive). It runs as a separate, opt-in gate (`.github/workflows/e2e.yml`): add the **`run-e2e`** label to a PR, or trigger *Actions → "Backend E2E (mocked)" → Run workflow*. Per-commit CI (`ci.yml`) runs unit + build/lint/SDK checks only.
+e2e is **not** run on every commit (it's expensive). It runs as a separate, opt-in gate (`.github/workflows/e2e.yml`): add the **`run-e2e`** label to a PR, or trigger *Actions → "Backend E2E" → Run workflow*. It is a real end-to-end run (Postgres/Redis/SuperTokens/workers/fake providers); only the LLM and the AgentBox sandbox are stubbed. Per-commit CI (`ci.yml`) runs unit + build/lint/SDK checks only.
 
 ## Coverage
 

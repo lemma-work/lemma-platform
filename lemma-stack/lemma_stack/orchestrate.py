@@ -9,6 +9,7 @@ from tomlkit import TOMLDocument
 
 from lemma_stack.config import render, store
 from lemma_stack.context import AdminContext
+from lemma_stack.output import AdminError, warn
 from lemma_stack.paths import LocalPaths
 from lemma_stack.register import register_local_server
 from lemma_stack.release import manifest as release_manifest
@@ -36,9 +37,23 @@ def resolve_manifest(
 ) -> ReleaseManifest:
     if manifest_path is not None:
         return release_manifest.load_file(manifest_path)
-    if prefer_pinned and paths.release_file.exists():
+    selected_channel = channel or store.channel(config)
+    has_pin = paths.release_file.exists()
+
+    # Desktop starts follow the stable channel so replacing the app upgrades
+    # its local images. Explicit version channels remain pinned. If Stable is
+    # temporarily unreachable, use the last known-good manifest so local mode
+    # still works offline.
+    if prefer_pinned and has_pin and selected_channel != "stable":
         return release_manifest.load_pinned(paths)
-    return release_manifest.fetch(channel or store.channel(config))
+    try:
+        return release_manifest.fetch(selected_channel)
+    except AdminError:
+        if not (prefer_pinned and has_pin and selected_channel == "stable"):
+            raise
+        pinned = release_manifest.load_pinned(paths)
+        warn(f"could not refresh the stable release; continuing with pinned Lemma {pinned.version}")
+        return pinned
 
 
 def bring_up(
@@ -48,6 +63,10 @@ def bring_up(
     provider: str,
     manifest: ReleaseManifest,
     do_register: bool = True,
+    service_names: set[str] | None = None,
+    host_apps: bool = False,
+    pull_infra_only: bool = False,
+    migrate: bool = True,
     progress: Progress = _noop,
 ) -> Runtime:
     """Pull images, start every service in order, optionally register the CLI.
@@ -59,17 +78,14 @@ def bring_up(
     runtime = detect.ensure_ready(provider)
 
     progress("pull", f"fetching Lemma {manifest.version}")
-    images.pull_release(runtime, manifest, kreuzberg=store.feature(config, "kreuzberg"))
+    images.pull_release(runtime, manifest, infra_only=pull_infra_only)
     release_manifest.pin(paths, manifest)
 
     ctx = AdminContext(paths=paths, config=config)
-    lifecycle.up(
-        runtime,
-        ctx.specs(manifest),
-        manifest,
-        migrate=True,
-        on_progress=progress,
-    )
+    specs = ctx.specs(manifest, host_apps=host_apps)
+    if service_names is not None:
+        specs = [spec for spec in specs if spec.name in service_names]
+    lifecycle.up(runtime, specs, manifest, migrate=migrate, on_progress=progress)
 
     if do_register:
         register_local_server(
@@ -84,5 +100,5 @@ def bring_down(paths: LocalPaths, config: TOMLDocument, *, infra: bool = False) 
     ctx = AdminContext(paths=paths, config=config)
     specs = ctx.specs()
     if not infra:
-        specs = [s for s in specs if s.name in {"agentbox", "backend", "frontend"}]
+        specs = [s for s in specs if s.name in {"backend", "frontend"}]
     lifecycle.down(ctx.runtime, specs)

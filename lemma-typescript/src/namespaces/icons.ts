@@ -7,7 +7,7 @@ export class IconsNamespace {
 
   upload(file: Blob) {
     const payload: IconUploadRequest = {
-      file: file as unknown as string,
+      file,
     };
     return this.client.request(() => IconsService.iconUpload(payload));
   }

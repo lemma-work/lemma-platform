@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.modules.connectors.contracts import AuthScheme
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
     SurfaceChannelRoute,
@@ -12,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
     SurfaceIdentityPolicy,
     SurfacePlatform,
     SurfaceSendPolicy,
+    SurfaceTelegramConfig,
 )
 from app.modules.agent_surfaces.domain.setup_guides import (
     SurfaceSetupAction,
@@ -46,11 +49,22 @@ class SurfaceSendPolicyConfig(BaseModel):
     allow_send: bool = False
 
 
+class SurfaceTelegramConfigInput(BaseModel):
+    """Selects the pod app exposed as this bot's Telegram Mini App."""
+
+    app_name: str | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SurfaceBehaviorConfigInput(BaseModel):
     identity: SurfaceIdentityConfigInput = Field(default_factory=SurfaceIdentityConfigInput)
     channels: list[SurfaceChannelRouteInput] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
     send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    telegram: SurfaceTelegramConfigInput = Field(
+        default_factory=SurfaceTelegramConfigInput
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -87,6 +101,9 @@ class SurfaceConfigResponse(BaseModel):
     channels: list[SurfaceChannelRouteResponse] = Field(default_factory=list)
     dm_conversation_reset_after_hours: int = 24
     send_policy: SurfaceSendPolicyConfig = Field(default_factory=SurfaceSendPolicyConfig)
+    telegram: SurfaceTelegramConfigInput = Field(
+        default_factory=SurfaceTelegramConfigInput
+    )
 
     @classmethod
     def from_domain(cls, config: SurfaceConfig) -> "SurfaceConfigResponse":
@@ -108,6 +125,7 @@ def surface_config_from_input(
         ),
         channels=channel_routes,
         send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
+        telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
     )
 
 
@@ -153,6 +171,44 @@ class SurfaceUpdateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class TelegramManagedBotSetupRequest(BaseModel):
+    name: str | None = Field(
+        default=None,
+        description="Pod-unique surface name. Defaults to telegram.",
+    )
+    default_agent_name: str | None = None
+    config: SurfaceBehaviorConfigInput = Field(default_factory=SurfaceBehaviorConfigInput)
+    is_enabled: bool = True
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TelegramManagedBotSetupResponse(BaseModel):
+    setup_id: str
+    status: str
+    launch_url: str
+    manager_bot_username: str
+    expires_at: str
+    account_id: UUID | None = None
+    surface_id: UUID | None = None
+    bot_username: str | None = None
+    bot_launch_url: str | None = None
+    error: str | None = None
+
+
+class SurfaceReach(BaseModel):
+    """How a human reaches this surface.
+
+    ``handle`` is the platform-native name a person types/sees to message the
+    bot (Slack/Teams bot display name, Telegram ``@username``, WhatsApp phone,
+    or the account/email for email surfaces). ``email`` is the surface's email
+    address, when it has one.
+    """
+
+    handle: str | None = None
+    email: str | None = None
+
+
 class AgentSurfaceResponse(BaseModel):
     id: UUID
     pod_id: UUID
@@ -165,7 +221,9 @@ class AgentSurfaceResponse(BaseModel):
     account_id: UUID | None = None
     surface_identity_id: str | None = None
     surface_identity_username: str | None = None
+    surface_identity_email: str | None = None
     webhook_url: str | None = None
+    reach: SurfaceReach | None = None
     config: SurfaceConfigResponse
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
@@ -250,3 +308,61 @@ class SurfaceSetupResponse(BaseModel):
     admin_consent: SurfaceAdminConsentInfo | None = None
     actions: list[SurfaceSetupAction] = Field(default_factory=list)
     guide: SurfacePlatformSetupGuide
+
+
+class SurfaceConnectDescriptor(BaseModel):
+    """What the frontend needs to render the "connect an account" (CUSTOM) flow
+    for a surface's connector — a slim projection of the connector's LEMMA
+    capability. ``system_oauth_available`` means the platform supplies the OAuth
+    app so the user connects without registering their own (distinct from whether
+    a fully-managed SYSTEM bot exists — that's ``supported_credential_modes``)."""
+
+    auth_scheme: AuthScheme
+    auth_config_schema: dict[str, Any] | None = None
+    credential_schema: dict[str, Any] | None = None
+    system_oauth_available: bool = False
+    supports_org_custom_oauth: bool = False
+
+
+class SurfaceSystemClaim(BaseModel):
+    """Whether this org can still put the platform's Lemma-managed bot/number
+    behind a surface.
+
+    The shared identity is claimable exactly once per organization, so the setup
+    UI can render the option as unavailable *before* the user commits instead of
+    discovering it as a failed save. ``claimed_by_pod_id`` is the pod holding the
+    claim — always a pod in the caller's own org, so linking to it leaks nothing
+    they can't already see."""
+
+    available: bool
+    claimed_by_pod_id: UUID | None = None
+    claimed_by_surface_name: str | None = None
+
+
+class AvailableSurface(BaseModel):
+    """One connectable surface platform. ``supported_credential_modes`` is the
+    single source of truth for how it can be set up: ``[CUSTOM]`` means an account
+    must be connected; ``[CUSTOM, SYSTEM]`` means a Lemma-managed bot can also run
+    with no account. The frontend derives ``account_needed = SYSTEM not in modes``
+    and ``system_bot_available = SYSTEM in modes``."""
+
+    platform: SurfacePlatform
+    connector_id: str
+    provider: str
+    title: str | None = None
+    description: str | None = None
+    icon: str | None = None
+    supported_credential_modes: list[SurfaceCredentialMode]
+    connector_available: bool = True
+    connect: SurfaceConnectDescriptor | None = None
+    # Only meaningful when SYSTEM is in supported_credential_modes; None means
+    # the platform has no Lemma-managed identity to claim in the first place.
+    system_claim: SurfaceSystemClaim | None = None
+    # Whether this deployment can provision a dedicated bot for the user through
+    # a manager bot (Telegram). Lets the setup UI offer that path only where it
+    # actually works, instead of failing once the user has committed to it.
+    managed_setup_available: bool = False
+
+
+class AvailableSurfacesResponse(BaseModel):
+    surfaces: list[AvailableSurface] = Field(default_factory=list)

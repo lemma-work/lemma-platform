@@ -3,7 +3,6 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AccountCreateSchema } from '../models/AccountCreateSchema.js';
-import type { AccountCredentialsResponseSchema } from '../models/AccountCredentialsResponseSchema.js';
 import type { AccountListResponseSchema } from '../models/AccountListResponseSchema.js';
 import type { AccountResponseSchema } from '../models/AccountResponseSchema.js';
 import type { AppTriggerListResponseSchema } from '../models/AppTriggerListResponseSchema.js';
@@ -219,30 +218,6 @@ export class ConnectorsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/organizations/{organization_id}/connectors/accounts/{account_id}',
-            path: {
-                'organization_id': organizationId,
-                'account_id': accountId,
-            },
-            errors: {
-                422: `Validation Error`,
-            },
-        });
-    }
-    /**
-     * Get Credentials
-     * Get the credentials for a specific account
-     * @param organizationId
-     * @param accountId
-     * @returns AccountCredentialsResponseSchema Successful Response
-     * @throws ApiError
-     */
-    public static connectorAccountCredentialsGet(
-        organizationId: string,
-        accountId: string,
-    ): CancelablePromise<AccountCredentialsResponseSchema> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/organizations/{organization_id}/connectors/accounts/{account_id}/credentials',
             path: {
                 'organization_id': organizationId,
                 'account_id': accountId,

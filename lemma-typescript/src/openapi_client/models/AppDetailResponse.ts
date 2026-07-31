@@ -19,4 +19,3 @@ export type AppDetailResponse = {
     user_id: string;
     visibility?: string;
 };
-

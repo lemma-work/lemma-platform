@@ -6,4 +6,3 @@ import type { PodRoleResourcePermissionRequest } from './PodRoleResourcePermissi
 export type PodRolePermissionsReplaceRequest = {
     grants?: Array<PodRoleResourcePermissionRequest>;
 };
-

@@ -8,7 +8,7 @@ from typing import Any
 
 from .jsonc import loads_jsonc
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 # The bundle's root manifest file (pod metadata, contents scope, variables).
 POD_MANIFEST_FILE = "pod.json"
 # Legacy placeholder for a pod-member assignee; superseded by ${name} variables

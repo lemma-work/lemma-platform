@@ -19,16 +19,33 @@ from app.modules.apps.domain.errors import (
     AppNotFoundError,
     AppValidationError,
 )
-from app.core.runtime_config import runtime_config_token
+from app.core.runtime_config import (
+    APP_BRANDING_SENTINEL,
+    build_app_branding,
+    runtime_config_token,
+)
+from app.core.config import settings
 from app.modules.apps.services.app_service import AppService
 from app.modules.test_support.authz import allow_all_context
 
 
-async def _get_app_asset(service, pod_id, name, user_id, *, asset_path, request_etag=None, ctx=None):
+async def _get_app_asset(
+    service, pod_id, name, user_id, *, asset_path, request_etag=None, ctx=None
+):
     """Serve an asset through the saga phases (the single-call convenience method
     was removed; production resolves in a short UoW then reads storage)."""
     resolved = await service.resolve_app_asset(
         pod_id, name, user_id, asset_path=asset_path, request_etag=request_etag, ctx=ctx
+    )
+    if isinstance(resolved, AppAssetDocument):
+        return resolved
+    return await service.read_app_asset(resolved)
+
+
+async def _get_public_app_asset(service, public_slug, *, asset_path=None):
+    resolved = await service.resolve_app_asset_by_public_slug(
+        public_slug,
+        asset_path=asset_path,
     )
     if isinstance(resolved, AppAssetDocument):
         return resolved
@@ -41,7 +58,9 @@ async def _delete_app(service, pod_id, name, user_id, ctx=None):
 
 
 async def _get_app_dist_archive(service, pod_id, name, user_id, ctx=None):
-    app_id, archive_path = await service.resolve_dist_archive(pod_id, name, user_id, ctx=ctx)
+    app_id, archive_path = await service.resolve_dist_archive(
+        pod_id, name, user_id, ctx=ctx
+    )
     return await service.read_archive(app_id, archive_path)
 
 
@@ -169,6 +188,7 @@ async def test_upload_bundle_sets_ready_and_persists_release_assets():
             "assets/app.js": "console.log('ok')",
         }
     )
+    source_archive = make_dist_zip({"src/index.ts": "export default {}"})
 
     repo.get_by_name.return_value = app
     repo.update.side_effect = lambda entity: entity
@@ -185,16 +205,18 @@ async def test_upload_bundle_sets_ready_and_persists_release_assets():
         pod_id,
         "dashboard",
         user_id,
-        source_archive_bytes=b"source-zip",
+        source_archive_bytes=source_archive,
         dist_archive_bytes=dist_archive,
         ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
     )
 
     assert updated.status == AppStatus.READY
-    assert updated.source_archive_path == "source/archive.zip"
+    assert updated.source_archive_path is not None
+    assert updated.source_archive_path.startswith("source/")
+    assert updated.source_archive_path.endswith("/archive.zip")
     assert updated.current_release_id == release_id
     written_paths = [args.args[0] for args in storage.write_file.await_args_list]
-    assert "source/archive.zip" in written_paths
+    assert updated.source_archive_path in written_paths
     assert any(path.endswith("/dist/index.html") for path in written_paths)
     assert any(path.endswith("/dist/assets/app.js") for path in written_paths)
     assert any(path.endswith("/dist/archive.zip") for path in written_paths)
@@ -253,7 +275,8 @@ async def test_get_app_asset_missing_release_raises_not_found():
     repo.get_by_name.return_value = app
 
     with pytest.raises(AppNotFoundError):
-        await _get_app_asset(service, 
+        await _get_app_asset(
+            service,
             pod_id,
             "dashboard",
             user_id,
@@ -277,6 +300,7 @@ async def test_get_app_asset_reads_release_contents():
         pod_id=pod_id,
         user_id=user_id,
         name="dashboard",
+        description="Team overview",
         public_slug="dashboard",
         current_release_id=uuid4(),
     )
@@ -292,7 +316,8 @@ async def test_get_app_asset_reads_release_contents():
     repo.get_release.return_value = release
     storage.read_file.return_value = "<html><head></head><body>public-ok</body></html>"
 
-    asset = await _get_app_asset(service, 
+    asset = await _get_app_asset(
+        service,
         pod_id,
         "dashboard",
         user_id,
@@ -305,11 +330,143 @@ async def test_get_app_asset_reads_release_contents():
     assert "public-ok" in body
     assert "data-lemma-runtime-config" in body
     assert str(pod_id) in body
+    assert '"app": {"name": "dashboard", "description": "Team overview"}' in body
     assert asset.media_type == "text/html"
     # ETag folds in the config hash so a pod/api/auth change busts the cache.
-    expected_token = runtime_config_token(app.pod_id)
+    expected_token = runtime_config_token(
+        app.pod_id, app={"name": app.name, "description": app.description}
+    )
     assert asset.etag == f'"version.{expected_token}"'
     assert asset.is_entrypoint is True
+
+
+@pytest.mark.asyncio
+async def test_public_app_entrypoint_includes_share_metadata(monkeypatch):
+    repo = AsyncMock()
+    storage = AsyncMock()
+    service = AppService(repo, Mock(return_value=storage), AsyncMock())
+    app = AppEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="Research Desk",
+        description="Evidence-backed research for the team.",
+        public_slug="research-desk",
+        current_release_id=uuid4(),
+    )
+    release = AppReleaseEntity(
+        id=app.current_release_id,
+        app_id=app.id,
+        version="version",
+        dist_root_path="releases/version/dist/",
+    )
+    repo.get_by_public_slug.return_value = app
+    repo.get_release.return_value = release
+    storage.read_file.return_value = b"<html><head></head><body>desk</body></html>"
+    monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.work")
+
+    asset = await _get_public_app_asset(service, "research-desk")
+    body = asset.content.decode()
+
+    assert 'property="og:title" content="Research Desk"' in body
+    assert 'name="twitter:card" content="summary_large_image"' in body
+    assert 'rel="canonical" href="https://research-desk.apps.lemma.work"' in body
+    assert APP_BRANDING_SENTINEL in body
+    assert "Remix on Lemma" in body
+    branding = build_app_branding("https://research-desk.apps.lemma.work")
+    expected_token = runtime_config_token(
+        app.pod_id,
+        app={
+            "name": app.name,
+            "description": app.description,
+            "url": "https://research-desk.apps.lemma.work",
+        },
+        branding=branding,
+    )
+    assert asset.etag == f'"version.{expected_token}"'
+
+
+@pytest.mark.asyncio
+async def test_public_app_branding_can_be_removed_by_org_entitlement(monkeypatch):
+    repo = AsyncMock()
+    storage = AsyncMock()
+    entitlement = AsyncMock()
+    entitlement.can_remove_app_branding.return_value = True
+    service = AppService(
+        repo,
+        Mock(return_value=storage),
+        AsyncMock(),
+        app_branding_entitlement=entitlement,
+    )
+    app = AppEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="Paid App",
+        public_slug="paid-app",
+        current_release_id=uuid4(),
+    )
+    release = AppReleaseEntity(
+        id=app.current_release_id,
+        app_id=app.id,
+        version="version",
+        dist_root_path="releases/version/dist/",
+    )
+    repo.get_by_public_slug.return_value = app
+    repo.get_release.return_value = release
+    storage.read_file.return_value = b"<html><head></head><body>paid</body></html>"
+    monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.work")
+
+    asset = await _get_public_app_asset(service, "paid-app")
+    body = asset.content.decode()
+
+    entitlement.can_remove_app_branding.assert_awaited_once_with(pod_id=app.pod_id)
+    assert APP_BRANDING_SENTINEL not in body
+    assert "Remix on Lemma" not in body
+
+
+@pytest.mark.asyncio
+async def test_public_app_branding_fails_closed_when_entitlement_lookup_fails(
+    monkeypatch,
+):
+    repo = AsyncMock()
+    storage = AsyncMock()
+    entitlement = AsyncMock()
+    entitlement.can_remove_app_branding.side_effect = RuntimeError("billing unavailable")
+    service = AppService(
+        repo,
+        Mock(return_value=storage),
+        AsyncMock(),
+        app_branding_entitlement=entitlement,
+    )
+    app = AppEntity(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        name="Fallback App",
+        public_slug="fallback-app",
+        current_release_id=uuid4(),
+    )
+    release = AppReleaseEntity(
+        id=app.current_release_id,
+        app_id=app.id,
+        version="version",
+        dist_root_path="releases/version/dist/",
+    )
+    repo.get_by_public_slug.return_value = app
+    repo.get_release.return_value = release
+    storage.read_file.return_value = b"<html><head></head><body>fallback</body></html>"
+    monkeypatch.setattr(settings, "app_base_domain", "apps.lemma.work")
+    monkeypatch.setattr(settings, "api_url", "https://api.lemma.work")
+
+    asset = await _get_public_app_asset(service, "fallback-app")
+    body = asset.content.decode()
+
+    entitlement.can_remove_app_branding.assert_awaited_once_with(pod_id=app.pod_id)
+    assert APP_BRANDING_SENTINEL in body
+    assert "Remix on Lemma" in body
 
 
 @pytest.mark.asyncio
@@ -341,7 +498,8 @@ async def test_get_app_asset_serves_static_asset_without_fallback():
     repo.get_release.return_value = release
     storage.read_file.return_value = b"console.log('asset')"
 
-    asset = await _get_app_asset(service, 
+    asset = await _get_app_asset(
+        service,
         pod_id,
         "dashboard",
         user_id,
@@ -407,7 +565,8 @@ async def test_get_app_asset_missing_path_raises_without_fallback():
     storage.read_file.side_effect = FileNotFoundError("missing")
 
     with pytest.raises(AppNotFoundError):
-        await _get_app_asset(service, 
+        await _get_app_asset(
+            service,
             pod_id,
             "dashboard",
             user_id,
@@ -447,12 +606,13 @@ async def test_get_app_asset_returns_not_modified_when_etag_matches():
     repo.get_release.return_value = release
 
     # The entrypoint ETag includes the config hash; a matching request 304s.
-    config_token = runtime_config_token(app.pod_id)
-    asset = await _get_app_asset(service, 
+    config_token = runtime_config_token(app.pod_id, app={"name": app.name})
+    asset = await _get_app_asset(
+        service,
         pod_id,
         "dashboard",
         user_id,
-        asset_path=None,
+        asset_path="settings",
         request_etag=f'"version.{config_token}"',
         ctx=allow_all_context(user_id=user_id, pod_id=pod_id),
     )
@@ -490,7 +650,8 @@ async def test_delete_app_removes_release_manifest_assets():
 
     repo.get_by_name.return_value = app
     repo.list_releases.return_value = [release]
-    await _delete_app(service, 
+    await _delete_app(
+        service,
         pod_id,
         "dashboard",
         user_id,
@@ -533,7 +694,8 @@ async def test_delete_app_ignores_missing_source_archive():
     repo.list_releases.return_value = [release]
     storage.delete_file.side_effect = [FileNotFoundError("missing source archive")]
 
-    await _delete_app(service, 
+    await _delete_app(
+        service,
         pod_id,
         "dashboard",
         user_id,
@@ -575,7 +737,8 @@ async def test_get_app_dist_archive_reads_current_release():
     repo.get_release.return_value = release
     storage.read_file.return_value = b"zip-bytes"
 
-    archive = await _get_app_dist_archive(service, 
+    archive = await _get_app_dist_archive(
+        service,
         pod_id,
         "dashboard",
         user_id,

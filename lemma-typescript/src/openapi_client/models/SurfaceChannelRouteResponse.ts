@@ -7,4 +7,3 @@ export type SurfaceChannelRouteResponse = {
     channel_id?: (string | null);
     channel_name?: (string | null);
 };
-

@@ -2,13 +2,13 @@
 
 import { use, useState } from 'react';
 import Link from 'next/link';
-import { ChevronRight, Edit2, MoreHorizontal, Play, Plus, Trash2, Workflow, Zap } from 'lucide-react';
+import { ChevronRight, Edit2, MoreHorizontal, Play, Plus, Trash2, Workflow, Zap } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceIndexHeader, ResourceIndexShell, ResourceMetric, ResourceMetricStrip } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell, ResourceMetric, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import {
@@ -79,7 +79,7 @@ export default function FunctionsIndexPage({
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title="Functions"
                 meta={<ConceptHint concept="function" />}
                 backHref={`/pod/${podId}/flows`}

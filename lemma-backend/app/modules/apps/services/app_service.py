@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
-import hashlib
+import asyncio
 from io import BytesIO
-from pathlib import PurePosixPath
+from pathlib import Path
 from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import structlog
 
-from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
+from app.core.api.uploads import upload_source_sha256
+from app.core.authorization.context import (
+    Context,
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
-from app.core.runtime_config import runtime_config_token
+from app.core.widget_html_validation import lint_app_html
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_public_slug, normalize_resource_name
 from app.modules.apps.domain.entities import (
@@ -23,6 +29,7 @@ from app.modules.apps.domain.entities import (
     AppStatus,
     AppUpdateEntity,
 )
+from app.modules.apps.domain.branding import AppBrandingEntitlementPort
 from app.modules.apps.domain.errors import (
     AppConflictError,
     AppNotFoundError,
@@ -32,8 +39,8 @@ from app.modules.apps.domain.ports import (
     AppRepositoryPort,
     AppStorageFactoryPort,
 )
+from app.modules.apps.services.app_asset_resolver import AppAssetResolver
 from app.modules.apps.services.app_dist_bundle import load_app_dist_bundle
-from app.modules.apps.services.app_html_validation import lint_app_html
 from app.modules.apps.services.app_storage_phase import (
     AppStoragePhase,
     _AppDeletionCleanup,
@@ -41,8 +48,8 @@ from app.modules.apps.services.app_storage_phase import (
     _UploadPlan,
     _WrittenBundle,
 )
-from app.modules.pod.domain.pod_entities import PodRole
-from app.modules.pod.domain.visibility import (
+from app.modules.pod.contracts import PodRole
+from app.modules.pod.contracts import (
     PERSONAL_VISIBILITY_VALUES,
     POD_VISIBILITY_VALUES,
 )
@@ -56,46 +63,18 @@ class AppService:
         app_repository: AppRepositoryPort,
         file_manager_factory: AppStorageFactoryPort,
         authorization_service: object,
+        app_branding_entitlement: AppBrandingEntitlementPort | None = None,
     ):
         self.repository = app_repository
         self.file_manager_factory = file_manager_factory
         self.authorization_service = authorization_service
+        self._asset_resolver = AppAssetResolver(
+            app_repository,
+            app_branding_entitlement,
+        )
         # Storage side of the asset/archive/bundle/delete sagas, on an object
         # that holds NO repository (DB-free by construction).
         self._storage_phase = AppStoragePhase(file_manager_factory)
-
-    @staticmethod
-    def _quote_etag(etag: str | None) -> str | None:
-        if not etag:
-            return None
-        return f'"{etag}"'
-
-    @classmethod
-    def _etag_matches(cls, candidate: str | None, request_header: str | None) -> bool:
-        if not candidate or not request_header:
-            return False
-
-        normalized_candidate = candidate.strip().strip('"')
-        for raw_value in request_header.split(","):
-            value = raw_value.strip()
-            if value == "*":
-                return True
-            if value.startswith("W/"):
-                value = value[2:]
-            if value.strip().strip('"') == normalized_candidate:
-                return True
-        return False
-
-    @staticmethod
-    def _normalize_requested_asset_path(asset_path: str | None) -> str:
-        normalized = (asset_path or "").replace("\\", "/").strip("/")
-        if not normalized:
-            return ""
-
-        path = PurePosixPath(normalized)
-        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-            raise AppNotFoundError("App asset not found")
-        return path.as_posix()
 
     async def _validate_unique_public_slug(
         self,
@@ -111,56 +90,6 @@ class AppService:
                 "pod and won't show up in your `apps list`. Choose a different slug."
             )
 
-    async def _get_current_release(
-        self,
-        app: AppEntity,
-        *,
-        raise_not_found_name: str,
-    ) -> AppReleaseEntity:
-        if not app.current_release_id:
-            raise AppNotFoundError(f"Build not found for app '{raise_not_found_name}'")
-
-        release = await self.repository.get_release(app.current_release_id)
-        if not release:
-            raise AppNotFoundError(f"Current release not found for app '{raise_not_found_name}'")
-        return release
-
-    async def _resolve_asset_document(
-        self,
-        app: AppEntity,
-        *,
-        raise_not_found_name: str,
-        asset_path: str | None,
-        request_etag: str | None = None,
-    ) -> _AssetReadInputs | AppAssetDocument:
-        """DB phase: resolve release + ETag. Returns a not-modified document on a
-        304 (no storage needed) or the inputs for the storage read otherwise."""
-        release = await self._get_current_release(app, raise_not_found_name=raise_not_found_name)
-        normalized_asset_path = self._normalize_requested_asset_path(asset_path)
-        entrypoint_request = normalized_asset_path in {"", "index.html"}
-        # Entrypoints carry the injected pod context, so a pod/api/auth change
-        # must bust the cached HTML — fold the config hash into the ETag.
-        etag = (
-            f"{release.version}.{runtime_config_token(app.pod_id)}"
-            if entrypoint_request
-            else release.version
-        )
-        quoted_etag = self._quote_etag(etag)
-
-        if self._etag_matches(etag, request_etag):
-            return AppAssetDocument(
-                etag=quoted_etag,
-                not_modified=True,
-                is_entrypoint=entrypoint_request,
-            )
-
-        return _AssetReadInputs(
-            app_id=app.id,
-            pod_id=app.pod_id,
-            dist_root_path=release.dist_root_path,
-            normalized_asset_path=normalized_asset_path,
-            quoted_etag=quoted_etag,
-        )
 
     async def read_app_asset(self, inputs: _AssetReadInputs) -> AppAssetDocument:
         """Storage phase: read the asset bytes — delegated to the repo-free
@@ -232,7 +161,9 @@ class AppService:
         self._normalize_app_visibility(entity)
         created = await self.repository.create(entity)
         if ctx is not None:
-            refreshed = await self.repository.get_by_name(entity.pod_id, entity.name, ctx=ctx)
+            refreshed = await self.repository.get_by_name(
+                entity.pod_id, entity.name, ctx=ctx
+            )
             return refreshed or created
         return created
 
@@ -256,14 +187,13 @@ class AppService:
         ctx: Context | None = None,
     ) -> AppEntity:
         """Promote a resolved widget artifact into a persisted app.
-
-        The widget and the app are the same artifact at two lifecycle stages:
-        the stored HTML is wrapped as a standalone document (no embed bridge)
-        and deployed as the app's bundle — identical to what the widget showed.
+        The widget and the app share one source artifact at two lifecycle stages:
+        the stored fragment is preserved, wrapped as a standalone document (no
+        embed bridge or conversation padding), and deployed as the app's bundle.
         """
         for issue in lint_app_html(artifact.content):
-            logger.warning(
-                "app_html_lint", app=name, pod_id=str(pod_id), issue=issue
+            logger.debug(
+                "apps.app_service.app_html_lint.diagnostic", pod_id=str(pod_id)
             )
         document = wrap_html_fragment(artifact.content, title=name, embed=False)
         entity_data: dict = {
@@ -373,7 +303,9 @@ class AppService:
             )
             app.public_slug = public_slug
         if update_entity.visibility is not None:
-            app.visibility = self._normalize_visibility_value(update_entity.visibility).value
+            app.visibility = self._normalize_visibility_value(
+                update_entity.visibility
+            ).value
 
         updated = await self.repository.update(app)
         if ctx is not None:
@@ -428,7 +360,7 @@ class AppService:
         user_id: UUID,
         *,
         has_source: bool,
-        dist_archive_bytes: bytes | None,
+        dist_archive_bytes: bytes | Path | None,
         ctx: Context | None = None,
     ) -> _UploadPlan:
         """Authorize + dedup (DB only). The storage writes happen outside this UoW
@@ -459,8 +391,8 @@ class AppService:
             # Validate the bundle up front (raises AppValidationError on a missing
             # root index.html), regardless of dedup — matches prior behavior and
             # ensures no storage write happens for an invalid bundle.
-            load_app_dist_bundle(dist_archive_bytes)
-            version = hashlib.sha256(dist_archive_bytes).hexdigest()
+            await asyncio.to_thread(load_app_dist_bundle, dist_archive_bytes)
+            version = await asyncio.to_thread(upload_source_sha256, dist_archive_bytes)
             release_root = f"releases/{version}/dist/"
             existing = await self.repository.get_release_by_version(app.id, version)
             existing_release_id = existing.id if existing is not None else None
@@ -479,8 +411,8 @@ class AppService:
     async def write_bundle_storage(
         self,
         plan: _UploadPlan,
-        source_archive_bytes: bytes | None,
-        dist_archive_bytes: bytes | None,
+        source_archive_bytes: bytes | Path | None,
+        dist_archive_bytes: bytes | Path | None,
     ) -> _WrittenBundle:
         """Write uploaded bytes to storage — delegated to the repo-free
         ``AppStoragePhase`` (holds no DB connection). Call between
@@ -515,18 +447,27 @@ class AppService:
         app.user_id = user_id
         return await self.repository.update(app)
 
+    async def cleanup_written_bundle(
+        self, plan: _UploadPlan, written: _WrittenBundle
+    ) -> None:
+        await self._storage_phase.cleanup_written_bundle(plan, written)
+
     async def upload_bundle(
         self,
         pod_id: UUID,
         name: str,
         user_id: UUID,
         *,
-        source_archive_bytes: bytes | None,
-        dist_archive_bytes: bytes | None,
+        source_archive_bytes: bytes | Path | None,
+        dist_archive_bytes: bytes | Path | None,
         ctx: Context | None = None,
     ) -> AppEntity:
         # Back-compat single-call path (holds the connection across storage). The
         # controller uses resolve/write/finalize so storage holds no connection.
+        from app.modules.apps.services.archive_validation import inspect_app_archive
+
+        if source_archive_bytes is not None:
+            inspect_app_archive(source_archive_bytes, label="Source archive")
         plan = await self.resolve_upload_bundle(
             pod_id,
             name,
@@ -538,7 +479,11 @@ class AppService:
         written = await self.write_bundle_storage(
             plan, source_archive_bytes, dist_archive_bytes
         )
-        return await self.finalize_upload_bundle(plan, written, user_id)
+        try:
+            return await self.finalize_upload_bundle(plan, written, user_id)
+        except BaseException:
+            await self.cleanup_written_bundle(plan, written)
+            raise
 
     async def resolve_app_asset(
         self,
@@ -557,7 +502,7 @@ class AppService:
             pod_id, name, user_id, raise_not_found=True, ctx=ctx
         )
         assert app is not None
-        return await self._resolve_asset_document(
+        return await self._asset_resolver.resolve(
             app,
             raise_not_found_name=name,
             asset_path=asset_path,
@@ -575,11 +520,12 @@ class AppService:
         app = await self.repository.get_by_public_slug(public_slug)
         if not app:
             raise AppNotFoundError(f"App with public slug '{public_slug}' not found")
-        return await self._resolve_asset_document(
+        return await self._asset_resolver.resolve(
             app,
             raise_not_found_name=public_slug,
             asset_path=asset_path,
             request_etag=request_etag,
+            public_url=self._asset_resolver.public_url(app),
         )
 
     async def resolve_source_archive(
@@ -621,7 +567,10 @@ class AppService:
             ctx=ctx,
         )
         assert app is not None
-        release = await self._get_current_release(app, raise_not_found_name=name)
+        release = await self._asset_resolver.current_release(
+            app,
+            raise_not_found_name=name,
+        )
         if not release.dist_archive_path:
             raise AppNotFoundError(f"Dist archive not found for app '{name}'")
         return app.id, release.dist_archive_path
@@ -637,7 +586,10 @@ class AppService:
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
         normalized = str(value or ResourceVisibility.POD.value).strip().upper()
-        if normalized in PERSONAL_VISIBILITY_VALUES or normalized in {"PRIVATE", "OWNER"}:
+        if normalized in PERSONAL_VISIBILITY_VALUES or normalized in {
+            "PRIVATE",
+            "OWNER",
+        }:
             return ResourceVisibility.PERSONAL
         if normalized == "RESTRICTED":
             return ResourceVisibility.RESTRICTED

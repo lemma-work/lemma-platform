@@ -3,8 +3,10 @@ from enum import Enum
 from uuid import UUID
 
 from pydantic import Field
+from pydantic import field_validator
 
 from app.core.domain.aggregate import AggregateRoot
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.domain.user_entities import UserEntity
 
 
@@ -14,6 +16,34 @@ class OrganizationRole(str, Enum):
     ORG_OWNER = "ORG_OWNER"
     ORG_EDITOR = "ORG_EDITOR"
     ORG_MEMBER = "ORG_MEMBER"
+
+
+# Organization roles ordered from least to most privileged. Mirrors the implicit
+# hierarchy already relied on in organization_service (e.g. an editor cannot
+# remove an owner).
+ORG_ROLE_HIERARCHY: dict["OrganizationRole", int] = {
+    OrganizationRole.ORG_MEMBER: 1,
+    OrganizationRole.ORG_EDITOR: 2,
+    OrganizationRole.ORG_OWNER: 3,
+}
+
+
+def can_grant_org_role(
+    approver_role: "OrganizationRole", target_role: "OrganizationRole"
+) -> bool:
+    """Whether ``approver_role`` may grant ``target_role`` to another member.
+
+    Only an ORG_OWNER may grant an elevated role (ORG_OWNER/ORG_EDITOR); every
+    lesser approver is capped at ORG_MEMBER. This blocks an editor — or a pod
+    admin who is only an org member — from minting an org owner/editor through a
+    side channel such as approving a join request.
+    """
+    if approver_role == OrganizationRole.ORG_OWNER:
+        return True
+    return (
+        ORG_ROLE_HIERARCHY[target_role]
+        <= ORG_ROLE_HIERARCHY[OrganizationRole.ORG_MEMBER]
+    )
 
 
 class OrganizationJoinPolicy(str, Enum):
@@ -72,6 +102,11 @@ class OrganizationInvitationEntity(AggregateRoot):
     )
     accepted_at: datetime | None = None
     revoked_at: datetime | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> str:
+        return normalize_identity_email(str(value))
 
     def is_expired(self, now: datetime | None = None) -> bool:
         if self.status != OrganizationInvitationStatus.PENDING:

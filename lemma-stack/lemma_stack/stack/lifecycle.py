@@ -12,12 +12,29 @@ from lemma_stack.output import info, ok
 from lemma_stack.runtime.base import Runtime
 from lemma_stack.stack import health, migrations
 from lemma_stack.stack.specs import (
+    CONTAINER_PREFIX,
     HASH_LABEL,
     NETWORK_NAME,
     POSTGRES_VOLUME,
     ServiceSpec,
     run_args,
 )
+
+OBSOLETE_SERVICE_NAMES = ("agentbox", "kreuzberg")
+
+
+def remove_obsolete_containers(runtime: Runtime) -> list[str]:
+    """Remove stateless services retired by the unified local topology."""
+
+    removed: list[str] = []
+    for service in OBSOLETE_SERVICE_NAMES:
+        name = f"{CONTAINER_PREFIX}-{service}"
+        if runtime.inspect(name) is None:
+            continue
+        runtime.remove_container(name)
+        removed.append(service)
+        info(f"{service}: removed (obsolete local service)")
+    return removed
 
 
 def _existing_hash(runtime: Runtime, name: str) -> str | None:
@@ -66,6 +83,7 @@ def up(
     notify = on_progress or (lambda *a, **k: None)
     runtime.ensure_network(NETWORK_NAME)
     runtime.ensure_volume(POSTGRES_VOLUME)
+    remove_obsolete_containers(runtime)
 
     for spec in specs:
         notify(f"service:{spec.name}", spec.name)
@@ -74,8 +92,8 @@ def up(
         _gate(runtime, spec)
         if spec.name == "db":
             migrations.ensure_databases(runtime)
-        # migrations run after infra + agentbox are up, before the app serves
-        if migrate and spec.name == "agentbox":
+        # Migrations run after all infra is healthy, before the app serves.
+        if migrate and spec.name == "supertokens":
             notify("migrate", "applying database migrations")
             migrations.run_migrations(runtime, manifest)
     notify("ready", "")

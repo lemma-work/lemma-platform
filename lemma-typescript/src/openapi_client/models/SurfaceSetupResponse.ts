@@ -29,4 +29,3 @@ export type SurfaceSetupResponse = {
     status: AgentSurfaceStatus;
     webhook_url?: (string | null);
 };
-

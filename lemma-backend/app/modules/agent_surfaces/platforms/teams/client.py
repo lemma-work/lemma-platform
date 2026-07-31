@@ -59,10 +59,7 @@ def looks_like_guid(value: str | None) -> bool:
 
 
 def bf_service_url(service_url: str | None) -> str:
-    return (
-        str(service_url or "").rstrip("/")
-        or BF_FALLBACK_SERVICE_URL.rstrip("/")
-    )
+    return str(service_url or "").rstrip("/") or BF_FALLBACK_SERVICE_URL.rstrip("/")
 
 
 async def get_graph_token(tenant_id: str) -> str | None:
@@ -82,9 +79,8 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
     app_id = surface_settings.microsoft_bot_app_id
     app_password = surface_settings.microsoft_bot_app_password
     if not app_id or not app_password:
-        logger.warning(
-            "Teams token acquisition skipped: MICROSOFT_BOT_APP_ID or "
-            "MICROSOFT_BOT_APP_PASSWORD not set in environment."
+        logger.debug(
+            'agent_surfaces.client.teams_token_acquisition_skipped_microsoft.diagnostic'
         )
         return None
 
@@ -119,37 +115,27 @@ async def _get_token(tenant_id: str, scope: str) -> str | None:
                     or error_code in ("unauthorized_client", "invalid_client")
                 ):
                     logger.error(
-                        "Teams token acquisition FAILED — admin consent required. "
-                        "Tenant admin for tenant=%s must grant consent at: "
-                        "https://login.microsoftonline.com/%s/adminconsent"
-                        "?client_id=%s "
-                        "status=%s error=%s description=%s",
-                        tenant_id,
-                        tenant_id,
-                        app_id,
-                        response.status,
-                        error_code,
-                        error_desc,
+                        "surface.teams.authentication_failed",
+                        tenant_id=tenant_id,
+                        app_id=app_id,
+                        status=response.status,
+                        error_code=error_code,
                     )
                 else:
-                    logger.warning(
-                        "Teams token acquisition failed for tenant=%s scope=%s "
-                        "status=%s error=%s description=%s",
-                        tenant_id,
-                        scope,
-                        response.status,
-                        error_code,
-                        error_desc,
+                    logger.debug(
+                        'agent_surfaces.client.teams_token_acquisition_tenant_s.diagnostic',
+                        tenant_id=tenant_id,
+                        status=response.status,
+                        error_code=error_code,
                     )
                 return None
             result = await response.json()
 
     token = result.get("access_token")
     if not token:
-        logger.warning(
-            "Teams token acquisition: no access_token in response for tenant=%s scope=%s",
-            tenant_id,
-            scope,
+        logger.debug(
+            'agent_surfaces.client.teams_token_acquisition_no_access.diagnostic',
+            tenant_id=tenant_id,
         )
         return None
 
@@ -188,32 +174,31 @@ async def resolve_graph_team_id(
 
     bot_token = await get_bot_token()
     if not bot_token:
-        logger.warning(
-            "Teams graph team resolution missing bot token raw_team=%s", raw_team_id
+        logger.debug(
+            'agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic',
+            raw_team_id=raw_team_id,
         )
         return None
 
-    details_url = (
-        f"{bf_service_url(service_url)}/v3/teams/{quote(str(raw_team_id))}"
-    )
+    details_url = f"{bf_service_url(service_url)}/v3/teams/{quote(str(raw_team_id))}"
 
     owns_session = session is None
     http = session or aiohttp.ClientSession()
     try:
         async with http.get(details_url, headers=auth_headers(bot_token)) as response:
             if response.status >= 400:
-                body = await response.text()
-                logger.warning(
-                    "Teams could not resolve team details raw_team=%s status=%s body=%s",
-                    raw_team_id,
-                    response.status,
-                    body[:300],
+                await response.text()
+                logger.debug(
+                    'agent_surfaces.client.teams_could_not_resolve_team.diagnostic',
+                    raw_team_id=raw_team_id,
+                    status=response.status,
                 )
                 return None
             details = await response.json()
-    except Exception as exc:
-        logger.warning(
-            "Teams team id resolution failed for %s: %s", raw_team_id, exc
+    except Exception:
+        logger.debug(
+            'agent_surfaces.client.teams_team_id_resolution_s.diagnostic',
+            raw_team_id=raw_team_id,
         )
         return None
     finally:
@@ -222,9 +207,9 @@ async def resolve_graph_team_id(
 
     aad_group_id = str(details.get("aadGroupId") or "") or None
     if not aad_group_id:
-        logger.warning(
-            "Teams team details for raw_team=%s did not include aadGroupId",
-            raw_team_id,
+        logger.debug(
+            'agent_surfaces.client.teams_team_details_raw_team.diagnostic',
+            raw_team_id=raw_team_id,
         )
         return None
     return aad_group_id

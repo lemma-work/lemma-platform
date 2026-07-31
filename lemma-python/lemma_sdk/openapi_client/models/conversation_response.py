@@ -38,6 +38,7 @@ class ConversationResponse:
         instructions (None | str | Unset):
         last_run_error (None | str | Unset):
         last_run_finished_at (datetime.datetime | None | Unset):
+        last_run_retryable (bool | Unset):  Default: False.
         last_run_status (AgentRunStatus | None | Unset):
         metadata (ConversationResponseMetadataType0 | None | Unset):
         organization_id (None | Unset | UUID):
@@ -58,6 +59,7 @@ class ConversationResponse:
     instructions: None | str | Unset = UNSET
     last_run_error: None | str | Unset = UNSET
     last_run_finished_at: datetime.datetime | None | Unset = UNSET
+    last_run_retryable: bool | Unset = False
     last_run_status: AgentRunStatus | None | Unset = UNSET
     metadata: ConversationResponseMetadataType0 | None | Unset = UNSET
     organization_id: None | Unset | UUID = UNSET
@@ -119,6 +121,8 @@ class ConversationResponse:
             last_run_finished_at = self.last_run_finished_at.isoformat()
         else:
             last_run_finished_at = self.last_run_finished_at
+
+        last_run_retryable = self.last_run_retryable
 
         last_run_status: None | str | Unset
         if isinstance(self.last_run_status, Unset):
@@ -197,6 +201,8 @@ class ConversationResponse:
             field_dict["last_run_error"] = last_run_error
         if last_run_finished_at is not UNSET:
             field_dict["last_run_finished_at"] = last_run_finished_at
+        if last_run_retryable is not UNSET:
+            field_dict["last_run_retryable"] = last_run_retryable
         if last_run_status is not UNSET:
             field_dict["last_run_status"] = last_run_status
         if metadata is not UNSET:
@@ -245,7 +251,7 @@ class ConversationResponse:
                 agent_id_type_0 = UUID(data)
 
                 return agent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -262,7 +268,7 @@ class ConversationResponse:
                 agent_runtime_type_0 = AgentRuntimeConfig.from_dict(data)
 
                 return agent_runtime_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRuntimeConfig | None | Unset, data)
 
@@ -299,13 +305,15 @@ class ConversationResponse:
                 last_run_finished_at_type_0 = isoparse(data)
 
                 return last_run_finished_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
         last_run_finished_at = _parse_last_run_finished_at(
             d.pop("last_run_finished_at", UNSET)
         )
+
+        last_run_retryable = d.pop("last_run_retryable", UNSET)
 
         def _parse_last_run_status(data: object) -> AgentRunStatus | None | Unset:
             if data is None:
@@ -318,7 +326,7 @@ class ConversationResponse:
                 last_run_status_type_0 = AgentRunStatus(data)
 
                 return last_run_status_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRunStatus | None | Unset, data)
 
@@ -337,7 +345,7 @@ class ConversationResponse:
                 metadata_type_0 = ConversationResponseMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ConversationResponseMetadataType0 | None | Unset, data)
 
@@ -354,7 +362,7 @@ class ConversationResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -380,7 +388,7 @@ class ConversationResponse:
                 parent_id_type_0 = UUID(data)
 
                 return parent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -397,7 +405,7 @@ class ConversationResponse:
                 status_type_0 = ConversationStatus(data)
 
                 return status_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ConversationStatus | None | Unset, data)
 
@@ -430,6 +438,7 @@ class ConversationResponse:
             instructions=instructions,
             last_run_error=last_run_error,
             last_run_finished_at=last_run_finished_at,
+            last_run_retryable=last_run_retryable,
             last_run_status=last_run_status,
             metadata=metadata,
             organization_id=organization_id,

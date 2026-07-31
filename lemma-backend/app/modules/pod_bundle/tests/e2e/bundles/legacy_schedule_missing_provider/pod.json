@@ -1,0 +1,12 @@
+{
+  "name": "Legacy Connector Schedule Pod",
+  "format_version": 2,
+  "description": "Predates connector/provider being mandatory on account variables — used to prove import now hard-rejects it instead of importing half-resolvable.",
+  "variables": {
+    "on_ticket_account": {
+      "type": "account",
+      "source_value": "019ebad7-9c4f-7143-8273-60e9ff368698",
+      "description": "Connector account for schedule 'on_ticket'"
+    }
+  }
+}

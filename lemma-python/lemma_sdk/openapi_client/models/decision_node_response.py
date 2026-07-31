@@ -118,7 +118,7 @@ class DecisionNodeResponse:
                 position_type_0 = DecisionNodeResponsePositionType0.from_dict(data)
 
                 return position_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(DecisionNodeResponsePositionType0 | None | Unset, data)
 

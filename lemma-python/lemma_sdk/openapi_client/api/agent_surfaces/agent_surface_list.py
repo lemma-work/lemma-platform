@@ -17,6 +17,8 @@ def _get_kwargs(
     *,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    platform: None | str | Unset = UNSET,
+    agent_name: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -29,6 +31,20 @@ def _get_kwargs(
     else:
         json_page_token = page_token
     params["page_token"] = json_page_token
+
+    json_platform: None | str | Unset
+    if isinstance(platform, Unset):
+        json_platform = UNSET
+    else:
+        json_platform = platform
+    params["platform"] = json_platform
+
+    json_agent_name: None | str | Unset
+    if isinstance(agent_name, Unset):
+        json_agent_name = UNSET
+    else:
+        json_agent_name = agent_name
+    params["agent_name"] = json_agent_name
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -79,13 +95,21 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    platform: None | str | Unset = UNSET,
+    agent_name: None | str | Unset = UNSET,
 ) -> Response[AgentSurfaceListResponse | ErrorResponse]:
     """List Surfaces
+
+     List surfaces in the pod. A pod may have several surfaces of the same
+    ``platform`` (different bots/accounts, one per agent); filter by
+    ``platform`` and/or ``agent_name`` to narrow the results.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        platform (None | str | Unset):
+        agent_name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -99,6 +123,8 @@ def sync_detailed(
         pod_id=pod_id,
         limit=limit,
         page_token=page_token,
+        platform=platform,
+        agent_name=agent_name,
     )
 
     response = client.get_httpx_client().request(
@@ -114,13 +140,21 @@ def sync(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    platform: None | str | Unset = UNSET,
+    agent_name: None | str | Unset = UNSET,
 ) -> AgentSurfaceListResponse | ErrorResponse | None:
     """List Surfaces
+
+     List surfaces in the pod. A pod may have several surfaces of the same
+    ``platform`` (different bots/accounts, one per agent); filter by
+    ``platform`` and/or ``agent_name`` to narrow the results.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        platform (None | str | Unset):
+        agent_name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -135,6 +169,8 @@ def sync(
         client=client,
         limit=limit,
         page_token=page_token,
+        platform=platform,
+        agent_name=agent_name,
     ).parsed
 
 
@@ -144,13 +180,21 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    platform: None | str | Unset = UNSET,
+    agent_name: None | str | Unset = UNSET,
 ) -> Response[AgentSurfaceListResponse | ErrorResponse]:
     """List Surfaces
+
+     List surfaces in the pod. A pod may have several surfaces of the same
+    ``platform`` (different bots/accounts, one per agent); filter by
+    ``platform`` and/or ``agent_name`` to narrow the results.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        platform (None | str | Unset):
+        agent_name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -164,6 +208,8 @@ async def asyncio_detailed(
         pod_id=pod_id,
         limit=limit,
         page_token=page_token,
+        platform=platform,
+        agent_name=agent_name,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -177,13 +223,21 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    platform: None | str | Unset = UNSET,
+    agent_name: None | str | Unset = UNSET,
 ) -> AgentSurfaceListResponse | ErrorResponse | None:
     """List Surfaces
+
+     List surfaces in the pod. A pod may have several surfaces of the same
+    ``platform`` (different bots/accounts, one per agent); filter by
+    ``platform`` and/or ``agent_name`` to narrow the results.
 
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        platform (None | str | Unset):
+        agent_name (None | str | Unset):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -199,5 +253,7 @@ async def asyncio(
             client=client,
             limit=limit,
             page_token=page_token,
+            platform=platform,
+            agent_name=agent_name,
         )
     ).parsed

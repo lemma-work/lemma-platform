@@ -39,9 +39,13 @@ class DatastoreAuthorization:
         ctx: Context | None,
     ) -> None:
         if ctx is not None:
-            await ctx.require(Permissions.DATASTORE_TABLE_CREATE, ResourceRef.pod(pod_id))
+            await ctx.require(
+                Permissions.DATASTORE_TABLE_CREATE, ResourceRef.pod(pod_id)
+            )
             return
-        await self._context().require(Permissions.DATASTORE_TABLE_CREATE, ResourceRef.pod(pod_id))
+        await self._context().require(
+            Permissions.DATASTORE_TABLE_CREATE, ResourceRef.pod(pod_id)
+        )
 
     async def require_datastore_read(
         self,
@@ -53,7 +57,9 @@ class DatastoreAuthorization:
         if ctx is not None:
             await ctx.require(Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id))
             return
-        await self._context().require(Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id))
+        await self._context().require(
+            Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id)
+        )
 
     async def require_table_read(
         self,
@@ -331,11 +337,10 @@ class DatastoreAuthorization:
                         resource_id=pod_id,
                     )
         except Exception:
-            logger.warning(
-                "Authorization check failed for is_document_admin (user=%s, pod=%s); "
-                "failing closed (denying)",
-                user_id,
-                pod_id,
+            logger.debug(
+                'datastore.authorization.authorization_check_document_admin_user.diagnostic',
+                user_id=user_id,
+                pod_id=pod_id,
                 exc_info=True,
             )
             return False
@@ -355,7 +360,9 @@ class DatastoreAuthorization:
         if ctx is not None:
             await ctx.require(permission_id, ResourceRef.table(pod_id, table_id))
             return
-        await self._context().require(fallback_action, ResourceRef.table(pod_id, table_id))
+        await self._context().require(
+            fallback_action, ResourceRef.table(pod_id, table_id)
+        )
 
     async def _require_document_action(
         self,
@@ -382,7 +389,9 @@ class DatastoreAuthorization:
         if current_ctx is not None:
             await current_ctx.require(action, resource)
             return
-        legacy_require = getattr(self.authorization_service, "require_user_action", None)
+        legacy_require = getattr(
+            self.authorization_service, "require_user_action", None
+        )
         if legacy_require is not None:
             await legacy_require(
                 user_id=user_id,

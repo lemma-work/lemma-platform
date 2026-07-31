@@ -7,7 +7,7 @@
 // form-field derivation, poll heuristics) that apps compose into their own
 // timelines and forms. The React hooks are thin adapters over this.
 import type { LemmaClient } from "../../client.js";
-import { isTerminalFlowStatus, normalizeRunStatus, sleep } from "../../run-utils.js";
+import { isTerminalWorkflowStatus, normalizeRunStatus, sleep } from "../../run-utils.js";
 import {
   buildSchemaFormFields,
   type JsonSchemaLike,
@@ -110,7 +110,7 @@ function resolveRunId(base?: string | null, override?: string | null): string {
  */
 export function selectWorkflowOutputs(run: FlowRun | null | undefined): WorkflowOutputs {
   const status = normalizeRunStatus(run?.status);
-  const isFinished = isTerminalFlowStatus(status);
+  const isFinished = isTerminalWorkflowStatus(status);
   const isWaitingForInput = status === "WAITING" && run?.active_wait?.wait_type === "HUMAN";
   const output = run?.execution_context ?? null;
   return {
@@ -158,7 +158,7 @@ export function buildWorkflowFormSubmit(
 export function shouldPollWorkflowRun(run: FlowRun | null | undefined): boolean {
   const status = normalizeRunStatus(run?.status);
   if (!status) return true;
-  if (isTerminalFlowStatus(status)) return false;
+  if (isTerminalWorkflowStatus(status)) return false;
   if (status === "WAITING" && run?.active_wait?.wait_type === "HUMAN") return false;
   return true;
 }
@@ -236,7 +236,7 @@ export class WorkflowController {
           const latest = await this.refresh(id);
           if (!latest) break;
           const latestStatus = normalizeRunStatus(latest.status);
-          if (latestStatus && isTerminalFlowStatus(latestStatus)) break;
+          if (latestStatus && isTerminalWorkflowStatus(latestStatus)) break;
           try {
             await sleep(this.options.pollIntervalMs ?? 2000, abort.signal);
           } catch (sleepError) {

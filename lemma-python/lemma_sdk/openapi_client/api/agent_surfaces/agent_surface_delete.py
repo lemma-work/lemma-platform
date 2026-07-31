@@ -13,14 +13,14 @@ from ...types import Response
 
 def _get_kwargs(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
 ) -> dict[str, Any]:
 
     _kwargs: dict[str, Any] = {
         "method": "delete",
-        "url": "/pods/{pod_id}/surfaces/{platform}".format(
+        "url": "/pods/{pod_id}/surfaces/{surface_name}".format(
             pod_id=quote(str(pod_id), safe=""),
-            platform=quote(str(platform), safe=""),
+            surface_name=quote(str(surface_name), safe=""),
         ),
     }
 
@@ -58,7 +58,7 @@ def _build_response(
 
 def sync_detailed(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
@@ -66,7 +66,7 @@ def sync_detailed(
 
     Args:
         pod_id (UUID):
-        platform (str):
+        surface_name (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -78,7 +78,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
-        platform=platform,
+        surface_name=surface_name,
     )
 
     response = client.get_httpx_client().request(
@@ -90,7 +90,7 @@ def sync_detailed(
 
 def sync(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
@@ -98,7 +98,7 @@ def sync(
 
     Args:
         pod_id (UUID):
-        platform (str):
+        surface_name (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -110,14 +110,14 @@ def sync(
 
     return sync_detailed(
         pod_id=pod_id,
-        platform=platform,
+        surface_name=surface_name,
         client=client,
     ).parsed
 
 
 async def asyncio_detailed(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     *,
     client: AuthenticatedClient | Client,
 ) -> Response[Any | ErrorResponse]:
@@ -125,7 +125,7 @@ async def asyncio_detailed(
 
     Args:
         pod_id (UUID):
-        platform (str):
+        surface_name (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -137,7 +137,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         pod_id=pod_id,
-        platform=platform,
+        surface_name=surface_name,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -147,7 +147,7 @@ async def asyncio_detailed(
 
 async def asyncio(
     pod_id: UUID,
-    platform: str,
+    surface_name: str,
     *,
     client: AuthenticatedClient | Client,
 ) -> Any | ErrorResponse | None:
@@ -155,7 +155,7 @@ async def asyncio(
 
     Args:
         pod_id (UUID):
-        platform (str):
+        surface_name (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -168,7 +168,7 @@ async def asyncio(
     return (
         await asyncio_detailed(
             pod_id=pod_id,
-            platform=platform,
+            surface_name=surface_name,
             client=client,
         )
     ).parsed

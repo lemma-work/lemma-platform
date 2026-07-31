@@ -8,12 +8,13 @@ them into the stored list by their text:
   * re-sending the same text with a checked box (``"- [x] Fetch the Q3 report"``,
     ``[X]`` / ``[*]`` also count) marks it done.
 
-Lines are matched to existing tasks by their (trimmed, case-insensitive) text, so
-the model can send the WHOLE list or just a SINGLE line to flip one task — either
-way nothing else is dropped. This is deliberately simpler than a structured-object,
-full-replace ``TodoWrite``: small models reliably emit one string per line but trip
-on nested objects or on resending a complete list every call. The tool ALWAYS
-returns the full list back as rendered lines.
+Lines are matched to existing tasks by their (trimmed, case-insensitive) text. A
+single line updates one task without dropping the rest; multiple lines represent a
+complete snapshot and replace the current list. This is deliberately simpler than a
+structured-object ``TodoWrite``: small models reliably emit one string per line but
+trip on nested objects. The tool ALWAYS returns the full list back as rendered
+lines. Once every stored item is complete, the next unchecked item starts a fresh
+plan rather than extending completed history.
 """
 
 from __future__ import annotations
@@ -39,8 +40,8 @@ class WriteTodosRequest(BaseModel):
             "One markdown checklist line per task. Use '[ ]' for a task still to "
             "do and '[x]' once it's done (e.g. '- [ ] Fetch the Q3 report'); a "
             "line with no checkbox is treated as not-done. Send the whole list, "
-            "or just the single line you want to flip — lines are matched to "
-            "existing tasks by their text, so the rest of the list is preserved. "
+            "or just the single line you want to flip. Multiple lines replace the "
+            "current list; a single line is matched by text and preserves the rest. "
             "The full, updated list is always returned."
         )
     )
@@ -50,9 +51,71 @@ class WriteTodosRequest(BaseModel):
 # or "[x]"/"[X]"/"[*]" (done). The remainder is the task text.
 _CHECKBOX_RE = re.compile(r"^\s*(?:[-*]\s+)?\[(?P<mark>[ xX*])\]\s*(?P<text>.*)$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+")
+_DUPLICATE_CHECKBOX_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:[-*]\s*)?\[[ xX*]\]\s*){2,}"
+)
+_PLAN_XML_TAG_RE = re.compile(
+    r"</?\s*(?:todos?|item)\b[^>]*>"
+    r"|</\s*td\s*>(?=\s*(?:<\s*(?:item|/?todos?)\b|$))",
+    flags=re.IGNORECASE,
+)
+_TEXT_STATUS_RE = re.compile(
+    r"^(?P<text>.+?)\s+(?:(?P<separator>[-—:])\s*)?"
+    r"(?P<status>done|complete|completed|in[\s_-]*progress|pending|todo)\s*$",
+    flags=re.IGNORECASE,
+)
 
 
-def _parse_todo_line(line: str) -> tuple[str, bool] | None:
+def _split_todo_fragments(line: str) -> tuple[list[str], bool]:
+    """Recover list items flattened into XML-like text by some tool parsers."""
+
+    if not line or not line.strip():
+        return [], False
+    had_plan_tags = _PLAN_XML_TAG_RE.search(line) is not None
+    if not had_plan_tags:
+        return [line.strip()], False
+    fragments = [
+        fragment.strip()
+        for fragment in _PLAN_XML_TAG_RE.sub("\n", line).splitlines()
+        if fragment.strip()
+    ]
+    return fragments, True
+
+
+def _remove_duplicate_checkbox_prefix(line: str) -> str:
+    """Drop an erroneous outer checkbox while preserving the innermost state."""
+
+    prefix = _DUPLICATE_CHECKBOX_PREFIX_RE.match(line)
+    if prefix is None:
+        return line
+    marks = re.findall(r"\[([ xX*])\]", prefix.group(0))
+    if not marks:
+        return line
+    return f"[{marks[-1]}] {line[prefix.end():].lstrip()}"
+
+
+def _text_status(text: str, *, infer_status: bool) -> tuple[str, bool | None]:
+    """Read status prose emitted by malformed XML plans without guessing broadly."""
+
+    match = _TEXT_STATUS_RE.match(text)
+    if match is None:
+        return text, None
+    # Accept normal prose only when it came from a flattened plan. For untagged
+    # calls, require an explicit separator ("— done") or an all-caps status label
+    # such as "RESEARCH DONE", both shapes seen from XML-oriented tool parsers.
+    if (
+        not infer_status
+        and match.group("separator") is None
+        and text != text.upper()
+    ):
+        return text, None
+    status = match.group("status").lower().replace("_", " ").replace("-", " ")
+    return match.group("text").strip(), status in {"done", "complete", "completed"}
+
+
+def _parse_todo_line(
+    line: str, *, infer_text_status: bool = False
+) -> tuple[str, bool] | None:
     """Parse one input line into ``(content, done)``, or ``None`` if blank.
 
     Accepts a markdown checklist item ("- [ ] do x", "[x] done", "* [*] done") or
@@ -61,16 +124,41 @@ def _parse_todo_line(line: str) -> tuple[str, bool] | None:
     """
     if not line or not line.strip():
         return None
+    line = _remove_duplicate_checkbox_prefix(line)
     match = _CHECKBOX_RE.match(line)
     if match:
         text = match.group("text").strip()
         if not text:
             return None
-        return text, match.group("mark") in ("x", "X", "*")
+        text, text_done = _text_status(text, infer_status=infer_text_status)
+        if not text:
+            return None
+        done = match.group("mark") in ("x", "X", "*")
+        return text, text_done if text_done is not None else done
     text = _BULLET_RE.sub("", line).strip()
     if not text:
         return None
-    return text, False
+    text, text_done = _text_status(text, infer_status=infer_text_status)
+    return (text, text_done if text_done is not None else False) if text else None
+
+
+def _parse_todo_lines(lines: list[str]) -> list[tuple[str, bool]]:
+    parsed: list[tuple[str, bool]] = []
+    for line in lines:
+        fragments, had_plan_tags = _split_todo_fragments(line)
+        infer_text_status = had_plan_tags or len(fragments) > 1
+        parsed.extend(
+            item
+            for item in (
+                _parse_todo_line(
+                    fragment,
+                    infer_text_status=infer_text_status,
+                )
+                for fragment in fragments
+            )
+            if item is not None
+        )
+    return parsed
 
 
 def _norm(text: str) -> str:
@@ -87,6 +175,7 @@ def _normalize_stored(stored: list[JsonObject]) -> list[JsonObject]:
     """Coerce stored rows to ``{content, done}``, tolerating the legacy
     ``{content, status, active_form}`` shape from before the simplification."""
     todos: list[JsonObject] = []
+    index: dict[str, JsonObject] = {}
     for raw in stored:
         if not isinstance(raw, dict):
             continue
@@ -94,7 +183,25 @@ def _normalize_stored(stored: list[JsonObject]) -> list[JsonObject]:
         if not content:
             continue
         done = bool(raw.get("done")) or raw.get("status") == "completed"
-        todos.append({"content": content, "done": done})
+        mark = "x" if done else " "
+        recovered = _parse_todo_lines([f"- [{mark}] {content}"])
+        if len(recovered) > 1:
+            # A flattened multi-item row was an authoritative snapshot, not one
+            # enormous task. Later rows can still incrementally update it.
+            todos = []
+            index = {}
+        for recovered_content, recovered_done in recovered:
+            key = _norm(recovered_content)
+            existing = index.get(key)
+            if existing is not None:
+                existing["done"] = recovered_done
+                continue
+            entry: JsonObject = {
+                "content": recovered_content,
+                "done": recovered_done,
+            }
+            todos.append(entry)
+            index[key] = entry
     return todos
 
 
@@ -127,7 +234,8 @@ def build_todo_toolset(
     """Build the todo FunctionToolset persisting to conversation metadata.
 
     Shared by both harness families: RunToolAssembler includes it directly (so it
-    reaches daemons over MCP), and the LEMMA assembler wraps it in TodoCapability.
+    reaches remote harnesses over MCP), and the LEMMA assembler wraps it in
+    TodoCapability.
     """
     store = ConversationTodoStore(
         uow_factory=uow_factory, conversation_id=conversation_id
@@ -138,17 +246,19 @@ def build_todo_toolset(
     ) -> JsonObject:
         """Add or update task-list items from markdown checklist lines.
 
-        Each line is upserted by its text: a new line is appended, a line whose
-        text matches an existing task flips that task's done state. Send one line
-        to flip one task, or the whole list at once. Returns the full task list.
+        A single line is upserted by its text; multiple lines replace the current
+        list as one authoritative snapshot. Returns the full task list.
         """
-        parsed = [
-            item
-            for item in (_parse_todo_line(line) for line in request.todos)
-            if item is not None
-        ]
+        parsed = _parse_todo_lines(request.todos)
         todos = _normalize_stored(await store.read())
-        index = {_norm(t["content"]): t for t in todos}
+
+        # A finished task list is historical. The first unchecked item after all
+        # stored items are complete starts a fresh plan instead of appending new
+        # work to an ever-growing conversation-wide archive.
+        if todos and all(bool(item.get("done")) for item in todos) and any(
+            not done for _, done in parsed
+        ):
+            todos = []
 
         if not parsed:
             # Nothing real to merge: return the current list rather than wiping it.
@@ -163,6 +273,13 @@ def build_todo_toolset(
                 )
             return result
 
+        # More than one supplied item is the model's complete current plan.
+        # Replacing on a full snapshot prevents wording changes and malformed
+        # XML serializations from growing an unbounded conversation-wide list.
+        if len(parsed) > 1:
+            todos = []
+
+        index = {_norm(t["content"]): t for t in todos}
         for content, done in parsed:
             existing = index.get(_norm(content))
             if existing is not None:

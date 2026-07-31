@@ -23,4 +23,3 @@ export type FormNodeConfig = {
      */
     ui_schema?: (Record<string, any> | null);
 };
-

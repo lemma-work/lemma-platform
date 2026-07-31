@@ -2,11 +2,30 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.modules.agent_surfaces.domain.models import (
+    APPROVAL_DECISION_APPROVE,
+    APPROVAL_DECISION_DENY,
+    APPROVAL_DECISION_SESSION,
+)
 from app.modules.agent_surfaces.platforms.common import SurfaceFileAttachment
 
 # action_id of the Submit button on a native Slack form; the inbound
 # block_actions parser matches on this to recognise a form submission.
 SLACK_FORM_SUBMIT_ACTION_ID = "lemma_form_submit"
+
+# action_id per approval decision on a native Slack approval prompt. The inbound
+# block_actions parser matches these to recover the decision (the button's
+# ``value`` carries the callback id). Kept as a decision→action_id map so the
+# render and parse sides stay in sync.
+SLACK_APPROVAL_ACTION_ID_BY_DECISION = {
+    APPROVAL_DECISION_APPROVE: "lemma_approval_approve",
+    APPROVAL_DECISION_DENY: "lemma_approval_deny",
+    APPROVAL_DECISION_SESSION: "lemma_approval_session",
+}
+SLACK_APPROVAL_DECISION_BY_ACTION_ID = {
+    action_id: decision
+    for decision, action_id in SLACK_APPROVAL_ACTION_ID_BY_DECISION.items()
+}
 
 
 class SlackToolResult(BaseModel):

@@ -3,9 +3,10 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from app.modules.identity.domain.organization_entities import (
+from app.modules.identity.contracts import (
     OrganizationMemberEntity,
     OrganizationRole,
+    can_grant_org_role,
 )
 from app.modules.pod.domain.errors import (
     PodAccessDeniedError,
@@ -338,7 +339,7 @@ class PodJoinRequestService:
         if not pod:
             raise PodNotFoundError()
 
-        await self._require_manage_permission(
+        approver = await self._require_manage_permission(
             pod_id=pod.id,
             organization_id=pod.organization_id,
             requester_user_id=requester_user_id,
@@ -353,11 +354,22 @@ class PodJoinRequestService:
                 f"Join request is already {join_request.status.value.lower()}"
             )
 
+        approver_is_org_manager = approver.role in (
+            OrganizationRole.ORG_OWNER,
+            OrganizationRole.ORG_EDITOR,
+        )
+
         target_org_member = await self.organization_repository.get_member(
             join_request.user_id,
             pod.organization_id,
         )
         if not target_org_member:
+            # The org role is granted to a brand-new member here, so bound it to
+            # what the approver may confer: only an org owner mints owners/editors.
+            if not can_grant_org_role(approver.role, org_role):
+                raise PodAccessDeniedError(
+                    "You may not grant that organization role"
+                )
             target_org_member = await self.organization_repository.add_member(
                 OrganizationMemberEntity(
                     user_id=join_request.user_id,
@@ -378,6 +390,17 @@ class PodJoinRequestService:
             )
             created_member = await self.pod_member_repository.create(pod_member)
             if self.pod_role_service is not None:
+                # A pod-admin approver (not an org-level manager) may only confer
+                # pod roles within their own bounds. Org owners/editors manage the
+                # pod with org authority and are not pod members, so they skip the
+                # pod-membership-based bounds check.
+                if not approver_is_org_manager:
+                    await self.pod_role_service.require_role_manager_bounds(
+                        pod_id=pod_id,
+                        requester_user_id=requester_user_id,
+                        target_roles=[pod_role],
+                        target_user_id=join_request.user_id,
+                    )
                 await self.pod_role_service.sync_member_roles(
                     pod_id=pod_id,
                     pod_member_id=created_member.id,

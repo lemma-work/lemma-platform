@@ -694,7 +694,7 @@ write_file "$APP_ROOT/src/index.css" <<'EOF'
 @import "tailwindcss";
 
 @theme inline {
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: var(--lemma-app-font, "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
   --font-heading: var(--font-sans);
   --font-mono: "Source Code Pro", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   --color-background: var(--background);
@@ -715,74 +715,74 @@ write_file "$APP_ROOT/src/index.css" <<'EOF'
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --radius-sm: 0.25rem;
-  --radius-md: 0.375rem;
-  --radius-lg: var(--radius);
-  --radius-xl: 0.75rem;
+  --radius-sm: var(--lemma-app-radius-sm, 0.25rem);
+  --radius-md: var(--lemma-app-radius-md, 0.375rem);
+  --radius-lg: var(--lemma-app-radius-lg, var(--radius));
+  --radius-xl: var(--lemma-app-radius-panel, 0.625rem);
 }
 
 :root {
   color-scheme: light;
-  --background: #fdfdf8;
-  --foreground: #23251d;
-  --card: #ffffff;
-  --card-foreground: #23251d;
+  --background: var(--lemma-app-bg, #f8f7f3);
+  --foreground: var(--lemma-app-text, #181816);
+  --card: var(--lemma-app-surface, #ffffff);
+  --card-foreground: var(--lemma-app-text, #181816);
   --popover: rgba(255, 255, 255, 0.96);
-  --popover-foreground: #23251d;
-  --primary: #1e1f23;
-  --primary-foreground: #ffffff;
-  --secondary: #eeefe9;
-  --secondary-foreground: #4d4f46;
-  --muted: #e5e7e0;
-  --muted-foreground: #65675e;
-  --accent: #eeefe9;
-  --accent-foreground: #23251d;
-  --destructive: #f54e00;
-  --border: #d3d6cc;
-  --input: #c8cbc0;
-  --ring: #3b82f6;
-  --radius: 0.625rem;
-  --brand-accent: #f54e00;
-  --brand-warm: #f7a501;
-  --surface-quiet: #eeefe9;
-  --surface-muted: #e5e7e0;
-  --text-secondary: #4d4f46;
-  --text-tertiary: #65675e;
-  --text-soft: #9ea096;
-  --shadow-xs: 0 1px 2px rgba(35, 37, 29, 0.04);
-  --shadow-sm: 0 8px 24px rgba(35, 37, 29, 0.05);
+  --popover-foreground: var(--lemma-app-text, #181816);
+  --primary: var(--lemma-app-accent, #5f61d8);
+  --primary-foreground: var(--lemma-app-text-on-accent, #ffffff);
+  --secondary: var(--lemma-app-subtle, #f6f5f2);
+  --secondary-foreground: var(--lemma-app-muted, #6f6d68);
+  --muted: var(--lemma-app-subtle, #f6f5f2);
+  --muted-foreground: var(--lemma-app-muted, #6f6d68);
+  --accent: var(--lemma-app-accent-soft, #eeeeff);
+  --accent-foreground: var(--lemma-app-text, #181816);
+  --destructive: var(--lemma-app-danger, #dc6155);
+  --border: var(--lemma-app-border, #e8e7e2);
+  --input: var(--lemma-app-border-strong, #d9d7d1);
+  --ring: var(--lemma-app-accent, #5f61d8);
+  --radius: var(--lemma-app-radius-lg, 0.5rem);
+  --brand-accent: var(--lemma-app-chart-1, #f06b3e);
+  --brand-warm: var(--lemma-app-chart-4, #e4b52d);
+  --surface-quiet: var(--lemma-app-subtle, #f6f5f2);
+  --surface-muted: var(--lemma-app-raised, #efeee9);
+  --text-secondary: var(--lemma-app-muted, #6f6d68);
+  --text-tertiary: var(--lemma-app-faint, #99968f);
+  --text-soft: var(--lemma-app-faint, #99968f);
+  --shadow-xs: none;
+  --shadow-sm: none;
   --shadow-lg: 0 24px 60px rgba(35, 37, 29, 0.12);
 }
 
 .dark {
   color-scheme: dark;
-  --background: #151614;
-  --foreground: #e5e7e0;
-  --card: #1c1d1a;
-  --card-foreground: #e5e7e0;
+  --background: var(--lemma-app-bg, #1a1b18);
+  --foreground: var(--lemma-app-text, #f0efea);
+  --card: var(--lemma-app-surface, #20211e);
+  --card-foreground: var(--lemma-app-text, #f0efea);
   --popover: rgba(28, 29, 26, 0.96);
-  --popover-foreground: #e5e7e0;
-  --primary: #fdfdf8;
-  --primary-foreground: #23251d;
-  --secondary: #252621;
-  --secondary-foreground: #c7cbbf;
-  --muted: #2e2f2a;
-  --muted-foreground: #9ea096;
-  --accent: #252621;
-  --accent-foreground: #e5e7e0;
-  --destructive: #f54e00;
-  --border: #32332e;
-  --input: #3d3f38;
-  --ring: #4e93e8;
-  --brand-accent: #f54e00;
-  --brand-warm: #f7a501;
-  --surface-quiet: #252621;
-  --surface-muted: #2e2f2a;
-  --text-secondary: #c7cbbf;
-  --text-tertiary: #9ea096;
-  --text-soft: #65675e;
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-sm: 0 12px 32px rgba(0, 0, 0, 0.22);
+  --popover-foreground: var(--lemma-app-text, #f0efea);
+  --primary: var(--lemma-app-accent, #8588e8);
+  --primary-foreground: var(--lemma-app-text-on-accent, #ffffff);
+  --secondary: var(--lemma-app-subtle, #262722);
+  --secondary-foreground: var(--lemma-app-muted, #aaa9a2);
+  --muted: var(--lemma-app-subtle, #262722);
+  --muted-foreground: var(--lemma-app-muted, #aaa9a2);
+  --accent: var(--lemma-app-accent-soft, #262640);
+  --accent-foreground: var(--lemma-app-text, #f0efea);
+  --destructive: var(--lemma-app-danger, #f87171);
+  --border: var(--lemma-app-border, #2d2f29);
+  --input: var(--lemma-app-border-strong, #45473f);
+  --ring: var(--lemma-app-accent, #8588e8);
+  --brand-accent: var(--lemma-app-chart-1, #f87171);
+  --brand-warm: var(--lemma-app-chart-4, #e0aa55);
+  --surface-quiet: var(--lemma-app-subtle, #262722);
+  --surface-muted: var(--lemma-app-raised, #2d2f29);
+  --text-secondary: var(--lemma-app-muted, #aaa9a2);
+  --text-tertiary: var(--lemma-app-faint, #75766e);
+  --text-soft: var(--lemma-app-faint, #75766e);
+  --shadow-xs: none;
+  --shadow-sm: none;
   --shadow-lg: 0 28px 72px rgba(0, 0, 0, 0.34);
 }
 
@@ -804,9 +804,7 @@ write_file "$APP_ROOT/src/index.css" <<'EOF'
   body {
     @apply font-sans text-foreground antialiased;
     background-color: var(--background);
-    background-image:
-      radial-gradient(circle at top, rgba(245, 78, 0, 0.07), transparent 28%),
-      radial-gradient(circle at bottom left, rgba(30, 31, 35, 0.04), transparent 24%);
+    background-image: none;
     letter-spacing: -0.01em;
   }
 
@@ -1459,6 +1457,18 @@ export function ThemeToggle({ sidebar = false }: { sidebar?: boolean }) {
     };
     media.addEventListener("change", handleChange);
     return () => media.removeEventListener("change", handleChange);
+  }, []);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleHostTheme = (event: Event) => {
+      const detail = (event as CustomEvent<{ theme?: ThemeMode }>).detail;
+      if (detail?.theme === "light" || detail?.theme === "dark") {
+        setTheme(detail.theme);
+      }
+    };
+    window.addEventListener("lemma:theme", handleHostTheme);
+    return () => window.removeEventListener("lemma:theme", handleHostTheme);
   }, []);
 
   const nextTheme: ThemeMode = theme === "dark" ? "light" : "dark";

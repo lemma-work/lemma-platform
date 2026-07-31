@@ -111,10 +111,10 @@
     }
   }
 
-  /* Typography baseline: editorial mission titles, readable body rhythm */
+  /* Product headings stay utilitarian; Bricolage is reserved for branded display moments. */
   h1,
   h2 {
-    font-family: var(--font-display-family);
+    font-family: var(--font-body-family);
     letter-spacing: 0;
     font-weight: 600;
     color: var(--text-primary);

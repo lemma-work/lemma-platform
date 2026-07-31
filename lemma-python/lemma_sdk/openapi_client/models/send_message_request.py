@@ -78,7 +78,7 @@ class SendMessageRequest:
                 metadata_type_0 = SendMessageRequestMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | SendMessageRequestMetadataType0 | Unset, data)
 

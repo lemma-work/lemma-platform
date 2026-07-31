@@ -2,8 +2,8 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { FlowDetailResponse } from '../models/FlowDetailResponse.js';
 import type { WorkflowCreateRequest } from '../models/WorkflowCreateRequest.js';
+import type { WorkflowDetailResponse } from '../models/WorkflowDetailResponse.js';
 import type { WorkflowGraphUpdateRequest } from '../models/WorkflowGraphUpdateRequest.js';
 import type { WorkflowListResponse } from '../models/WorkflowListResponse.js';
 import type { WorkflowRunFormSubmitRequest } from '../models/WorkflowRunFormSubmitRequest.js';
@@ -178,13 +178,13 @@ export class WorkflowsService {
      * Create a workflow definition. The graph (`nodes`/`edges`) can be included in this call to create a ready-to-run workflow in one step, or omitted to create a shell and upload the graph later with `workflow.graph.update`.
      * @param podId
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     public static workflowCreate(
         podId: string,
         requestBody: WorkflowCreateRequest,
-    ): CancelablePromise<FlowDetailResponse> {
+    ): CancelablePromise<WorkflowDetailResponse> {
         return __request(OpenAPI, {
             method: 'POST',
             url: '/pods/{pod_id}/workflows',
@@ -227,13 +227,13 @@ export class WorkflowsService {
      * Get a single workflow definition including graph and start configuration.
      * @param podId
      * @param workflowName
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     public static workflowGet(
         podId: string,
         workflowName: string,
-    ): CancelablePromise<FlowDetailResponse> {
+    ): CancelablePromise<WorkflowDetailResponse> {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/pods/{pod_id}/workflows/{workflow_name}',
@@ -252,14 +252,14 @@ export class WorkflowsService {
      * @param podId
      * @param workflowName
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     public static workflowUpdate(
         podId: string,
         workflowName: string,
         requestBody: WorkflowUpdateRequest,
-    ): CancelablePromise<FlowDetailResponse> {
+    ): CancelablePromise<WorkflowDetailResponse> {
         return __request(OpenAPI, {
             method: 'PATCH',
             url: '/pods/{pod_id}/workflows/{workflow_name}',
@@ -280,14 +280,14 @@ export class WorkflowsService {
      * @param podId
      * @param workflowName
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     public static workflowGraphUpdate(
         podId: string,
         workflowName: string,
         requestBody: WorkflowGraphUpdateRequest,
-    ): CancelablePromise<FlowDetailResponse> {
+    ): CancelablePromise<WorkflowDetailResponse> {
         return __request(OpenAPI, {
             method: 'PUT',
             url: '/pods/{pod_id}/workflows/{workflow_name}/graph',

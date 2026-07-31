@@ -275,6 +275,55 @@ async def test_remove_member_not_found_raises(
 
 
 @pytest.mark.asyncio
+async def test_remove_member_revokes_authorization():
+    # Removal must revoke the member's cached authorization immediately (targeted
+    # by the removed user's id), not leave it live until the snapshot TTL.
+    requester_id = uuid4()
+    target_user_id = uuid4()
+    pod = _make_pod(organization_id=uuid4(), user_id=uuid4())
+    member = PodMemberEntity(
+        pod_id=pod.id,
+        organization_member_id=uuid4(),
+        role=PodRole.EDITOR,
+        user_id=target_user_id,
+    )
+
+    pod_member_repo = AsyncMock()
+    pod_member_repo.get_by_pod_and_id.return_value = member
+    pod_member_repo.delete_entity.return_value = True
+    pod_repo = AsyncMock()
+    pod_repo.get.return_value = pod
+    org_repo = AsyncMock()
+    org_repo.get_member.return_value = _make_org_member(
+        user_id=requester_id,
+        organization_id=pod.organization_id,
+        role=OrganizationRole.ORG_OWNER,
+    )
+    org_repo.get_member_by_id.return_value = _make_org_member(
+        user_id=target_user_id,
+        organization_id=pod.organization_id,
+        role=OrganizationRole.ORG_MEMBER,
+    )
+    role_service = AsyncMock()
+
+    service = PodMemberService(
+        pod_member_repository=pod_member_repo,
+        pod_repository=pod_repo,
+        organization_repository=org_repo,
+        pod_role_service=role_service,
+    )
+
+    result = await service.remove_member_from_pod(pod.id, member.id, requester_id)
+
+    assert result is True
+    role_service.revoke_member_authorization.assert_awaited_once_with(
+        pod_id=member.pod_id,
+        pod_member_id=member.id,
+        user_id=target_user_id,
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_member_role_sets_role(
     pod_member_service: PodMemberService,
     pod_repository_mock: AsyncMock,

@@ -24,9 +24,12 @@ jobs:
       typescript: ${{ steps.filter.outputs.typescript }}
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
+      desktop: ${{ steps.filter.outputs.desktop }}
+      agentbox: ${{ steps.filter.outputs.agentbox }}
+      agent_host: ${{ steps.filter.outputs.agent_host }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -47,18 +50,103 @@ jobs:
               - '.github/workflows/ci.yml'
             frontend:
               - 'lemma-frontend/**'
-            codegen:
-              - 'lemma-python/**'
-              - 'lemma-typescript/**'
-              - 'lemma-backend/app/**'
-              - 'scripts/**'
               - '.github/workflows/ci.yml'
+            codegen:
+              - 'lemma-python/lemma_sdk/openapi_spec.json'
+              - 'lemma-python/lemma_sdk/openapi_client/**'
+              - 'lemma-python/lemma_sdk/_spec_info.py'
+              - 'lemma-python/scripts/generate_openapi_client.sh'
+              - 'lemma-typescript/src/openapi_client/**'
+              - 'lemma-typescript/src/react/generated/**'
+              - 'lemma-typescript/scripts/generate_openapi_client.sh'
+              - 'lemma-typescript/scripts/generate_l2.mjs'
+              - 'lemma-typescript/scripts/patch_generated_imports.mjs'
+              - '.github/workflows/ci.yml'
+            desktop:
+              - 'desktop/**'
+              - 'lemma-stack/**'
+              - 'lemma-frontend/lib/education/concepts.ts'
+              - '.github/actions/setup-apple-signing/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release-desktop.yml'
+            agent_host:
+              - 'agent-host/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release-agent-host.yml'
+            agentbox:
+              - 'agentbox/**'
+              - 'agentbox-client/**'
+              # agentbox/uv.lock pins lemma-sdk as an editable path dependency on
+              # ../lemma-python, so a version bump there makes the lock stale and
+              # `uv sync --locked` fail. Without this the job would not run on
+              # that change and the rot would surface on some later, unrelated PR.
+              - 'lemma-python/**'
+              - '.github/workflows/ci.yml'
+
+  agentbox:
+    name: AgentBox providers, state, and runtime
+    needs: changes
+    if: needs.changes.outputs.agentbox == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agentbox
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentbox
+          POSTGRES_PASSWORD: agentbox
+          POSTGRES_DB: agentbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentbox -d agentbox_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: agentbox/uv.lock
+      - name: Install AgentBox with every provider and state backend
+        run: uv sync --all-extras --locked
+      - name: Ruff
+        run: uv run ruff check agentbox tests ../agentbox-client/agentbox_client ../agentbox-client/tests
+      - name: AgentBox OpenAPI contract drift
+        run: uv run python ../agentbox-client/scripts/generate.py --check
+      - name: AgentBox non-e2e tests with real PostgreSQL parity
+        run: uv run python -m pytest tests -m "not e2e"
+        env:
+          AGENTBOX_TEST_POSTGRES_URL: postgresql://agentbox:agentbox@localhost:5432/agentbox_test
+      - name: AgentBox client tests
+        run: uv run python -m pytest ../agentbox-client/tests
+      - name: Docker daemon smoke
+        run: |
+          docker version
+          docker info
+      - name: Build canonical Docker conformance images
+        run: make build-test-images
+      - name: Real Docker provider contract
+        timeout-minutes: 20
+        run: >-
+          uv run python -m pytest
+          tests/adapters/test_docker_real.py
+          --junitxml=agentbox-docker-e2e.xml
+        env:
+          AGENTBOX_RUN_DOCKER_TESTS: "1"
 
   backend-unit:
     name: lemma-backend unit
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
     defaults:
       run:
         working-directory: lemma-backend
@@ -73,16 +161,92 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
       - name: Sync deps
-        run: uv sync
-      - name: Unit tests
-        run: make test-unit
+        run: uv sync --extra local
+      - name: Unit tests with coverage
+        run: make coverage-backend-unit
         env:
           REDIS_URL: redis://localhost:6379
+      - name: Add backend coverage to job summary
+        if: always()
+        run: |
+          if [ -f coverage-backend/comment.md ]; then
+            cat coverage-backend/comment.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload backend unit coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-unit-coverage
+          include-hidden-files: true
+          path: |
+            lemma-backend/.coverage.backend
+            lemma-backend/coverage-backend/comment.md
+            lemma-backend/coverage-backend/summary.json
+            lemma-backend/coverage-backend/coverage.json
+            lemma-backend/coverage-backend/coverage.xml
+            lemma-backend/coverage-backend/html
+          if-no-files-found: ignore
+  backend-lint:
+    name: lemma-backend quality gates
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync deps
+        run: uv sync --extra local
+      - name: Ruff handwritten backend
+        run: make lint
+      - name: Async-safety lint
+        run: make lint-async
+      - name: Critical domain type safety
+        run: make typecheck-critical
+      - name: Architecture, complexity, and broad-catch ratchet
+        run: make architecture
+
+  backend-migration:
+    name: lemma-backend migration upgrade/downgrade
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.3-pg15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: migration_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d migration_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - name: Verify consolidated reliability migration
+        run: uv run python scripts/verify_reliability_migration.py
+        env:
+          MIGRATION_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/migration_test
 
   python-sdk:
     name: Python SDK + CLI tests
@@ -90,10 +254,14 @@ jobs:
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+      - name: Check Python SDK lockfile
+        working-directory: lemma-python
+        run: uv lock --check
       - name: Install SDK + CLI
         run: |
           python -m pip install --upgrade pip
@@ -123,7 +291,7 @@ jobs:
       run:
         working-directory: lemma-typescript
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -152,10 +320,10 @@ jobs:
     if: needs.changes.outputs.codegen == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -189,7 +357,7 @@ jobs:
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -216,7 +384,7 @@ jobs:
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -242,7 +410,7 @@ jobs:
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -256,10 +424,10 @@ jobs:
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install uv
         run: pip install uv
       - name: Install lemma-cli from local checkout
@@ -298,12 +466,219 @@ jobs:
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
 
+  agent-host:
+    name: Agent Host crate
+    needs: changes
+    if: needs.changes.outputs.agent_host == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent-host/target
+          key: agent-host-cargo-${{ runner.os }}-${{ hashFiles('agent-host/Cargo.lock') }}
+          restore-keys: agent-host-cargo-${{ runner.os }}-
+
+      # reqwest is built with native-tls, so the crate links against the system
+      # OpenSSL rather than vendoring one.
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Check formatting
+        working-directory: agent-host
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: agent-host
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: agent-host
+        run: cargo test --locked
+
+  desktop:
+    name: macOS desktop build + codesign
+    needs: changes
+    if: needs.changes.outputs.desktop == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-ci-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-ci-cargo-${{ runner.os }}-
+
+      - name: Import Developer ID certificate
+        id: apple-signing
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: ./.github/actions/setup-apple-signing
+        with:
+          certificate: ${{ secrets.APPLE_CERTIFICATE }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      - name: Select Developer ID signing
+        if: steps.apple-signing.outcome == 'success'
+        env:
+          SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+        run: |
+          echo "APPLE_SIGNING_IDENTITY=${SIGNING_IDENTITY}" >> "${GITHUB_ENV}"
+          echo "LEMMA_EXPECTED_SIGNING=developer-id" >> "${GITHUB_ENV}"
+
+      - name: Select ad-hoc signing for untrusted builds
+        if: steps.apple-signing.outcome == 'skipped'
+        run: |
+          echo "APPLE_SIGNING_IDENTITY=-" >> "${GITHUB_ENV}"
+          echo "LEMMA_EXPECTED_SIGNING=adhoc" >> "${GITHUB_ENV}"
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build native local sidecars
+        run: desktop/scripts/build-sidecar.sh
+
+      - name: Run desktop tests
+        working-directory: desktop
+        run: cargo test --locked
+
+      - name: Stage CI online runtime manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/tauri.conf.json').version")"
+          mkdir -p desktop/runtime
+          jq -n \
+            --arg version "${version}" \
+            '{
+              schema_version: 1,
+              version: $version,
+              host_packs: {
+                "aarch64-apple-darwin": {
+                  url: "https://downloads.example.invalid/lemma-host-pack.zip",
+                  sha256: ("0" * 64),
+                  size: 1,
+                  expanded_size: 1,
+                  format: "zip",
+                  platform: "macos",
+                  architecture: "aarch64",
+                  runtime_version: $version
+                }
+              },
+              guest_runtimes: {
+                "macos-aarch64": {
+                  url: "https://downloads.example.invalid/lemma-guest-runtime.zip",
+                  sha256: ("0" * 64),
+                  size: 1,
+                  expanded_size: 1,
+                  format: "zip",
+                  platform: "linux",
+                  architecture: "aarch64",
+                  runtime_version: $version
+                }
+              }
+            }' > desktop/runtime/lemma-local.json
+
+      - name: Sign virtualization helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          args=(
+            --force
+            --options runtime
+            --entitlements desktop/entitlements.plist
+            --sign "${APPLE_SIGNING_IDENTITY}"
+          )
+          if [[ "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
+            args+=(--timestamp)
+          fi
+          codesign "${args[@]}" "${helper}"
+          codesign --verify --strict --verbose=2 "${helper}"
+          codesign -d --entitlements :- "${helper}" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+
+      - name: Build and codesign online DMG
+        working-directory: desktop
+        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
+
+      - name: Verify application signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="desktop/target/release/bundle/macos/Lemma.app"
+          locald="${app}/Contents/MacOS/lemma-locald"
+          runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
+          vz="${app}/Contents/Resources/lemma-vz"
+
+          test -d "${app}"
+          test -x "${locald}"
+          test -x "${runtime_bridge}"
+          test -x "${vz}"
+          test -f "${app}/Contents/Resources/lemma-local.json"
+          test ! -e "${app}/Contents/MacOS/lemma-supervisor"
+          test ! -e "${app}/Contents/MacOS/uv"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          codesign --verify --strict --verbose=2 "${locald}"
+          codesign --verify --strict --verbose=2 "${runtime_bridge}"
+          codesign --verify --strict --verbose=2 "${vz}"
+          codesign -d --entitlements :- "${vz}" 2>/dev/null \
+            | grep -F "com.apple.security.virtualization"
+
+          signature_info="$(codesign -dvvv "${app}" 2>&1)"
+          printf '%s\n' "${signature_info}"
+          if [[ "${LEMMA_EXPECTED_SIGNING}" == "developer-id" ]]; then
+            grep -F "Authority=Developer ID Application:" <<< "${signature_info}"
+          else
+            grep -F "Signature=adhoc" <<< "${signature_info}"
+          fi
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-desktop-macos-${{ github.sha }}
+          path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Remove temporary signing keychain
+        if: always() && steps.apple-signing.outcome == 'success'
+        run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
   ci:
     name: CI passed
     if: always()
     needs:
       - changes
       - backend-unit
+      - backend-lint
+      - backend-migration
       - python-sdk
       - typescript-sdk
       - codegen-drift
@@ -311,6 +686,9 @@ jobs:
       - frontend-build
       - install-experience
       - windows-cli
+      - desktop
+      - agentbox
+      - agent-host
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed

@@ -1,25 +1,56 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from app.modules.agent_surfaces.config import surface_settings
-from app.core.infrastructure.events.message_bus import get_message_bus
+from app.core.infrastructure.events.inbox import stable_event_id
+from app.core.infrastructure.events.publisher import EventPublisher
+from app.core.redaction import redact_value
 from app.modules.agent_surfaces.api.dependencies import (
     SurfaceWebhookSecurityServiceDep,
+    TelegramManagerServiceDep,
     get_surface_service,
 )
 from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
-from app.modules.agent_surfaces.infrastructure.debug.raw_webhook_file_logger import (
-    log_raw_webhook_event,
+from app.modules.identity.domain.events import WhatsAppMobileVerificationReceivedEvent
+from app.modules.identity.services.whatsapp_mobile_verification import (
+    is_whatsapp_verification_configured,
+    parse_reserved_verification_message,
 )
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
 )
+from app.modules.agent_surfaces.services.telegram_manager_service import (
+    TelegramManagedBotProvisioningInProgressError,
+)
 
 router = APIRouter(prefix="/surfaces", tags=["Agent Surfaces (Ingress)"])
+
+
+def _surface_source_event_id(platform: str, payload: dict, raw_body: bytes) -> str:
+    candidates: list[object] = [
+        payload.get("event_id"),
+        payload.get("update_id"),
+        payload.get("id"),
+        payload.get("message_id"),
+        payload.get("data", {}).get("message_id")
+        if isinstance(payload.get("data"), dict)
+        else None,
+    ]
+    for candidate in candidates:
+        if candidate is not None and str(candidate):
+            return f"{platform}:{candidate}"
+    return f"{platform}:content-sha256:{hashlib.sha256(raw_body).hexdigest()}"
+
+
+def _redacted_headers(headers: dict[str, str]) -> dict[str, str]:
+    value = redact_value(headers)
+    return {str(key): str(item) for key, item in value.items()}
 
 
 def _decode_webhook_payload(raw_body: bytes, headers: dict[str, str]) -> dict:
@@ -75,9 +106,7 @@ def _normalize_resend_inbound(payload: dict) -> dict:
     elif isinstance(raw_headers, dict):
         header_map = {str(k).lower(): str(v) for k, v in raw_headers.items()}
 
-    references_raw = (
-        data.get("references") or header_map.get("references") or ""
-    )
+    references_raw = data.get("references") or header_map.get("references") or ""
     if isinstance(references_raw, str):
         references = [r for r in references_raw.split() if r]
     else:
@@ -99,6 +128,38 @@ def _normalize_resend_inbound(payload: dict) -> dict:
 
 
 @router.post(
+    "/webhooks/telegram-manager",
+    operation_id="surface.webhook.handle_telegram_manager",
+    summary="Handle Telegram manager-bot webhook",
+)
+async def handle_telegram_manager_webhook(
+    request: Request,
+    service: TelegramManagerServiceDep,
+):
+    expected = str(surface_settings.telegram_manager_webhook_secret or "").strip()
+    provided = str(
+        request.headers.get("x-telegram-bot-api-secret-token") or ""
+    ).strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram manager webhook is not configured",
+        )
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid Telegram webhook secret")
+    payload = _decode_webhook_payload(await request.body(), dict(request.headers))
+    try:
+        await service.handle_update(payload)
+    except TelegramManagedBotProvisioningInProgressError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Telegram managed-bot setup is still provisioning",
+            headers={"Retry-After": "1"},
+        ) from exc
+    return {"message": "Webhook received"}
+
+
+@router.post(
     "/webhooks/{platform}",
     operation_id="surface.webhook.handle_platform",
     summary="Handle platform-level surface webhook",
@@ -108,7 +169,6 @@ async def handle_platform_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
-    message_bus=Depends(get_message_bus),
 ):
     """Handle platform-level webhook callbacks."""
     headers = dict(request.headers)
@@ -130,14 +190,16 @@ async def handle_platform_webhook(
         )
         if surface is None:
             return {"message": "Ignored: no surface for address"}
-        await log_raw_webhook_event(source="resend", payload=normalized, headers=headers)
+        source_event_id = _surface_source_event_id("resend", normalized, raw_body)
         event = SurfaceWebhookReceivedEvent(
+            event_id=stable_event_id({"event_id": source_event_id}),
             source="resend",
             payload=normalized,
-            headers=headers,
+            headers=_redacted_headers(headers),
             surface_id=surface.id,
+            source_event_id=source_event_id,
         )
-        await message_bus.publish(stream=event.stream_name(), event=event)
+        await EventPublisher.publish(event.stream_name(), event)
         return {"message": "Webhook received"}
 
     # Slack sends url_verification before any signing secret is configured — respond immediately.
@@ -153,14 +215,37 @@ async def handle_platform_webhook(
         raw_body=raw_body,
     )
 
-    await log_raw_webhook_event(source=platform, payload=payload, headers=headers)
+    # Verification commands are identity traffic, not agent messages. The
+    # request is intercepted only after Meta's raw-body signature succeeds and
+    # only when it targets Lemma's configured global phone-number id.
+    if platform == "whatsapp":
+        verification = parse_reserved_verification_message(payload)
+        if verification is not None and is_whatsapp_verification_configured():
+            code, sender_wa_id, destination_id, message_id = verification
+            if destination_id == surface_settings.whatsapp_phone_number_id:
+                identity_event = WhatsAppMobileVerificationReceivedEvent(
+                    event_id=stable_event_id(
+                        {"whatsapp_mobile_verification_message_id": message_id}
+                    ),
+                    code=code,
+                    sender_wa_id=sender_wa_id,
+                    destination_phone_number_id=destination_id,
+                    whatsapp_message_id=message_id,
+                )
+                await EventPublisher.publish(
+                    identity_event.stream_name(), identity_event
+                )
+                return {"message": "Verification message received"}
 
+    source_event_id = _surface_source_event_id(platform, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
+        event_id=stable_event_id({"event_id": source_event_id}),
         source=platform,
         payload=payload,
-        headers=headers,
+        headers=_redacted_headers(headers),
+        source_event_id=source_event_id,
     )
-    await message_bus.publish(stream=event.stream_name(), event=event)
+    await EventPublisher.publish(event.stream_name(), event)
 
     return {"message": "Webhook received"}
 
@@ -175,7 +260,6 @@ async def handle_surface_webhook(
     request: Request,
     security_service: SurfaceWebhookSecurityServiceDep,
     service: AgentSurfaceService = Depends(get_surface_service),
-    message_bus=Depends(get_message_bus),
 ):
     """Handle webhooks addressed to one concrete surface."""
     headers = dict(request.headers)
@@ -193,15 +277,16 @@ async def handle_surface_webhook(
     )
 
     source = surface.surface_type.value.lower()
-    await log_raw_webhook_event(source=source, payload=payload, headers=headers)
-
+    source_event_id = _surface_source_event_id(source, payload, raw_body)
     event = SurfaceWebhookReceivedEvent(
+        event_id=stable_event_id({"event_id": source_event_id}),
         source=source,
         payload=payload,
-        headers=headers,
+        headers=_redacted_headers(headers),
         surface_id=surface.id,
+        source_event_id=source_event_id,
     )
-    await message_bus.publish(stream=event.stream_name(), event=event)
+    await EventPublisher.publish(event.stream_name(), event)
 
     return {"message": "Webhook received"}
 
@@ -216,8 +301,10 @@ def _webhook_verification_response(
         verify_token = params.get("hub.verify_token")
 
         security_enabled = bool(surface_settings.surface_webhook_security_enabled)
-        if mode == "subscribe" and challenge and (
-            not security_enabled or verify_token == whatsapp_verify_token
+        if (
+            mode == "subscribe"
+            and challenge
+            and (not security_enabled or verify_token == whatsapp_verify_token)
         ):
             return Response(content=challenge, media_type="text/plain")
 
@@ -292,7 +379,7 @@ async def teams_admin_consent_callback(
         html = f"""
         <html><body style="font-family:sans-serif;padding:2rem">
         <h2>&#10060; Admin consent failed</h2>
-        <p><strong>{error}</strong>: {error_description or ''}</p>
+        <p><strong>{error}</strong>: {error_description or ""}</p>
         <p>Please contact your administrator or try again.</p>
         </body></html>
         """
@@ -312,9 +399,14 @@ async def teams_admin_consent_callback(
 
         surface_id = UUID(state)
     except ValueError:
-        return HTMLResponse(content="<html><body>Invalid state parameter.</body></html>", status_code=400)
+        return HTMLResponse(
+            content="<html><body>Invalid state parameter.</body></html>",
+            status_code=400,
+        )
 
-    surface = await service.activate_after_consent(surface_id=surface_id, tenant_id=tenant)
+    surface = await service.activate_after_consent(
+        surface_id=surface_id, tenant_id=tenant
+    )
 
     if surface is None:
         html = """

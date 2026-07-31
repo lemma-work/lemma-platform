@@ -26,6 +26,14 @@ import {
   setTestingToken,
 } from "./auth.js";
 import { ApiError } from "./http.js";
+import { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
+import {
+  LEMMA_APP_THEME_MESSAGE_TYPE,
+  LEMMA_THEME_EVENT,
+  applyLemmaHostTheme,
+  getLemmaHostTheme,
+  subscribeLemmaHostTheme,
+} from "./browser-theme.js";
 
 export {
   LemmaClient,
@@ -37,14 +45,19 @@ export {
   resolveSafeRedirectUri,
   setTestingToken,
   ApiError,
+  POD_DEFAULT_AGENT_SELECTOR,
+  LEMMA_APP_THEME_MESSAGE_TYPE,
+  LEMMA_THEME_EVENT,
+  applyLemmaHostTheme,
+  getLemmaHostTheme,
+  subscribeLemmaHostTheme,
 };
 
 // Browser globals. We standardize on `window.LemmaClient` (the skills, the app
 // HTML lint, and the no-build starter all construct `new
 // window.LemmaClient.LemmaClient()`), and keep `window.Lemma` as a back-compat
 // alias for conversation widgets that historically loaded this bundle as
-// `new Lemma.LemmaClient(...)`. Both point at the same surface object. See
-// docs/app-widget-unification.md.
+// `new Lemma.LemmaClient(...)`. Both point at the same surface object.
 if (typeof globalThis !== "undefined") {
   const scope = globalThis as Record<string, unknown>;
   const surface = {
@@ -57,6 +70,12 @@ if (typeof globalThis !== "undefined") {
     resolveSafeRedirectUri,
     setTestingToken,
     ApiError,
+    POD_DEFAULT_AGENT_SELECTOR,
+    LEMMA_APP_THEME_MESSAGE_TYPE,
+    LEMMA_THEME_EVENT,
+    applyLemmaHostTheme,
+    getLemmaHostTheme,
+    subscribeLemmaHostTheme,
   };
   if (!scope.LemmaClient) {
     scope.LemmaClient = surface;

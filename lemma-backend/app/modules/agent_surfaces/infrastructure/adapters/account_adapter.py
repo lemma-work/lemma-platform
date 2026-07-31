@@ -8,7 +8,7 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountInfo,
     SurfaceAuthConfigInfo,
 )
-from app.modules.connectors.infrastructure.repositories.account_repository import (
+from app.composition.surface_connectors import (
     AccountRepository,
 )
 
@@ -43,7 +43,7 @@ class SqlAlchemySurfaceAuthConfigAdapter:
         self._uow = uow
 
     async def get_auth_config(self, auth_config_id: UUID) -> SurfaceAuthConfigInfo | None:
-        from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
+        from app.composition.surface_connectors import AuthConfig
 
         auth_config = await self._uow.session.get(AuthConfig, auth_config_id)
         if auth_config is None:

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { BookA, BookOpen, CircleHelp, Footprints, Map, RotateCcw } from 'lucide-react';
+import { BookA, BookOpen, CircleHelp, Footprints, Map, RotateCcw } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import {

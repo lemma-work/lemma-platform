@@ -1,8 +1,9 @@
 from pathlib import Path
 from typing import Literal, Optional
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.settings_env import dotenv_path
 
 
 def _default_local_root() -> Path:
@@ -28,7 +29,10 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
     environment: Literal["local", "development", "production", "testing"] = Field(
         default="local",
@@ -107,35 +111,74 @@ class Settings(BaseSettings):
             "task that opens a DB session consumes one pooled connection."
         ),
     )
-    agent_run_stop_poll_interval_seconds: float = Field(
-        default=1.0,
+    # --- Thread-offload pool (app.core.concurrency.offload) ---
+    # Blocking work (CPU-bound, sync SDKs, KMS) runs in worker threads via
+    # run_blocking(). These partition the pool by workload class so one class
+    # can't starve another, and the total raises anyio's default (40) to leave
+    # headroom for residual un-limited offloads (embedder/reranker).
+    offload_total_threads: int = Field(
+        default=64,
         description=(
-            "Minimum interval between DB polls of an agent run's stop flag. The "
-            "harness checks should_stop at every streaming checkpoint (per token "
-            "/ part / tool call); without throttling that is one SELECT per token "
-            "per run, flooding the pool. The checker caches the result and "
-            "re-queries at most this often (0 disables throttling). A stop "
-            "request is still honored within this interval."
+            "Total worker threads for off-loop blocking work (anyio's global "
+            "default thread limiter). Raised from the anyio default (40) so the "
+            "named sub-limiters below, which sum above 40, have room alongside "
+            "un-limited offloads. Env: ``OFFLOAD_TOTAL_THREADS``."
         ),
     )
-    agent_context_brief_cache_ttl_seconds: int = Field(
-        default=60,
+    offload_cpu_bound_limit: int = Field(
+        default=8,
         description=(
-            "TTL for the in-process cache of an agent's rendered runtime-context "
-            "brief, keyed by (agent, conversation, pod, user). The brief is "
-            "injected into the system prompt and rebuilt on every message; it "
-            "only changes when pod inventory/grants change, so caching it keeps "
-            "the hot path off the DB. Tradeoff: a just-changed grant/table can "
-            "lag by up to this long. 0 disables caching."
+            "Max concurrent CPU-bound offloads (markdown chunking, tokenizing, "
+            "zip/unzip). Env: ``OFFLOAD_CPU_BOUND_LIMIT``."
         ),
     )
-    function_run_poll_interval_seconds: float = Field(
+    offload_external_http_limit: int = Field(
+        default=24,
+        description=(
+            "Max concurrent blocking external-HTTP offloads (sync connector SDKs "
+            "like Composio, OAuth token exchanges). Sized near worker_concurrency "
+            "so connector-heavy runs aren't throttled, while still bounded. Env: "
+            "``OFFLOAD_EXTERNAL_HTTP_LIMIT``."
+        ),
+    )
+    offload_crypto_limit: int = Field(
+        default=8,
+        description=(
+            "Max concurrent crypto offloads (KMS wrap/unwrap gRPC). Env: "
+            "``OFFLOAD_CRYPTO_LIMIT``."
+        ),
+    )
+    # --- Event-loop watchdog (app.core.observability.loop_watchdog) ---
+    loop_lag_watchdog_interval_seconds: float = Field(
+        default=0.5,
+        description=(
+            "How often the watchdog probes event-loop lag and refreshes the "
+            "liveness heartbeat. Env: ``LOOP_LAG_WATCHDOG_INTERVAL_SECONDS``."
+        ),
+    )
+    loop_lag_warn_seconds: float = Field(
+        default=0.3,
+        description=(
+            "Log a warning when measured event-loop lag exceeds this. Env: "
+            "``LOOP_LAG_WARN_SECONDS``."
+        ),
+    )
+    loop_lag_unhealthy_seconds: float = Field(
         default=5.0,
         description=(
-            "Interval an agent's JOB-function tool waits between DB polls of the "
-            "function run's status. JOB functions are long-running, so 1s polling "
-            "is needlessly aggressive; 5s cuts the poll query rate 5x. The overall "
-            "wait budget is unchanged."
+            "Event-loop lag above this marks the process unhealthy: /livez "
+            "returns 503 so a Kubernetes liveness probe restarts a wedged loop. "
+            "Env: ``LOOP_LAG_UNHEALTHY_SECONDS``."
+        ),
+    )
+    worker_heartbeat_path: str = Field(
+        default="/tmp/worker_heartbeat",
+        description=(
+            "File the loop watchdog rewrites (epoch seconds) each tick. The "
+            "worker has no HTTP server, so its Kubernetes liveness probe execs a "
+            "freshness check on this file — a wedged loop stops updating it and "
+            "the pod is restarted. Set empty to disable heartbeat writes. Env: "
+            "``WORKER_HEARTBEAT_PATH``."
         ),
     )
     worker_shutdown_grace_period_seconds: int = Field(
@@ -168,69 +211,36 @@ class Settings(BaseSettings):
             "Set to the actual value in your Postgres config."
         ),
     )
-    conversation_title_model: str | None = Field(
-        default=None,
-        description=(
-            "Model name (within the system runtime profile's catalog) used to "
-            "LLM-generate conversation titles. When unset (the default), no LLM "
-            "call is made: the title is derived from the user's first message. "
-            "Set this only to a model your provider actually serves — pointing "
-            "it at a non-existent model makes the title call hang."
-        ),
-    )
     redis_url: str = Field(
         default="redis://localhost:6379",
         description="Redis connection URL",
+    )
+    max_request_body_bytes: int = Field(
+        default=220 * 1024 * 1024,
+        description="Global ASGI request-body ceiling, enforced while receiving bytes.",
     )
     redis_max_connections: int = Field(
         default=200,
         description="Maximum pooled Redis connections per process",
     )
-    redis_stream_polling_interval_ms: int = Field(
-        default=500,
+    desktop_auth_create_limit: int = Field(
+        default=100,
+        ge=0,
         description=(
-            "Polling interval in milliseconds for FastStream Redis stream consumers. "
-            "Higher values reduce idle XREAD/XREADGROUP volume at the cost of slightly higher event pickup latency."
+            "Maximum desktop auth handoff requests a client IP may create per "
+            "rate-limit window. Set to 0 to disable the application-level cap."
         ),
     )
-    consumer_group_reconcile_interval_seconds: float = Field(
-        default=30.0,
-        description=(
-            "How often the worker re-ensures Redis consumer groups exist. Bounds "
-            "the FastStream supervisor retry-storm if a group is lost (flush / "
-            "failover / eviction): the lost group is recreated within this window "
-            "and the subscriber resumes instead of spinning forever. Set to 0 to "
-            "disable the background reconcile loop."
-        ),
+    desktop_auth_create_window_seconds: int = Field(
+        default=60,
+        ge=1,
+        description="Desktop auth handoff creation rate-limit window in seconds.",
     )
-    daemon_ws_ping_stale_after_seconds: float = Field(
-        default=90.0,
+    lemma_local_ai_ready: Optional[bool] = Field(
+        default=None,
         description=(
-            "If a connected user daemon sends no daemon.ping for this long, the "
-            "backend closes the websocket proactively instead of waiting for a "
-            "TCP-level disconnect (handles a half-open connection the daemon "
-            "itself doesn't notice). Should comfortably exceed the daemon's own "
-            "self-declared-dead threshold (ping interval * missed-pong limit, "
-            "default 15s * 3 = 45s)."
-        ),
-    )
-    daemon_reconnect_grace_seconds: float = Field(
-        default=120.0,
-        description=(
-            "How long DaemonHarness.run() waits for a disconnected user daemon "
-            "to reattach an in-flight run before failing it. Bounded and "
-            "orthogonal to DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS (7200s), which "
-            "governs a *live* connection's max silent gap between events, not "
-            "disconnect recovery."
-        ),
-    )
-    local_agent_runtime_config_path: str = Field(
-        default_factory=lambda: str(
-            _default_local_root() / "lemma" / "agent-runtime.json"
-        ),
-        description=(
-            "Local-only file used by the runtime settings API to persist the "
-            "system default agent runtime."
+            "Safe local Desktop readiness flag. None outside managed-local installs; "
+            "never contains provider credentials."
         ),
     )
     lemma_default_model_type: Literal["openai_compat", "anthropic_compat"] = Field(
@@ -335,6 +345,15 @@ class Settings(BaseSettings):
             "disable session approvals (every destructive action re-prompts)."
         ),
     )
+    delegation_revocation_ttl_seconds: int = Field(
+        default=3600,
+        description=(
+            "How long a revoked delegated workload (e.g. a deleted agent/function) "
+            "stays blocked. Must be >= the max access-token lifetime so an "
+            "in-flight delegated token cannot outlive its revocation. Set to 0 to "
+            "disable delegation revocation."
+        ),
+    )
     # Google OAuth Settings
     google_client_id: Optional[str] = Field(
         default=None, description="Google OAuth Client ID"
@@ -415,6 +434,21 @@ class Settings(BaseSettings):
     )
     smtp_from_name: str = Field(default="Lemma", description="From name")
     smtp_use_tls: bool = Field(default=True, description="Use TLS for SMTP")
+    resend_api_key: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "Resend API key. When explicit SMTP credentials are absent, this is "
+            "used as the password for Resend's SMTP relay."
+        ),
+    )
+    resend_webhook_secret: Optional[SecretStr] = Field(
+        default=None,
+        description="Resend signing secret for native email event webhooks",
+    )
+    resend_from_email: str = Field(
+        default="local@ops.asur.work",
+        description="Sender address used with the Resend SMTP relay",
+    )
     email_transport: Literal["smtp", "filesystem"] = Field(
         default="smtp",
         description="Email transport backend",
@@ -422,6 +456,86 @@ class Settings(BaseSettings):
     email_output_dir: str = Field(
         default="/tmp/lemma-emails",
         description="Directory used by filesystem email transport",
+    )
+    auth_email_deliverability_checks_enabled: bool = Field(
+        default=True,
+        description="Validate signup email domains with DNS before creating accounts",
+    )
+    auth_email_verification_required: bool = Field(
+        default=True,
+        description=(
+            "Require email/password users to verify their email before accessing "
+            "application APIs"
+        ),
+    )
+    auth_disposable_email_domains_enabled: bool = Field(
+        default=True,
+        description="Reject domains in the bundled OSS disposable-email list",
+    )
+    auth_disposable_email_allowlist: list[str] = Field(
+        default_factory=list,
+        description="Domains that override the bundled disposable-email list",
+    )
+    auth_abuse_protection_enabled: bool = Field(
+        default=True,
+        description="Enable Redis-backed limits on SuperTokens and Telegram auth routes",
+    )
+    auth_altcha_enabled: bool = Field(
+        default=False,
+        description="Require self-hosted ALTCHA proof-of-work on email-generating auth APIs",
+    )
+    auth_altcha_hmac_key: Optional[SecretStr] = Field(
+        default=None,
+        description="HMAC key used to sign self-hosted ALTCHA challenges",
+    )
+    auth_altcha_max_number: int = Field(
+        default=100_000,
+        ge=10_000,
+        le=2_000_000,
+        description="Maximum proof-of-work search space for ALTCHA challenges",
+    )
+    auth_whatsapp_mobile_verification_enabled: bool = Field(
+        default=False,
+        description=(
+            "Allow signed messages sent to Lemma's global WhatsApp number to "
+            "verify an authenticated user's mobile number"
+        ),
+    )
+    auth_trusted_proxy_ips: list[str] = Field(
+        default_factory=list,
+        description="Immediate proxy IPs allowed to supply Forwarded/X-Forwarded-For",
+    )
+    auth_bounce_webhook_secret: Optional[SecretStr] = Field(
+        default=None,
+        description="HMAC secret for normalized hard-bounce webhook events",
+    )
+    telegram_oidc_client_id: Optional[str] = Field(
+        default=None,
+        description="Telegram Web Login client ID issued by BotFather",
+    )
+    telegram_oidc_client_secret: Optional[SecretStr] = Field(
+        default=None,
+        description="Telegram Web Login client secret issued by BotFather",
+    )
+    telegram_oidc_redirect_uri: Optional[str] = Field(
+        default=None,
+        description="Registered Telegram OIDC callback URL",
+    )
+    telegram_oidc_issuer: str = Field(
+        default="https://oauth.telegram.org",
+        description="Expected Telegram OIDC issuer",
+    )
+    telegram_oidc_authorization_endpoint: str = Field(
+        default="https://oauth.telegram.org/auth",
+        description="Telegram OIDC authorization endpoint",
+    )
+    telegram_oidc_token_endpoint: str = Field(
+        default="https://oauth.telegram.org/token",
+        description="Telegram OIDC token endpoint",
+    )
+    telegram_oidc_jwks_uri: str = Field(
+        default="https://oauth.telegram.org/.well-known/jwks.json",
+        description="Telegram OIDC JSON Web Key Set endpoint",
     )
 
     # Application Settings
@@ -435,6 +549,24 @@ class Settings(BaseSettings):
         default=True,
         description="Emit structured JSON logs instead of console-formatted logs",
     )
+    local_http_access_logs_enabled: bool = Field(
+        default=False,
+        description=(
+            "Emit safe HTTP request summaries at INFO for local diagnostics. "
+            "Records only method, route template, status, and duration."
+        ),
+    )
+    release_sha: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("LEMMA_RELEASE_SHA", "RELEASE_SHA"),
+        description=(
+            "Full 40-character source Git SHA whose immutable image digest is "
+            "deployed. Emitted as ``service.version`` and ``release.sha`` on every "
+            "log line and added to the OpenTelemetry Resource. Required in "
+            "production: startup rejects an empty or non-hex value. Env: "
+            "``LEMMA_RELEASE_SHA``."
+        ),
+    )
     frontend_url: str = Field(
         default="http://localhost:3711", description="Frontend URL for email links"
     )
@@ -443,7 +575,7 @@ class Settings(BaseSettings):
         description="Central auth frontend origin used by the SuperTokens UI",
     )
     auth_website_base_path: str = Field(
-        default="/",
+        default="/auth",
         description="Path where the centralized auth UI is rendered",
     )
     api_url: str = Field(
@@ -463,9 +595,6 @@ class Settings(BaseSettings):
             "can keep this distinct from the browser canonical auth URL."
         ),
     )
-    scheduler_api_url: str = Field(
-        default="http://localhost:8711", description="Scheduler API URL"
-    )
     supertokens_core_url: str = Field(
         default="http://localhost:3567", description="Supertokens core URL"
     )
@@ -481,16 +610,26 @@ class Settings(BaseSettings):
     # app/modules/datastore/config.py
     # datastore signed-url config moved to app/modules/datastore/config.py
     # Object Storage Settings
-    storage_backend: Literal["auto", "local", "gcs"] = Field(
+    storage_backend: Literal["auto", "local", "gcs", "s3", "azure"] = Field(
         default="auto",
         description=(
-            "Object storage backend. 'auto' uses local storage in local/testing and "
-            "GCS when a bucket is configured elsewhere."
+            "Private object storage backend. 'auto' preserves the historical "
+            "local-or-GCS selection. Supported explicit cloud adapters: GCS, "
+            "Amazon S3 (and S3-compatible endpoints), and Azure Blob Storage."
         ),
     )
-    gcs_storage_bucket: Optional[str] = Field(
+    storage_bucket: Optional[str] = Field(
         default=None,
-        description="Google Cloud Storage bucket name for document storage",
+        validation_alias=AliasChoices(
+            "storage_bucket",
+            "STORAGE_BUCKET",
+            "GCS_STORAGE_BUCKET",
+        ),
+        description=(
+            "Private storage location: a filesystem directory for local, bucket "
+            "name for GCS/S3, or container name for Azure. GCS_STORAGE_BUCKET is "
+            "accepted as a backward-compatible environment alias."
+        ),
     )
     public_bucket_name: Optional[str] = Field(
         default=None,
@@ -552,6 +691,17 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("auth_website_base_path", mode="before")
+    @classmethod
+    def _normalise_auth_website_base_path(cls, value: object) -> str:
+        candidate = str(value or "/auth").strip()
+        if "://" in candidate or "?" in candidate or "#" in candidate:
+            raise ValueError("AUTH_WEBSITE_BASE_PATH must be a relative URL path")
+        segments = [segment for segment in candidate.split("/") if segment]
+        if any(segment in {".", ".."} for segment in segments):
+            raise ValueError("AUTH_WEBSITE_BASE_PATH cannot contain dot segments")
+        return "/" + "/".join(segments) if segments else "/"
+
     @model_validator(mode="after")
     def _require_app_base_domain_outside_local(self) -> "Settings":
         # Apps are served by host at `<slug>.<app_base_domain>`. Outside
@@ -568,9 +718,9 @@ class Settings(BaseSettings):
         return self
 
     # App serving: apps are served by host, at `<public_slug>.<app_base_domain>`.
-    # Locally the stack sets this to a sslip.io wildcard (e.g.
-    # 127-0-0-1.sslip.io:8711) that resolves to loopback; in cloud it is the real
-    # apps domain behind the ingress. There is intentionally NO cloud default: an
+    # Locally the stack sets this to a reserved loopback domain (e.g.
+    # apps.lemma.localhost:8711); in cloud it is the real apps domain behind the
+    # ingress. There is intentionally NO cloud default: an
     # empty value disables host-based app routing, and it is REQUIRED outside
     # local/testing (see _require_app_base_domain_outside_local).
     app_base_domain: str = Field(
@@ -578,9 +728,17 @@ class Settings(BaseSettings):
         description=(
             "Base domain under which public apps are served, as "
             "`<public_slug>.<app_base_domain>`. The local stack sets this to the "
-            "sslip.io wildcard host (e.g. 127-0-0-1.sslip.io:8711); in cloud it is "
+            "loopback apps domain (e.g. apps.lemma.localhost:8711); in cloud it is "
             "the real apps domain behind the ingress. Empty disables host-based "
             "app routing and is rejected at startup in development/production."
+        ),
+    )
+    app_branding_enabled: bool = Field(
+        default=True,
+        description=(
+            "Show the host-owned 'Remix on Lemma' attribution on public app "
+            "entrypoints. Enabled by default in OSS and cloud; cloud billing may "
+            "remove it for entitled organizations."
         ),
     )
     browser_sdk_path: Optional[str] = Field(
@@ -618,13 +776,11 @@ class Settings(BaseSettings):
             "saturate one core and distort connection/latency measurements."
         ),
     )
-    e2e_sandbox_mode: Literal["docker", "fake"] = Field(
+    e2e_sandbox_mode: Literal["docker", "e2b"] = Field(
         default="docker",
         description=(
-            "TEST HOOK ONLY. 'fake' runs workspace/CLI tools against an in-process "
-            "subprocess AgentBox instead of the Docker manager, so e2e needs no "
-            "Docker image. Production/dev leave this at 'docker'. The e2e fixtures "
-            "default it to 'fake' (override with E2E_REAL=1)."
+            "TEST HOOK ONLY. Selects the real AgentBox provider used by E2E. "
+            "Docker is the default; E2B is credential-gated."
         ),
     )
     e2e_disable_worker_file_autoindex: bool = Field(
@@ -644,12 +800,87 @@ class Settings(BaseSettings):
     agentbox_api_key: Optional[str] = Field(
         description="Bearer API key for the AgentBox manager", default=None
     )
+    agentbox_workspace_profile_name: str = Field(
+        default="workspace-python-v1",
+        description="Immutable AgentBox workspace profile name",
+    )
+    agentbox_workspace_profile_digest: str = Field(
+        default=f"sha256:{'1' * 64}",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+        description="Immutable AgentBox workspace profile digest",
+    )
+    agentbox_function_profile_name: str = Field(
+        default="function-python-v1",
+        description="Immutable AgentBox function profile name",
+    )
+    agentbox_function_profile_digest: str = Field(
+        default=f"sha256:{'2' * 64}",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+        description="Immutable AgentBox function profile digest",
+    )
+    function_builder_executable: str = Field(
+        default="uv",
+        description="Executable used only while prebuilding function dependencies",
+    )
+    function_builder_python_platform: Optional[str] = Field(
+        default=None,
+        description="uv Linux wheel target matching the function runtime image",
+    )
+    function_builder_digest: str = Field(
+        default="local-uv-builder-1",
+        description="Immutable builder identity included in function revision hashes",
+    )
+    function_session_token_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+    )
+    function_session_token_cache_max_entries: int = Field(
+        default=4096,
+        ge=1,
+        le=100_000,
+    )
+    function_runtime_endpoint_cache_ttl_seconds: int = Field(
+        default=4 * 60 * 60,
+        ge=5 * 60,
+        le=24 * 60 * 60,
+        description=(
+            "Maximum seconds to reuse an allocation-fenced direct function-runtime "
+            "lease. The provider lease expiry can shorten this horizon; stale "
+            "allocation responses invalidate it immediately."
+        ),
+    )
+    function_runtime_endpoint_cache_max_entries: int = Field(
+        default=4096,
+        ge=1,
+        le=100_000,
+    )
+    function_api_deadline_seconds: int = Field(default=120, ge=1, le=3600)
+    function_job_deadline_seconds: int = Field(default=600, ge=1, le=3_000)
+    function_runtime_gateway_url: Optional[str] = Field(
+        default=None,
+        description="Backend URL reachable from function sandboxes",
+    )
     workspace_callback_api_url: Optional[str] = Field(
         default=None,
         description=(
             "URL workspace sandboxes use to reach this API (e.g. http://backend:8000 "
-            "when sandboxes share a container network); overrides the "
-            "localhost->host.docker.internal rewrite"
+            "when sandboxes share a container network). No hostname inference "
+            "or rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_auth_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit auth frontend URL reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
+        ),
+    )
+    workspace_callback_frontend_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Explicit frontend origin reachable from workspace sandboxes; "
+            "no hostname rewriting is performed when absent."
         ),
     )
     # Composio + connector runtime config moved to app/modules/connectors/config.py
@@ -662,8 +893,11 @@ class Settings(BaseSettings):
     # DodoPayments + billing model overrides live in the billing module's
     # config.py (now in lemma-cloud).
     llm_otel_enabled: bool = Field(
-        default=True,
-        description="Enable a separate OTEL exporter for LLM/OpenInference spans",
+        default=False,
+        description=(
+            "Enable the independent LLM/OpenInference trace pipeline. It is "
+            "disabled by default and never exports through the general OTLP pipeline."
+        ),
     )
     llm_otel_exporter_otlp_protocol: str = Field(
         default="grpc",
@@ -677,9 +911,23 @@ class Settings(BaseSettings):
         default=None,
         description="Comma-separated OTLP headers for LLM/OpenInference spans",
     )
+    llm_otel_traces_sampler: str = Field(
+        default="traceidratio",
+        description="Independent sampler used by the LLM trace pipeline",
+    )
+    llm_otel_traces_sampler_arg: float = Field(
+        default=0.01,
+        ge=0.0,
+        le=1.0,
+        description="Independent LLM trace sampling ratio (default 1%%)",
+    )
     observability_enabled: bool = Field(
         default=False,
         description="Enable OpenTelemetry-based observability",
+    )
+    otel_sdk_disabled: bool = Field(
+        default=False,
+        description="Standard OpenTelemetry hard-disable switch",
     )
     otel_service_name: Optional[str] = Field(
         default=None,
@@ -704,17 +952,60 @@ class Settings(BaseSettings):
         default=None,
         description="Comma-separated OTLP headers applied to all signals (e.g. authorization=<key>)",
     )
-    otel_signals: str = Field(
-        default="traces,metrics,logs",
+    otel_exporter_otlp_traces_endpoint: Optional[str] = Field(default=None)
+    otel_exporter_otlp_metrics_endpoint: Optional[str] = Field(default=None)
+    otel_exporter_otlp_logs_endpoint: Optional[str] = Field(default=None)
+    otel_exporter_otlp_traces_protocol: Optional[str] = Field(default=None)
+    otel_exporter_otlp_metrics_protocol: Optional[str] = Field(default=None)
+    otel_exporter_otlp_logs_protocol: Optional[str] = Field(default=None)
+    otel_exporter_otlp_traces_headers: Optional[str] = Field(default=None)
+    otel_exporter_otlp_metrics_headers: Optional[str] = Field(default=None)
+    otel_exporter_otlp_logs_headers: Optional[str] = Field(default=None)
+    otel_traces_exporter: str = Field(
+        default="otlp",
+        description="Standard trace exporter selector: otlp or none",
+    )
+    otel_metrics_exporter: str = Field(
+        default="none",
+        description="Standard metric exporter selector: otlp or none",
+    )
+    otel_logs_exporter: str = Field(
+        default="none",
+        description="Standard log exporter selector: otlp or none",
+    )
+    otel_signals: Optional[str] = Field(
+        default=None,
         description=(
-            "Which OTLP signals to export when an endpoint is set: a comma-separated "
-            "subset of traces,metrics,logs. Defaults to all three; set e.g. 'traces' "
-            "to export only traces."
+            "Deprecated compatibility selector. Standard OTEL_*_EXPORTER variables "
+            "take precedence; missing or empty legacy selection means traces-only."
         ),
     )
     observability_metrics_export_interval_millis: int = Field(
-        default=15000,
-        description="Metric export interval for OTEL periodic readers",
+        default=60000,
+        ge=1000,
+        validation_alias=AliasChoices(
+            "OTEL_METRIC_EXPORT_INTERVAL",
+            "OBSERVABILITY_METRICS_EXPORT_INTERVAL_MILLIS",
+        ),
+        description="Metric export interval in milliseconds",
+    )
+    otel_traces_sampler: str = Field(
+        default="parentbased_traceidratio",
+        description=(
+            "OpenTelemetry trace sampler strategy. Defaults to parent-based 5%% "
+            "head sampling so a sampled parent propagates the decision and "
+            "independent roots are sampled at the configured ratio. Env: "
+            "``OTEL_TRACES_SAMPLER``."
+        ),
+    )
+    otel_traces_sampler_arg: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Sampling ratio for ratio-based samplers (0.05 = 5%%). Env: "
+            "``OTEL_TRACES_SAMPLER_ARG``."
+        ),
     )
     lemma_llm_caching_enabled: bool = Field(
         default=False,
@@ -740,6 +1031,44 @@ class Settings(BaseSettings):
     local_embedding_model: str = Field(
         default="BAAI/bge-base-en-v1.5",
         description="FastEmbed model used for local CPU embeddings.",
+    )
+    local_embedding_cache_dir: str = Field(
+        default="~/.cache/lemma/fastembed",
+        description=(
+            "Persistent FastEmbed model cache. Model initialization is guarded by "
+            "a process-safe lock so concurrent document workers cannot corrupt a "
+            "cold download. Env: ``LOCAL_EMBEDDING_CACHE_DIR``."
+        ),
+    )
+    local_embedding_preload: bool = Field(
+        default=True,
+        description=(
+            "Compatibility switch for local embedding startup. False forces lazy "
+            "initialization; true uses LOCAL_EMBEDDING_STARTUP_MODE."
+        ),
+    )
+    local_embedding_startup_mode: Literal["blocking", "background", "lazy"] = Field(
+        default="blocking",
+        description=(
+            "How local embeddings initialize. 'blocking' preserves server "
+            "readiness semantics for hosted/developer deployments, 'background' "
+            "warms the model without blocking core API readiness, and 'lazy' "
+            "waits for the first embedding operation."
+        ),
+    )
+    local_embedding_preload_timeout_seconds: float = Field(
+        default=900.0,
+        description=(
+            "Maximum worker-startup time allowed for local model preload, including "
+            "a first-run model download."
+        ),
+    )
+    lemma_runtime_instance_id: str = Field(
+        default="",
+        description=(
+            "Opaque launch identity echoed by local health endpoints so the "
+            "Desktop supervisor cannot accept a stale process on the same port."
+        ),
     )
     openai_compat_embedding_model: str = Field(
         default="nomic-ai/nomic-embed-text-v1.5",
@@ -776,16 +1105,25 @@ class Settings(BaseSettings):
     def is_local_mode(self) -> bool:
         return self.environment in {"local", "testing"}
 
-    def effective_storage_backend(self) -> Literal["local", "gcs"]:
+    def effective_storage_backend(self) -> Literal["local", "gcs", "s3", "azure"]:
         if self.storage_backend != "auto":
             return self.storage_backend
         if self.is_local_mode():
             return "local"
-        return "gcs" if self.gcs_storage_bucket else "local"
+        # Preserve the historical production behavior where a configured bucket
+        # implied GCS. New S3/Azure deployments must select their backend.
+        return "gcs" if self.storage_bucket else "local"
 
     def effective_public_storage_backend(self) -> Literal["local", "gcs"]:
-        if self.storage_backend != "auto":
-            return self.storage_backend
+        # Public icon storage remains an intentionally separate local/GCS
+        # concern. S3/Azure private-object selection must not accidentally turn
+        # the existing public-assets path into a differently configured backend.
+        if self.storage_backend == "gcs":
+            return "gcs"
+        if self.storage_backend == "local":
+            return "local"
+        if self.storage_backend in {"s3", "azure"}:
+            return "gcs" if self.public_bucket_name else "local"
         if self.is_local_mode():
             return "local"
         return "gcs" if self.public_bucket_name else "local"
@@ -836,13 +1174,22 @@ class Settings(BaseSettings):
 
     def is_email_configured(self) -> bool:
         """Check if email is properly configured."""
-        return all(
+        explicit_smtp = all(
             [
                 self.smtp_host,
                 self.smtp_user,
                 self.smtp_password,
                 self.smtp_from_email,
             ]
+        )
+        return bool(explicit_smtp or reveal_secret(self.resend_api_key))
+
+    def is_telegram_oidc_configured(self) -> bool:
+        """Return whether the global Telegram Web Login client is usable."""
+        return bool(
+            self.telegram_oidc_client_id
+            and reveal_secret(self.telegram_oidc_client_secret)
+            and self.telegram_oidc_redirect_uri
         )
 
     def resolve_browser_sdk_path(self) -> Optional[Path]:

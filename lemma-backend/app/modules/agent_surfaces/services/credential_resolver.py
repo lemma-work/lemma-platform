@@ -23,18 +23,21 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     SurfacePlatform,
 )
-from app.modules.connectors.infrastructure.models.account import Account
-from app.modules.connectors.services.connector_service import ConnectorService
+from app.modules.agent_surfaces.domain.surface_connectors import (
+    SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS,
+)
+from app.composition.surface_connectors import Account, ConnectorService
 
 logger = get_logger(__name__)
 
-# Connectors that manage service-level credentials (no OAuth refresh flow).
-# Resend uses a static API key, not a 3-legged OAuth token — routing it through
-# the OAuth refresh flow would silently drop `api_key` (ConnectorService's
-# `_to_oauth_credentials` only carries access_token/refresh_token/token_type/
-# expires_at/raw_response/connection_id; `api_key` isn't one of them, and it
-# isn't in `_CONTEXT_KEYS` below either, so nothing rescues it afterward).
-_SELF_MANAGED_CREDENTIAL_APPS = frozenset({"teams", "whatsapp", "telegram", "resend"})
+# Connectors that manage service-level credentials (no OAuth refresh flow),
+# derived from the surface-connector registry so it can't drift from the
+# bindings. Resend, for one, uses a static API key, not a 3-legged OAuth token —
+# routing it through the OAuth refresh flow would silently drop `api_key`
+# (ConnectorService's `_to_oauth_credentials` only carries access_token/
+# refresh_token/token_type/expires_at/raw_response/connection_id; `api_key` isn't
+# one of them, and it isn't in `_CONTEXT_KEYS` below either, so nothing rescues it).
+_SELF_MANAGED_CREDENTIAL_APPS = SELF_MANAGED_CREDENTIAL_CONNECTOR_IDS
 
 # Non-secret keys platform adapters read for identity/routing context.
 _CONTEXT_KEYS = ("scope", "scopes", "api_base_url", "raw_response", "user_data")
@@ -68,7 +71,10 @@ def native_credentials(platform: str | SurfacePlatform | None) -> dict[str, Any]
 def has_native_credentials(platform: str | SurfacePlatform | None) -> bool:
     normalized = str(platform or "").upper()
     if normalized == SurfacePlatform.WHATSAPP:
-        return bool(surface_settings.whatsapp_access_token and surface_settings.whatsapp_phone_number_id)
+        return bool(
+            surface_settings.whatsapp_access_token
+            and surface_settings.whatsapp_phone_number_id
+        )
     if normalized == SurfacePlatform.TELEGRAM:
         return bool(surface_settings.telegram_bot_token)
     if normalized == SurfacePlatform.RESEND:
@@ -161,11 +167,10 @@ class SurfaceCredentialResolver:
                     if hasattr(refreshed, "model_dump")
                     else {}
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Could not refresh credentials for account %s, falling back to stored: %s",
-                    account_id,
-                    exc,
+            except Exception:
+                logger.debug(
+                    'agent_surfaces.credential_resolver.could_not_refresh_credentials_account.diagnostic',
+                    account_id=account_id,
                 )
                 payload = dict(stored)
 
@@ -188,9 +193,9 @@ class SurfaceCredentialResolver:
             auth_config = await self._connector_service.auth_config_repository.get(
                 auth_config_id
             )
-        except Exception as exc:
-            logger.warning(
-                "Could not resolve provider for account %s: %s", account.id, exc
+        except Exception:
+            logger.debug(
+                'agent_surfaces.credential_resolver.could_not_resolve_provider_account.diagnostic'
             )
             return None
         if auth_config is None:

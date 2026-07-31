@@ -2,7 +2,7 @@
 
 import { use, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { ArrowRight, CheckCircle2, Loader2, Mail, Plus, ShieldCheck, Users } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Loader2, Mail, Plus, ShieldCheck, Users } from '@/components/ui/icons';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -376,7 +376,6 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
         <PodSettingsShell
             podId={podId}
             title="Pod Settings"
-            description="Manage who can get into this pod and what kind of access they have."
             action={canManageMembers ? (
                 <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
                     <DialogTrigger asChild>

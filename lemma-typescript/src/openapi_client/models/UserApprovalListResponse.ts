@@ -6,4 +6,3 @@ import type { MessageResponse } from './MessageResponse.js';
 export type UserApprovalListResponse = {
     items: Array<MessageResponse>;
 };
-

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import socket
 from pathlib import Path
 import shutil
@@ -110,7 +111,9 @@ def _cleanup_e2e_workspace_containers(*, sandboxes_only: bool = False) -> None:
         subprocess.run(["docker", "network", "rm", *network_ids], check=False)
 
 
-def _configure_local_datastore_runtime(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def _configure_local_datastore_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     from app.core.config import settings
 
     del tmp_path  # see below
@@ -134,7 +137,54 @@ async def _run_cleanup_step(
     try:
         await asyncio.wait_for(cleanup(), timeout=timeout_seconds)
     except TimeoutError:
-        logger.warning("Timed out during E2E cleanup step %s", name)
+        logger.warning("test_support.e2e_base.timed_out_during_e2e_cleanup.timeout")
+
+
+async def _close_e2e_process_clients() -> None:
+    """Close process-local clients opened by HTTPX ASGI test requests.
+
+    ``httpx.ASGITransport`` intentionally does not run the application's
+    lifespan. E2E requests can therefore initialize the same lazy singletons as
+    production without invoking their production shutdown hooks. Keep this
+    cleanup on the pytest async loop and call it from the canonical client
+    fixture after all dependent request fixtures have unwound.
+    """
+
+    from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
+    from app.core.infrastructure.channels.channel_service import channel_service
+    from app.core.infrastructure.db.session import close_engine
+    from app.core.infrastructure.events.message_bus import close_message_bus
+    from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
+    from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
+        close_surface_event_dedup_store,
+    )
+    from app.modules.datastore.infrastructure.session import close_datastore_engine
+    from app.modules.identity.infrastructure.user_cache import close_user_cache
+    from app.modules.identity.services.auth_abuse import close_auth_abuse_store
+    from app.modules.identity.services.telegram_oidc import close_telegram_oidc_store
+    from app.modules.workspace.services.workspace_sandbox_service import (
+        reset_workspace_store_state,
+    )
+    from app.modules.workspace.services.workspace_tool_runtime import (
+        close_workspace_tool_runtimes,
+    )
+
+    await _run_cleanup_step(
+        "close_workspace_tool_runtimes", close_workspace_tool_runtimes
+    )
+    await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
+    await _run_cleanup_step(
+        "close_surface_event_dedup_store", close_surface_event_dedup_store
+    )
+    await _run_cleanup_step("close_user_cache", close_user_cache)
+    await _run_cleanup_step("close_auth_abuse_store", close_auth_abuse_store)
+    await _run_cleanup_step("close_telegram_oidc_store", close_telegram_oidc_store)
+    await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
+    await _run_cleanup_step("close_message_bus", close_message_bus)
+    await _run_cleanup_step("close_redis_json_caches", close_redis_json_caches)
+    await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
+    await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
+    await _run_cleanup_step("close_engine", close_engine)
 
 
 def _shared_context_resource(name: str, factory: Callable[[], Any]) -> Any:
@@ -157,8 +207,12 @@ def _close_shared_contexts() -> None:
 
 
 def _reset_supertokens_testing_state() -> None:
+    from supertokens_python.recipe.accountlinking.recipe import AccountLinkingRecipe
     from supertokens_python.recipe.dashboard.recipe import DashboardRecipe
     from supertokens_python.recipe.emailpassword.recipe import EmailPasswordRecipe
+    from supertokens_python.recipe.emailverification.recipe import (
+        EmailVerificationRecipe,
+    )
     from supertokens_python.recipe.jwt.recipe import JWTRecipe
     from supertokens_python.recipe.multitenancy.recipe import MultitenancyRecipe
     from supertokens_python.recipe.oauth2provider.recipe import OAuth2ProviderRecipe
@@ -171,7 +225,9 @@ def _reset_supertokens_testing_state() -> None:
     Supertokens.reset()
     for recipe in (
         SessionRecipe,
+        AccountLinkingRecipe,
         EmailPasswordRecipe,
+        EmailVerificationRecipe,
         DashboardRecipe,
         ThirdPartyRecipe,
         JWTRecipe,
@@ -181,6 +237,27 @@ def _reset_supertokens_testing_state() -> None:
         OAuth2ProviderRecipe,
     ):
         recipe.reset()
+
+
+async def verify_emailpassword_for_tests(user_id: str, email: str) -> None:
+    """Complete the real SuperTokens verification transition in E2E fixtures."""
+    from supertokens_python.recipe.emailverification.asyncio import (
+        create_email_verification_token,
+        verify_email_using_token,
+    )
+    from supertokens_python.recipe.emailverification.interfaces import (
+        CreateEmailVerificationTokenOkResult,
+    )
+    from supertokens_python.types import RecipeUserId
+
+    created = await create_email_verification_token(
+        "public", RecipeUserId(user_id), email
+    )
+    assert isinstance(created, CreateEmailVerificationTokenOkResult)
+    verified = await verify_email_using_token(
+        "public", created.token, attempt_account_linking=False
+    )
+    assert verified.status == "OK"
 
 
 @pytest.fixture(scope="session")
@@ -235,6 +312,10 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.google_client_id = "test-google-client-id"
     settings.google_client_secret = "test-google-client-secret"
     settings.email_transport = "filesystem"
+    settings.auth_email_verification_required = True
+    settings.auth_email_deliverability_checks_enabled = False
+    settings.auth_abuse_protection_enabled = False
+    settings.auth_altcha_enabled = False
     # Namespace local filesystem roots per pytest-xdist worker so parallel
     # workers never share (or rmtree out from under each other) the same dirs.
     # ``PYTEST_XDIST_WORKER`` is e.g. "gw0"/"gw1" under xdist, unset otherwise.
@@ -243,11 +324,13 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     shutil.rmtree(settings.email_output_dir, ignore_errors=True)
     Path(settings.email_output_dir).mkdir(parents=True, exist_ok=True)
     settings.local_file_storage_root = f"/tmp/lemma-files-tests{worker_suffix}"
-    settings.gcs_storage_bucket = None
+    settings.storage_bucket = None
     settings.public_bucket_name = None
     settings.storage_backend = "local"
     settings.embedding_provider = "local"
-    settings.local_object_storage_root = f"/tmp/lemma-object-storage-tests{worker_suffix}"
+    settings.local_object_storage_root = (
+        f"/tmp/lemma-object-storage-tests{worker_suffix}"
+    )
 
     # Pin a stable, session-wide AgentBox manager endpoint. The worker subprocess
     # is session-scoped and captures os.environ once at spawn, while the manager
@@ -266,6 +349,25 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     os.environ["AGENTBOX_API_URL"] = agentbox_url
     os.environ["AGENTBOX_API_KEY"] = agentbox_key
 
+    # Pin the callback server to one session-wide port for the same reason as
+    # AgentBox above. Queued functions are dispatched by the session-scoped
+    # worker, whose settings are loaded once when its subprocess starts. The
+    # function-scoped backend server rebinds this port for each test, so both
+    # API- and worker-driven sandboxes receive the same explicit, reachable URL.
+    # Production code intentionally performs no localhost/container rewriting.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        callback_port = int(sock.getsockname()[1])
+    callback_url = os.getenv(
+        "WORKSPACE_E2E_DOCKER_API_URL",
+        f"http://host.docker.internal:{callback_port}",
+    )
+    settings.workspace_callback_api_url = callback_url
+    settings.function_runtime_gateway_url = callback_url
+    os.environ["WORKSPACE_E2E_BACKEND_PORT"] = str(callback_port)
+    os.environ["WORKSPACE_CALLBACK_API_URL"] = callback_url
+    os.environ["FUNCTION_RUNTIME_GATEWAY_URL"] = callback_url
+
     # E2E execution mode: default to the fast mocked level (no real model, no
     # Docker) so CI and local runs are fast and deterministic. ``E2E_REAL=1``
     # (or the per-axis E2E_LLM_MODE / E2E_SANDBOX_MODE) opts into the real model
@@ -273,11 +375,32 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     # inherits os.environ) runs in the same mode.
     real = os.environ.get("E2E_REAL", "").lower() in ("1", "true", "yes")
     llm_mode = os.environ.get("E2E_LLM_MODE") or ("real" if real else "mock")
-    sandbox_mode = os.environ.get("E2E_SANDBOX_MODE") or ("docker" if real else "fake")
+    sandbox_mode = os.environ.get("E2E_SANDBOX_MODE") or "docker"
     settings.e2e_llm_mode = llm_mode
     settings.e2e_sandbox_mode = sandbox_mode
     os.environ["E2E_LLM_MODE"] = llm_mode
     os.environ["E2E_SANDBOX_MODE"] = sandbox_mode
+    if llm_mode == "mock":
+        # system:lemma normally requires an operator credential and model
+        # catalog. The deterministic FunctionModel never contacts that
+        # provider, but profile resolution still exercises the production path.
+        os.environ.setdefault("LEMMA_OPENAI_API_KEY", "e2e-mock-key-not-used")
+        os.environ.setdefault("LEMMA_OPENAI_DEFAULT_MODEL", "e2e-mock-model")
+        os.environ.setdefault("LEMMA_OPENAI_MODEL_NAMES", "e2e-mock-model")
+        os.environ.setdefault(
+            "LEMMA_SYSTEM_MODEL_METADATA_JSON",
+            json.dumps(
+                {
+                    "e2e-mock-model": {
+                        "input_per_million_usd": 1.0,
+                        "output_per_million_usd": 1.0,
+                        "max_input_tokens": 100_000,
+                        "max_output_tokens": 20_000,
+                        "max_requests": 200,
+                    }
+                }
+            ),
+        )
 
     # A single Kreuzberg is shared across all xdist workers (see datastore
     # conftest); under concurrent indexing load it can briefly stall or be
@@ -293,9 +416,6 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     settings.e2e_disable_worker_file_autoindex = True
     os.environ.setdefault("E2E_DISABLE_WORKER_FILE_AUTOINDEX", "true")
 
-    if sandbox_mode == "fake":
-        _start_fake_agentbox(agentbox_port)
-
     from app.core.infrastructure.db import session as db_session_module
 
     db_session_module.reset_engine_state()
@@ -303,44 +423,13 @@ def e2e_settings(test_database_url, test_redis_url, supertokens_container):
     return settings
 
 
-_fake_agentbox_started: set[int] = set()
-
-
-def _start_fake_agentbox(port: int) -> None:
-    """Run the in-process fake AgentBox manager on ``port`` in a daemon thread.
-
-    One per session/xdist-worker (the pinned agentbox port is per-worker), so
-    parallel workers don't contend. Replaces the Docker manager for the fast
-    ``e2e_sandbox_mode == "fake"`` path; the session worker + in-process tools
-    reach it over HTTP at the pinned port.
-    """
-    if port in _fake_agentbox_started:
-        return
-    import threading
-    import time
-
-    import uvicorn
-
-    from app.modules.workspace.testing.fake_agentbox import create_fake_agentbox_app
-
-    app = create_fake_agentbox_app()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name=f"fake-agentbox-{port}", daemon=True)
-    thread.start()
-    for _ in range(200):
-        if server.started:
-            break
-        time.sleep(0.02)
-    _fake_agentbox_started.add(port)
-
-
 @pytest.fixture(scope="session", autouse=True)
 def cleanup_workspace_containers_session():
-    # Clean stale containers from prior interrupted runs.
-    _cleanup_e2e_workspace_containers()
     yield
-    _cleanup_e2e_workspace_containers()
+    # Close exactly the contexts created by this pytest process. Broad sweeps
+    # by the shared label are unsafe even in a serial session because another
+    # independently invoked pytest process may be running at the same time.
+    _close_shared_contexts()
 
 
 @pytest_asyncio.fixture(scope="function", autouse=True)
@@ -350,31 +439,7 @@ async def cleanup_workspace_containers_function():
     # containers here would kill the shared session testcontainers and break every
     # subsequent test.
     _cleanup_e2e_workspace_containers(sandboxes_only=True)
-    from app.core.infrastructure.channels.channel_service import channel_service
-    from app.core.infrastructure.db.session import close_engine
-    from app.core.infrastructure.events.message_bus import close_message_bus
-    from app.core.infrastructure.jobs.streaq_job_queue import close_streaq_job_queue
-    from app.modules.datastore.infrastructure.session import close_datastore_engine
-    from app.modules.agent_surfaces.infrastructure.adapters.redis_event_dedup_store import (
-        close_surface_event_dedup_store,
-    )
-    from app.modules.identity.infrastructure.user_cache import close_user_cache
-    from app.modules.workspace.services.workspace_sandbox_service import (
-        reset_workspace_store_state,
-    )
-    from app.modules.workspace.services.workspace_tool_runtime import (
-        reset_workspace_tool_runtimes,
-    )
-
-    reset_workspace_tool_runtimes()
-    await _run_cleanup_step("reset_workspace_store_state", reset_workspace_store_state)
-    await _run_cleanup_step("close_surface_event_dedup_store", close_surface_event_dedup_store)
-    await _run_cleanup_step("close_user_cache", close_user_cache)
-    await _run_cleanup_step("close_streaq_job_queue", close_streaq_job_queue)
-    await _run_cleanup_step("close_message_bus", close_message_bus)
-    await _run_cleanup_step("channel_service.disconnect", channel_service.disconnect)
-    await _run_cleanup_step("close_datastore_engine", close_datastore_engine)
-    await _run_cleanup_step("close_engine", close_engine)
+    await _close_e2e_process_clients()
 
 
 @pytest_asyncio.fixture(scope="session")
@@ -423,6 +488,12 @@ async def worker(e2e_settings):
                 "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,
                 "API_URL": os.environ.get("API_URL", e2e_settings.api_url),
+                "WORKSPACE_CALLBACK_API_URL": (
+                    e2e_settings.workspace_callback_api_url
+                ),
+                "FUNCTION_RUNTIME_GATEWAY_URL": (
+                    e2e_settings.function_runtime_gateway_url
+                ),
                 # The manager rebinds to this stable port each test; keep the
                 # worker pointed at it so worker-driven function jobs reach it.
                 "AGENTBOX_API_URL": e2e_settings.agentbox_api_url,
@@ -433,6 +504,7 @@ async def worker(e2e_settings):
                 "EMAIL_TRANSPORT": "filesystem",
                 "EMAIL_OUTPUT_DIR": e2e_settings.email_output_dir,
                 "GCS_STORAGE_BUCKET": "",
+                "STORAGE_BUCKET": "",
                 "PUBLIC_BUCKET_NAME": "",
                 "STORAGE_BACKEND": "local",
                 "EMBEDDING_PROVIDER": "local",
@@ -446,9 +518,8 @@ async def worker(e2e_settings):
         )
 
         readiness_markers = (
-            "Worker starting...",
-            "`HandleAgentRunEvent` waiting for messages",
-            "`HandleScheduleEvents` waiting for messages",
+            '"logger": "app.core.infrastructure.jobs.streaq_runtime"',
+            '"event": "service.started"',
         )
         startup_ok = False
         for _ in range(200):
@@ -487,7 +558,9 @@ async def worker(e2e_settings):
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
+            redis_client = redis.from_url(
+                e2e_settings.redis_url, decode_responses=False
+            )
             await redis_client.flushdb()
             await redis_client.aclose()
 
@@ -516,7 +589,11 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
     from app.modules.usage.infrastructure import models as usage_models
     from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
     from app.modules.pod.infrastructure import models as pod_role_models
+    from app.core.infrastructure.events import models as event_models
+    from app.modules.pod_bundle.infrastructure import models as pod_bundle_models
+
     _ = (
+        event_models,
         user_models,
         organization_models,
         pod_models,
@@ -530,6 +607,7 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
         usage_models,
         agent_surface_models,
         pod_role_models,
+        pod_bundle_models,
     )
 
     import asyncio as _asyncio
@@ -628,7 +706,10 @@ async def async_client(test_app) -> AsyncGenerator["AsyncClient", None]:
         transport=ASGITransport(app=test_app),
         base_url="http://testserver",
     ) as client:
-        yield client
+        try:
+            yield client
+        finally:
+            await _close_e2e_process_clients()
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -643,6 +724,11 @@ async def fixed_test_user(async_client: "AsyncClient"):
         ]
     }
     response = await async_client.post("/st/auth/signup", json=signup_data)
+    data = response.json()
+    assert response.status_code == 200 and data.get("status") == "OK", data
+
+    await verify_emailpassword_for_tests(data["user"]["id"], email)
+    response = await async_client.post("/st/auth/signin", json=signup_data)
     data = response.json()
     assert response.status_code == 200 and data.get("status") == "OK", data
 

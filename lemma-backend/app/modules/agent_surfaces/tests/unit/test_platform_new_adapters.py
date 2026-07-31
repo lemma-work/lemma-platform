@@ -21,6 +21,7 @@ from app.modules.agent_surfaces.platforms.whatsapp.parser import (
     WhatsAppMessageParser,
 )
 from app.modules.agent_surfaces.platforms.whatsapp import (
+    client as whatsapp_client_module,
     service as whatsapp_service_module,
 )
 from app.modules.agent_surfaces.platforms.gmail.parser import (
@@ -137,8 +138,13 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
     posted: dict = {}
 
     class _Response:
+        status_code = 200
+
         def raise_for_status(self):
             return None
+
+        def json(self):
+            return {"messages": [{"id": "wamid.1"}]}
 
     class _Client:
         async def __aenter__(self):
@@ -154,7 +160,7 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
             return _Response()
 
     monkeypatch.setattr(
-        whatsapp_service_module.httpx,
+        whatsapp_client_module.httpx,
         "AsyncClient",
         lambda *args, **kwargs: _Client(),
     )
@@ -201,6 +207,52 @@ async def test_whatsapp_send_display_resource_uses_cta_url_payload(monkeypatch):
     assert posted["json"]["interactive"]["action"]["parameters"]["url"].startswith(
         "https://app.example.test"
     )
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_display_phone_number_lookup_uses_graph_phone_id(monkeypatch):
+    requested: dict = {}
+
+    class _Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"display_phone_number": "+1 555 0100"}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, *, params, headers):
+            requested["url"] = url
+            requested["params"] = params
+            requested["headers"] = headers
+            return _Response()
+
+    monkeypatch.setattr(
+        whatsapp_client_module.httpx,
+        "AsyncClient",
+        lambda *args, **kwargs: _Client(),
+    )
+
+    number = await whatsapp_service_module.WhatsAppPlatformService(
+        {
+            "access_token": "wa-token",
+            "phone_number_id": "PN42",
+            "api_base_url": "https://graph.example.test/v21.0",
+        }
+    ).get_display_phone_number()
+
+    assert number == "+1 555 0100"
+    assert requested["url"] == "https://graph.example.test/v21.0/PN42"
+    assert requested["params"] == {"fields": "display_phone_number"}
+    assert requested["headers"]["Authorization"] == "Bearer wa-token"
 
 
 def _telegram_text_payload() -> dict:

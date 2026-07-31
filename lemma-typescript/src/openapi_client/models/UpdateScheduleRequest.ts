@@ -15,4 +15,3 @@ export type UpdateScheduleRequest = {
     visibility?: (string | null);
     workflow_name?: (string | null);
 };
-

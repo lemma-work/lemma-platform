@@ -9,4 +9,3 @@ export type OrganizationSlugAvailabilityResponse = {
     available: boolean;
     slug: string;
 };
-

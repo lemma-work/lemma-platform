@@ -1,5 +1,5 @@
 import pytest
-from uuid import uuid4
+from uuid import UUID, uuid4
 from types import SimpleNamespace
 
 from app.modules.agent.defaults import default_agent_runtime_profile_id
@@ -64,23 +64,29 @@ def _test_harness_profile(
     *,
     organization_id,
     name: str,
-    protocol: RuntimeProfileProtocol,
+    harness_id=None,
+    default_model_name: str | None = None,
 ) -> AgentRuntimeProfile:
     return AgentRuntimeProfile(
         id=str(uuid4()),
         organization_id=organization_id,
+        harness_id=harness_id or uuid4(),
         scope=RuntimeProfileScope.ORGANIZATION,
         kind=RuntimeProfileKind.HARNESS,
-        protocol=protocol,
+        protocol=RuntimeProfileProtocol.AGENT_HOST,
         name=name,
-        default_model_name="default",
-        model_catalog=[
-            RuntimeModelCatalogEntry(
-                name="default",
-                provider_model_name="default",
-            )
-        ],
-        config={"binary": name},
+        default_model_name=default_model_name,
+        model_catalog=(
+            [
+                RuntimeModelCatalogEntry(
+                    name=default_model_name,
+                    provider_model_name=default_model_name,
+                )
+            ]
+            if default_model_name
+            else []
+        ),
+        config={"harness_snapshot_revision": "rev-1"},
     )
 
 
@@ -122,32 +128,74 @@ class _ProfileRepository:
         return profile
 
 
-class _DaemonRepository:
-    def __init__(self, daemons):
-        self.daemons = daemons
+class _HostRepository:
+    """Stub for the pieces of AgentHostRepository profile creation touches."""
 
-    async def get_for_user(self, *, daemon_id, user_id):
-        for daemon in self.daemons:
-            if daemon.id == daemon_id and daemon.user_id == user_id:
-                return daemon
-        return None
+    def __init__(self, harnesses, hosts):
+        self.harnesses = harnesses
+        self.hosts = hosts
+
+    async def get_harness(self, *, harness_id, for_update=False):
+        del for_update
+        return self.harnesses.get(harness_id)
+
+    async def get_for_user(self, *, host_id, user_id):
+        host = self.hosts.get(host_id)
+        if host is None or host.user_id != user_id:
+            return None
+        return host
+
+
+def _ready_agent_host(
+    *, user_id, organization_id, config_options=None, capabilities=None
+):
+    """A live host with one READY harness, as the profile writer requires."""
+    from datetime import datetime, timezone
+
+    host_id = uuid4()
+    harness_id = uuid4()
+    host = SimpleNamespace(
+        id=host_id,
+        user_id=user_id,
+        organization_id=organization_id,
+        status="ONLINE",
+        last_seen_at=datetime.now(timezone.utc),
+        revoked_at=None,
+    )
+    harness = SimpleNamespace(
+        id=harness_id,
+        host_id=host_id,
+        harness_key="opencode",
+        health="READY",
+        config_revision="rev-1",
+        config_options=config_options if config_options is not None else [],
+        capabilities=capabilities if capabilities is not None else {},
+    )
+    return _HostRepository({harness_id: harness}, {host_id: host}), harness_id
 
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("codex", HarnessKind.CODEX),
-        ("claude_code", HarnessKind.CLAUDE_CODE),
-        ("opencode", HarnessKind.OPENCODE),
-        ("cursor", HarnessKind.CURSOR),
-        ("cursor_agent", HarnessKind.CURSOR),
-        ("antigravity", HarnessKind.ANTIGRAVITY),
-        ("agy", HarnessKind.ANTIGRAVITY),
         ("pydantic_ai", HarnessKind.LEMMA),
+        ("PYDANTIC_AI", HarnessKind.LEMMA),
+        ("lemma", HarnessKind.LEMMA),
+        ("harness", HarnessKind.HARNESS),
     ],
 )
 def test_harness_kind_accepts_legacy_aliases(raw, expected):
     assert HarnessKind(raw) is expected
+
+
+@pytest.mark.parametrize(
+    "retired",
+    ["CODEX", "CLAUDE_CODE", "OPENCODE", "CURSOR", "ANTIGRAVITY", "agy"],
+)
+def test_harness_kind_rejects_retired_daemon_kinds(retired):
+    # The local daemon's per-tool kinds are gone. Nothing persisted is read back
+    # through this enum, so rejecting them cannot break a history read.
+    with pytest.raises(ValueError):
+        HarnessKind(retired)
 
 
 @pytest.mark.asyncio
@@ -510,23 +558,13 @@ def test_system_runtime_profile_can_use_anthropic_compatible_env(monkeypatch):
     assert str(profile.config.base_url) == "https://anthropic.test/"
 
 
-@pytest.mark.parametrize(
-    ("protocol", "harness_kind"),
-    [
-        (RuntimeProfileProtocol.CODEX_APP_SERVER, HarnessKind.CODEX),
-        (RuntimeProfileProtocol.CLAUDE_CODE, HarnessKind.CLAUDE_CODE),
-        (RuntimeProfileProtocol.OPENCODE, HarnessKind.OPENCODE),
-        (RuntimeProfileProtocol.CURSOR, HarnessKind.CURSOR),
-        (RuntimeProfileProtocol.ANTIGRAVITY, HarnessKind.ANTIGRAVITY),
-    ],
-)
 @pytest.mark.asyncio
-async def test_runtime_resolves_org_local_harness_profiles(protocol, harness_kind):
+async def test_runtime_resolves_org_agent_host_profile():
     org_id = uuid4()
     profile = _test_harness_profile(
         organization_id=org_id,
-        name=harness_kind.value.lower(),
-        protocol=protocol,
+        name="opencode",
+        default_model_name="grok-4",
     )
     service = AgentRuntimeProfileService(_ProfileRepository([profile]))
 
@@ -536,180 +574,275 @@ async def test_runtime_resolves_org_local_harness_profiles(protocol, harness_kin
         user_id=uuid4(),
     )
 
-    assert resolved.harness_kind is harness_kind
-    assert resolved.model_name_for_harness == "default"
+    assert resolved.harness_kind is HarnessKind.HARNESS
+    assert resolved.model_name_for_harness == "grok-4"
+    assert resolved.public_snapshot()["harness_id"] == str(profile.harness_id)
 
 
 @pytest.mark.asyncio
-async def test_create_user_daemon_profile_from_catalog():
+async def test_runtime_resolves_agent_host_profile_that_pins_no_model():
+    # A harness with no model option leaves the catalog empty. That must
+    # resolve, not raise: the harness picks its own default.
+    org_id = uuid4()
+    profile = _test_harness_profile(organization_id=org_id, name="opencode")
+    service = AgentRuntimeProfileService(_ProfileRepository([profile]))
+
+    resolved = await service.resolve(
+        runtime=AgentRuntimeConfig(profile_id=profile.id),
+        organization_id=org_id,
+        user_id=uuid4(),
+    )
+
+    assert resolved.model is None
+    assert resolved.public_snapshot()["model_name"] is None
+
+
+@pytest.mark.asyncio
+async def test_resolved_agent_host_snapshot_feeds_the_dispatch_run_config():
+    """The resolver's snapshot is the harness's only input, so pin the contract.
+
+    In particular the model: ``model_name_for_harness`` substitutes a "default"
+    placeholder when nothing is pinned, and Agent Host rejects any model the
+    harness does not advertise — so an unpinned profile must dispatch with no
+    model at all.
+    """
+    from app.modules.agent.infrastructure.harnesses.agent_host import (
+        _agent_host_run_config,
+    )
+
+    org_id = uuid4()
+    pinned = _test_harness_profile(
+        organization_id=org_id, name="opencode", default_model_name="grok-4"
+    )
+    service = AgentRuntimeProfileService(_ProfileRepository([pinned]))
+    resolved = await service.resolve(
+        runtime=AgentRuntimeConfig(profile_id=pinned.id),
+        organization_id=org_id,
+        user_id=uuid4(),
+    )
+    options = HarnessOptions(
+        model_name=resolved.model_name_for_harness,
+        extra={"runtime_profile": resolved.public_snapshot()},
+    )
+
+    run_config = _agent_host_run_config(options)
+    assert run_config.harness_id == pinned.harness_id
+    assert run_config.runtime_profile_id == UUID(pinned.id)
+    assert run_config.model_name == "grok-4"
+
+    unpinned = _test_harness_profile(organization_id=org_id, name="codex")
+    resolved_unpinned = await AgentRuntimeProfileService(
+        _ProfileRepository([unpinned])
+    ).resolve(
+        runtime=AgentRuntimeConfig(profile_id=unpinned.id),
+        organization_id=org_id,
+        user_id=uuid4(),
+    )
+    assert resolved_unpinned.model_name_for_harness == "default"
+    assert (
+        _agent_host_run_config(
+            HarnessOptions(
+                model_name=resolved_unpinned.model_name_for_harness,
+                extra={"runtime_profile": resolved_unpinned.public_snapshot()},
+            )
+        ).model_name
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_agent_host_profile_binds_harness_and_advertises_its_models():
     org_id = uuid4()
     user_id = uuid4()
-    daemon_id = uuid4()
     repo = _ProfileRepository([])
-    daemon_repo = _DaemonRepository(
-        [
-            SimpleNamespace(
-                id=daemon_id,
-                user_id=user_id,
-                harness_catalog={
-                    "OPENCODE": {
-                        "available": True,
-                        "models": ["opencode/deepseek-v4-flash-free"],
-                    }
-                },
-            )
-        ]
+    host_repo, harness_id = _ready_agent_host(
+        user_id=user_id,
+        organization_id=org_id,
+        config_options=[
+            {
+                "id": "model",
+                "category": "model",
+                "name": "Model",
+                "options": [
+                    {"value": "grok-4", "name": "Grok 4"},
+                    {"value": "gpt-5.5"},
+                ],
+            },
+            {
+                "id": "reasoning",
+                "category": "reasoning",
+                "name": "Reasoning",
+                "options": [{"value": "high"}, {"value": "low"}],
+            },
+        ],
     )
-    service = AgentRuntimeProfileService(repo, daemon_repository=daemon_repo)
+    service = AgentRuntimeProfileService(repo, host_repository=host_repo)
 
-    profile = await service.create_user_daemon_profile(
+    profile = await service.create_agent_host_profile(
         organization_id=org_id,
         user_id=user_id,
-        daemon_id=daemon_id,
-        harness_kind=HarnessKind.OPENCODE,
-        name=" OpenCode daemon ",
-        default_model_name="opencode/deepseek-v4-flash-free",
+        harness_id=harness_id,
+        name="  OpenCode on my laptop  ",
+        default_model_name="grok-4",
+        config_selections={"reasoning": "high"},
     )
 
     assert profile in repo.profiles
-    assert profile.organization_id == org_id
-    assert profile.user_id == user_id
-    assert profile.daemon_id == daemon_id
-    assert profile.scope is RuntimeProfileScope.ORGANIZATION
-    assert profile.name == "OpenCode daemon"
-    assert profile.protocol is RuntimeProfileProtocol.OPENCODE
-    assert profile.derived_harness_kind() is HarnessKind.OPENCODE
-    assert profile.default_model_name == "opencode/deepseek-v4-flash-free"
-    assert [model.name for model in profile.model_catalog] == [
-        "default",
-        "opencode/deepseek-v4-flash-free",
-    ]
-    assert profile.public_dict()["config"] == {}
-    assert profile.metadata == {"source": "USER_DAEMON"}
+    assert profile.harness_id == harness_id
+    assert profile.name == "OpenCode on my laptop"
+    assert profile.kind is RuntimeProfileKind.HARNESS
+    assert profile.protocol is RuntimeProfileProtocol.AGENT_HOST
+    assert profile.derived_harness_kind() is HarnessKind.HARNESS
+    assert profile.default_model_name == "grok-4"
+    assert [model.name for model in profile.model_catalog] == ["grok-4", "gpt-5.5"]
+    assert profile.config.harness_snapshot_revision == "rev-1"
+    assert profile.config.config_selections == {"reasoning": "high"}
+    assert profile.metadata == {"source": "AGENT_HOST", "harness_key": "opencode"}
 
 
 @pytest.mark.asyncio
-async def test_create_user_daemon_profile_maps_claude_standard_context_models():
+async def test_create_agent_host_profile_marks_models_vision_when_harness_reports_images():
     org_id = uuid4()
     user_id = uuid4()
-    daemon_id = uuid4()
-    repo = _ProfileRepository([])
-    daemon_repo = _DaemonRepository(
-        [
-            SimpleNamespace(
-                id=daemon_id,
-                user_id=user_id,
-                harness_catalog={
-                    "CLAUDE_CODE": {
-                        "available": True,
-                        "models": ["sonnet", "opus"],
-                        "model_catalog": [
-                            {
-                                "name": "sonnet",
-                                "display_name": "Claude Sonnet 4.6",
-                                "provider_model_name": "claude-sonnet-4-6",
-                                "metadata": {"context_window": "standard"},
-                            },
-                            {
-                                "name": "opus",
-                                "display_name": "Claude Opus 4.8",
-                                "provider_model_name": "claude-opus-4-8",
-                                "metadata": {"context_window": "standard"},
-                            },
-                        ],
-                    }
-                },
-            )
-        ]
+    host_repo, harness_id = _ready_agent_host(
+        user_id=user_id,
+        organization_id=org_id,
+        capabilities={"images": True},
+        config_options=[
+            {
+                "id": "model",
+                "category": "model",
+                "name": "Model",
+                "options": [{"value": "grok-4"}],
+            }
+        ],
     )
-    service = AgentRuntimeProfileService(repo, daemon_repository=daemon_repo)
+    service = AgentRuntimeProfileService(
+        _ProfileRepository([]), host_repository=host_repo
+    )
 
-    profile = await service.create_user_daemon_profile(
+    profile = await service.create_agent_host_profile(
         organization_id=org_id,
         user_id=user_id,
-        daemon_id=daemon_id,
-        harness_kind=HarnessKind.CLAUDE_CODE,
-        name="Claude Code daemon",
-        default_model_name="sonnet",
+        harness_id=harness_id,
+        name="Vision harness",
     )
 
-    by_name = {entry.name: entry for entry in profile.model_catalog}
-    # Default leads the catalog; the friendly alias stays the selection name but
-    # carries the full standard-context id + advertising metadata.
-    assert profile.model_catalog[0].name == "default"
-    assert by_name["sonnet"].provider_model_name == "claude-sonnet-4-6"
-    assert by_name["sonnet"].display_name == "Claude Sonnet 4.6"
-    assert by_name["sonnet"].metadata["context_window"] == "standard"
-    assert by_name["opus"].provider_model_name == "claude-opus-4-8"
+    from app.modules.agent.domain.runtime_profiles import RuntimeModelCapability
 
-    # Resolving the alias hands the harness the standard-context id, so a user
-    # without usage credits never hits the 1M-context failure.
-    resolved = await service.resolve(
-        runtime=AgentRuntimeConfig(profile_id=profile.id, model_name="sonnet"),
-        organization_id=org_id,
-        user_id=user_id,
-    )
-    assert resolved.model_name_for_harness == "claude-sonnet-4-6"
+    assert RuntimeModelCapability.VISION in profile.model_catalog[0].capabilities
 
 
 @pytest.mark.asyncio
-async def test_create_user_daemon_profile_rejects_unavailable_harness():
+async def test_create_agent_host_profile_rejects_unknown_harness():
     user_id = uuid4()
-    daemon_id = uuid4()
     service = AgentRuntimeProfileService(
         _ProfileRepository([]),
-        daemon_repository=_DaemonRepository(
-            [
-                SimpleNamespace(
-                    id=daemon_id,
-                    user_id=user_id,
-                    harness_catalog={"CODEX": {"available": False}},
-                )
-            ]
-        ),
+        host_repository=_HostRepository({}, {}),
     )
 
     with pytest.raises(ValueError, match="not available"):
-        await service.create_user_daemon_profile(
+        await service.create_agent_host_profile(
             organization_id=uuid4(),
             user_id=user_id,
-            daemon_id=daemon_id,
-            harness_kind=HarnessKind.CODEX,
-            name="Codex daemon",
+            harness_id=uuid4(),
+            name="Missing harness",
         )
 
 
 @pytest.mark.asyncio
-async def test_create_user_daemon_profile_rejects_unknown_model():
+async def test_create_agent_host_profile_rejects_offline_host():
+    from datetime import datetime, timedelta, timezone
+
+    org_id = uuid4()
     user_id = uuid4()
-    daemon_id = uuid4()
+    host_repo, harness_id = _ready_agent_host(
+        user_id=user_id, organization_id=org_id
+    )
+    host = next(iter(host_repo.hosts.values()))
+    host.last_seen_at = datetime.now(timezone.utc) - timedelta(hours=1)
     service = AgentRuntimeProfileService(
-        _ProfileRepository([]),
-        daemon_repository=_DaemonRepository(
-            [
-                SimpleNamespace(
-                    id=daemon_id,
-                    user_id=user_id,
-                    harness_catalog={
-                        "OPENCODE": {
-                            "available": True,
-                            "models": ["opencode/deepseek-v4-flash-free"],
-                        }
-                    },
-                )
-            ]
-        ),
+        _ProfileRepository([]), host_repository=host_repo
     )
 
-    with pytest.raises(ValueError, match="detected model names"):
-        await service.create_user_daemon_profile(
-            organization_id=uuid4(),
+    with pytest.raises(ValueError, match="offline"):
+        await service.create_agent_host_profile(
+            organization_id=org_id,
             user_id=user_id,
-            daemon_id=daemon_id,
-            harness_kind=HarnessKind.OPENCODE,
-            name="OpenCode daemon",
-            default_model_name="opencode/missing",
+            harness_id=harness_id,
+            name="Offline host",
         )
+
+
+@pytest.mark.asyncio
+async def test_create_agent_host_profile_rejects_unhealthy_harness():
+    org_id = uuid4()
+    user_id = uuid4()
+    host_repo, harness_id = _ready_agent_host(
+        user_id=user_id, organization_id=org_id
+    )
+    host_repo.harnesses[harness_id].health = "AUTH_REQUIRED"
+    service = AgentRuntimeProfileService(
+        _ProfileRepository([]), host_repository=host_repo
+    )
+
+    with pytest.raises(ValueError, match="not ready"):
+        await service.create_agent_host_profile(
+            organization_id=org_id,
+            user_id=user_id,
+            harness_id=harness_id,
+            name="Unauthenticated harness",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_agent_host_profile_rejects_model_the_harness_does_not_offer():
+    org_id = uuid4()
+    user_id = uuid4()
+    host_repo, harness_id = _ready_agent_host(
+        user_id=user_id,
+        organization_id=org_id,
+        config_options=[
+            {
+                "id": "model",
+                "category": "model",
+                "name": "Model",
+                "options": [{"value": "grok-4"}],
+            }
+        ],
+    )
+    service = AgentRuntimeProfileService(
+        _ProfileRepository([]), host_repository=host_repo
+    )
+
+    with pytest.raises(ValueError, match="not offered by this harness"):
+        await service.create_agent_host_profile(
+            organization_id=org_id,
+            user_id=user_id,
+            harness_id=harness_id,
+            name="Bad model",
+            default_model_name="does-not-exist",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_agent_host_profile_rejects_a_harness_owned_by_someone_else():
+    org_id = uuid4()
+    host_repo, harness_id = _ready_agent_host(
+        user_id=uuid4(), organization_id=org_id
+    )
+    service = AgentRuntimeProfileService(
+        _ProfileRepository([]), host_repository=host_repo
+    )
+
+    with pytest.raises(ValueError, match="not owned by the current user"):
+        await service.create_agent_host_profile(
+            organization_id=org_id,
+            user_id=uuid4(),
+            harness_id=harness_id,
+            name="Someone else's laptop",
+        )
+
 
 
 @pytest.mark.asyncio
@@ -925,9 +1058,10 @@ def test_lemma_harness_builds_dynamic_anthropic_compatible_model():
 
 def test_default_runtime_uses_system_profile(monkeypatch, tmp_path):
     from app.core.config import settings
+    from app.modules.agent.config import agent_settings
 
     monkeypatch.setattr(
-        settings,
+        agent_settings,
         "local_agent_runtime_config_path",
         str(tmp_path / "missing-runtime.json"),
     )

@@ -19,4 +19,3 @@ export type UsageSummaryResponse = {
     total_units: number;
     user_id?: (string | null);
 };
-

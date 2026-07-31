@@ -7,10 +7,11 @@ import httpx
 from pydantic_ai.tools import RunContext
 from slack_sdk.errors import SlackApiError
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     OTHER_ANSWER_SUFFIX as _OTHER_SUFFIX,
+    SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
     SurfaceContextMessage,
     SurfaceDisplayRenderPlan,
@@ -32,6 +33,7 @@ from app.modules.agent_surfaces.platforms.slack.client import (
     slack_scopes,
 )
 from app.modules.agent_surfaces.platforms.slack.models import (
+    SLACK_APPROVAL_ACTION_ID_BY_DECISION,
     SLACK_FORM_SUBMIT_ACTION_ID,
     SlackChannelMessageSnapshot,
     SlackFileAttachment,
@@ -64,9 +66,9 @@ class SlackPlatformService:
         user_id = event.sender_external_user_id
         token = slack_access_token(self.credentials)
         if not user_id or not token:
-            logger.warning(
-                "Slack fetch_sender_profile skipped due to missing user_id or token user_id=%s",
-                user_id,
+            logger.debug(
+                'agent_surfaces.service.slack_fetch_sender_profile_skipped.diagnostic',
+                user_id=user_id,
             )
             return None
 
@@ -82,11 +84,36 @@ class SlackPlatformService:
                 display_name=profile.get("display_name") or profile.get("real_name"),
                 raw_profile=user,
             )
-        except Exception as exc:
-            logger.exception(
-                "Slack fetch_sender_profile failed for user=%s: %s", user_id, exc
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.slack_fetch_sender_profile_user.propagated',
+                user_id=user_id,
+                exc_info=True,
             )
             raise
+
+    async def get_user_display_name(self, user_id: str) -> str | None:
+        """Return a user's Slack display name (best-effort).
+
+        Used to surface the bot's own human-facing name for the reach handle.
+        Returns None when the token or user id is missing, or on any API error.
+        """
+        token = slack_access_token(self.credentials)
+        if not user_id or not token:
+            return None
+        try:
+            client = build_slack_client(self.credentials)
+            response = await client.users_info(user=user_id)
+            user = response.get("user") or {}
+            profile = user.get("profile") or {}
+            name = profile.get("display_name") or profile.get("real_name")
+            return str(name).strip() or None if name else None
+        except Exception:
+            logger.debug(
+                "agent_surfaces.service.slack_get_user_display_name.observed",
+                user_id=user_id,
+            )
+            return None
 
     async def send_message(
         self,
@@ -98,9 +125,8 @@ class SlackPlatformService:
         token = slack_access_token(self.credentials)
         channel = event.reply_target.get("channel")
         if not token or not channel:
-            logger.warning(
-                "Slack send_message skipped due to missing token or channel channel=%s",
-                channel,
+            logger.debug(
+                'agent_surfaces.service.slack_send_message_skipped_due.diagnostic'
             )
             return
 
@@ -117,12 +143,10 @@ class SlackPlatformService:
                 )
             )
             await client.chat_postMessage(**payload)
-        except Exception as exc:
-            logger.exception(
-                "Slack send_message failed channel=%s thread=%s: %s",
-                channel,
-                event.reply_target.get("thread_ts"),
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.slack_send_message_channel_s.propagated',
+                exc_info=True,
             )
             raise
 
@@ -136,9 +160,8 @@ class SlackPlatformService:
         token = slack_access_token(self.credentials)
         channel = event.reply_target.get("channel")
         if not token or not channel:
-            logger.warning(
-                "Slack send_display_resource skipped due to missing token or channel channel=%s",
-                channel,
+            logger.debug(
+                'agent_surfaces.service.slack_send_display_resource_skipped.diagnostic'
             )
             return
 
@@ -161,12 +184,10 @@ class SlackPlatformService:
                 )
             )
             await client.chat_postMessage(**payload)
-        except Exception as exc:
-            logger.exception(
-                "Slack send_display_resource failed channel=%s thread=%s: %s",
-                channel,
-                event.reply_target.get("thread_ts"),
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.slack_send_display_resource_channel.propagated',
+                exc_info=True,
             )
             raise
 
@@ -199,6 +220,35 @@ class SlackPlatformService:
         await client.chat_postMessage(**payload)
         return True
 
+    async def send_approval(
+        self,
+        *,
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as Block Kit Approve/Deny buttons."""
+        token = slack_access_token(self.credentials)
+        channel = event.reply_target.get("channel")
+        if not token or not channel:
+            return False
+        client = build_slack_client(self.credentials)
+        payload: dict[str, Any] = {
+            "channel": channel,
+            "text": f"Approval needed: {approval_plan.title}",
+            "blocks": _approval_blocks(approval_plan),
+        }
+        thread_ts = event.reply_target.get("thread_ts")
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        payload.update(
+            slack_customized_message_kwargs(
+                self.credentials, (metadata or {}).get("agent_display_name")
+            )
+        )
+        await client.chat_postMessage(**payload)
+        return True
+
     async def add_processing_indicator(
         self,
         *,
@@ -210,10 +260,8 @@ class SlackPlatformService:
         timestamp = event.external_message_id
         thread_ts = event.reply_target.get("thread_ts")
         if not token or not channel or not timestamp:
-            logger.warning(
-                "Slack add_processing_indicator skipped channel=%s timestamp=%s",
-                channel,
-                timestamp,
+            logger.debug(
+                'agent_surfaces.service.slack_add_processing_indicator_skipped.diagnostic'
             )
             return
 
@@ -240,10 +288,9 @@ class SlackPlatformService:
                         "invalid_arguments",
                         "method_not_supported_for_channel_type",
                     }:
-                        logger.warning(
-                            "Slack typing indicator unsupported channel=%s error=%s",
-                            channel,
-                            error_code,
+                        logger.debug(
+                            'agent_surfaces.service.slack_typing_indicator_unsupported_channel.diagnostic',
+                            error_code=error_code,
                         )
                         return
                     raise
@@ -255,18 +302,14 @@ class SlackPlatformService:
         except SlackApiError as exc:
             error_code = str((exc.response or {}).get("error") or "")
             if error_code in {"already_reacted", "missing_scope", "not_reactable"}:
-                logger.warning(
-                    "Slack reaction indicator skipped channel=%s timestamp=%s error=%s",
-                    channel,
-                    timestamp,
-                    error_code,
+                logger.debug(
+                    'agent_surfaces.service.slack_reaction_indicator_skipped_channel.diagnostic',
+                    error_code=error_code,
                 )
                 return
-            logger.exception(
-                "Slack add_processing_indicator failed channel=%s timestamp=%s: %s",
-                channel,
-                timestamp,
-                exc,
+            logger.debug(
+                'agent_surfaces.service.slack_add_processing_indicator_channel.propagated',
+                exc_info=True,
             )
             raise
 
@@ -303,11 +346,9 @@ class SlackPlatformService:
             response = await client.chat_postMessage(**payload)
             ts = str(response["ts"])
             return {"ts": ts, "channel": str(response.get("channel") or channel)}
-        except SlackApiError as exc:
-            logger.warning(
-                "Slack stream_progress failed channel=%s error=%s",
-                channel,
-                str((exc.response or {}).get("error") or exc),
+        except SlackApiError:
+            logger.debug(
+                'agent_surfaces.service.slack_stream_progress_channel_s.diagnostic'
             )
             return progress_handle
 
@@ -326,12 +367,12 @@ class SlackPlatformService:
         client = build_slack_client(self.credentials)
         channel = progress_handle.get("channel") or event.reply_target.get("channel")
         try:
-            await client.chat_delete(channel=str(channel), ts=str(progress_handle["ts"]))
-        except SlackApiError as exc:
-            logger.warning(
-                "Slack end_progress delete failed channel=%s error=%s",
-                channel,
-                str((exc.response or {}).get("error") or exc),
+            await client.chat_delete(
+                channel=str(channel), ts=str(progress_handle["ts"])
+            )
+        except SlackApiError:
+            logger.debug(
+                'agent_surfaces.service.slack_end_progress_delete_channel.diagnostic'
             )
 
     async def list_channels(self) -> list[SurfaceChannelInfo]:
@@ -405,8 +446,9 @@ class SlackPlatformService:
             response.raise_for_status()
             content = response.content
         mime_type = (
-            str(attachment.get("mime_type") or attachment.get("content_type") or "")
-            .strip()
+            str(
+                attachment.get("mime_type") or attachment.get("content_type") or ""
+            ).strip()
             or str(file_item.get("mimetype") or "").strip()
             or mimetypes.guess_type(file_name)[0]
             or "application/octet-stream"
@@ -475,10 +517,9 @@ class SlackPlatformService:
         token = slack_access_token(self.credentials)
         channel = ctx.deps.external_channel_id
         if not token or not channel:
-            logger.warning(
-                "Slack get_recent_channel_messages missing context channel=%s conversation=%s",
-                channel,
-                ctx.deps.conversation_id,
+            logger.debug(
+                'agent_surfaces.service.slack_get_recent_channel_messages.diagnostic',
+                conversation_id=ctx.deps.conversation_id,
             )
             return SlackRecentChannelMessagesResult(
                 success=False,
@@ -505,12 +546,11 @@ class SlackPlatformService:
                 message=background_channel_context_note(len(messages)),
                 messages=messages,
             )
-        except Exception as exc:
-            logger.exception(
-                "Slack get_recent_channel_messages failed channel=%s conversation=%s: %s",
-                channel,
-                ctx.deps.conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.slack_get_recent_channel_messages.propagated',
+                conversation_id=ctx.deps.conversation_id,
+                exc_info=True,
             )
             raise
 
@@ -543,9 +583,9 @@ class SlackPlatformService:
                 )
                 # history is newest-first → flip to chronological
                 raw = list(reversed(response.get("messages") or []))
-        except Exception as exc:
-            logger.warning(
-                "Slack fetch_recent_context failed channel=%s: %s", channel, exc
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.slack_fetch_recent_context_channel.diagnostic'
             )
             return []
 
@@ -560,9 +600,7 @@ class SlackPlatformService:
             ts = str(item.get("ts") or "")
             if current_ts and ts == current_ts:
                 continue  # the message being handled isn't "context"
-            author = (
-                str(item.get("user") or item.get("username") or "").strip() or None
-            )
+            author = str(item.get("user") or item.get("username") or "").strip() or None
             out.append(SurfaceContextMessage(author=author, text=text, ts=ts or None))
         return out
 
@@ -575,10 +613,9 @@ class SlackPlatformService:
         token = slack_access_token(self.credentials)
         channel = ctx.deps.external_channel_id
         if not token or not channel:
-            logger.warning(
-                "Slack search_current_channel missing context channel=%s conversation=%s",
-                channel,
-                ctx.deps.conversation_id,
+            logger.debug(
+                'agent_surfaces.service.slack_search_current_channel_missing.diagnostic',
+                conversation_id=ctx.deps.conversation_id,
             )
             return SlackSearchChannelMessagesResult(
                 success=False,
@@ -636,13 +673,11 @@ class SlackPlatformService:
                 message=background_channel_context_note(len(matches)),
                 matches=matches,
             )
-        except Exception as exc:
-            logger.exception(
-                "Slack search_current_channel failed channel=%s conversation=%s query=%s: %s",
-                channel,
-                ctx.deps.conversation_id,
-                request.query,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.slack_search_current_channel_channel.propagated',
+                conversation_id=ctx.deps.conversation_id,
+                exc_info=True,
             )
             raise
 
@@ -728,11 +763,7 @@ def _question_select_element(question: SurfaceQuestion) -> dict[str, Any] | None
     if not options:
         return None
     return {
-        "type": (
-            "multi_static_select"
-            if question.multi_select
-            else "static_select"
-        ),
+        "type": ("multi_static_select" if question.multi_select else "static_select"),
         "action_id": question.header,
         "options": options,
     }
@@ -799,6 +830,47 @@ def _question_blocks(plan: SurfaceQuestionRenderPlan) -> list[dict[str, Any]]:
             ],
         }
     )
+    return blocks
+
+
+def _approval_blocks(plan: SurfaceApprovalRenderPlan) -> list[dict[str, Any]]:
+    """Build a section (title/reason/action) + Approve/Deny action buttons.
+
+    Each button's ``action_id`` encodes the decision; its ``value`` carries the
+    callback id so the block_actions parser can route the tap back to the run.
+    """
+    text_parts = [f"*Approval needed:* {_slack_escape(plan.title)}"]
+    if plan.reason:
+        text_parts.append(_slack_escape(plan.reason))
+    if plan.action_summary:
+        text_parts.append(f"> Action: `{_slack_escape(plan.action_summary)}`")
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": _truncate_slack_text("\n".join(text_parts), 2900),
+            },
+        }
+    ]
+    elements: list[dict[str, Any]] = []
+    for button in plan.buttons:
+        action_id = SLACK_APPROVAL_ACTION_ID_BY_DECISION.get(button.decision)
+        if action_id is None:
+            continue
+        element: dict[str, Any] = {
+            "type": "button",
+            "action_id": action_id,
+            "text": {
+                "type": "plain_text",
+                "text": _truncate_slack_text(button.label, 74) or "Approve",
+            },
+            "value": plan.callback_id,
+        }
+        if button.style in ("primary", "danger"):
+            element["style"] = button.style
+        elements.append(element)
+    blocks.append({"type": "actions", "elements": elements})
     return blocks
 
 

@@ -34,8 +34,8 @@ from app.modules.agent_surfaces.platforms.attachment_limits import (
     INBOUND_ATTACHMENT_BYTE_CAP,
     INBOUND_VOICE_TRANSCRIBE_BYTE_CAP,
 )
-from app.modules.datastore.api.dependencies import build_file_service
-from app.modules.datastore.services.files.paths import normalize_datastore_name
+from app.composition.surface_datastore import build_file_service
+from app.modules.datastore.contracts import normalize_datastore_name
 
 logger = get_logger(__name__)
 
@@ -190,11 +190,6 @@ class SurfaceFileIngestService:
             isinstance(declared_size, int)
             and declared_size > INBOUND_ATTACHMENT_BYTE_CAP
         ):
-            logger.info(
-                "Surface attachment skipped (too large) platform=%s size=%s",
-                platform,
-                declared_size,
-            )
             return None
 
         try:
@@ -203,11 +198,9 @@ class SurfaceFileIngestService:
                 event=parsed,
                 attachment=attachment,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface attachment download failed platform=%s error=%s",
-                platform,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.surface_file_ingest_service.surface_attachment_download_platform_s.diagnostic'
             )
             return None
         if downloaded is None:
@@ -215,12 +208,6 @@ class SurfaceFileIngestService:
 
         content, name, mime = downloaded
         if len(content) > INBOUND_ATTACHMENT_BYTE_CAP:
-            logger.info(
-                "Surface attachment skipped (too large after download) platform=%s "
-                "size=%s",
-                platform,
-                len(content),
-            )
             return None
 
         try:
@@ -232,12 +219,9 @@ class SurfaceFileIngestService:
                 directory_path=directory,
                 search_enabled=True,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface attachment persist failed platform=%s name=%s error=%s",
-                platform,
-                name,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.surface_file_ingest_service.surface_attachment_persist_platform_s.diagnostic'
             )
             return None
 

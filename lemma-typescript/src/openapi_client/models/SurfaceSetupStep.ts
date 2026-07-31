@@ -8,4 +8,3 @@ export type SurfaceSetupStep = {
     phase: SurfaceSetupPhase;
     title: string;
 };
-

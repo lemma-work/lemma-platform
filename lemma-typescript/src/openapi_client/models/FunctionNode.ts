@@ -14,4 +14,3 @@ export type FunctionNode = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

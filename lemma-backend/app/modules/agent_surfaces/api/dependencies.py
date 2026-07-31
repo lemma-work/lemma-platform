@@ -4,9 +4,10 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from app.core.api.dependencies import UoWDep
+from app.core.api.dependencies import UoWDep, get_uow_factory
+from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.infrastructure.events.message_bus import get_message_bus
-from app.modules.agent.api.dependencies import ConversationServiceDep
+from app.composition.surface_agent import ConversationServiceDep
 from app.modules.agent_surfaces.infrastructure.adapters.account_adapter import (
     SqlAlchemySurfaceAccountAdapter,
     SqlAlchemySurfaceAuthConfigAdapter,
@@ -36,12 +37,15 @@ from app.modules.agent_surfaces.services.credential_resolver import (
 from app.modules.agent_surfaces.services.user_surfaces_service import (
     UserSurfacesService,
 )
-from app.modules.identity.infrastructure.user_repositories import UserRepository
-from app.modules.connectors.api.dependencies import get_connector_service
-from app.modules.connectors.infrastructure.repositories.connector_trigger_repository import (
+from app.modules.agent_surfaces.services.telegram_manager_service import (
+    TelegramManagerService,
+)
+from app.composition.surface_identity import create_surface_user_repository
+from app.composition.surface_connectors import get_connector_service
+from app.composition.surface_connectors import (
     ConnectorTriggerRepository,
 )
-from app.modules.schedule.api.dependencies import get_schedule_service
+from app.composition.surface_schedule import get_schedule_service
 
 
 def surface_repository_factory(uow) -> SurfaceRepository:
@@ -93,8 +97,14 @@ def get_user_surfaces_service(uow: UoWDep) -> UserSurfacesService:
     return UserSurfacesService(
         surface_repository=surface_repository_factory(uow),
         pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
-        user_repository=UserRepository(uow),
+        user_repository=create_surface_user_repository(uow),
     )
+
+
+def get_telegram_manager_service(
+    uow_factory: UnitOfWorkFactory = Depends(get_uow_factory),
+) -> TelegramManagerService:
+    return TelegramManagerService(uow_factory=uow_factory)
 
 
 SurfaceServiceDep = Annotated[AgentSurfaceService, Depends(get_surface_service)]
@@ -106,4 +116,7 @@ SurfaceEventHandlerDep = Annotated[
 ]
 SurfaceWebhookSecurityServiceDep = Annotated[
     SurfaceWebhookSecurityService, Depends(get_surface_webhook_security_service)
+]
+TelegramManagerServiceDep = Annotated[
+    TelegramManagerService, Depends(get_telegram_manager_service)
 ]

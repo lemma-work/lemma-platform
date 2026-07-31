@@ -47,15 +47,9 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
             status = result.scalar_one_or_none()
 
         if status is None:
-            logger.info("Skipped enqueue for %s: file is missing or not searchable", file_id)
             return False
 
         if status != FileStatus.PENDING.value:
-            logger.info(
-                "Skipped enqueue for %s: status %s is not eligible for processing",
-                file_id,
-                status,
-            )
             return False
 
         return True
@@ -87,11 +81,6 @@ class RedisDatastoreReindexQueue(DatastoreReindexQueuePort):
             metadata=metadata or {},
         )
         if result is None:
-            logger.info(
-                "Skipped duplicate reindex enqueue for %s with job %s",
-                file_id,
-                job_id,
-            )
             return False
         return True
 

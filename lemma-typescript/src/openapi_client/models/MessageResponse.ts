@@ -17,4 +17,3 @@ export type MessageResponse = {
     tool_name?: (string | null);
     tool_result?: null;
 };
-

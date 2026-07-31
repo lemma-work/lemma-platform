@@ -49,40 +49,45 @@ async def _run(op, payload, connection_config=CONN):
     )
 
 
+# OperationExecutionValidationError carries a fixed, non-reflecting message by
+# design (see domain/errors.py), so these assert on the type and on the fact that
+# rejection happens with no reachable database -- never on the message text.
+
+
 @pytest.mark.asyncio
 async def test_query_requires_non_empty_query():
-    with pytest.raises(OperationExecutionValidationError, match="query"):
+    with pytest.raises(OperationExecutionValidationError):
         await _run("query", {"query": "   "})
 
 
 @pytest.mark.asyncio
 async def test_query_read_only_enforced_before_connect():
     # A write query is rejected by validation before any DB connection is opened.
-    with pytest.raises(OperationExecutionValidationError, match="read-only"):
+    with pytest.raises(OperationExecutionValidationError):
         await _run("query", {"query": "DELETE FROM users"})
 
 
 @pytest.mark.asyncio
 async def test_describe_table_requires_table():
-    with pytest.raises(OperationExecutionValidationError, match="table"):
+    with pytest.raises(OperationExecutionValidationError):
         await _run("describe_table", {})
 
 
 @pytest.mark.asyncio
 async def test_unsupported_op_rejected():
-    with pytest.raises(OperationExecutionValidationError, match="Unsupported SQL operation"):
+    with pytest.raises(OperationExecutionValidationError):
         await _run("drop_everything", {})
 
 
 @pytest.mark.asyncio
 async def test_missing_host_or_database_rejected():
-    with pytest.raises(OperationExecutionValidationError, match="host"):
+    with pytest.raises(OperationExecutionValidationError):
         await _run("query", {"query": "SELECT 1"}, connection_config={"dialect": "postgresql"})
 
 
 @pytest.mark.asyncio
 async def test_unsupported_dialect_rejected():
-    with pytest.raises(OperationExecutionValidationError, match="dialect"):
+    with pytest.raises(OperationExecutionValidationError):
         await _run(
             "query",
             {"query": "SELECT 1"},

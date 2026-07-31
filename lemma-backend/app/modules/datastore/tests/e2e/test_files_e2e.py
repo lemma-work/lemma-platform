@@ -233,3 +233,38 @@ async def test_file_download_round_trips_content_and_sets_disposition(
     assert response.status_code == status.HTTP_200_OK, response.text
     assert response.content == b"hello download"
     assert "filename" in response.headers.get("content-disposition", "")
+    etag = f'"{uploaded["content_sha256"]}"'
+    assert response.headers["etag"] == etag
+    assert response.headers["cache-control"] == "private, no-cache"
+
+    not_modified = await pod_api.request(
+        "GET",
+        f"/pods/{pod_api.pod_id}/datastore/files/download",
+        params={"path": uploaded["path"]},
+        headers={"If-None-Match": f"W/{etag}"},
+    )
+    assert not_modified.status_code == status.HTTP_304_NOT_MODIFIED
+    assert not not_modified.content
+    assert not_modified.headers["etag"] == etag
+
+
+@pytest.mark.asyncio
+async def test_folder_move_copies_descendant_originals(pod_api: DatastoreApi):
+    await pod_api.create_folder("/me/move-source")
+    await pod_api.create_folder("/me/move-source/nested")
+    uploaded = await pod_api.upload_file(
+        "inside.md",
+        b"move me",
+        directory_path="/me/move-source/nested",
+    )
+
+    moved = await pod_api.update_file(
+        "/me/move-source", new_path="/me/move-target"
+    )
+
+    assert moved["path"] == "/me/move-target"
+    assert (
+        await pod_api.download_file("/me/move-target/nested/inside.md")
+        == b"move me"
+    )
+    await pod_api.get_file(uploaded["path"], expected_status=status.HTTP_404_NOT_FOUND)

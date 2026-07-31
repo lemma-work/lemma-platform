@@ -6,4 +6,3 @@ export type ExportProgressResponse = {
     done?: number;
     total?: number;
 };
-

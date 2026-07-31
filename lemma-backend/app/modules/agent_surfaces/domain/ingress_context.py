@@ -13,9 +13,18 @@ from app.modules.agent_surfaces.domain.entities import (
 from app.modules.agent_surfaces.domain.models import SurfaceMessageMetadata
 
 
+SurfaceReplyKind = Literal[
+    "signup",
+    "identity_link",
+    "surface_setup",
+    "pod_access",
+]
+
+
 class SurfaceContextBase(BaseModel):
     platform: SurfacePlatform
     surface_id: UUID | None = None
+    surface_name: str | None = None
     surface_account_id: UUID | None = None
     surface_config: SurfaceConfig | None = None
     agent_display_name: str | None = None
@@ -27,6 +36,7 @@ class SurfaceReplyContext(SurfaceContextBase):
     (signup prompts, contact-link requests/confirmations)."""
 
     mode: Literal["reply"] = "reply"
+    reply_kind: SurfaceReplyKind = "signup"
     reply_message: str
     reply_metadata: dict = Field(default_factory=dict)
 

@@ -94,6 +94,17 @@ async def test_whatsapp_built_in_dm_surface_handles_payload_and_replies(
     assert conversation["metadata"]["surface_platform"] == "WHATSAPP"
 
     whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=2)
+    # Issue 1: the agent marks the inbound message read (blue ticks) and shows a
+    # typing bubble the moment it picks the message up — one combined call.
+    read_indicators = [
+        message
+        for message in whatsapp_messages
+        if message.get("status") == "read"
+    ]
+    assert read_indicators, "expected a mark-read + typing indicator"
+    assert read_indicators[0]["message_id"] == "wamid-e2e-001"
+    assert read_indicators[0]["typing_indicator"] == {"type": "text"}
+
     final_messages = [
         message
         for message in whatsapp_messages

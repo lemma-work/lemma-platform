@@ -203,7 +203,7 @@ def parse_db_error(
                 DatastoreConflictError,
             )
         return (
-            f"A record with these values already exists.",
+            "A record with these values already exists.",
             None,
             DatastoreConflictError,
         )

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from app.core.domain.entity import Entity
 from app.modules.connectors.domain.connector import AuthProvider

@@ -29,10 +29,24 @@ class FakeStore:
     async def save_export(self, state):
         self.saved.append(state)
 
+    async def get_publish(self, job_id):
+        return None
+
+    async def save_publish(self, state):
+        self.saved.append(state)
+
+    async def recover_stale_jobs(self, *, cutoff):
+        del cutoff
+        return []
+
 
 class FakeStaging:
     def __init__(self, import_ids):
-        self._by_kind = {"pod-imports": list(import_ids), "pod-exports": []}
+        self._by_kind = {
+            "pod-imports": list(import_ids),
+            "pod-exports": [],
+            "pod-publishes": [],
+        }
         self.deleted = []
 
     async def list_archives(self, kind):

@@ -35,6 +35,7 @@ from lemma_pod_bundle.layout import (
     _write_json,
 )
 from lemma_pod_bundle.normalize import (
+    _attach_permissions_payload,
     _normalize_agent_payload,
     _normalize_app_payload,
     _normalize_function_payload,
@@ -47,6 +48,7 @@ from lemma_pod_bundle.normalize import (
 from lemma_pod_bundle.portability import _extract_portable_variables
 
 from app.core.authorization.context import Context
+from app.core.concurrency.offload import run_blocking
 from app.core.helpers.slug import slugify
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
@@ -144,6 +146,26 @@ def _dump_response(response: Any) -> dict[str, Any]:
     return response.model_dump(mode="json")
 
 
+async def _resolve_account_connector_info(
+    uow: SqlAlchemyUnitOfWork, account_id: UUID
+) -> tuple[str, str] | None:
+    """Ground-truth ``(connector_id, provider)`` for an account, resolved via
+    the connectors module — never inferred from a resource's own name (e.g. a
+    surface's platform or a schedule's directory name), since that guess is
+    wrong for any resource type with no platform concept of its own. Returns
+    ``None`` if the account (or its auth config) no longer exists."""
+    from app.composition.pod_bundle_resources import get_connector_service
+
+    service = get_connector_service(uow)
+    account = await service.account_repository.get(account_id)
+    if account is None:
+        return None
+    auth_config = await service.auth_config_repository.get(account.auth_config_id)
+    if auth_config is None:
+        return None
+    return account.connector_id, auth_config.provider.value
+
+
 class BundleExporter:
     """Builds a pod bundle archive from a pod's resources.
 
@@ -204,17 +226,17 @@ class BundleExporter:
         )
 
         # Lazy imports (avoid import cycles + keep the module import cheap).
-        from app.modules.agent.api.dependencies import get_agent_service
-        from app.modules.apps.api.dependencies import build_app_service
-        from app.modules.datastore.api.dependencies import (
+        from app.composition.pod_bundle_resources import (
+            build_app_service,
             build_record_service,
             build_table_service,
+            build_function_service,
+            get_agent_service,
+            get_schedule_service,
+            get_workflow_service,
         )
-        from app.modules.datastore.services.table_context import TableContext
-        from app.modules.function.api.dependencies import build_function_service
-        from app.modules.pod.infrastructure.pod_repositories import PodRepository
-        from app.modules.schedule.api.dependencies import get_schedule_service
-        from app.modules.workflow.api.dependencies import get_flow_service
+        from app.modules.datastore.contracts import TableContext
+        from app.composition.pod_bundle_pod import PodRepository
 
         from app.core.infrastructure.events.message_bus import get_message_bus
 
@@ -239,9 +261,7 @@ class BundleExporter:
 
             # Total = the pod.json step + every selected resource type; drives the
             # progress bar deterministically without a pre-count DB round-trip.
-            total = 1 + sum(
-                1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected
-            )
+            total = 1 + sum(1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected)
             done = 1
             await on_progress(done, total)
 
@@ -309,9 +329,17 @@ class BundleExporter:
                     payload = _normalize_function_payload(
                         _function_response_dict(function)
                     )
-                    payload = _extract_large_text(
-                        payload, field_name="code", file_name="code.py", resource_dir=dir_
-                    )
+                    grantee_id = getattr(function, "id", None)
+                    if grantee_id is not None:
+                        grants = await _resource_grants_payload(
+                            uow,
+                            pod_id=pod_id,
+                            grantee_type="FUNCTION",
+                            grantee_id=grantee_id,
+                        )
+                        if grants:
+                            payload = _attach_permissions_payload(payload, grants)
+                    payload = _extract_large_text(payload, field_name="code", file_name="code.py", resource_dir=dir_)
                     _write_json(dir_ / f"{function_name}.json", payload)
                 done += 1
                 await on_progress(done, total)
@@ -333,6 +361,16 @@ class BundleExporter:
                     dir_ = root / "agents" / agent_name
                     dir_.mkdir(parents=True, exist_ok=True)
                     payload = _normalize_agent_payload(_agent_response_dict(agent))
+                    grantee_id = getattr(agent, "id", None)
+                    if grantee_id is not None:
+                        grants = await _resource_grants_payload(
+                            uow,
+                            pod_id=pod_id,
+                            grantee_type="AGENT",
+                            grantee_id=grantee_id,
+                        )
+                        if grants:
+                            payload = _attach_permissions_payload(payload, grants)
                     payload = _extract_large_text(
                         payload,
                         field_name="instruction",
@@ -345,13 +383,13 @@ class BundleExporter:
 
             # --- workflows ----------------------------------------------------
             if "workflows" in selected:
-                flow_service = get_flow_service(uow)
-                flows, _ = await flow_service.list_flows(
+                flow_service = get_workflow_service(uow)
+                flows, _ = await flow_service.list_workflows(
                     pod_id, limit=1000, requester_user_id=user_id, ctx=ctx
                 )
                 for summary in sorted(flows, key=lambda f: str(f.name or "")):
                     workflow_name = str(summary.name or "")
-                    flow = await flow_service.get_flow_by_name(
+                    flow = await flow_service.get_workflow_by_name(
                         pod_id, workflow_name, requester_user_id=user_id, ctx=ctx
                     )
                     dir_ = root / "workflows" / workflow_name
@@ -375,9 +413,23 @@ class BundleExporter:
                     schedule_name = str(schedule.name or schedule.id or "")
                     dir_ = root / "schedules" / schedule_name
                     dir_.mkdir(parents=True, exist_ok=True)
-                    payload = _normalize_schedule_payload(
-                        _schedule_response_dict(schedule)
-                    )
+                    raw_schedule = _schedule_response_dict(schedule)
+                    account_id = raw_schedule.get("account_id")
+                    if account_id:
+                        info = await _resolve_account_connector_info(
+                            uow, UUID(str(account_id))
+                        )
+                        if info is None:
+                            from app.modules.pod_bundle.domain.errors import (
+                                BundleInvalidError,
+                            )
+
+                            raise BundleInvalidError(
+                                f"Schedule '{schedule_name}' references account "
+                                f"{account_id}, which no longer exists."
+                            )
+                        raw_schedule["connector_id"], raw_schedule["provider"] = info
+                    payload = _normalize_schedule_payload(raw_schedule)
                     payload.setdefault("name", schedule_name)
                     _write_json(dir_ / f"{schedule_name}.json", payload)
                 done += 1
@@ -443,7 +495,8 @@ class BundleExporter:
                 with_files=wrote_files,
             )
 
-            zip_bytes = pack_bundle(root)
+            # DEFLATE over the whole bundle is CPU-bound; keep it off the loop.
+            zip_bytes = await run_blocking(pack_bundle, root, limiter="cpu_bound")
 
         bundle_filename = f"{slugify(pod_name) or 'pod'}.zip"
         await on_progress(total, total)
@@ -491,7 +544,9 @@ class BundleExporter:
         csv_text, kept = _csv_within_bytes(cleaned, data_budget.item_cap())
         if kept == 0:
             return 0, max(available, len(cleaned))
-        dest.write_text(csv_text, encoding="utf-8")
+        await run_blocking(
+            dest.write_text, csv_text, encoding="utf-8", limiter="cpu_bound"
+        )
         data_budget.consume(len(csv_text.encode("utf-8")))
         return kept, max(available, len(cleaned))
 
@@ -500,39 +555,46 @@ class BundleExporter:
     ) -> None:
         """Export configured surfaces best-effort: a surface that can't be
         serialized is skipped with a warning, never failing the whole export."""
-        from app.modules.agent_surfaces.api.controllers.surface_controller import (
+        from app.composition.pod_bundle_resources import (
             _surface_response,
         )
-        from app.modules.agent_surfaces.api.dependencies import get_surface_service
+        from app.composition.pod_bundle_resources import get_surface_service
 
         try:
             service = get_surface_service(uow)
             surfaces, _ = await service.list_surfaces_by_pod(pod_id, limit=100)
-        except Exception as exc:  # noqa: BLE001 - surfaces are best-effort
-            logger.warning("Skipping surface export for pod %s: %s", pod_id, exc)
+        except Exception:  # noqa: BLE001 - surfaces are best-effort
+            logger.debug('pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic', pod_id=pod_id)
             return
 
-        seen_platforms: set[str] = set()
+        seen_names: set[str] = set()
         for surface in surfaces:
             try:
-                payload = _normalize_surface_payload(
-                    _dump_response(_surface_response(surface))
-                )
+                raw_surface = _dump_response(_surface_response(surface))
+                account_id = raw_surface.get("account_id")
+                if account_id:
+                    info = await _resolve_account_connector_info(
+                        uow, UUID(str(account_id))
+                    )
+                    if info is None:
+                        raise ValueError(
+                            f"Surface references account {account_id}, which no "
+                            "longer exists."
+                        )
+                    raw_surface["connector_id"], raw_surface["provider"] = info
+                payload = _normalize_surface_payload(raw_surface)
                 platform = str(payload.get("platform") or "")
-                if not platform or platform in seen_platforms:
+                # De-dup by the surface's pod-unique name (not platform), so a pod
+                # with several surfaces of one platform exports all of them.
+                surface_name = str(payload.get("name") or "")
+                if not platform or not surface_name or surface_name in seen_names:
                     continue
-                seen_platforms.add(platform)
-                surface_name = str(payload["name"])
+                seen_names.add(surface_name)
                 dir_ = root / "surfaces" / surface_name
                 dir_.mkdir(parents=True, exist_ok=True)
                 _write_json(dir_ / f"{surface_name}.json", payload)
-            except Exception as exc:  # noqa: BLE001 - one bad surface is not fatal
-                logger.warning(
-                    "Skipping surface %s in pod %s export: %s",
-                    getattr(surface, "id", "?"),
-                    pod_id,
-                    exc,
-                )
+            except Exception:  # noqa: BLE001 - one bad surface is not fatal
+                logger.debug('pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic', pod_id=pod_id)
 
     async def _export_app_assets(
         self,
@@ -549,7 +611,7 @@ class BundleExporter:
         widget/no-source app — its built ``dist.zip``. Best-effort and byte-budgeted:
         an app with neither archive, or one over budget, exports metadata-only.
         Mirrors the CLI's ``_download_app_assets`` for format parity."""
-        from app.modules.apps.domain.errors import AppNotFoundError
+        from app.modules.apps.contracts import AppNotFoundError
 
         # Prefer source (rebuildable in the target pod); the exported vite dist is
         # baked with the source pod id and is not portable.
@@ -563,8 +625,15 @@ class BundleExporter:
             source_bytes = None
 
         if source_bytes:
-            if byte_budget.allow(name=f"apps/{app_name}/source", size=len(source_bytes)):
-                _extract_zip_bytes(source_bytes, dest / "source")
+            if byte_budget.allow(
+                name=f"apps/{app_name}/source", size=len(source_bytes)
+            ):
+                await run_blocking(
+                    _extract_zip_bytes,
+                    source_bytes,
+                    dest / "source",
+                    limiter="cpu_bound",
+                )
             return
 
         dist_bytes: bytes | None = None
@@ -579,7 +648,9 @@ class BundleExporter:
         if dist_bytes and byte_budget.allow(
             name=f"apps/{app_name}/dist.zip", size=len(dist_bytes)
         ):
-            (dest / "dist.zip").write_bytes(dist_bytes)
+            await run_blocking(
+                (dest / "dist.zip").write_bytes, dist_bytes, limiter="cpu_bound"
+            )
 
     async def _export_pod_files(
         self,
@@ -599,17 +670,19 @@ class BundleExporter:
         failing the export."""
         from lemma_pod_bundle.layout import FILES_MANIFEST
 
-        from app.modules.datastore.api.dependencies import build_file_service
+        from app.composition.pod_bundle_resources import build_file_service
 
         try:
             service = build_file_service(uow)
             entities = await self._walk_pod_files(service, pod_id, ctx)
-        except Exception as exc:  # noqa: BLE001 - files are best-effort
-            logger.warning("Skipping file export for pod %s: %s", pod_id, exc)
+        except Exception:  # noqa: BLE001 - files are best-effort
+            logger.debug('pod_bundle.exporter.skipping_file_export_pod_s.diagnostic', pod_id=pod_id)
             return False
 
         pod_entities = [
-            e for e in entities if str(getattr(e, "visibility", "") or "").upper() == "POD"
+            e
+            for e in entities
+            if str(getattr(e, "visibility", "") or "").upper() == "POD"
         ]
         if not pod_entities:
             return False
@@ -654,11 +727,13 @@ class BundleExporter:
                 warnings.append(f"file '{path}' skipped: {exc}")
                 continue
             # When size wasn't known up front, budget the real bytes now.
-            if not declared and not data_budget.allow(name=f"files{path}", size=len(content)):
+            if not declared and not data_budget.allow(
+                name=f"files{path}", size=len(content)
+            ):
                 continue
             target = files_root.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
+            await run_blocking(target.write_bytes, content, limiter="cpu_bound")
             file_manifest.append(
                 {
                     "path": path,
@@ -701,44 +776,90 @@ class BundleExporter:
 # --- response-dict adapters (per-module GET serialization) -------------------
 
 
+async def _resource_grants_payload(
+    uow: SqlAlchemyUnitOfWork,
+    *,
+    pod_id: UUID,
+    grantee_type: str,
+    grantee_id: UUID,
+) -> dict[str, Any] | None:
+    """Serialize an agent's/function's resource grants into the bundle's portable
+    ``{"grants": [...]}`` shape (keyed by ``resource_name``, never a source-org id).
+
+    Mirrors the ``…/permissions`` GET endpoint the CLI exporter reads, so a pod
+    exported through the async backend keeps the same executable grants a
+    CLI-exported one does — without them, an imported agent/function can be created
+    but can't call the tables/functions it was granted. ``list_grantee_resource_grants``
+    already drops grants whose resource no longer resolves to a name, and the applier
+    skips any that don't resolve in the target pod, so this stays best-effort/portable.
+    Best-effort: a failure to read grants logs and returns ``None`` (the resource
+    still exports, just without its grants) rather than sinking the whole export,
+    matching the surfaces/files/apps best-effort policy. Returns ``None`` when the
+    grantee has no grants (so nothing is attached)."""
+    from app.core.authorization.grants import list_grantee_resource_grants
+
+    try:
+        grouped = await list_grantee_resource_grants(
+            uow.session,
+            pod_id=pod_id,
+            grantee_type=grantee_type,
+            grantee_id=grantee_id,
+        )
+    except Exception:  # noqa: BLE001 - grant export is best-effort
+        logger.debug('pod_bundle.exporter.skipping_grant_export_s_s.diagnostic', grantee_type=grantee_type, grantee_id=grantee_id)
+        return None
+    if not grouped:
+        return None
+    return {
+        "grants": [
+            {
+                "resource_type": resource_type.value,
+                "resource_name": resource_name,
+                "permission_ids": sorted(set(permission_ids)),
+            }
+            for (resource_type, resource_name), permission_ids in grouped.items()
+        ]
+    }
+
+
 def _pod_response_dict(pod: Any) -> dict[str, Any]:
-    from app.modules.pod.api.schemas.pod_schemas import PodResponse
+    from app.modules.pod.contracts import PodResponse
 
     return _dump_response(PodResponse.model_validate(pod))
 
 
 def _table_response_dict(table: Any) -> dict[str, Any]:
-    from app.modules.datastore.api.schemas.datastore_schemas import TableResponse
+    from app.modules.datastore.contracts import TableResponse
 
     return _dump_response(TableResponse.model_validate(table))
 
 
 def _function_response_dict(function: Any) -> dict[str, Any]:
-    from app.modules.function.api.schemas.function_schemas import FunctionResponse
+    from app.modules.function.contracts import FunctionResponse
 
     return _dump_response(FunctionResponse.model_validate(function.model_dump()))
 
 
 def _agent_response_dict(agent: Any) -> dict[str, Any]:
-    from app.modules.agent.api.schemas import AgentResponse
+    from app.modules.agent.contracts import AgentResponse
 
     return _dump_response(AgentResponse.model_validate(agent))
 
 
 def _flow_response_dict(flow: Any) -> dict[str, Any]:
-    from app.modules.workflow.api.schemas import flow_response_from_domain
+    from app.modules.workflow.contracts import workflow_response_from_domain
 
-    return _dump_response(flow_response_from_domain(flow))
+    return _dump_response(workflow_response_from_domain(flow))
 
 
 def _schedule_response_dict(schedule: Any) -> dict[str, Any]:
-    from app.modules.schedule.api.schemas.schedule_schemas import ScheduleResponse
+    from app.modules.schedule.contracts import ScheduleResponse
 
     return _dump_response(ScheduleResponse.model_validate(schedule))
 
 
 def _app_response_dict(app: Any) -> dict[str, Any]:
-    from app.modules.apps.api.schemas.app_schemas import AppDetailResponse
+    from app.modules.apps.contracts import AppDetailResponse
 
     return _dump_response(AppDetailResponse.model_validate(app))
 
@@ -809,9 +930,7 @@ def _extract_zip_bytes(data: bytes, dest_dir: Path) -> None:
         archive.extractall(dest_dir)
 
 
-def _csv_within_bytes(
-    rows: list[dict[str, Any]], max_bytes: int
-) -> tuple[str, int]:
+def _csv_within_bytes(rows: list[dict[str, Any]], max_bytes: int) -> tuple[str, int]:
     """Render records to CSV (CLI ``record_io.write_export_rows`` cell semantics:
     complex cells -> JSON text, None -> empty), keeping only as many *leading*
     rows as fit within ``max_bytes`` (header always included). Returns

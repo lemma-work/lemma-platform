@@ -7,12 +7,11 @@ import type { FunctionRunStatus } from './FunctionRunStatus.js';
  * Function run summary for list responses.
  */
 export type FunctionRunSummaryResponse = {
-    completed_at: any;
-    created_at: any;
+    completed_at: (string | null);
+    created_at: (string | null);
     function_id: string;
     id: string;
-    started_at: any;
+    started_at: (string | null);
     status: FunctionRunStatus;
     user_id: string;
 };
-

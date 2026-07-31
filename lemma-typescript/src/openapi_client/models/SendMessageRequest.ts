@@ -6,4 +6,3 @@ export type SendMessageRequest = {
     content: string;
     metadata?: (Record<string, any> | null);
 };
-

@@ -30,11 +30,21 @@ class RunToolAssembler:
         conversation: Conversation | None,
     ) -> list[object]:
         # The pod default assistant (no specific agent) gets the fixed default
-        # toolset; a user-created agent gets exactly the toolsets it was created
-        # with — nothing implicit is added.
+        # toolset. User-created agents get their configured toolsets plus narrow
+        # runtime dependencies required to use them correctly.
         toolset_names = list(
             agent.toolsets if agent is not None else POD_DEFAULT_AGENT_TOOLSETS
         )
+        # display_resource can author WIDGET content only after reading the
+        # built-in lemma-widget skill. Make that dependency automatic so a
+        # custom agent cannot receive USER_INTERACTION without the starter and
+        # authoring contract it needs. This grants skill *reading* only; it does
+        # not add POD, shell, network, or resource permissions.
+        if (
+            AgentToolset.USER_INTERACTION in toolset_names
+            and AgentToolset.SKILLS not in toolset_names
+        ):
+            toolset_names.append(AgentToolset.SKILLS)
         # Depth=1: a run that IS itself a spawned sub-agent gets neither the
         # sub-agent control toolset nor the agent_<name> spawn tools. The source of
         # truth is the `is_sub_agent` metadata flag stamped by SubAgentService.spawn
@@ -55,7 +65,7 @@ class RunToolAssembler:
         # TODO is conversation-scoped (its list lives in conversation metadata), so
         # it isn't a static singleton in the registry — build it per conversation
         # here. Included in the assembled list so BOTH the in-process LEMMA harness
-        # and the daemon MCP path expose write_todos, and only when the agent's
+        # and the remote MCP path expose write_todos, and only when the agent's
         # toolsets actually include TODO.
         if (
             conversation is not None
@@ -82,13 +92,9 @@ class RunToolAssembler:
             and conversation.metadata
             and conversation.metadata.get("surface_platform")
         ):
-            from app.modules.agent_surfaces.infrastructure.adapters.platform_tool_factory import (
-                SurfacePlatformToolFactory,
-            )
+            from app.composition.agent_surface_runtime import build_surface_toolsets
 
             toolsets.extend(
-                await SurfacePlatformToolFactory(self.uow_factory).build_toolsets(
-                    conversation=conversation,
-                )
+                await build_surface_toolsets(self.uow_factory, conversation)
             )
         return toolsets

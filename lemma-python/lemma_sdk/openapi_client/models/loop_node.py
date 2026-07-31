@@ -112,7 +112,7 @@ class LoopNode:
                 position_type_0 = LoopNodePositionType0.from_dict(data)
 
                 return position_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(LoopNodePositionType0 | None | Unset, data)
 

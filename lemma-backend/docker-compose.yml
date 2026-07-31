@@ -32,7 +32,7 @@ services:
         condition: service_healthy
 
   supertokens:
-    image: docker.io/supertokens/supertokens-postgresql:11.1.0
+    image: docker.io/supertokens/supertokens-postgresql:11.4.5
     depends_on:
       db:
         condition: service_healthy
@@ -48,48 +48,5 @@ services:
       timeout: 5s
       retries: 10
 
-  kreuzberg:
-    # Document-extraction service (REST API: /health, /extract, /chunk). The
-    # project moved orgs (kreuzberg-dev → xberg-io), so the old
-    # ghcr.io/kreuzberg-dev/kreuzberg:4.9.9 path now denies pulls — a fresh
-    # `docker compose up` failed with "error from registry: denied" and took the
-    # whole stack down with it. This is the same 4.9.9 on the current public
-    # namespace. The -core image is smaller (~580MB) and downloads OCR models on
-    # first use into the kreuzberg_cache volume. Overridable via DEV_KREUZBERG_IMAGE.
-    image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/xberg-io/kreuzberg:4.9.9-core}
-    ports:
-      - "${DEV_KREUZBERG_PORT:-8002}:8000"
-    restart: unless-stopped
-    # Resource bounds so document extraction (OCR/layout is CPU+RAM heavy) can't
-    # run the host out of memory. Each Kreuzberg extraction carries a ~1.5GB
-    # model+runtime floor; the backend caps its own concurrency (2) to keep the
-    # multiplied peak under 4GB. CPUs are held at 2 on purpose: more cores let
-    # Kreuzberg parallelize pages internally, which multiplies peak RAM and
-    # OOM-kills a 4GB instance (measured: 4 CPU OOMs, 2 CPU peaks ~3.9GB). Raise
-    # mem_limit before raising cpus.
-    mem_limit: ${DEV_KREUZBERG_MEM_LIMIT:-4g}
-    cpus: ${DEV_KREUZBERG_CPUS:-2}
-    environment:
-      # Reject oversized uploads at the edge (backend also guards before sending);
-      # the request-body cap sits just above it for multipart overhead.
-      KREUZBERG_MAX_UPLOAD_SIZE_MB: "${DEV_KREUZBERG_MAX_UPLOAD_SIZE_MB:-25}"
-      KREUZBERG_MAX_REQUEST_BODY_BYTES: "${DEV_KREUZBERG_MAX_REQUEST_BODY_BYTES:-31457280}"
-      # Persist the ONNX/Hugging Face model + extraction-result cache across
-      # restarts so the service never re-downloads or re-warms models on boot.
-      KREUZBERG_CACHE_DIR: /app/.kreuzberg
-      HF_HOME: /app/.kreuzberg/huggingface
-      RUST_LOG: "${DEV_KREUZBERG_LOG_LEVEL:-info}"
-    volumes:
-      - kreuzberg_cache:/app/.kreuzberg
-    stop_grace_period: 30s
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      # Models can load on first boot; don't fail health while warming.
-      start_period: 40s
-
 volumes:
   postgres_data:
-  kreuzberg_cache:

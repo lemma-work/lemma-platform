@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import Boolean, String, ForeignKey, Index, Text, text
@@ -8,8 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.infrastructure.db.base import UUIDAuditBase
 from app.modules.connectors.domain.account import AccountEntity
 
-from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.connectors.infrastructure.models.connector import Connector
+
+if TYPE_CHECKING:
+    from app.modules.connectors.infrastructure.models.auth_config import AuthConfig
 
 
 class Account(UUIDAuditBase):
@@ -64,7 +67,7 @@ class Account(UUIDAuditBase):
     # Relationships
     connector: Mapped["Connector"] = relationship(Connector)
     auth_config: Mapped["AuthConfig"] = relationship("AuthConfig")
-    user: Mapped["User"] = relationship(User, foreign_keys=[user_id])
+    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
     __table_args__ = (
         # At most one default account per (user, auth_config). Multiple
         # non-default accounts are allowed (e.g. several Telegram bot tokens).

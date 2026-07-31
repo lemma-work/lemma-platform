@@ -20,8 +20,9 @@ from app.modules.datastore.services.file_service import DatastoreFileService
 from app.modules.datastore.services.record_service import RecordService
 from app.modules.datastore.services.table_service import TableService
 from app.modules.datastore.infrastructure.storage import create_datastore_storage
-from app.modules.pod.services.authorization_factory import create_authorization_service
-from app.modules.identity.infrastructure.user_repositories import UserRepository
+from app.composition.authorization import create_authorization_service
+from app.composition.identity_notifications import create_user_reader
+from app.modules.datastore.composition import get_datastore_composition
 
 _schema_manager_instance: Optional[SchemaManager] = None
 
@@ -72,7 +73,8 @@ def build_record_service(uow) -> RecordService:
         ),
         message_bus=message_bus,
         authorization_service=create_authorization_service(uow),
-        user_repository=UserRepository(uow, message_bus=message_bus),
+        user_repository=create_user_reader(uow, message_bus=message_bus),
+        transactional_events=True,
     )
 
 
@@ -83,6 +85,7 @@ def build_file_service(uow) -> DatastoreFileService:
         file_repository=DatastoreFileRepository(uow, message_bus=message_bus),
         storage=create_datastore_storage(),
         authorization_service=create_authorization_service(uow),
+        search_service_factory=get_datastore_composition().build_search_service,
     )
 
 

@@ -105,7 +105,9 @@ class FileReader:
                 ctx=ctx,
             )
 
-        if not self.paths._is_requester_personal_path(directory_path, requester_user_id):
+        if not self.paths._is_requester_personal_path(
+            directory_path, requester_user_id
+        ):
             await self.authz.require_document_read(
                 user_id=requester_user_id,
                 pod_id=pod_id,
@@ -142,9 +144,7 @@ class FileReader:
         always-present folder so users and agents can discover and create skills
         (a ``<skill>/skill.md`` under it).
         """
-        folders = [
-            self.paths._personal_root_folder_entity(pod_id, requester_user_id)
-        ]
+        folders = [self.paths._personal_root_folder_entity(pod_id, requester_user_id)]
         if self.paths._normalize_path(requested_directory_path) == "/":
             folders.append(self.system_skill_files.root_folder_entity(pod_id))
         return folders
@@ -238,7 +238,9 @@ class FileReader:
                 resource_name=file_entity.path,
                 ctx=ctx,
             )
-        await self.authorizer.ensure_file_path_access(file_entity, requester_user_id, ctx=ctx)
+        await self.authorizer.ensure_file_path_access(
+            file_entity, requester_user_id, ctx=ctx
+        )
         return file_entity
 
     async def get_file(
@@ -295,9 +297,7 @@ class FileReader:
             ctx=ctx,
         )
 
-    async def read_content_for_entity(
-        self, file_entity: DatastoreFileEntity
-    ) -> bytes:
+    async def read_content_for_entity(self, file_entity: DatastoreFileEntity) -> bytes:
         """Read a file's bytes from object storage for an already-resolved,
         authorized entity. Touches only storage (+ the in-memory system-skill
         overlay) — **no DB session** — so it is safe to call after the resolving
@@ -336,7 +336,9 @@ class FileReader:
         access only). Pair with ``load_children`` to build the child list from
         the storage manifest without holding a pooled DB connection."""
         path = self.paths._resolve_api_path(path, requester_user_id=requester_user_id)
-        file_entity = await self.get_file_by_path(pod_id, path, requester_user_id, ctx=ctx)
+        file_entity = await self.get_file_by_path(
+            pod_id, path, requester_user_id, ctx=ctx
+        )
         if file_entity.is_folder:
             raise DatastoreValidationError("Folders do not have document child files")
         return file_entity
@@ -368,7 +370,9 @@ class FileReader:
         children: list[dict[str, Any]] = []
         if manifest is None:
             return children
-        base = self.paths._to_api_path(file_entity.path, requester_user_id=requester_user_id)
+        base = self.paths._to_api_path(
+            file_entity.path, requester_user_id=requester_user_id
+        )
         for artifact in manifest.get("artifacts", []):
             name = artifact.get("name") if isinstance(artifact, dict) else None
             if not name:
@@ -417,7 +421,9 @@ class FileReader:
         for cut in range(len(segments) - 1, 0, -1):
             candidate = "/" + "/".join(segments[:cut])
             artifact_rel = "/".join(segments[cut:])
-            entity = await self.file_repository.get_by_path(pod_id=pod_id, path=candidate)
+            entity = await self.file_repository.get_by_path(
+                pod_id=pod_id, path=candidate
+            )
             if entity is not None and entity.is_file:
                 file_entity = await self.get_file_by_path(
                     pod_id, candidate, requester_user_id, ctx=ctx
@@ -491,16 +497,14 @@ class FileReader:
     ) -> dict[str, Any] | None:
         try:
             raw = await self.storage.download_file(
-                build_datastore_child_manifest_key(
-                    file_entity.pod_id, file_entity.path
-                )
+                build_datastore_child_manifest_key(file_entity.pod_id, file_entity.path)
             )
             return json.loads(raw.decode("utf-8"))
         except DatastoreObjectNotFoundError:
             return None
         except Exception:
-            logger.warning(
-                "Failed to load child manifest for %s", file_entity.path, exc_info=True
+            logger.debug(
+                'datastore.reader.load_child_manifest_s.diagnostic', exc_info=True
             )
             return None
 
@@ -517,12 +521,12 @@ class FileReader:
         """Return the converted markdown for a document — full, or a page range
         when ``page_start`` is given — plus the document's page count."""
         path = self.paths._resolve_api_path(path, requester_user_id=requester_user_id)
-        file_entity = await self.get_file_by_path(pod_id, path, requester_user_id, ctx=ctx)
+        file_entity = await self.get_file_by_path(
+            pod_id, path, requester_user_id, ctx=ctx
+        )
         try:
             content = await self.storage.download_file(
-                build_datastore_child_markdown_key(
-                    file_entity.pod_id, file_entity.path
-                )
+                build_datastore_child_markdown_key(file_entity.pod_id, file_entity.path)
             )
         except DatastoreObjectNotFoundError:
             raise DatastoreFileNotFoundError(
@@ -534,7 +538,9 @@ class FileReader:
             ) from exc
         full_md = content.decode("utf-8", errors="replace")
         offsets = parse_page_offsets(full_md)
-        page_count = max((page for _, page in offsets), default=1 if full_md.strip() else 0)
+        page_count = max(
+            (page for _, page in offsets), default=1 if full_md.strip() else 0
+        )
         markdown = (
             slice_pages(full_md, page_start, page_end)
             if page_start is not None

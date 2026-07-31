@@ -1,0 +1,68 @@
+name: Setup Windows code signing
+description: Import and validate the release Authenticode certificate
+
+inputs:
+  certificate:
+    description: Base64-encoded PFX certificate
+    required: true
+  certificate-password:
+    description: PFX password
+    required: true
+  timestamp-url:
+    description: RFC 3161 timestamp service URL
+    required: true
+
+outputs:
+  thumbprint:
+    description: Imported certificate thumbprint
+    value: ${{ steps.import.outputs.thumbprint }}
+
+runs:
+  using: composite
+  steps:
+    - name: Import and validate certificate
+      id: import
+      shell: pwsh
+      env:
+        WINDOWS_CERTIFICATE: ${{ inputs.certificate }}
+        WINDOWS_CERTIFICATE_PASSWORD: ${{ inputs.certificate-password }}
+        WINDOWS_TIMESTAMP_URL: ${{ inputs.timestamp-url }}
+      run: |
+        if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or
+            [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD) -or
+            [string]::IsNullOrWhiteSpace($env:WINDOWS_TIMESTAMP_URL)) {
+          throw "A certificate, password, and timestamp URL are required for Windows signing."
+        }
+        $certificatePath = Join-Path $env:RUNNER_TEMP "lemma-signing-$([Guid]::NewGuid()).pfx"
+        try {
+          [IO.File]::WriteAllBytes(
+            $certificatePath,
+            [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+          )
+          $password = ConvertTo-SecureString `
+            -String $env:WINDOWS_CERTIFICATE_PASSWORD `
+            -Force `
+            -AsPlainText
+          $certificate = Import-PfxCertificate `
+            -FilePath $certificatePath `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -Password $password `
+            -Exportable:$false
+          if (-not $certificate.HasPrivateKey) {
+            throw "The imported Windows signing certificate has no private key."
+          }
+          $codeSigningOid = "1.3.6.1.5.5.7.3.3"
+          $usageExtensions = @(
+            $certificate.Extensions | Where-Object {
+              $_ -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]
+            }
+          )
+          if ($usageExtensions.Count -eq 0 -or
+              $usageExtensions.EnhancedKeyUsages.Value -notcontains $codeSigningOid) {
+            throw "The imported Windows certificate is not valid for code signing."
+          }
+          "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+        }
+        finally {
+          Remove-Item $certificatePath -Force -ErrorAction SilentlyContinue
+        }

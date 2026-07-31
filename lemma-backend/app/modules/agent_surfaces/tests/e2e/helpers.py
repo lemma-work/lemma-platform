@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -24,8 +25,8 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileScope,
     RuntimeProfileStatus,
 )
-from app.modules.agent.infrastructure.models import (
-    AgentRunModel,
+from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.runtime_models import (
     AgentRuntimeProfileModel,
 )
 from app.modules.agent_surfaces.domain.ingress_context import (
@@ -45,7 +46,9 @@ from app.modules.agent_surfaces.tests.e2e.mock_infrastructure import (
     FakeWhatsAppServer,
     MockPlatformMessageStore,
 )
-from app.modules.identity.infrastructure.models.organization_models import OrganizationMember
+from app.modules.identity.infrastructure.models.organization_models import (
+    OrganizationMember,
+)
 from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.connectors.infrastructure.models.account import Account
@@ -226,8 +229,7 @@ async def _create_agent(
             "name": name or f"Surface Agent {uuid4().hex[:8]}",
             "instruction": "Reply briefly. Surface e2e will emulate the model.",
             "agent_runtime": {
-                "profile_id": "system:fireworks",
-                "model_name": "kimi-k2.6",
+                "profile_id": "system:lemma",
             },
             "toolsets": toolsets if toolsets is not None else [],
         },
@@ -254,16 +256,41 @@ async def _create_surface(
         payload["name"] = name
     if config.get("account_id"):
         payload["account_id"] = config["account_id"]
+    if config.get("credential_mode"):
+        payload["credential_mode"] = config["credential_mode"]
     if allowed_channel_ids:
-        payload["config"] = {
-            "channels": [{"channel_id": allowed_channel_ids[0]}]
-        }
+        payload["config"] = {"channels": [{"channel_id": allowed_channel_ids[0]}]}
     if agent_name:
         payload["default_agent_name"] = agent_name
 
     response = await client.post(f"/pods/{pod_id}/surfaces", json=payload)
     assert response.status_code == 200, response.text
-    return response.json()
+    surface = response.json()
+
+    # Teams surfaces are intentionally non-deliverable until tenant admin
+    # consent is recorded. Behavioral journeys model an already-consented
+    # installation through the real public callback; the dedicated consent E2E
+    # creates its surface directly and therefore still verifies the pending
+    # state and rejection paths before activation.
+    if platform == "TEAMS":
+        consent = await client.get(
+            "/surfaces/teams/admin-consent/callback",
+            params={
+                # Binding internals such as the tenant id are deliberately not
+                # exposed by AgentSurfaceResponse. The hermetic provider uses
+                # one stable tenant across all Teams fixtures.
+                "tenant": REAL_TEAMS_TENANT_ID,
+                "admin_consent": "True",
+                "state": surface["id"],
+            },
+        )
+        assert consent.status_code == 200, consent.text
+        activated = await client.get(f"/pods/{pod_id}/surfaces/{surface['name']}")
+        assert activated.status_code == 200, activated.text
+        surface = activated.json()
+        assert surface["status"] == "ACTIVE"
+
+    return surface
 
 
 async def _create_agent_surface(
@@ -608,6 +635,34 @@ async def _messages_for_conversation(
     )
     assert response.status_code == 200, response.text
     return response.json()["items"]
+
+
+async def _wait_for_conversation_message(
+    client: AsyncClient,
+    *,
+    pod_id: str,
+    conversation_id: str,
+    predicate: Callable[[dict], bool],
+    timeout_seconds: float = 10.0,
+) -> dict:
+    """Wait until a worker-produced durable message satisfies ``predicate``."""
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    last_items: list[dict] = []
+    while asyncio.get_running_loop().time() < deadline:
+        last_items = await _messages_for_conversation(
+            client,
+            pod_id=pod_id,
+            conversation_id=conversation_id,
+        )
+        match = next((item for item in last_items if predicate(item)), None)
+        if match is not None:
+            return match
+        await asyncio.sleep(0.1)
+    raise AssertionError(
+        "Timed out waiting for matching durable conversation message "
+        f"conversation_id={conversation_id} last_items={last_items!r}"
+    )
+
 
 def _whatsapp_payload(
     *,

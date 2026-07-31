@@ -72,7 +72,11 @@ class McpExecutor:
         tool_name = (execution or {}).get("tool_name") or operation_name
         headers = build_mcp_headers(connection_config, third_party_credentials)
 
-        logger.info("mcp-exec %s tool=%s", connector_id, tool_name)
+        logger.debug(
+            "connectors.mcp_executor.calling_mcp_tool.observed",
+            connector_id=connector_id,
+            tool_name=tool_name,
+        )
         try:
             client = self._client_factory(server_url, headers)
             async with client:

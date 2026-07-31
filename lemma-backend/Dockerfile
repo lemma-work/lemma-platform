@@ -22,27 +22,33 @@ COPY lemma-backend/pyproject.toml lemma-backend/uv.lock ./
 
 # Copy local path dependencies and repo-native skills.
 COPY agentbox-client /agentbox-client
+COPY agentbox /agentbox
+COPY lemma-pod-bundle /lemma-pod-bundle
 COPY lemma-backend/lemma-connectors ./lemma-connectors
 COPY lemma-skills ./lemma-skills
 
-# Install dependencies into /app/.venv. The markitdown extra ships in the image
-# so the local stack can run the in-process document processor
-# (DOCUMENT_PROCESSOR=markitdown) without the Kreuzberg container.
+# Install dependencies into /app/.venv. The local extra ships AgentBox and
+# MarkItDown in the backend image for the managed all-in-one composition.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project --extra markitdown
+    uv sync --frozen --no-dev --no-install-project --extra local
 
 # Copy backend application code
 COPY lemma-backend/ ./
 
 # Sync the project itself
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --extra markitdown
+    uv sync --frozen --no-dev --extra local
 
 # Stage 2: Runtime stage
 FROM python:3.14-slim-bookworm
 
 # Set working directory
 WORKDIR /app
+
+# Function dependency resolution happens before a revision becomes READY. The
+# runtime image keeps the same pinned uv binary as the build stage; invocation
+# sandboxes never contain a package manager.
+COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
 
 # Create non-root user for security
 # -d /home/appuser: explicitly set home directory
@@ -55,6 +61,11 @@ RUN mkdir -p /app/.composio && chown -R appuser:appuser /app/.composio
 # Copy virtual environment from builder
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --from=builder --chown=appuser:appuser /agentbox-client /agentbox-client
+COPY --from=builder --chown=appuser:appuser /agentbox /agentbox
+# uv installs monorepo path dependencies as editable links. Keep the linked
+# source in the runtime image (as we already do for agentbox-client), otherwise
+# importing lemma_pod_bundle fails after the builder stage is discarded.
+COPY --from=builder --chown=appuser:appuser /lemma-pod-bundle /lemma-pod-bundle
 # Copy skills from the builder stage explicitly instead of relying on the blanket repo copy.
 COPY --from=builder --chown=appuser:appuser /app/lemma-skills /app/lemma-skills
 
@@ -82,4 +93,4 @@ USER appuser
 # Expose application port
 EXPOSE 8000
 # Run the application
-CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.app:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

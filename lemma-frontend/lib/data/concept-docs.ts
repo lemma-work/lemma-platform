@@ -17,13 +17,13 @@ import {
   Plug,
   ShieldCheck,
   UserCheck,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+} from '@/components/ui/icons';
+import type { LemmaIcon } from '@/components/ui/icons';
 
 import { CONCEPTS, type ConceptEntry, type ConceptId } from '@/lib/education/concepts';
 import type { DocsBlock, DocsPage } from '@/lib/data/docs';
 
-const CONCEPT_ICONS: Record<ConceptId, LucideIcon> = {
+const CONCEPT_ICONS: Record<ConceptId, LemmaIcon> = {
   pod: FolderOpen,
   agent: Bot,
   flow: GitBranch,

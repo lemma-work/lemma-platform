@@ -530,7 +530,7 @@ def main() -> None:
                 "--output-model-type",
                 "pydantic_v2.BaseModel",
                 "--target-python-version",
-                "3.12",
+                "3.14",
                 "--snake-case-field",
                 "--use-operation-id-as-name",
                 "--use-schema-description",

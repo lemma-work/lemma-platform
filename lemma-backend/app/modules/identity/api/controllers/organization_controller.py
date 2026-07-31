@@ -60,7 +60,7 @@ async def create_organization(
     user: UserEntity = request.state.user
     entity = OrganizationEntity(
         name=data.name,
-        slug=slugify(data.name),
+        slug=data.slug or "",
         email_domain=data.email_domain,
         join_policy=data.join_policy,
     )
@@ -532,11 +532,22 @@ async def remove_member(
     org_id: UUID,
     member_id: UUID,
     org_service: OrganizationServiceDep,
+    uow: UoWDep,
 ) -> None:
     """Remove a member from the organization."""
     user: UserEntity = request.state.user
+    authz = AuthorizationDataService(uow.session)
+    # Capture the member's authorization targets before removal: deleting the
+    # org member cascades its pod memberships away, but their (FK-less) role
+    # assignments and grants do not cascade. The read is harmless if the removal
+    # is subsequently denied.
+    targets = await authz.member_authorization_targets(
+        organization_member_id=member_id
+    )
     await org_service.remove_member(
         member_id=member_id,
         requester_user_id=user.id,
         organization_id=org_id,
     )
+    if targets is not None:
+        await authz.purge_member_authorization(targets)

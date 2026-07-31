@@ -3,17 +3,37 @@ from fastapi import HTTPException
 from fastapi.security import HTTPBearer
 from starlette.requests import HTTPConnection
 from supertokens_python.recipe.session.asyncio import get_session
-from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
+from supertokens_python.recipe.session.exceptions import (
+    InvalidClaimsError,
+    TryRefreshTokenError,
+)
 from app.core.authorization.current import set_current_context
 from app.core.config import settings
 from app.core.authorization.delegation import (
+    CLAIM_ACTOR_ID,
     DelegationClaimsError,
     parse_delegation_claims,
 )
+from app.core.authorization.delegation_revocation import is_delegation_revoked
 from app.core.log.log import get_logger
 from app.modules.identity.domain.user_entities import AuthUserEntity
+from app.core.infrastructure.db.session import async_session_maker
+from app.modules.identity.infrastructure.models.user_models import User
+from sqlalchemy import select
 
 logger = get_logger(__name__)
+
+
+async def _get_local_auth_state(user_id: UUID):
+    async with async_session_maker() as db_session:
+        return (
+            await db_session.execute(
+                select(User.is_active, User.is_verified, User.is_deleted).where(
+                    User.id == user_id
+                )
+            )
+        ).first()
+
 
 # Define the security scheme for OpenAPI
 # auto_error=False allows us to handle the error manually and support exclusions
@@ -26,6 +46,7 @@ EXCLUDED_PATHS = (
     "/redoc",
     "/openapi.json",
     "/health",
+    "/livez",
     "/public/icons",
     "/public/apps",
     "/public/sdk",  # browser SDK bundle for no-build apps
@@ -75,6 +96,37 @@ def _is_datastore_changes_ws_path(path: str) -> bool:
     return True
 
 
+def _is_public_desktop_auth_path(path: str, method: str) -> bool:
+    """Only request creation and verifier exchange are unauthenticated.
+
+    The similarly-named ``.../{request_id}/complete`` route deliberately does
+    not match: it must receive the authenticated browser session.
+    """
+    normalized_method = method.upper()
+    return normalized_method == "POST" and path in {
+        "/auth/desktop/requests",
+        "/auth/desktop/session",
+    }
+
+
+def _is_public_identity_auth_path(path: str, method: str) -> bool:
+    normalized_method = method.upper()
+    return (
+        normalized_method == "GET"
+        and path
+        in {
+            "/auth/altcha/config",
+            "/auth/altcha/challenge",
+            "/auth/telegram/config",
+            "/auth/telegram/start",
+            "/auth/telegram/callback",
+        }
+    ) or (
+        normalized_method == "POST"
+        and path in {"/auth/email/bounces", "/auth/email/bounces/resend"}
+    )
+
+
 async def verify_auth(connection: HTTPConnection):
     """
     Global dependency to enforce authentication on all routes except excluded ones.
@@ -82,14 +134,22 @@ async def verify_auth(connection: HTTPConnection):
     """
     set_current_context(None)
 
-    if connection.url.path.startswith(EXCLUDED_PATHS) or _is_surface_webhook_path(
-        connection.url.path
+    if (
+        connection.url.path.startswith(EXCLUDED_PATHS)
+        or _is_surface_webhook_path(connection.url.path)
+        or _is_public_desktop_auth_path(
+            connection.url.path,
+            str(connection.scope.get("method", "GET")),
+        )
+        or _is_public_identity_auth_path(
+            connection.url.path,
+            str(connection.scope.get("method", "GET")),
+        )
     ):
         return
 
     if connection.scope["type"] != "http" and (
         connection.url.path.startswith("/workspace/browser")
-        or connection.url.path == "/me/agent-runtime/daemon/ws"
         or _is_datastore_changes_ws_path(connection.url.path)
     ):
         return
@@ -108,6 +168,31 @@ async def verify_auth(connection: HTTPConnection):
             parsed_user_id = UUID(user_id)
             payload = session.get_access_token_payload() or {}
 
+            local_state = await _get_local_auth_state(parsed_user_id)
+            if (
+                local_state is None
+                or not local_state.is_active
+                or local_state.is_deleted
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "ACCOUNT_INACTIVE",
+                        "message": "This account is inactive.",
+                    },
+                )
+            if (
+                settings.auth_email_verification_required
+                and not local_state.is_verified
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "EMAIL_VERIFICATION_REQUIRED",
+                        "message": "Verify your email before continuing.",
+                    },
+                )
+
             connection.state.user = AuthUserEntity(id=parsed_user_id)
             connection.state.session = session
             connection.state.auth_claims = payload
@@ -124,8 +209,41 @@ async def verify_auth(connection: HTTPConnection):
                         },
                     ) from exc
 
-                connection.state.delegation_claims = delegation_claims
+                if delegation_claims is not None and await is_delegation_revoked(
+                    actor_id=delegation_claims.actor_id
+                ):
+                    # The workload this token delegates for lost its authority
+                    # (e.g. the agent/function was deleted). Reject before it
+                    # expires on its own.
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "code": "DELEGATION_REVOKED",
+                            "message": "Delegated workload has been revoked.",
+                        },
+                    )
 
+                connection.state.delegation_claims = delegation_claims
+            elif payload.get("isImpersonation") is True or payload.get(CLAIM_ACTOR_ID):
+                # Delegation is disabled, but a delegated/impersonation token
+                # (minted with isImpersonation + delegation claims) carries the
+                # workload's authority. Without the delegation layer to clamp it,
+                # honoring it would silently promote it to a full user session, so
+                # reject it — disabling the flag must fail safe, not escalate.
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "IMPERSONATION_NOT_ALLOWED",
+                        "message": "Delegated tokens are disabled.",
+                    },
+                )
+
+    except InvalidClaimsError:
+        # Keep SuperTokens' invalid-claim contract intact. Its middleware turns
+        # this into a 403 response with ``claimValidationErrors``. Rewriting it
+        # to 401 makes the frontend treat an intentionally unverified session as
+        # expired and repeatedly refresh/retry the same protected request.
+        raise
     except TryRefreshTokenError:
         # This exception is raised when the access token has expired.
         # SuperTokens frontend SDKs handle the refresh flow, but for an API client,
@@ -145,7 +263,7 @@ async def verify_auth(connection: HTTPConnection):
         if isinstance(e, HTTPException):
             raise e
 
-        logger.debug(f"Auth dependency error: {e}")
+        logger.debug("security.security.auth_dependency.observed")
         # If we reached here, and authentication failed but didn't raise, we force 401.
         # However, get_session(session_required=True) *should* send a response or raise.
         # SuperTokens often sends a response directly which stops execution?

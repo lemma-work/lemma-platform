@@ -7,7 +7,7 @@ owns the unit-of-work + ingress-service construction so the tool needs no
 surface-specific wiring on its context.
 
 Works uniformly for both agent harnesses: the in-process LEMMA harness and the
-daemon harness (whose MCP tool calls execute in the backend) both reach this the
+remote harness (whose MCP tool calls execute in the backend) both reach this the
 same way — each call opens its own short uow. Credentials are resolved by the
 ingress service per call; ``display_resource`` is infrequent so this is not a hot
 path.
@@ -25,7 +25,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
 from app.core.log.log import get_logger
-from app.modules.agent.tools.user_interaction.models import DisplayResourceRequest
+from app.modules.agent.contracts import DisplayResourceRequest
 from app.modules.agent_surfaces.services.ingress_service import (
     AgentSurfaceIngressService,
 )
@@ -42,7 +42,7 @@ def build_agent_surface_ingress_service(
     ``build_surface_event_handler`` dependency; kept here so the tool delivery
     path does not depend on the worker/request context.
     """
-    from app.modules.agent.api.dependencies import get_conversation_service
+    from app.composition.surface_agent import get_conversation_service
     from app.modules.agent_surfaces.api.dependencies import surface_repository_factory
     from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
         SqlAlchemySurfaceRoutingResolutionAdapter,
@@ -50,7 +50,7 @@ def build_agent_surface_ingress_service(
     from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
         SurfaceConversationLinkRepository,
     )
-    from app.modules.connectors.api.dependencies import get_connector_service
+    from app.composition.surface_connectors import get_connector_service
 
     return AgentSurfaceIngressService(
         uow=uow,
@@ -86,12 +86,11 @@ async def deliver_display_resource_to_surface(
                 tool_output=tool_output,
                 metadata=metadata,
             )
-    except Exception as exc:
-        logger.warning(
-            "Surface display resource delivery failed conversation=%s tool_call=%s error=%s",
-            conversation_id,
-            tool_call_id,
-            exc,
+    except Exception:
+        logger.debug(
+            'agent_surfaces.surface_display_delivery.surface_display_resource_delivery_conversation.diagnostic',
+            conversation_id=conversation_id,
+            tool_call_id=tool_call_id,
         )
         return False
 
@@ -113,11 +112,10 @@ async def deliver_surface_message_to_surface(
                 conversation_id=conversation_id,
                 message=message,
             )
-    except Exception as exc:
-        logger.warning(
-            "Surface message delivery failed conversation=%s error=%s",
-            conversation_id,
-            exc,
+    except Exception:
+        logger.debug(
+            'agent_surfaces.surface_display_delivery.surface_message_delivery_conversation_s.diagnostic',
+            conversation_id=conversation_id,
         )
         return False
 
@@ -142,11 +140,9 @@ async def deliver_voice_note_to_surface(
                 path=file_path,
                 caption=caption,
             )
-    except Exception as exc:
-        logger.warning(
-            "Surface voice note delivery failed conversation=%s path=%s error=%s",
-            conversation_id,
-            file_path,
-            exc,
+    except Exception:
+        logger.debug(
+            'agent_surfaces.surface_display_delivery.surface_voice_note_delivery_conversation.diagnostic',
+            conversation_id=conversation_id,
         )
         return False

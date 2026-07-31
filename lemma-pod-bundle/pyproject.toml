@@ -5,13 +5,13 @@ description = "Shared pod bundle format vocabulary for the Lemma CLI and backend
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Lemma" }]
-requires-python = ">=3.11"
+requires-python = ">=3.14,<3.15"
 # Stdlib only, on purpose: this package is the shared bundle-format vocabulary
 # consumed by both the CLI and the backend, so it must stay dependency-free.
 dependencies = []
 
 [build-system]
-requires = ["setuptools>=69.0"]
+requires = ["setuptools>=83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]

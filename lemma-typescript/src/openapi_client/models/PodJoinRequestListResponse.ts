@@ -9,4 +9,3 @@ export type PodJoinRequestListResponse = {
     next_page_token?: (string | null);
     total: number;
 };
-

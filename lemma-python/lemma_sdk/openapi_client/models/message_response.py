@@ -179,7 +179,7 @@ class MessageResponse:
                 agent_run_id_type_0 = UUID(data)
 
                 return agent_run_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -198,7 +198,7 @@ class MessageResponse:
                 metadata_type_0 = MessageResponseMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(MessageResponseMetadataType0 | None | Unset, data)
 

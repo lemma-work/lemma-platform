@@ -1,21 +1,10 @@
+/* Same register as an agent's own page: flat canvas, cards, page-sized text.
+   This used to layer two gradient washes behind a 4xl headline, which made
+   creating an agent look like a different product from editing one. */
 .agent-builder-root {
   position: relative;
   isolation: isolate;
-  background:
-    linear-gradient(180deg, var(--surface-1) 0%, var(--pod-main-bg) 36%, color-mix(in srgb, var(--surface-1) 72%, var(--pod-main-bg)) 100%),
-    var(--pod-main-bg);
-}
-
-.agent-builder-root::before {
-  position: absolute;
-  inset: 0 0 auto;
-  z-index: -1;
-  height: 23rem;
-  background:
-    linear-gradient(112deg, transparent 0%, color-mix(in srgb, var(--surface-1) 72%, transparent) 38%, transparent 76%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 42%, transparent), transparent 72%);
-  content: "";
-  pointer-events: none;
+  background: var(--bg-canvas);
 }
 
 .agent-builder-canvas {
@@ -24,34 +13,26 @@
 
 .agent-builder-hero {
   display: flex;
-  align-items: flex-end;
+  flex-wrap: wrap;
+  align-items: baseline;
   justify-content: space-between;
-  gap: 1.25rem;
-  padding: 0.25rem 0 1.25rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 34%, transparent);
+  gap: var(--space-3);
 }
 
 .agent-builder-title {
   color: var(--text-primary);
-  font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, sans-serif;
-  font-size: 2.25rem;
-  font-weight: 400;
-  line-height: 1.08;
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: var(--leading-snug);
   letter-spacing: 0;
-}
-
-@media (min-width: 640px) {
-  .agent-builder-title {
-    font-size: 3rem;
-  }
 }
 
 .agent-builder-step-strip {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--space-2);
   width: fit-content;
   max-width: 100%;
-  padding: 0.75rem 0 0.5rem;
+  padding: var(--space-3) 0 0;
 }
 
 .agent-builder-progress-track {
@@ -181,20 +162,26 @@
 
 .agent-builder-stage {
   position: relative;
-  padding: 1.75rem 0 2.5rem;
 }
 
-.agent-builder-stage[data-step="shape"]::before,
-.agent-builder-stage[data-step="access"]::before {
-  position: absolute;
-  inset: 0 -1.5rem auto;
-  z-index: -1;
-  height: 18rem;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--intelligence-soft) 22%, transparent), transparent 54%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 36%, transparent), transparent 78%);
-  content: "";
-  pointer-events: none;
+/* Sits on the canvas under the cards, not on a frosted slab of its own. */
+.agent-builder-footer {
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
+  background: var(--bg-canvas);
+  padding-block: var(--space-2);
+}
+
+/* Matches `.resource-page-column`: same max width *and* the same inner inset, so
+   the verbs line up with the edge of the cards above them. */
+.agent-builder-footer-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0 auto;
+  width: 100%;
+  max-width: 52rem;
+  padding-inline: var(--space-3);
 }
 
 .agent-builder-side-section {
@@ -206,8 +193,8 @@
 }
 
 .agent-builder-section + .agent-builder-section {
-  margin-top: 1.5rem;
-  padding-top: 1.5rem;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 44%, transparent);
 }
 
@@ -234,7 +221,7 @@
 
 .agent-builder-note {
   border-left: 2px solid color-mix(in srgb, var(--action-primary) 28%, var(--border-subtle));
-  padding-left: 0.875rem;
+  padding-left: var(--space-3-5);
   color: var(--text-secondary);
 }
 
@@ -287,17 +274,17 @@
   display: flex;
   max-width: 64rem;
   flex-wrap: wrap;
-  gap: 0.5rem 0.875rem;
+  gap: var(--space-2) var(--space-3-5);
 }
 
 .agent-builder-permission-option {
   display: inline-flex;
   min-height: 2rem;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
-  padding: 0.25rem 0.5rem;
+  padding: var(--space-1) var(--space-2);
   color: var(--text-secondary);
   font-size: var(--text-sm);
   font-weight: 400;
@@ -322,7 +309,7 @@
 
 .agent-builder-access-grid {
   display: grid;
-  gap: 2rem 3rem;
+  gap: var(--space-8) var(--space-12);
 }
 
 .agent-builder-access-card {
@@ -398,15 +385,15 @@
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 0.125rem 0 0.25rem;
+  padding: var(--space-1) 0 var(--space-1);
 }
 
 .lemma-index-row {
   position: relative;
   min-height: 2.75rem;
   border-radius: var(--radius-lg);
-  padding-left: 0.25rem;
-  padding-right: 0.25rem;
+  padding-left: var(--space-1);
+  padding-right: var(--space-1);
   transition:
     background-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
@@ -443,7 +430,7 @@
 }
 
 .lemma-run-list {
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .lemma-run-list > .lemma-index-row::after {
@@ -468,20 +455,20 @@
 
 .data-table-workbench .data-table-toolbar {
   margin: 0.75rem 0.875rem 0;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 56%, transparent);
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
-  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  padding: var(--space-2) var(--space-2-5);
 }
 
 .data-table-workbench .data-table-viewport {
-  padding: 0.75rem 0.875rem 0;
+  padding: var(--space-3) var(--space-3-5) 0;
 }
 
 .data-table-workbench .data-table-grid-frame {
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 56%, transparent);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: var(--card-bg);
 }
 
@@ -491,11 +478,11 @@
 }
 
 .data-table-workbench .data-table-head {
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--border-subtle) 52%, transparent);
+  box-shadow: 0 1px 0 var(--border-subtle);
 }
 
 .data-table-workbench .data-table-grid tbody tr {
-  min-height: 2.375rem;
+  min-height: 2.25rem;
 }
 
 .data-table-workbench .data-table-grid tbody tr:hover {
@@ -509,11 +496,11 @@
 
 .data-table-workbench .data-table-footer {
   margin: 0 0.875rem 0.75rem;
-  border: 1px solid color-mix(in srgb, var(--border-subtle) 56%, transparent);
+  border: 1px solid var(--border-subtle);
   border-top: 0;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: color-mix(in srgb, var(--surface-1) 88%, transparent);
-  padding: 0.5rem 0.625rem;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--surface-1);
+  padding: var(--space-2) var(--space-2-5);
 }
 
 .lemma-route-panel {

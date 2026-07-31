@@ -135,6 +135,38 @@ async def test_create_record_emits_record_event_on_unified_stream():
     assert event.record_id == record_id
 
 
+async def test_production_record_event_is_staged_by_repository_not_published_after_commit():
+    ctx = _events_enabled_context()
+    user_id = uuid4()
+    record_id = str(uuid4())
+    stored = type(
+        "StoredRecord",
+        (),
+        {"user_id": user_id, "id": record_id, "data": {"merchant": "Hotel"}},
+    )()
+    staged_events = []
+    record_repository = AsyncMock()
+
+    async def create_record(_ctx, _data, _user_id, *, event_factory):
+        staged_events.append(event_factory(stored))
+        return stored
+
+    record_repository.create_record.side_effect = create_record
+    message_bus = AsyncMock()
+    service = RecordService(
+        record_repository=record_repository,
+        message_bus=message_bus,
+        transactional_events=True,
+    )
+
+    await service.create_record(ctx, {"merchant": "Hotel"}, user_id)
+
+    message_bus.publish.assert_not_called()
+    assert len(staged_events) == 1
+    assert staged_events[0].record_id == record_id
+    assert staged_events[0].operation == DatastoreRecordOperation.INSERT
+
+
 async def test_create_record_skips_event_when_events_disabled():
     ctx = _table_context()  # events_enabled defaults to False
     record_repository = AsyncMock()

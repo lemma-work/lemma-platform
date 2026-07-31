@@ -1,4 +1,5 @@
 from typing import Any, Dict, Union
+from uuid import UUID
 
 from supertokens_python.recipe.emailpassword.interfaces import (
     RecipeInterface,
@@ -10,6 +11,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.events.message_bus import get_message_bus
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.identity.domain.user_entities import UserEntity
+from app.modules.identity.domain.email import normalize_identity_email
 from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
 )
@@ -33,6 +35,7 @@ def override_emailpassword_functions(
         should_try_linking_with_session_user: Union[bool, None],
         user_context: Dict[str, Any],
     ):
+        email = normalize_identity_email(email)
         result = await original_sign_up(
             email,
             password,
@@ -54,18 +57,18 @@ def override_emailpassword_functions(
                         uow, message_bus=message_bus
                     ),
                 )
-                created_user = await user_service.create_user(
+                await user_service.create_user(
                     UserEntity(
-                        id=user_id,
-                        email=emails[0],
-                        is_verified=True,
+                        id=UUID(user_id),
+                        email=normalize_identity_email(emails[0]),
+                        is_verified=False,
                         is_active=True,
                         is_superuser=False,
                         is_deleted=False,
-                    )
+                    ),
+                    send_welcome=False,
                 )
                 await uow.commit()
-                logger.info(f"User created successfully: {created_user}")
 
         return result
 

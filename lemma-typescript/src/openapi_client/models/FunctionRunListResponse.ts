@@ -11,4 +11,3 @@ export type FunctionRunListResponse = {
     limit: number;
     next_page_token?: (string | null);
 };
-

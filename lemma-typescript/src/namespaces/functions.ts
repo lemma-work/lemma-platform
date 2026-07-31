@@ -42,7 +42,9 @@ export class FunctionsNamespace {
   readonly runs = {
     create: (name: string, options: RunFunctionOptions = {}) =>
       this.client.request(() => {
-        const payload: ExecuteFunctionRequest = { input_data: options.input };
+        const payload: ExecuteFunctionRequest = {
+          input_data: options.input as ExecuteFunctionRequest["input_data"],
+        };
         return FunctionsService.functionRun(this.podId(), name, payload);
       }),
     list: (name: string, params: { limit?: number; pageToken?: string } = {}) =>

@@ -31,6 +31,15 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "usage.",
     "workspace.",       # workspace runtime is driven by the backend
     "channel.",
+    # Device protocol: the Agent Host binary calls these with its own
+    # per-installation secret. The SDK exposes only the user-facing
+    # management side (agent.host.pairing.create / list / harnesses.list
+    # / revoke) via the AgentHosts resource.
+    "agent.host.events.append",
+    "agent.host.harnesses.publish",
+    "agent.host.pairing.complete",
+    "agent.host.poll",
+    "agent.host.self_revoke",
     "app.public",
     "health_check",     # liveness probe
     # OAuth/consent browser callbacks — never called by a client
@@ -103,6 +112,29 @@ def test_facade_imports_resolve():
     """Any rename in the regenerated client must fail loudly, not at call time."""
     import lemma_sdk  # noqa: F401
     from lemma_sdk import resources  # noqa: F401
+
+
+def test_schedule_run_contract_has_no_new_fire_aliases() -> None:
+    spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
+    paths = set(spec["paths"])
+    schemas = spec["components"]["schemas"]
+
+    assert "/pods/{pod_id}/schedules/{schedule_id}/runs" in paths
+    assert "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry" in paths
+    assert not any("/fires" in path for path in paths)
+    assert "ScheduleRunResponse" in schemas
+    assert "ScheduleRunListResponse" in schemas
+    assert schemas["ScheduleRunStatus"]["enum"] == [
+        "RECEIVED",
+        "PROCESSING",
+        "DISPATCHED",
+        "FILTERED",
+        "FAILED",
+        "DEAD_LETTERED",
+    ]
+    assert "ScheduleFireStatus" in schemas
+    assert "ScheduleFireResponse" not in schemas
+    assert "ScheduleFireListResponse" not in schemas
 
 
 def test_facade_imports_exist_in_spec():

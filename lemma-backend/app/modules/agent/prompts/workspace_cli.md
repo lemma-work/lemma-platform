@@ -84,7 +84,7 @@ For large local files, scope to the pages you need with `--target-pages` first. 
 
 ## Workspace
 
-The conversation workspace is a private code sandbox that is entirely yours. Do your work in your working directory (shown in the Working Directory section) and create subfolders under it as needed — do not scatter work into `/tmp` or other paths, which are scratch and get wiped. Files created here are not directly visible to the user until uploaded to pod files (`/me/...`). `localhost` refers to this container, not the Lemma backend — never probe `localhost` to check API/Auth availability.
+The conversation workspace is a private code sandbox that is entirely yours. Do your work only in your working directory (shown in the Working Directory section) and create subfolders under it as needed. Never create a parallel project root directly under `/workspace`; if uncertain, run `pwd` once and then use relative paths. Do not scatter work into `/tmp` or other paths, which are scratch and get wiped. Files created here are not directly visible to the user until uploaded to pod files (`/me/...`). `localhost` refers to this container, not the Lemma backend — never probe `localhost` to check API/Auth availability.
 
 `execute_python` and `exec_command` both run in your working directory, so relative paths write there (`open('out.csv', 'w')`, `plt.savefig('chart.png')`). Python execution is stateful within the conversation: imports, variables, and in-memory objects persist across executions, and the shell and the Python kernel share the same interpreter and installed packages. Use that for stepwise analysis instead of repeating setup.
 

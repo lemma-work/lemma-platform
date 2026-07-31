@@ -15,7 +15,9 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.data_store_flow_start_output import DataStoreFlowStartOutput
+    from ..models.data_store_workflow_start_config_output import (
+        DataStoreWorkflowStartConfigOutput,
+    )
 
 
 T = TypeVar("T", bound="DataStoreWorkflowStartOutput")
@@ -25,11 +27,11 @@ T = TypeVar("T", bound="DataStoreWorkflowStartOutput")
 class DataStoreWorkflowStartOutput:
     """
     Attributes:
-        config (DataStoreFlowStartOutput):
+        config (DataStoreWorkflowStartConfigOutput):
         type_ (Literal['DATASTORE_EVENT'] | Unset): Datastore-event workflow start. Default: 'DATASTORE_EVENT'.
     """
 
-    config: DataStoreFlowStartOutput
+    config: DataStoreWorkflowStartConfigOutput
     type_: Literal["DATASTORE_EVENT"] | Unset = "DATASTORE_EVENT"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -52,10 +54,12 @@ class DataStoreWorkflowStartOutput:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.data_store_flow_start_output import DataStoreFlowStartOutput
+        from ..models.data_store_workflow_start_config_output import (
+            DataStoreWorkflowStartConfigOutput,
+        )
 
         d = dict(src_dict)
-        config = DataStoreFlowStartOutput.from_dict(d.pop("config"))
+        config = DataStoreWorkflowStartConfigOutput.from_dict(d.pop("config"))
 
         type_ = cast(Literal["DATASTORE_EVENT"] | Unset, d.pop("type", UNSET))
         if type_ != "DATASTORE_EVENT" and not isinstance(type_, Unset):

@@ -233,7 +233,7 @@ class AgentDetailResponse:
                 agent_runtime_type_0 = AgentRuntimeConfig.from_dict(data)
 
                 return agent_runtime_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRuntimeConfig | None | Unset, data)
 
@@ -274,7 +274,7 @@ class AgentDetailResponse:
                 )
 
                 return input_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentDetailResponseInputSchemaType0 | None | Unset, data)
 
@@ -293,7 +293,7 @@ class AgentDetailResponse:
                 metadata_type_0 = AgentDetailResponseMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentDetailResponseMetadataType0 | None | Unset, data)
 
@@ -314,7 +314,7 @@ class AgentDetailResponse:
                 )
 
                 return output_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentDetailResponseOutputSchemaType0 | None | Unset, data)
 

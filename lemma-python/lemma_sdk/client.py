@@ -16,7 +16,6 @@ if TYPE_CHECKING:
         BoundOrgRuntime,
         BoundPods,
         Orgs,
-        Runtime,
         Tools,
         User,
     )
@@ -94,10 +93,10 @@ class Lemma:
         return Tools(self._transport)
 
     @cached_property
-    def runtime(self) -> "Runtime":
-        from .resources import Runtime
+    def agent_hosts(self) -> "AgentHosts":
+        from .resources import AgentHosts
 
-        return Runtime(self._transport)
+        return AgentHosts(self._transport)
 
     @cached_property
     def org_runtime(self) -> "BoundOrgRuntime":

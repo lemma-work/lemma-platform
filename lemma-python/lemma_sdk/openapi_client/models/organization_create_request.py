@@ -20,11 +20,13 @@ class OrganizationCreateRequest:
         name (str):
         email_domain (None | str | Unset):
         join_policy (OrganizationJoinPolicy | Unset): Who may self-join an organization, ordered from closed to open.
+        slug (None | str | Unset):
     """
 
     name: str
     email_domain: None | str | Unset = UNSET
     join_policy: OrganizationJoinPolicy | Unset = UNSET
+    slug: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -40,6 +42,12 @@ class OrganizationCreateRequest:
         if not isinstance(self.join_policy, Unset):
             join_policy = self.join_policy.value
 
+        slug: None | str | Unset
+        if isinstance(self.slug, Unset):
+            slug = UNSET
+        else:
+            slug = self.slug
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update(
@@ -51,6 +59,8 @@ class OrganizationCreateRequest:
             field_dict["email_domain"] = email_domain
         if join_policy is not UNSET:
             field_dict["join_policy"] = join_policy
+        if slug is not UNSET:
+            field_dict["slug"] = slug
 
         return field_dict
 
@@ -75,10 +85,20 @@ class OrganizationCreateRequest:
         else:
             join_policy = OrganizationJoinPolicy(_join_policy)
 
+        def _parse_slug(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        slug = _parse_slug(d.pop("slug", UNSET))
+
         organization_create_request = cls(
             name=name,
             email_domain=email_domain,
             join_policy=join_policy,
+            slug=slug,
         )
 
         organization_create_request.additional_properties = d

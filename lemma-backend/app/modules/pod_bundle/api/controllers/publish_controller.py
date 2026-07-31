@@ -16,12 +16,12 @@ from fastapi.responses import StreamingResponse
 
 from app.core.api.dependencies import CurrentUser, get_uow_factory
 from app.core.authorization.scope import pod_context_scope
+from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import (
-    ChannelService,
     get_channel_service,
 )
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.modules.pod.api.dependencies import PodViewerDep
+from app.composition.pod_bundle_pod import PodEditorDep, PodViewerDep
 from app.modules.pod_bundle.api.dependencies import PublishUseCasesDep
 from app.modules.pod_bundle.api.schemas import (
     PublishStartRequest,
@@ -35,7 +35,7 @@ from app.modules.pod_bundle.infrastructure.state_store import (
 
 router = APIRouter(prefix="/pods", tags=["Pod Bundle"], redirect_slashes=False)
 
-ChannelServiceDep = Annotated[ChannelService, Depends(get_channel_service)]
+ChannelServiceDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 
 _TERMINAL = {PublishStatus.COMPLETED, PublishStatus.FAILED}
 _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
@@ -51,7 +51,7 @@ _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
         "Publish the pod as a bundle to a new GitHub repository. Returns 202 with "
         "a publish_id; poll the status endpoint for the repo URL."
     ),
-    dependencies=[PodViewerDep],
+    dependencies=[PodEditorDep],
 )
 async def start_publish(
     pod_id: UUID,
@@ -63,6 +63,7 @@ async def start_publish(
         pod_id=pod_id,
         user_id=user.id,
         repo_name=data.repo_name,
+        mode=data.mode,
         private=data.private,
         account_id=data.account_id,
         ai_readme=data.ai_readme,
@@ -120,7 +121,7 @@ async def stream_publish_events(
 
 
 async def publish_event_stream(
-    store, channel_service: ChannelService, pod_id: UUID, publish_id: UUID
+    store, channel_service: RealtimeChannel, pod_id: UUID, publish_id: UUID
 ) -> AsyncGenerator[str, None]:
     async with channel_service.subscribe([bundle_job_channel(publish_id)]) as iterator:
         state = await store.get_publish(publish_id)

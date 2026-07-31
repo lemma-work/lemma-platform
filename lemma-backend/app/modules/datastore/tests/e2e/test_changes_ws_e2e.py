@@ -17,7 +17,7 @@ from asgiref.testing import ApplicationCommunicator
 
 from app.modules.datastore.tests.e2e.harness import DatastoreApi
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.usefixtures("datastore_outbox_dispatcher")]
 
 
 def _ws_communicator(

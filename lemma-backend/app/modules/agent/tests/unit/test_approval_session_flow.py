@@ -13,8 +13,11 @@ from uuid import uuid4
 import pytest
 
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
+from app.core.authorization.session_approvals import exact_command_permission_id
 from app.core.domain.errors import DomainError
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.approval_reconciliation import (
+    record_session_approvals,
+)
 from app.modules.agent.tools.tool_errors import approval_error_result
 
 
@@ -67,12 +70,12 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    service = ConversationService.__new__(ConversationService)
     conversation = SimpleNamespace(id=uuid4(), agent_id=uuid4())
     user_id = uuid4()
 
-    await service._record_session_approvals(
-        conversation=conversation,
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
         tool_args={
             "tool_name": "pod_delete_table",
             "permission_ids": ["datastore.table.delete", "folder.delete", "", 7],
@@ -80,7 +83,11 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
         user_id=user_id,
     )
 
-    assert [r["permission_id"] for r in recorded] == [
+    # An exact-command entry is always recorded first (alongside any structured
+    # permission ids), so a later identical request_approval call can auto-run
+    # without re-prompting even for tools with no permission_ids at all.
+    assert recorded[0]["permission_id"].startswith("exact_command:pod_delete_table:")
+    assert [r["permission_id"] for r in recorded[1:]] == [
         "datastore.table.delete",
         "folder.delete",
     ]
@@ -102,11 +109,11 @@ async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    service = ConversationService.__new__(ConversationService)
     conversation = SimpleNamespace(id=uuid4(), agent_id=None)
 
-    await service._record_session_approvals(
-        conversation=conversation,
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
         tool_args={"permission_ids": ["datastore.table.delete"]},
         user_id=uuid4(),
     )
@@ -115,19 +122,49 @@ async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_approve_for_session_without_permission_ids_is_a_noop(monkeypatch):
+async def test_approve_for_session_without_permission_ids_records_only_exact_command(
+    monkeypatch,
+):
+    """exec_command has no structured permission to unlock as a category — the
+    only reuse it gets is the exact-command key, never a broader grant."""
+    recorded: list[dict] = []
+
+    async def fake_record(**kwargs):
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(
+        "app.core.authorization.session_approvals.record_session_approval",
+        fake_record,
+    )
+    conversation = SimpleNamespace(id=uuid4(), agent_id=None)
+
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
+        tool_args={"tool_name": "exec_command", "args": {"cmd": "ls -la"}},
+        user_id=uuid4(),
+    )
+
+    assert len(recorded) == 1
+    assert recorded[0]["permission_id"] == exact_command_permission_id(
+        "exec_command", {"cmd": "ls -la"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_for_session_without_tool_name_records_nothing(monkeypatch):
     async def fail_record(**kwargs):
-        raise AssertionError("nothing should be recorded without permission ids")
+        raise AssertionError("nothing to key an exact-command approval on")
 
     monkeypatch.setattr(
         "app.core.authorization.session_approvals.record_session_approval",
         fail_record,
     )
-    service = ConversationService.__new__(ConversationService)
     conversation = SimpleNamespace(id=uuid4(), agent_id=None)
 
-    await service._record_session_approvals(
-        conversation=conversation,
-        tool_args={"tool_name": "exec_command"},
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
+        tool_args={},
         user_id=uuid4(),
     )

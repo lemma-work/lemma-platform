@@ -6,4 +6,3 @@ export type OperationExecutionRequest = {
     account_id?: (string | null);
     payload: Record<string, any>;
 };
-

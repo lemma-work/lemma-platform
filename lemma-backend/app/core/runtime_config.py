@@ -3,17 +3,18 @@
 An app and a conversation widget are the same primitive — a pod-authenticated
 HTML page that reads ``window.__LEMMA_CONFIG__`` and talks to the pod through the
 browser SDK. The host injects that config at serve time so the artifact bakes in
-nothing and is portable between contexts (a widget's HTML can be promoted to an
-app verbatim). This module is the shared kernel both serving paths use; it
-operates on a ``pod_id``, not on any app/widget entity.
-
-See docs/app-widget-unification.md.
+nothing and is portable between contexts (a widget's source fragment can be promoted
+to an app without modification). This module is the shared kernel both serving paths
+use; it operates on a ``pod_id``, not on any app/widget entity.
 """
 
 from __future__ import annotations
 
 import hashlib
+import html
 import json
+from pathlib import PurePosixPath
+from urllib.parse import urlencode
 from uuid import UUID
 
 from app.core.config import settings
@@ -22,30 +23,190 @@ from app.core.config import settings
 # NOT the bare global name — a page that merely *reads* window.__LEMMA_CONFIG__
 # must still receive injection.
 RUNTIME_CONFIG_SENTINEL = "data-lemma-runtime-config"
+SOCIAL_METADATA_SENTINEL = "data-lemma-social-metadata"
+APP_BRANDING_SENTINEL = "data-lemma-app-branding"
 
 
-def build_runtime_config(pod_id: UUID | str) -> dict[str, str]:
+def build_runtime_app_identity(
+    name: str,
+    description: str | None = None,
+    public_url: str | None = None,
+) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in {
+            "name": name,
+            "description": description,
+            "url": public_url,
+        }.items()
+        if value
+    }
+
+
+def is_runtime_config_entrypoint(asset_path: str) -> bool:
+    return asset_path in {"", "index.html"} or bool(
+        asset_path and "." not in PurePosixPath(asset_path).name
+    )
+
+
+def build_runtime_config(
+    pod_id: UUID | str,
+    *,
+    app: dict[str, str] | None = None,
+) -> dict[str, object]:
     """Pod context handed to the browser SDK at serve time.
 
     No-build pages bake nothing in; the SDK's resolveConfig prefers this
     ``window.__LEMMA_CONFIG__`` global over env, so the host is the single source
     of truth for which pod/api/auth a served page talks to.
     """
-    return {
+    config: dict[str, object] = {
         "podId": str(pod_id),
         "apiUrl": settings.api_url,
         "authUrl": settings.auth_frontend_url,
     }
+    if app:
+        config["app"] = {
+            key: value
+            for key, value in app.items()
+            if key in {"name", "description", "iconUrl", "url"} and value
+        }
+    return config
 
 
-def runtime_config_token(pod_id: UUID | str) -> str:
+def _public_app_social_metadata(app: dict[str, str] | None) -> str:
+    if not app or not app.get("url"):
+        return ""
+    name = app.get("name") or "A Lemma app"
+    description = app.get("description") or f"Run {name} on Lemma."
+    public_url = app["url"]
+    image_query = urlencode(
+        {
+            "variant": "run",
+            "title": name,
+            "detail": description,
+            "label": public_url.removeprefix("https://").removeprefix("http://"),
+        }
+    )
+    image_url = f"https://lemma.work/api/social-card?{image_query}"
+    escaped_name = html.escape(name, quote=True)
+    escaped_description = html.escape(description, quote=True)
+    escaped_url = html.escape(public_url, quote=True)
+    escaped_image = html.escape(image_url, quote=True)
+    return (
+        f"<meta {SOCIAL_METADATA_SENTINEL}>"
+        f'<meta property="og:title" content="{escaped_name}">'
+        f'<meta property="og:description" content="{escaped_description}">'
+        '<meta property="og:type" content="website">'
+        f'<meta property="og:url" content="{escaped_url}">'
+        f'<meta property="og:image" content="{escaped_image}">'
+        '<meta name="twitter:card" content="summary_large_image">'
+        f'<meta name="twitter:title" content="{escaped_name}">'
+        f'<meta name="twitter:description" content="{escaped_description}">'
+        f'<meta name="twitter:image" content="{escaped_image}">'
+        f'<link rel="canonical" href="{escaped_url}">'
+    )
+
+
+def build_app_branding(public_url: str) -> dict[str, str]:
+    """Build the host-controlled attribution shown on a public app."""
+
+    remix_query = urlencode(
+        {
+            "source": public_url,
+            "utm_source": "public_app",
+            "utm_medium": "badge",
+            "utm_campaign": "remix",
+        }
+    )
+    remix_url = f"{settings.frontend_url.rstrip('/')}/remix?{remix_query}"
+    return {
+        "label": "Remix on Lemma",
+        "url": remix_url,
+    }
+
+
+def _public_app_branding_script(branding: dict[str, str] | None) -> str:
+    if not branding or not branding.get("url"):
+        return ""
+
+    payload = json.dumps(
+        {
+            "label": branding.get("label") or "Remix on Lemma",
+            "url": branding["url"],
+        }
+    ).replace("<", "\\u003c")
+    return (
+        f"<script {APP_BRANDING_SENTINEL}>"
+        "(function(){"
+        f"const config={payload};"
+        "const mount=function(){"
+        "if(!document.body||document.querySelector('[data-lemma-branding-host]'))return;"
+        "const host=document.createElement('div');"
+        "host.setAttribute('data-lemma-branding-host','');"
+        "const root=host.attachShadow({mode:'closed'});"
+        "root.innerHTML="
+        "'<style>"
+        ":host{all:initial;position:fixed;right:max(12px,env(safe-area-inset-right));"
+        "bottom:max(12px,env(safe-area-inset-bottom));z-index:2147483647;"
+        "font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif}"
+        "a{box-sizing:border-box;display:inline-flex;height:32px;align-items:center;gap:8px;"
+        "padding:0 12px 0 10px;border:1px solid rgba(255,255,255,.16);border-radius:999px;"
+        "background:rgba(20,20,19,.94);color:#fff;text-decoration:none;"
+        "font:600 12px/1 Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;"
+        "letter-spacing:-.01em;box-shadow:0 8px 28px rgba(0,0,0,.22);"
+        "backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);"
+        "transition:transform 140ms ease,background 140ms ease,box-shadow 140ms ease}"
+        "a:hover{background:#111;transform:translateY(-1px);box-shadow:0 10px 32px rgba(0,0,0,.28)}"
+        "a:focus-visible{outline:2px solid #d99a32;outline-offset:3px}"
+        ".mark{display:inline-flex;height:16px;align-items:flex-end;gap:2px}"
+        ".mark i{display:block;width:3px;border-radius:2px;background:#d99a32}"
+        ".mark i:nth-child(1){height:7px}.mark i:nth-child(2){height:11px}"
+        ".mark i:nth-child(3){height:16px}"
+        "@media(max-width:380px){:host{right:max(8px,env(safe-area-inset-right));"
+        "bottom:max(8px,env(safe-area-inset-bottom))}a{height:30px;padding:0 10px 0 9px}}"
+        "@media(prefers-reduced-motion:reduce){a{transition:none}}"
+        "</style>"
+        "<a target=\"_blank\" rel=\"noopener noreferrer\">"
+        "<span class=\"mark\" aria-hidden=\"true\"><i></i><i></i><i></i></span>"
+        "<span class=\"label\"></span></a>';"
+        "const link=root.querySelector('a');"
+        "link.href=config.url;"
+        "link.setAttribute('aria-label',config.label);"
+        "root.querySelector('.label').textContent=config.label;"
+        "document.body.appendChild(host);"
+        "};"
+        "if(document.readyState==='loading'){"
+        "document.addEventListener('DOMContentLoaded',mount,{once:true});"
+        "}else{mount();}"
+        "})();"
+        "</script>"
+    )
+
+
+def runtime_config_token(
+    pod_id: UUID | str,
+    *,
+    app: dict[str, str] | None = None,
+    branding: dict[str, str] | None = None,
+) -> str:
     """Short, stable hash of the runtime config, for cache busting (ETags)."""
-    payload = json.dumps(build_runtime_config(pod_id), sort_keys=True)
+    config = build_runtime_config(pod_id, app=app)
+    token_payload: object = (
+        {"config": config, "branding": branding} if branding else config
+    )
+    payload = json.dumps(token_payload, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-def inject_runtime_config(content: bytes | str, pod_id: UUID | str) -> bytes:
-    """Insert the ``__LEMMA_CONFIG__`` script into an HTML entrypoint.
+def inject_runtime_config(
+    content: bytes | str,
+    pod_id: UUID | str,
+    *,
+    app: dict[str, str] | None = None,
+    branding: dict[str, str] | None = None,
+) -> bytes:
+    """Insert host runtime data and presentation into an HTML entrypoint.
 
     Idempotent via the ``data-lemma-runtime-config`` sentinel attribute. Config
     values are JSON-encoded and ``<``-escaped so they cannot break out of the
@@ -59,21 +220,27 @@ def inject_runtime_config(content: bytes | str, pod_id: UUID | str) -> bytes:
     else:
         text = content
 
-    if RUNTIME_CONFIG_SENTINEL in text:
+    injection = ""
+    if RUNTIME_CONFIG_SENTINEL not in text:
+        payload = json.dumps(build_runtime_config(pod_id, app=app)).replace(
+            "<", "\\u003c"
+        )
+        injection += (
+            f"<script {RUNTIME_CONFIG_SENTINEL}>"
+            f"window.__LEMMA_CONFIG__={payload};</script>"
+        )
+    if SOCIAL_METADATA_SENTINEL not in text:
+        injection += _public_app_social_metadata(app)
+    if APP_BRANDING_SENTINEL not in text:
+        injection += _public_app_branding_script(branding)
+    if not injection:
         return text.encode("utf-8")
-
-    payload = json.dumps(build_runtime_config(pod_id)).replace("<", "\\u003c")
-    script = (
-        f"<script {RUNTIME_CONFIG_SENTINEL}>"
-        f"window.__LEMMA_CONFIG__={payload};"
-        "</script>"
-    )
 
     lowered = text.lower()
     head_idx = lowered.find("<head")
     if head_idx != -1:
         tag_end = text.find(">", head_idx)
         if tag_end != -1:
-            text = text[: tag_end + 1] + script + text[tag_end + 1 :]
+            text = text[: tag_end + 1] + injection + text[tag_end + 1 :]
             return text.encode("utf-8")
-    return (script + text).encode("utf-8")
+    return (injection + text).encode("utf-8")

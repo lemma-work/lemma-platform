@@ -1,46 +1,53 @@
 'use client';
 
 import { use, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
     ArrowLeft,
-    ChevronDown,
     ImagePlus,
     Loader2,
-    Plus,
     Share2,
-} from 'lucide-react';
-import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 import { StepLoader } from '@/components/brand/loader';
 
+import { TriggersRow } from '@/components/triggers/triggers-row';
 import { FlowEditor } from '@/components/flows/flow-editor';
 import { FlowExecutionPanel } from '@/components/flows/flow-execution-panel';
+import { WorkflowSteps } from '@/components/flows/run-cards';
 import {
-    ResourceDetailHeader,
+    ResourceHeader,
     ResourceDetailShell,
     ResourceDetailViewport,
+    ResourceHeroTitle,
     ResourceTabPane,
+    ResourceWorkSplit,
 } from '@/components/pod/resource-layout';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ResourceArrivalNotice } from '@/components/shared/resource-feedback';
-import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
+import { ResourceShareButton, ResourceVisibilityBadge, getResourceVisibilityCopy, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
     useFlow,
-    useFlows,
     useUpdateFlow,
     useUpdateFlowGraph,
 } from '@/lib/hooks/use-flows';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { FlowDefinition, Workflow, WorkflowUpdateInput } from '@/lib/types';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
-type WorkflowDetailTab = 'runs' | 'edit';
+/**
+ * Two surfaces, not three. `overview` is the document — what this workflow is,
+ * what it is made of, when it fires — with a dock for running it. `edit` is the
+ * canvas, which genuinely is a different kind of screen and keeps the whole
+ * pane. Triggers used to be a tab of their own; they are one line on the
+ * document now, the way an agent's are.
+ */
+type WorkflowDetailTab = 'overview' | 'edit';
 type WorkflowEditView = 'steps' | 'flow';
 
 export default function FlowDetailPage({
@@ -54,27 +61,57 @@ export default function FlowDetailPage({
     const router = useRouter();
     const searchParams = useSearchParams();
     const podAccess = usePodAccess(podId);
-    const canCreateWorkflow = podAccess.can('workflow.create');
     const canUpdateWorkflow = podAccess.can('workflow.update');
+    const canUseSchedules = podAccess.canAny(['schedule.read', 'schedule.create']);
+    const canCreateSchedule = podAccess.can('schedule.create');
+    const canUpdateSchedule = podAccess.can('schedule.update');
+    const canDeleteSchedule = podAccess.can('schedule.delete');
 
     const { data: flowData, isLoading } = useFlow(podId, workflowName);
-    const { data: allFlowsData = [] } = useFlows(podId);
+    // Pod-wide schedules, grouped client-side — shared cache with the schedules page.
+    const automation = usePodAutomation(podId, { schedules: canUseSchedules, surfaces: false });
+    const workflowSchedules = automation.schedulesForWorkflow(flowData?.name ?? workflowName);
     const updateFlow = useUpdateFlow();
     const updateFlowGraph = useUpdateFlowGraph();
 
     const [localDefinition, setLocalDefinition] = useState<FlowDefinition | null>(null);
-    const allFlows = useMemo(() => allFlowsData || [], [allFlowsData]);
+    const [dockView, setDockView] = useState<'run' | 'history'>('run');
+    const [layoutWidth, setLayoutWidth] = useState(0);
+    const layoutObserverRef = useRef<ResizeObserver | null>(null);
+
+    // Callback ref, not an effect: this page renders a loading state first, so a
+    // mount-only effect would find no node and never retry.
+    const measureLayout = useCallback((node: HTMLDivElement | null) => {
+        layoutObserverRef.current?.disconnect();
+        layoutObserverRef.current = null;
+        if (!node) return;
+
+        const syncWidth = () => setLayoutWidth(node.getBoundingClientRect().width);
+        syncWidth();
+
+        const observer = new ResizeObserver(syncWidth);
+        observer.observe(node);
+        layoutObserverRef.current = observer;
+    }, []);
+    const isStackedLayout = layoutWidth > 0 && layoutWidth < 1040;
+    const flowNodes = useMemo(() => flowData?.nodes || [], [flowData]);
+    const flowEdges = useMemo(() => flowData?.edges || [], [flowData]);
     const canUpdateCurrentWorkflow = resourceAllows(flowData, 'workflow.update', canUpdateWorkflow);
-    const activeTab: WorkflowDetailTab = canUpdateCurrentWorkflow && searchParams.get('mode') === 'edit' ? 'edit' : 'runs';
+    const requestedMode = searchParams.get('mode');
+    // `?mode=triggers` still resolves — old links land on the document, which is
+    // where triggers now live.
+    const activeTab: WorkflowDetailTab = requestedMode === 'edit' && canUpdateCurrentWorkflow
+        ? 'edit'
+        : 'overview';
 
     const setActiveTab = useCallback((nextTab: WorkflowDetailTab) => {
         if (nextTab === 'edit' && !canUpdateCurrentWorkflow) return;
         const nextParams = new URLSearchParams(searchParams.toString());
 
-        if (nextTab === 'edit') {
-            nextParams.set('mode', 'edit');
-        } else {
+        if (nextTab === 'overview') {
             nextParams.delete('mode');
+        } else {
+            nextParams.set('mode', nextTab);
         }
 
         const nextQuery = nextParams.toString();
@@ -93,7 +130,7 @@ export default function FlowDetailPage({
     }, [flowData]);
 
     const handleDefinitionSave = useCallback(async (definition: FlowDefinition) => {
-        if (!resourceAllows(flowData, 'workflow.update', canUpdateWorkflow)) return;
+        if (!canUpdateCurrentWorkflow) return;
         setLocalDefinition(definition);
         try {
             await updateFlowGraph.mutateAsync({
@@ -104,15 +141,16 @@ export default function FlowDetailPage({
                     edges: definition.edges,
                 },
             });
+            playSoundFeedback('action-success');
         } catch (error) {
             console.error('Failed to save workflow:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to save workflow. Please try again.');
         }
-    }, [canUpdateWorkflow, flowData, podId, setLocalDefinition, updateFlowGraph, workflowName]);
+    }, [canUpdateCurrentWorkflow, podId, setLocalDefinition, updateFlowGraph, workflowName]);
 
     const handleFlowSettingsSave = useCallback(async (updates: Partial<Workflow>) => {
         if (!flowData) return;
-        if (!resourceAllows(flowData, 'workflow.update', canUpdateWorkflow)) return;
+        if (!canUpdateCurrentWorkflow) return;
 
         const flowUpdatePayload = {
             description:
@@ -142,7 +180,7 @@ export default function FlowDetailPage({
             });
         }
 
-    }, [canUpdateWorkflow, flowData, podId, updateFlow, workflowName]);
+    }, [canUpdateCurrentWorkflow, flowData, podId, updateFlow, workflowName]);
 
     const handleShareVisibilityChange = useCallback(async (visibility: ResourceVisibilityValue) => {
         await handleFlowSettingsSave({ visibility });
@@ -169,67 +207,20 @@ export default function FlowDetailPage({
     const workflowShareUrl = typeof window === 'undefined'
         ? undefined
         : `${window.location.origin}/pod/${podId}/flows/${encodeURIComponent(flowData.name || workflowName)}`;
-
-    const switcher = (
-        <DropdownMenu.Root>
-            <DropdownMenu.Trigger asChild>
-                <button
-                    type="button"
-                    className="flow-detail-switcher-button lemma-quiet-action lemma-quiet-action-sm custom-focus-ring text-[var(--text-tertiary)]"
-                    aria-label="Switch workflow"
-                >
-                    <ChevronDown className="h-3.5 w-3.5" />
-                </button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                    align="start"
-                    sideOffset={8}
-                    className="surface-panel z-50 w-64 p-1 shadow-[var(--shadow-lg)]"
-                >
-                    <div className="px-2 py-1.5 type-eyebrow-medium">
-                        Workflows
-                    </div>
-                    {allFlows.map((flow) => (
-                        <DropdownMenu.Item asChild key={flow.name}>
-                            <Link
-                                href={`/pod/${podId}/flows/${encodeURIComponent(flow.name)}`}
-                                className="lemma-menu-row lemma-menu-row-between"
-                            >
-                                <span className="truncate">{flow.name}</span>
-                                {flow.name === flowData.name ? (
-                                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--delight)]" />
-                                ) : null}
-                            </Link>
-                        </DropdownMenu.Item>
-                    ))}
-                    {canCreateWorkflow ? (
-                        <>
-                            <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
-                            <DropdownMenu.Item asChild>
-                                <Link
-                                    href={`/pod/${podId}/flows/new`}
-                                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-[var(--delight)] outline-none transition-colors hover:bg-[var(--delight-soft)] hover:text-[var(--text-primary)]"
-                                >
-                                    <Plus className="h-3.5 w-3.5" />
-                                    Add workflow
-                                </Link>
-                            </DropdownMenu.Item>
-                        </>
-                    ) : null}
-                </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-    );
+    const visibilityCopy = getResourceVisibilityCopy(flowData.visibility, 'workflows');
+    const VisibilityIcon = visibilityCopy.icon;
 
     return (
         <ResourceDetailShell>
-            <ResourceDetailHeader
+            <ResourceHeader
                 title={flowData.name}
                 backHref={`/pod/${podId}/flows`}
                 backLabel="Workflows"
-                switcher={switcher}
-                meta={<ResourceVisibilityBadge visibility={flowData.visibility} resourceLabel="workflows" />}
+                // The identity card below owns the name and the visibility, so
+                // the bar carries neither: no title until that card scrolls
+                // away, no switcher (a bare chevron next to a blank label), and
+                // no badge. Back still gets you to the list.
+                titleOwner="page"
                 fullscreen={activeTab === 'edit'}
                 tabs={(
                     <WorkflowModeSwitch
@@ -238,48 +229,19 @@ export default function FlowDetailPage({
                         canEdit={canUpdateCurrentWorkflow}
                     />
                 )}
-                actions={canUpdateCurrentWorkflow ? (
-                    <TooltipProvider>
-                    <ResourceShareButton
-                        value={flowData.visibility}
-                        podId={podId}
-                        resourceType="workflow"
-                        resourceId={flowData.id}
-                        resourceLabel="workflows"
-                        resourceName={flowData.name}
-                        shareUrl={workflowShareUrl}
-                        onChange={handleShareVisibilityChange}
-                        trigger={({ openShare, disabled }) => (
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-8 w-8 rounded"
-                                        onClick={openShare}
-                                        disabled={disabled}
-                                        aria-label="Share"
-                                    >
-                                        <Share2 className="h-4 w-4" />
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Share</TooltipContent>
-                            </Tooltip>
-                        )}
-                    />
-                    </TooltipProvider>
-                ) : null}
+                // Sharing lives on the identity card as the visibility chip —
+                // one control that both states who can open this and changes it.
             />
             <ResourceArrivalNotice
                 resource="workflow"
                 title="Workflow created"
                 description="Start by adding the steps this workflow should follow. Runs will appear here once it has work to do."
                 celebrate
-                actions={[
-                    ...(canUpdateCurrentWorkflow ? [{ label: 'Add steps', onClick: () => setActiveTab('edit'), variant: 'primary' as const }] : []),
-                    { label: 'Add schedule', href: `/pod/${podId}/schedules?workflow=${encodeURIComponent(flowData.name)}` },
-                ]}
+                // Triggers live on this page now — "Runs when", one row down — so
+                // there is nowhere to send anyone for them.
+                actions={canUpdateCurrentWorkflow
+                    ? [{ label: 'Add steps', onClick: () => setActiveTab('edit'), variant: 'primary' as const }]
+                    : []}
                 className="mx-4 mt-3"
             />
 
@@ -288,7 +250,7 @@ export default function FlowDetailPage({
                     {activeTab === 'edit' && localDefinition ? (
                         <EditWorkflowPanel
                             flowName={flowData.name}
-                            onExit={() => setActiveTab('runs')}
+                            onExit={() => setActiveTab('overview')}
                             definition={localDefinition}
                             onDefinitionChange={handleDefinitionSave}
                             isSavingDefinition={updateFlowGraph.isPending}
@@ -300,13 +262,134 @@ export default function FlowDetailPage({
                     ) : null}
                 </ResourceTabPane>
 
-                <ResourceTabPane active={activeTab === 'runs'}>
-                    {activeTab === 'runs' && <FlowExecutionPanel podId={podId} flowName={workflowName} />}
+                <ResourceTabPane active={activeTab === 'overview'}>
+                    {activeTab === 'overview' ? (
+                        <div ref={measureLayout} className="h-full min-h-0">
+                            <ResourceWorkSplit
+                                isStacked={isStackedLayout}
+                                main={(
+                                    <div className="resource-page-scroll">
+                                        <div className="resource-page-column">
+                                            <section className="resource-card">
+                                                <header className="agent-identity">
+                                                    <span className="agent-identity-avatar" aria-hidden>
+                                                        <ProductIcon kind="workflows" size="sm" />
+                                                    </span>
+                                                    <div className="agent-identity-body">
+                                                        <div className="agent-identity-titles">
+                                                            <ResourceHeroTitle className="agent-identity-name">
+                                                                {flowData.name}
+                                                            </ResourceHeroTitle>
+                                                        </div>
+                                                        {flowData.description ? (
+                                                            <p className="agent-identity-description-static">{flowData.description}</p>
+                                                        ) : null}
+                                                    </div>
+                                                    <div className="agent-identity-chips">
+                                                        <div className="agent-identity-chip-slot">
+                                                            <ResourceShareButton
+                                                                value={flowData.visibility}
+                                                                podId={podId}
+                                                                resourceType="workflow"
+                                                                resourceId={flowData.id}
+                                                                resourceLabel="workflows"
+                                                                resourceName={flowData.name}
+                                                                shareUrl={workflowShareUrl}
+                                                                disabled={!canUpdateCurrentWorkflow}
+                                                                onChange={handleShareVisibilityChange}
+                                                                trigger={({ openShare, disabled }) => (
+                                                                    <button
+                                                                        type="button"
+                                                                        className="agent-identity-chip"
+                                                                        onClick={openShare}
+                                                                        disabled={disabled}
+                                                                        title={visibilityCopy.description}
+                                                                    >
+                                                                        <VisibilityIcon className="h-3.5 w-3.5 shrink-0" />
+                                                                        <span className="truncate">{visibilityCopy.label}</span>
+                                                                    </button>
+                                                                )}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </header>
+
+                                                {/* No "Steps" row here: the card below
+                                                    lists them, and counting them in
+                                                    two places on one screen is the
+                                                    duplication this page just lost. */}
+                                                <div className="agent-wiring">
+                                                    {canUseSchedules ? (
+                                                        <TriggersRow
+                                                            podId={podId}
+                                                            target={{ kind: 'workflow', name: flowData.name }}
+                                                            schedules={workflowSchedules}
+                                                            canCreate={canCreateSchedule}
+                                                            canUpdate={canUpdateSchedule}
+                                                            canDelete={canDeleteSchedule}
+                                                            emptyText="You start it."
+                                                        />
+                                                    ) : null}
+                                                </div>
+                                            </section>
+
+                                            <section className="resource-card">
+                                                <WorkflowSteps
+                                                    nodes={flowNodes}
+                                                    edges={flowEdges}
+                                                    action={canUpdateCurrentWorkflow ? (
+                                                        <Button type="button" variant="outline" size="sm" onClick={() => setActiveTab('edit')}>
+                                                            Edit
+                                                        </Button>
+                                                    ) : null}
+                                                />
+                                            </section>
+                                        </div>
+                                    </div>
+                                )}
+                                aside={(
+                                    <div className="agent-dock">
+                                        <div className="agent-dock-bar">
+                                            <div className="segmented-control">
+                                                <button
+                                                    type="button"
+                                                    className="segmented-control-item"
+                                                    data-active={dockView === 'run'}
+                                                    onClick={() => setDockView('run')}
+                                                >
+                                                    Run
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    className="segmented-control-item"
+                                                    data-active={dockView === 'history'}
+                                                    onClick={() => setDockView('history')}
+                                                >
+                                                    History
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="agent-dock-body">
+                                            <FlowExecutionPanel podId={podId} flowName={workflowName} view={dockView} />
+                                        </div>
+                                    </div>
+                                )}
+                                asideClassName={isStackedLayout
+                                    ? 'agent-dock-shell agent-dock-shell-stacked w-full border-t-0'
+                                    : 'agent-dock-shell w-[min(30rem,42%)] border-l-0'}
+                            />
+                        </div>
+                    ) : null}
                 </ResourceTabPane>
             </ResourceDetailViewport>
         </ResourceDetailShell>
     );
 }
+
+const WORKFLOW_MODE_LABELS: Record<WorkflowDetailTab, string> = {
+    overview: 'Overview',
+    edit: 'Edit',
+};
 
 function WorkflowModeSwitch({
     value,
@@ -317,7 +400,10 @@ function WorkflowModeSwitch({
     onChange: (value: WorkflowDetailTab) => void;
     canEdit: boolean;
 }) {
-    const items: WorkflowDetailTab[] = canEdit ? ['runs', 'edit'] : ['runs'];
+    // With nothing to switch to, a one-item switch is just a label.
+    if (!canEdit) return null;
+
+    const items: WorkflowDetailTab[] = ['overview', 'edit'];
     return (
         <div className="segmented-control">
             {items.map((item) => (
@@ -329,7 +415,7 @@ function WorkflowModeSwitch({
                     data-active={value === item}
                     aria-pressed={value === item}
                 >
-                    {item === 'runs' ? 'Runs' : 'Edit'}
+                    {WORKFLOW_MODE_LABELS[item]}
                 </button>
             ))}
         </div>
@@ -546,7 +632,7 @@ function HeaderIconEditor({
                 alt={`${name} icon`}
                 label={name}
                 className="h-10 w-10 rounded-lg !border-0 !bg-transparent"
-                fallback={<ProductIcon tone="workflows" size="lg" />}
+                fallback={<ProductIcon kind="workflows" size="lg" />}
             />
             <span className="absolute -bottom-1 -right-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--row-border)] bg-[var(--card-bg)] text-[var(--text-tertiary)] shadow-[var(--shadow-xs)]">
                 {isUploading ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <ImagePlus className="h-2.5 w-2.5" />}

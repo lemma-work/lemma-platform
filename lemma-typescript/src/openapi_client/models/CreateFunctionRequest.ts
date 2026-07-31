@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { FunctionType } from './FunctionType.js';
+import type { JsonObject } from './JsonObject.js';
 import type { ResourceVisibility } from './ResourceVisibility.js';
 /**
  * Request to create a function.
@@ -15,11 +16,10 @@ export type CreateFunctionRequest = {
      * Python source for the function. When provided, the platform analyzes the code and populates input_schema, output_schema, and config_schema on the returned function.
      */
     code?: (string | null);
-    config?: (Record<string, any> | null);
+    config?: (JsonObject | null);
     description?: (string | null);
     icon_url?: (string | null);
     name: string;
     type?: FunctionType;
     visibility?: ResourceVisibility;
 };
-

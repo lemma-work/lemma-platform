@@ -3,12 +3,12 @@ from __future__ import annotations
 import mimetypes
 from typing import Any
 
-import httpx
 from pydantic_ai.tools import RunContext
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
     SurfaceQuestionRenderPlan,
@@ -18,6 +18,10 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
     WhatsAppSurfaceEventMetadata,
 )
 from app.modules.agent_surfaces.platforms import common
+from app.modules.agent_surfaces.platforms.whatsapp.client import (
+    WhatsAppApiError,
+    WhatsAppClient,
+)
 from app.modules.agent_surfaces.platforms.whatsapp.models import (
     WhatsAppCurrentContactParams,
     WhatsAppCurrentContactResult,
@@ -31,6 +35,11 @@ logger = get_logger(__name__)
 # (``callback_id~header~value``). The callback id itself uses ``|``, so ``~``
 # unambiguously splits the three parts. WhatsApp allows ids up to 256 chars.
 WHATSAPP_INTERACTION_SEP = "~"
+
+# Sentinel used in place of a question ``header`` to mark an approval button
+# reply (``callback_id~__approval__~<decision>``). The parser routes this to an
+# approval decision instead of an ask_user answer.
+WHATSAPP_APPROVAL_HEADER = "__approval__"
 
 
 def _build_whatsapp_interactive(
@@ -73,15 +82,44 @@ def _build_whatsapp_interactive(
             "action": {
                 "button": "Choose",
                 "sections": [
-                    {
-                        "rows": [
-                            {"id": rid, "title": title[:24]} for rid, title in rows
-                        ]
-                    }
+                    {"rows": [{"id": rid, "title": title[:24]} for rid, title in rows]}
                 ],
             },
         }
     return None
+
+
+def _build_whatsapp_approval_interactive(
+    plan: SurfaceApprovalRenderPlan,
+) -> dict[str, Any] | None:
+    """Build a WhatsApp reply-button payload for an approval prompt, or ``None``
+    if it can't be expressed natively (more than 3 buttons, or an id over 256
+    chars). Each button id packs ``callback_id~__approval__~<decision>``."""
+    buttons: list[dict[str, Any]] = []
+    for button in plan.buttons:
+        button_id = (
+            f"{plan.callback_id}{WHATSAPP_INTERACTION_SEP}{WHATSAPP_APPROVAL_HEADER}"
+            f"{WHATSAPP_INTERACTION_SEP}{button.decision}"
+        )
+        if len(button_id.encode("utf-8")) > 256:
+            return None
+        buttons.append(
+            {"type": "reply", "reply": {"id": button_id, "title": button.label[:20]}}
+        )
+    if not 1 <= len(buttons) <= 3:
+        return None
+    body_parts = [f"*{plan.title}*"]
+    if plan.reason:
+        body_parts.append(plan.reason)
+    if plan.action_summary:
+        body_parts.append(f"Action: {plan.action_summary}")
+    body_text = "\n\n".join(body_parts).strip()[:1024] or "Approval needed"
+    return {
+        "type": "button",
+        "body": {"text": body_text},
+        "action": {"buttons": buttons},
+    }
+
 
 _WHATSAPP_API_BASE = "https://graph.facebook.com/v21.0"
 
@@ -91,7 +129,15 @@ class WhatsAppPlatformService:
         self.credentials = credentials
         self._access_token = credentials.get("access_token") or ""
         self._phone_number_id = credentials.get("phone_number_id") or ""
+        # Resolve the base here (honoring a credential override, else the module
+        # constant that tests monkeypatch) and hand it to the typed client so all
+        # transport goes through one place.
         self._api_base = credentials.get("api_base_url") or _WHATSAPP_API_BASE
+        self._client = WhatsAppClient(
+            access_token=self._access_token,
+            phone_number_id=self._phone_number_id,
+            api_base=self._api_base,
+        )
 
     async def fetch_sender_profile(
         self, event: ParsedInboundSurfaceEvent
@@ -100,6 +146,26 @@ class WhatsAppPlatformService:
             phone=event.sender_phone,
             display_name=event.sender_display_name,
         )
+
+    async def get_display_phone_number(self) -> str | None:
+        """Return the human-messageable WhatsApp number for this phone_number_id.
+
+        ``phone_number_id`` is Meta's opaque Graph id; users need the display
+        phone number in surfaces list UI. Prefer already-stored account
+        credential metadata, then resolve it through Graph best-effort.
+        """
+        for key in ("display_phone_number", "phone_number"):
+            value = str(self.credentials.get(key) or "").strip()
+            if value:
+                return value
+        try:
+            return await self._client.get_phone_number_field("display_phone_number")
+        except Exception:
+            logger.debug(
+                "agent_surfaces.service.whatsapp_display_phone_lookup_phone.observed",
+                phone_number_id=self._phone_number_id,
+            )
+            return None
 
     async def send_message(
         self,
@@ -111,22 +177,23 @@ class WhatsAppPlatformService:
             event.reply_target.get("phone_number_id") or self._phone_number_id
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
-
-        url = f"{self._api_base}/{phone_number_id}/messages"
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": sender_wa_id,
-            "type": "text",
-            "text": {"body": message},
-        }
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={"Authorization": f"Bearer {self._access_token}"},
+        if not sender_wa_id or not phone_number_id or not self._access_token:
+            logger.debug(
+                'agent_surfaces.service.whatsapp_send_message_skipped_due.diagnostic',
+                phone_number_id=phone_number_id,
+                sender_wa_id=sender_wa_id,
             )
-            resp.raise_for_status()
+            return
+
+        await self._client.send_message_payload(
+            phone_number_id=phone_number_id,
+            payload={
+                "messaging_product": "whatsapp",
+                "to": sender_wa_id,
+                "type": "text",
+                "text": {"body": message},
+            },
+        )
 
     async def send_questions(
         self,
@@ -147,6 +214,14 @@ class WhatsAppPlatformService:
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not sender_wa_id or not phone_number_id or not self._access_token:
+            # Missing credentials/target — the caller's text fallback hits the same
+            # guard in send_message, so log here to make the double-skip diagnosable
+            # instead of a silent swallow.
+            logger.debug(
+                'agent_surfaces.service.whatsapp_send_questions_skipped_missing.diagnostic',
+                phone_number_id=phone_number_id,
+                sender_wa_id=sender_wa_id,
+            )
             return False
         if any(q.multi_select for q in question_plan.questions):
             return False
@@ -158,21 +233,41 @@ class WhatsAppPlatformService:
             if interactive is None:
                 return False
             interactives.append(interactive)
-        url = f"{self._api_base}/{phone_number_id}/messages"
-        async with httpx.AsyncClient() as client:
-            for interactive in interactives:
-                payload = {
-                    "messaging_product": "whatsapp",
-                    "to": sender_wa_id,
-                    "type": "interactive",
-                    "interactive": interactive,
-                }
-                resp = await client.post(
-                    url,
-                    json=payload,
-                    headers={"Authorization": f"Bearer {self._access_token}"},
-                )
-                resp.raise_for_status()
+        for interactive in interactives:
+            await self._client.send_interactive(
+                phone_number_id=phone_number_id,
+                to=sender_wa_id,
+                interactive=interactive,
+            )
+        return True
+
+    async def send_approval(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as WhatsApp reply buttons.
+
+        Approve/Deny (and optionally Approve-for-session) render as ≤3 reply
+        buttons; the tapped button's id carries the decision. Returns ``False``
+        (caller falls back to text) when the buttons can't be encoded natively.
+        """
+        del metadata
+        phone_number_id = (
+            event.reply_target.get("phone_number_id") or self._phone_number_id
+        )
+        sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
+        if not sender_wa_id or not phone_number_id or not self._access_token:
+            return False
+        interactive = _build_whatsapp_approval_interactive(approval_plan)
+        if interactive is None:
+            return False
+        await self._client.send_interactive(
+            phone_number_id=phone_number_id,
+            to=sender_wa_id,
+            interactive=interactive,
+        )
         return True
 
     async def send_display_resource(
@@ -187,15 +282,14 @@ class WhatsAppPlatformService:
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
         if not phone_number_id or not sender_wa_id:
-            logger.warning(
-                "WhatsApp send_display_resource skipped: missing phone_number_id or "
-                "recipient wa_id (phone_number_id=%s)",
-                phone_number_id,
+            logger.debug(
+                'agent_surfaces.service.whatsapp_send_display_resource_skipped.diagnostic',
+                phone_number_id=phone_number_id,
             )
             return
         action = render_plan.primary_action
         if action is None:
-            await self._post_message_payload(
+            await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
                 payload=_whatsapp_text_payload(
                     recipient_wa_id=sender_wa_id,
@@ -206,18 +300,18 @@ class WhatsAppPlatformService:
             return
 
         try:
-            await self._post_message_payload(
+            await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
                 payload=_whatsapp_cta_url_payload(
                     recipient_wa_id=sender_wa_id,
                     render_plan=render_plan,
                 ),
             )
-        except httpx.HTTPStatusError:
-            logger.info(
-                "WhatsApp display_resource cta_url rejected; falling back to text message"
+        except WhatsAppApiError:
+            logger.debug(
+                "agent_surfaces.service.whatsapp_display_resource_cta_url.observed"
             )
-            await self._post_message_payload(
+            await self._client.send_message_payload(
                 phone_number_id=phone_number_id,
                 payload=_whatsapp_text_payload(
                     recipient_wa_id=sender_wa_id,
@@ -231,30 +325,53 @@ class WhatsAppPlatformService:
         event: ParsedInboundSurfaceEvent,
         metadata: dict[str, Any] | None = None,
     ) -> None:
+        """Acknowledge the inbound message with blue read ticks + a typing bubble.
+
+        WhatsApp couples mark-as-read and the typing indicator into a single
+        ``status:read`` call keyed by the inbound message id. The typing bubble
+        shows for ~25s or until the next message is sent, so a single call at run
+        start is enough (WhatsApp has no message-edit API for per-step progress).
+        Best-effort: an indicator failure never affects the run. When the inbound
+        message id is missing we fall back to the legacy 💬 reaction.
+        """
+        del metadata
         phone_number_id = (
             event.reply_target.get("phone_number_id") or self._phone_number_id
         )
         sender_wa_id = event.reply_target.get("sender_wa_id") or event.sender_phone
+        message_id = str(event.external_message_id or "").strip()
+        if not phone_number_id or not self._access_token:
+            return
 
-        url = f"{self._api_base}/{phone_number_id}/messages"
-        payload = {
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": sender_wa_id,
-            "type": "reaction",
-            "reaction": {"emoji": "\U0001f4ac", "action": "react"},
-        }
-
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    url,
-                    json=payload,
-                    headers={"Authorization": f"Bearer {self._access_token}"},
+        if message_id:
+            try:
+                await self._client.mark_read_and_typing(
+                    phone_number_id=phone_number_id,
+                    message_id=message_id,
                 )
-                resp.raise_for_status()
+                return
+            except Exception:
+                # Best-effort indicator; log at debug so it is diagnosable without
+                # spamming warnings, then fall through to the reaction fallback.
+                logger.debug(
+                    "agent_surfaces.service.whatsapp_mark_read_typing_best.observed"
+                )
+
+        # Fallback: no inbound id (or read/typing rejected) — post a reaction so
+        # the user still sees the agent acknowledged the message.
+        if not sender_wa_id or not message_id:
+            return
+        try:
+            await self._client.react(
+                phone_number_id=phone_number_id,
+                to=sender_wa_id,
+                message_id=message_id,
+                emoji="\U0001f4ac",
+            )
         except Exception:
-            pass
+            logger.debug(
+                "agent_surfaces.service.whatsapp_reaction_indicator_best_effort.observed"
+            )
 
     async def download_attachment_bytes(
         self,
@@ -268,7 +385,7 @@ class WhatsAppPlatformService:
         media_id = str(attachment.get("id") or "").strip()
         if not media_id:
             return None
-        media_info = await self._get_media_info(media_id)
+        media_info = await self._client.get_media_info(media_id)
         if not media_info:
             return None
         download_url = str(media_info.get("url") or "").strip()
@@ -279,15 +396,11 @@ class WhatsAppPlatformService:
             or _filename_from_url(download_url)
             or "whatsapp_file"
         )
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(
-                download_url,
-                headers={"Authorization": f"Bearer {self._access_token}"},
-            )
-            response.raise_for_status()
-            content = response.content
+        content = await self._client.download_media(download_url)
         mime_type = (
-            str(attachment.get("mime_type") or media_info.get("mime_type") or "").strip()
+            str(
+                attachment.get("mime_type") or media_info.get("mime_type") or ""
+            ).strip()
             or mimetypes.guess_type(file_name)[0]
             or "application/octet-stream"
         )
@@ -316,17 +429,27 @@ class WhatsAppPlatformService:
         send_type = _resolve_whatsapp_send_type(
             delivery_mode="auto", mime_type=mime_type
         )
-        media_id = await self._upload_media(
-            phone_number_id=phone_number_id,
-            file_name=file_name,
-            file_bytes=file_bytes,
-            mime_type=mime_type,
-        )
+        try:
+            media_id = await self._client.upload_media(
+                phone_number_id=phone_number_id,
+                file_name=file_name,
+                file_bytes=file_bytes,
+                mime_type=mime_type,
+            )
+        except WhatsAppApiError as exc:
+            # Unsupported media / rejected upload — caller falls back to a link.
+            logger.debug(
+                "surface.whatsapp.media_upload_rejected",
+                mime_type=mime_type,
+                status_code=exc.status_code,
+                exc_info=True,
+            )
+            return False
         if not media_id:
             return False
-        message_id = await self._send_media_message(
+        message_id = await self._client.send_media(
             phone_number_id=phone_number_id,
-            recipient_wa_id=recipient_wa_id,
+            to=recipient_wa_id,
             media_id=media_id,
             send_type=send_type,
             file_name=file_name,
@@ -407,103 +530,6 @@ class WhatsAppPlatformService:
             if candidate:
                 return candidate
         return None
-
-    async def _upload_media(
-        self,
-        *,
-        phone_number_id: str,
-        file_name: str,
-        file_bytes: bytes,
-        mime_type: str,
-    ) -> str | None:
-        url = f"{self._api_base}/{phone_number_id}/media"
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url,
-                data={
-                    "messaging_product": "whatsapp",
-                    "type": mime_type,
-                },
-                files={"file": (file_name, file_bytes, mime_type)},
-                headers={"Authorization": f"Bearer {self._access_token}"},
-            )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError:
-                response_body = _response_body_excerpt(response)
-                logger.error(
-                    "WhatsApp media upload rejected phone_number_id=%s file_name=%s "
-                    "mime_type=%s status=%s body=%s",
-                    phone_number_id,
-                    file_name,
-                    mime_type,
-                    response.status_code,
-                    response_body,
-                )
-                raise
-            payload = response.json()
-        return str((payload or {}).get("id") or "").strip() or None
-
-    async def _send_media_message(
-        self,
-        *,
-        phone_number_id: str,
-        recipient_wa_id: str,
-        media_id: str,
-        send_type: str,
-        file_name: str,
-        caption: str | None,
-    ) -> str | None:
-        url = f"{self._api_base}/{phone_number_id}/messages"
-        media_payload: dict[str, Any] = {"id": media_id}
-        if send_type == "document":
-            media_payload["filename"] = file_name
-        if caption and send_type in {"document", "image", "video"}:
-            media_payload["caption"] = caption
-
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": recipient_wa_id,
-            "type": send_type,
-            send_type: media_payload,
-        }
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers={"Authorization": f"Bearer {self._access_token}"},
-            )
-            response.raise_for_status()
-            result = response.json()
-        messages = (result or {}).get("messages") or []
-        first = messages[0] if messages else {}
-        return str(first.get("id") or "").strip() or None
-
-    async def _post_message_payload(
-        self,
-        *,
-        phone_number_id: str,
-        payload: dict[str, Any],
-    ) -> None:
-        url = f"{self._api_base}/{phone_number_id}/messages"
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers={"Authorization": f"Bearer {self._access_token}"},
-            )
-            response.raise_for_status()
-
-    async def _get_media_info(self, media_id: str) -> dict[str, Any] | None:
-        url = f"{self._api_base}/{media_id}"
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {self._access_token}"},
-            )
-            response.raise_for_status()
-            payload = response.json()
-        return payload if isinstance(payload, dict) else None
 
 
 def _resolve_whatsapp_send_type(*, delivery_mode: str, mime_type: str) -> str:
@@ -595,15 +621,3 @@ def _truncate_whatsapp_text(value: str, max_length: int) -> str:
 
 def _filename_from_url(url: str) -> str:
     return str(url or "").rstrip("/").split("/")[-1].strip()
-
-
-def _response_body_excerpt(response: httpx.Response) -> str:
-    body = ""
-    try:
-        body = response.text
-    except Exception:
-        body = ""
-    body = str(body or "").strip()
-    if len(body) > 500:
-        return body[:500] + "..."
-    return body

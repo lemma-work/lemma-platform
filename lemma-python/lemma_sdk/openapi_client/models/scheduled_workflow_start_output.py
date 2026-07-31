@@ -15,7 +15,9 @@ from attrs import field as _attrs_field
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.scheduled_flow_start_output import ScheduledFlowStartOutput
+    from ..models.scheduled_workflow_start_config_output import (
+        ScheduledWorkflowStartConfigOutput,
+    )
 
 
 T = TypeVar("T", bound="ScheduledWorkflowStartOutput")
@@ -25,11 +27,11 @@ T = TypeVar("T", bound="ScheduledWorkflowStartOutput")
 class ScheduledWorkflowStartOutput:
     """
     Attributes:
-        config (ScheduledFlowStartOutput):
+        config (ScheduledWorkflowStartConfigOutput):
         type_ (Literal['SCHEDULED'] | Unset): Scheduled workflow start. Default: 'SCHEDULED'.
     """
 
-    config: ScheduledFlowStartOutput
+    config: ScheduledWorkflowStartConfigOutput
     type_: Literal["SCHEDULED"] | Unset = "SCHEDULED"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -52,10 +54,12 @@ class ScheduledWorkflowStartOutput:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.scheduled_flow_start_output import ScheduledFlowStartOutput
+        from ..models.scheduled_workflow_start_config_output import (
+            ScheduledWorkflowStartConfigOutput,
+        )
 
         d = dict(src_dict)
-        config = ScheduledFlowStartOutput.from_dict(d.pop("config"))
+        config = ScheduledWorkflowStartConfigOutput.from_dict(d.pop("config"))
 
         type_ = cast(Literal["SCHEDULED"] | Unset, d.pop("type", UNSET))
         if type_ != "SCHEDULED" and not isinstance(type_, Unset):

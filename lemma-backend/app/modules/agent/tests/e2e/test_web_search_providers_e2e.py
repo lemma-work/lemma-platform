@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.core.config import settings
 from app.core.web_search.web_search import WebSearchRequest, search_web
 
-pytestmark = pytest.mark.e2e
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.provider,
+    pytest.mark.skipif(
+        os.getenv("LEMMA_RUN_PROVIDER_E2E") != "1",
+        reason="Set LEMMA_RUN_PROVIDER_E2E=1 to run live web-search provider e2e.",
+    ),
+]
 
 
 @pytest.mark.asyncio

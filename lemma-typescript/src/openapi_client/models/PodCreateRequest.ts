@@ -13,4 +13,3 @@ export type PodCreateRequest = {
     name: string;
     organization_id: string;
 };
-

@@ -10,5 +10,5 @@ export type OrganizationCreateRequest = {
     email_domain?: (string | null);
     join_policy?: OrganizationJoinPolicy;
     name: string;
+    slug?: (string | null);
 };
-

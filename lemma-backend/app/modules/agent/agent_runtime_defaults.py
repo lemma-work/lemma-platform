@@ -8,10 +8,12 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.core.config import settings
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import AgentRuntimeConfig
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
 )
+
 
 class AgentRuntimeDefaultError(ValueError):
     """Raised when a local runtime default cannot be updated."""
@@ -26,7 +28,7 @@ class AgentRuntimeDefaultService:
     ):
         self.environment = environment or settings.environment
         self.config_path = Path(
-            config_path or settings.local_agent_runtime_config_path
+            config_path or agent_settings.local_agent_runtime_config_path
         ).expanduser()
 
     @property
@@ -63,7 +65,7 @@ class AgentRuntimeDefaultService:
             return AgentRuntimeConfig.model_validate_json(
                 self.config_path.read_text(encoding="utf-8")
             )
-        except (OSError, ValidationError, ValueError):
+        except OSError, ValidationError, ValueError:
             return None
 
     def _validate_runtime(self, agent_runtime: AgentRuntimeConfig) -> None:

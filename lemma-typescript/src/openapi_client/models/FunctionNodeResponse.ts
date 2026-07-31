@@ -10,4 +10,3 @@ export type FunctionNodeResponse = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

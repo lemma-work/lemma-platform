@@ -121,6 +121,83 @@ async def _seed_projects(pod_api: DatastoreApi, owner_user_id: str) -> dict:
 
 class TestDatastoreRecords:
     @pytest.mark.asyncio
+    async def test_records_coerce_typed_api_values_and_reject_malformed_values(
+        self,
+        pod_api: DatastoreApi,
+    ):
+        """HTTP record writes coerce supported JSON scalars into database types.
+
+        Invalid temporal, numeric, and UUID inputs stay user-facing validation
+        errors and never expose driver or SQL details.
+        """
+        await pod_api.create_table(
+            {
+                "name": "typed_events",
+                "enable_rls": False,
+                "columns": [
+                    {"name": "happened_at", "type": "DATETIME", "required": True},
+                    {"name": "due_on", "type": "DATE", "required": True},
+                    {"name": "attempts", "type": "INTEGER", "required": True},
+                    {"name": "score", "type": "FLOAT", "required": True},
+                    {"name": "enabled", "type": "BOOLEAN", "required": True},
+                    {"name": "reference_id", "type": "UUID", "required": True},
+                    {"name": "payload", "type": "JSON", "required": True},
+                ],
+            }
+        )
+        reference_id = str(uuid4())
+        created = await pod_api.create_record(
+            "typed_events",
+            {
+                "happened_at": "2026-07-10T12:34:56Z",
+                "due_on": "2026-07-11T08:00:00",
+                "attempts": "7",
+                "score": "98.25",
+                "enabled": "yes",
+                "reference_id": reference_id,
+                "payload": {"source": "public-api", "retry": False},
+            },
+        )
+        assert created["happened_at"].startswith("2026-07-10T12:34:56")
+        assert created["due_on"] == "2026-07-11"
+        assert created["attempts"] == 7
+        assert created["score"] == 98.25
+        assert created["enabled"] is True
+        assert created["reference_id"] == reference_id
+        assert created["payload"] == {"source": "public-api", "retry": False}
+
+        updated = await pod_api.update_record(
+            "typed_events",
+            created["id"],
+            {"attempts": 8, "score": 99, "enabled": 0},
+        )
+        assert updated["attempts"] == 8
+        assert updated["score"] == 99.0
+        assert updated["enabled"] is False
+
+        invalid_values = (
+            ("happened_at", "not-a-datetime"),
+            ("due_on", "not-a-date"),
+            ("attempts", "seven"),
+            ("score", "high"),
+            ("reference_id", "not-a-uuid"),
+        )
+        for field, value in invalid_values:
+            response = await pod_api.request(
+                "PATCH",
+                (
+                    f"/pods/{pod_api.pod_id}/datastore/tables/typed_events/"
+                    f"records/{created['id']}"
+                ),
+                json={"data": {field: value}},
+            )
+            assert response.status_code == status.HTTP_400_BAD_REQUEST, response.text
+            error = response.json()
+            assert error["code"] == "DATASTORE_VALIDATION_ERROR"
+            assert field in error["message"]
+            assert "SQL" not in error["message"]
+
+    @pytest.mark.asyncio
     async def test_records_support_typed_values_computed_columns_and_validation(
         self,
         project_workspace: DatastoreApi,

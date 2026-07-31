@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable, Protocol
 from uuid import UUID
 
@@ -15,18 +15,15 @@ from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttribu
 from opentelemetry import trace
 from app.core.config import settings
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.core.infrastructure.events.publisher import EventPublisher
 from app.core.log.log import get_logger
 from app.core.observability.telemetry import agent_run_telemetry_context
+from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.entities import Agent, AgentRun, Conversation, Message
 from app.modules.agent.domain.errors import (
     AgentNotFoundError,
     ConversationNotFoundError,
 )
-from app.modules.agent.domain.events import (
-    AGENT_EVENTS_STREAM,
-    AgentRunCompletedEvent,
-)
+from app.modules.agent.domain.events import AgentRunCompletedEvent
 from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
@@ -71,7 +68,13 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.services.run_observer_delivery import notify_run_failed
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
+from app.composition.agent_usage import (
+    UsageReservation,
+    usage_context_from_agent_context,
+    usage_execution_context,
+)
 from app.modules.agent.services.workspace_location import (
     resolve_pod_cwd,
     resolve_workspace_location,
@@ -84,15 +87,25 @@ from app.modules.agent.tools.workspace_cli.pydantic_adapter import view_image_to
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
-from app.modules.usage.domain.entities import UsageReservation
-from app.modules.usage.services.usage_context import (
-    usage_context_from_agent_context,
-    usage_execution_context,
-)
 
 logger = get_logger(__name__)
-
 FULL_HISTORY_AGENT_RUN_COUNT = 5
+
+
+def _newest_message_time(run: AgentRun) -> datetime | None:
+    """The newest message ``created_at`` in a run as an aware UTC datetime, or
+    None when the run has no timestamped messages. Naive timestamps are treated
+    as UTC (matching the DM-reset window handling)."""
+    newest: datetime | None = None
+    for message in run.messages:
+        created = getattr(message, "created_at", None)
+        if created is None:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if newest is None or created > newest:
+            newest = created
+    return newest
 
 
 async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None:
@@ -105,35 +118,18 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
     try:
         await coro
     except asyncio.CancelledError:
-        logger.warning(
-            "Agent run finalization cancelled run=%s", agent_run_id
-        )
-    except Exception as exc:
-        logger.error(
-            "Agent run finalization failed run=%s: %s",
-            agent_run_id,
-            exc,
-            exc_info=True,
-        )
+        logger.debug('agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic', agent_run_id=agent_run_id)
+    except Exception:
+        logger.error("agent.agent_runner_service.agent_run_finalization_run_s.failed", agent_run_id=agent_run_id, exc_info=True)
 
 
 def _rejected_run_error_message(data: object) -> str:
-    """Build a user-facing message for a daemon-capacity REJECTED event.
-
-    Falls back to a generic message if the structured shape the daemon sends
-    (``{"reason", "active_run_count", "max_concurrent_runs"}``) isn't present
-    -- keeps this robust against an older/newer daemon sending a different
-    payload shape.
-    """
-    if isinstance(data, dict) and data.get("reason") == "daemon_at_capacity":
-        active = data.get("active_run_count")
-        cap = data.get("max_concurrent_runs")
-        if isinstance(active, int) and isinstance(cap, int):
-            return (
-                f"Daemon busy: {active}/{cap} runs already active. "
-                "Try again in a moment."
-            )
-    return "Daemon rejected this run (at capacity). Try again in a moment."
+    """Build a user-facing message for a pre-dispatch harness rejection."""
+    if isinstance(data, dict):
+        detail = data.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    return "The Agent Host rejected this run before dispatch. Try again."
 
 
 def _profile_model_settings(
@@ -146,7 +142,9 @@ def _profile_model_settings(
     if not isinstance(config, dict):
         return None
     model_settings = config.get("model_settings")
-    return model_settings if isinstance(model_settings, dict) and model_settings else None
+    return (
+        model_settings if isinstance(model_settings, dict) and model_settings else None
+    )
 
 
 class AgentRunObserver(Protocol):
@@ -168,6 +166,13 @@ class AgentRunObserver(Protocol):
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None: ...
+
+    async def on_run_failed(
+        self,
+        conversation: Conversation,
+        error: Exception,
+    ) -> None:
+        raise NotImplementedError
 
 
 class AgentRunnerService:
@@ -253,7 +258,7 @@ class AgentRunnerService:
                 workspace_cwd=workspace_location.cwd,
                 pod_cwd=pod_cwd,
                 # Only the in-process pydantic (LEMMA) harness catches the
-                # ask_user/request_approval pause signal; daemon harnesses run the
+                # ask_user/request_approval pause signal; remote harnesses run the
                 # tools over MCP and own their own session, so they can't be paused
                 # mid tool-call and use the WAITING output contract instead.
                 supports_pause_signal=(
@@ -271,8 +276,8 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=conversation.pod_id,
                 )
-            except Exception as exc:
-                logger.warning("Failed to build agent context brief: %s", exc)
+            except Exception:
+                logger.debug('agent.agent_runner_service.build_agent_context_brief_s.diagnostic')
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
                 conversation=conversation,
@@ -286,7 +291,7 @@ class AgentRunnerService:
             )
             if supports_vision and view_image_toolset not in full_toolsets:
                 full_toolsets = [*full_toolsets, view_image_toolset]
-            # Daemon harnesses (Codex/Claude-Code) reach every tool through the MCP
+            # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
             # server, so they keep the full toolset list. The in-process LEMMA
             # harness instead shows core tools directly and defers the heavy "extra"
             # tools over MCP, layering current-time/caching/todo capabilities.
@@ -313,12 +318,18 @@ class AgentRunnerService:
                     ),
                 )
                 harness_toolsets = []
+            usage_reservation = await self.usage_recorder.reserve(
+                organization_id=conversation.organization_id,
+                user_id=user_id,
+                runtime_profile=runtime_profile_snapshot,
+            )
+            enforced_usage_limits = self.fixed_usage_limits
             options = HarnessOptions(
                 model_name=resolved_runtime.model_name_for_harness,
                 toolsets=harness_toolsets,
                 capabilities=harness_capabilities,
                 model_settings=harness_model_settings,
-                usage_limits=self.fixed_usage_limits,
+                usage_limits=enforced_usage_limits,
                 output_type=self._resolve_output_type(agent, conversation),
                 should_stop=self._make_stop_checker(agent_run_id),
                 extra={
@@ -326,12 +337,6 @@ class AgentRunnerService:
                     "runtime_credentials": runtime_credentials,
                 },
             )
-            usage_reservation = await self.usage_recorder.reserve(
-                organization_id=conversation.organization_id,
-                user_id=user_id,
-                runtime_profile=runtime_profile_snapshot,
-            )
-
             terminal_event_seen = False
             observer_started = False
             harness_agent = self._agent_with_resolved_runtime_metadata(
@@ -366,12 +371,8 @@ class AgentRunnerService:
                         try:
                             await observer.on_run_started(conversation, ctx)
                             observer_started = True
-                        except Exception as exc:
-                            logger.warning(
-                                "Agent run observer start failed run=%s: %s",
-                                agent_run_id,
-                                exc,
-                            )
+                        except Exception:
+                            logger.debug('agent.agent_runner_service.agent_run_observer_start_run.diagnostic', agent_run_id=agent_run_id)
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -391,14 +392,11 @@ class AgentRunnerService:
                                     continue
                                 if observer is not None:
                                     try:
-                                        await observer.on_event(event, conversation, ctx)
-                                    except Exception as exc:
-                                        logger.warning(
-                                            "Agent run observer failed run=%s event=%s: %s",
-                                            agent_run_id,
-                                            event.type,
-                                            exc,
+                                        await observer.on_event(
+                                            event, conversation, ctx
                                         )
+                                    except Exception:
+                                        logger.debug('agent.agent_runner_service.agent_run_observer_run_s.diagnostic', agent_run_id=agent_run_id)
                                 if event.type == AgentEventType.USAGE:
                                     if isinstance(event.data, AgentRunUsage):
                                         usage_data = event.data
@@ -425,12 +423,16 @@ class AgentRunnerService:
                                 )
                                 if event.type == AgentEventType.MESSAGE:
                                     saved_output = (
-                                        self.message_writer.output_data_from_event(event)
+                                        self.message_writer.output_data_from_event(
+                                            event
+                                        )
                                     )
                                     if saved_output is not None:
                                         output_data = saved_output
                                     event_final_status, event_final_error = (
-                                        self.message_writer.final_status_from_event(event)
+                                        self.message_writer.final_status_from_event(
+                                            event
+                                        )
                                     )
                                     if event_final_status is not None:
                                         final_status = event_final_status
@@ -442,18 +444,17 @@ class AgentRunnerService:
                         if observer is not None and observer_started:
                             try:
                                 await observer.on_run_finished(conversation, ctx)
-                            except Exception as exc:
-                                logger.warning(
-                                    "Agent run observer finish failed run=%s: %s",
-                                    agent_run_id,
-                                    exc,
-                                )
+                            except Exception:
+                                logger.debug('agent.agent_runner_service.agent_run_observer_finish_run.diagnostic', agent_run_id=agent_run_id)
         except BaseException as exc:
             if isinstance(exc, Exception):
-                logger.error("Agent run failed: %s", exc, exc_info=True)
+                logger.error(
+                    "agent.agent_runner_service.agent_run_s.failed", exc_info=True
+                )
             else:
                 logger.warning(
-                    "Agent run cancelled (timeout or shutdown): run=%s", agent_run_id
+                    "agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout",
+                    agent_run_id=agent_run_id,
                 )
             # Finalize the run, shielding the DB write so it completes even when
             # we're inside a cancelled cancel scope (streaq task timeout / worker
@@ -493,6 +494,7 @@ class AgentRunnerService:
                     ),
                     agent_run_id=agent_run_id,
                 )
+                await notify_run_failed(observer, conversation, exc, agent_run_id)
 
     async def _resolve_agent_runtime(
         self,
@@ -526,11 +528,10 @@ class AgentRunnerService:
     async def _should_stop_run(self, agent_run_id: UUID) -> bool:
         async with self.uow_factory() as uow:
             agent_run = await ConversationRepository(uow).get_agent_run(agent_run_id)
-        return (
-            agent_run is not None
-            and agent_run.status
-            in {AgentRunStatus.STOP_REQUESTED, AgentRunStatus.STOPPED}
-        )
+        return agent_run is not None and agent_run.status in {
+            AgentRunStatus.STOP_REQUESTED,
+            AgentRunStatus.STOPPED,
+        }
 
     def _make_stop_checker(self, agent_run_id: UUID) -> Callable[[], Awaitable[bool]]:
         """Build a throttled, sticky stop checker for the harness.
@@ -544,7 +545,7 @@ class AgentRunnerService:
         sticks (no further queries). A stop request is still honored within the
         poll interval. Interval ``0`` disables throttling (every call queries).
         """
-        interval = settings.agent_run_stop_poll_interval_seconds
+        interval = agent_settings.agent_run_stop_poll_interval_seconds
         stopped = False
         last_checked: float | None = None
 
@@ -587,7 +588,7 @@ class AgentRunnerService:
                 user_id=user_id,
                 agent_name=agent_name,
             )
-            messages = self._select_runtime_history(runs)
+            messages = self._select_runtime_history(runs, conversation)
             return conversation, agent, agent_run, messages
 
     async def _handle_harness_event(
@@ -635,16 +636,6 @@ class AgentRunnerService:
             return False
 
         if event.type == AgentEventType.STATUS:
-            await self._persist_status_event_metadata(
-                conversation_id=conversation_id,
-                data=event.data,
-            )
-            if (
-                isinstance(event.data, dict)
-                and event.data.get("status")
-                in {"daemon.session.started", "daemon.session.invalid"}
-            ):
-                return False
             await publish_conversation_event(
                 conversation_id,
                 status_payload(
@@ -674,9 +665,9 @@ class AgentRunnerService:
             return True
 
         if event.type == AgentEventType.REJECTED:
-            # The daemon explicitly refused this run (already at
-            # max_concurrent_runs) -- terminal, like ERROR, but with a more
-            # actionable message built from the event's structured data.
+            # The remote harness refused this run before dispatch -- terminal,
+            # like ERROR, but with a more actionable message built from the
+            # event's structured data.
             await self._finish_agent_run(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
@@ -742,63 +733,6 @@ class AgentRunnerService:
 
         return False
 
-    async def _persist_status_event_metadata(
-        self,
-        *,
-        conversation_id: UUID,
-        data: object,
-    ) -> None:
-        if not isinstance(data, dict):
-            return
-        status = data.get("status")
-        if status not in {"daemon.session.started", "daemon.session.invalid"}:
-            return
-        local_session = data.get("local_session")
-        if not isinstance(local_session, dict):
-            return
-        harness_kind = str(local_session.get("harness_kind") or "")
-        session_id = str(local_session.get("session_id") or "")
-        if not harness_kind or not session_id:
-            return
-        async with self.uow_factory() as uow:
-            repo = ConversationRepository(uow)
-            conversation = await repo.get_conversation(conversation_id)
-            if conversation is None:
-                return
-            metadata: JsonObject = (
-                dict(conversation.metadata)
-                if isinstance(conversation.metadata, dict)
-                else {}
-            )
-            if status == "daemon.session.invalid":
-                existing = metadata.get("daemon_session")
-                if (
-                    isinstance(existing, dict)
-                    and str(existing.get("harness_kind") or "") == harness_kind
-                    and str(existing.get("session_id") or "") == session_id
-                ):
-                    metadata.pop("daemon_session", None)
-                sessions = metadata.get("daemon_sessions")
-                if isinstance(sessions, dict):
-                    legacy = sessions.get(harness_kind)
-                    if (
-                        isinstance(legacy, dict)
-                        and str(legacy.get("session_id") or "") == session_id
-                    ):
-                        sessions.pop(harness_kind, None)
-                    if sessions:
-                        metadata["daemon_sessions"] = sessions
-                    else:
-                        metadata.pop("daemon_sessions", None)
-            else:
-                metadata["daemon_session"] = {
-                    "session_id": session_id,
-                    "harness_kind": harness_kind,
-                }
-                metadata.pop("daemon_sessions", None)
-            conversation.metadata = metadata
-            await repo.update_conversation(conversation)
-
     async def _finish_agent_run(
         self,
         *,
@@ -818,6 +752,8 @@ class AgentRunnerService:
         usage_reservation: UsageReservation | None = None,
     ) -> None:
         try:
+            event: AgentRunCompletedEvent | None = None
+            event_data: JsonObject = {}
             async with self.uow_factory() as uow:
                 finish_result = await ConversationRepository(uow).finish_agent_run(
                     agent_run_id=agent_run_id,
@@ -826,25 +762,27 @@ class AgentRunnerService:
                     error=error,
                     output_data=output_data,
                 )
+                if finish_result is not None and finish_result.updated:
+                    status = finish_result.status
+                    conversation_status = finish_result.conversation_status
+                    if status == AgentRunStatus.STOPPED:
+                        error = None
+                    if error:
+                        event_data["error"] = error
+                    if output_data is not None:
+                        event_data["output_data"] = output_data
+                    event_data["conversation_status"] = conversation_status.value
+                    event = AgentRunCompletedEvent(
+                        conversation_id=conversation_id,
+                        agent_run_id=agent_run_id,
+                        status=status,
+                        data=event_data or None,
+                    )
+                    uow.collect_events([event])
             if finish_result is None or not finish_result.updated:
                 await self.usage_recorder.release(usage_reservation)
                 return
-            status = finish_result.status
-            conversation_status = finish_result.conversation_status
-            if status == AgentRunStatus.STOPPED:
-                error = None
-            event_data: JsonObject = {}
-            if error:
-                event_data["error"] = error
-            if output_data is not None:
-                event_data["output_data"] = output_data
-            event_data["conversation_status"] = conversation_status.value
-            event = AgentRunCompletedEvent(
-                conversation_id=conversation_id,
-                agent_run_id=agent_run_id,
-                status=status,
-                data=event_data or None,
-            )
+            assert event is not None
             if status == AgentRunStatus.FAILED:
                 await publish_conversation_event(
                     conversation_id,
@@ -859,7 +797,6 @@ class AgentRunnerService:
                     data=event_data or None,
                 ),
             )
-            await self._publish_lifecycle_event(event)
             await self._publish_usage_event(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
@@ -873,22 +810,20 @@ class AgentRunnerService:
                 runtime_profile=runtime_profile,
                 usage_reservation=usage_reservation,
             )
-        except Exception as exc:
-            logger.error(
-                "Failed to finalize agent run run=%s: %s", agent_run_id, exc, exc_info=True
+        except Exception:
+            logger.debug(
+                'agent.agent_runner_service.finalize_agent_run_run_s.propagated',
+                agent_run_id=agent_run_id,
+                exc_info=True,
             )
             try:
                 await self.usage_recorder.release(usage_reservation)
-            except Exception as release_exc:
-                logger.warning(
-                    "Failed to release usage reservation run=%s: %s",
-                    agent_run_id,
-                    release_exc,
+            except Exception:
+                logger.debug(
+                    'agent.agent_runner_service.release_usage_reservation_run_s.diagnostic',
+                    agent_run_id=agent_run_id,
                 )
-            return
-
-    async def _publish_lifecycle_event(self, event: object) -> None:
-        await EventPublisher.publish(AGENT_EVENTS_STREAM, event)
+            raise
 
     async def _publish_usage_event(
         self,
@@ -981,7 +916,61 @@ class AgentRunnerService:
                 return run
         raise ConversationNotFoundError()
 
-    def _select_runtime_history(self, runs: list[AgentRun]) -> list[Message]:
+    def _apply_surface_history_window(
+        self, runs: list[AgentRun], conversation: Conversation | None
+    ) -> list[AgentRun]:
+        """For surface conversations, bound history by age + message count.
+
+        Trims at run granularity (a tool-call and its return live in the same run,
+        so whole-run trimming never splits a pair) and always keeps at least the
+        most recent run. No-op for non-surface conversations or when a limit is
+        disabled. Runs are assumed chronologically ordered.
+        """
+        if conversation is None or not runs:
+            return runs
+        metadata = conversation.metadata or {}
+        if not metadata.get("surface_platform"):
+            return runs
+
+        from app.composition.agent_surface_runtime import surface_history_limits
+
+        max_messages, window_hours = surface_history_limits()
+
+        trimmed = list(runs)
+        # Age window: drop whole runs whose newest message predates the window,
+        # keeping the most recent run regardless.
+        if window_hours > 0 and len(trimmed) > 1:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+            kept: list[AgentRun] = []
+            for index, run in enumerate(trimmed):
+                is_last = index == len(trimmed) - 1
+                newest = _newest_message_time(run)
+                if is_last or newest is None or newest >= cutoff:
+                    kept.append(run)
+            trimmed = kept or trimmed[-1:]
+
+        # Message-count budget: keep the most recent whole runs that fit, always
+        # keeping the most recent run.
+        if max_messages > 0:
+            result: list[AgentRun] = []
+            total = 0
+            for run in reversed(trimmed):
+                count = len(run.ordered_messages())
+                if result and total + count > max_messages:
+                    break
+                result.insert(0, run)
+                total += count
+            trimmed = result or trimmed[-1:]
+
+        return trimmed
+
+    def _select_runtime_history(
+        self, runs: list[AgentRun], conversation: Conversation | None = None
+    ) -> list[Message]:
+        # Surface (Slack/Telegram/WhatsApp/…) conversations bound how much prior
+        # history reaches the model by age + count. Trim at run granularity first
+        # so tool-call/tool-return pairs (which live within a run) stay intact.
+        runs = self._apply_surface_history_window(runs, conversation)
         if len(runs) <= FULL_HISTORY_AGENT_RUN_COUNT:
             return [message for run in runs for message in run.ordered_messages()]
 
@@ -1028,12 +1017,11 @@ class AgentRunnerService:
         surface_metadata = None
         if isinstance(surface_metadata_payload, dict):
             try:
-                from app.modules.agent_surfaces.domain.surface_event_metadata import (
-                    SurfaceEventMetadata,
+                from app.composition.agent_surface_runtime import (
+                    parse_surface_event_metadata,
                 )
-                from pydantic import TypeAdapter
 
-                surface_metadata = TypeAdapter(SurfaceEventMetadata).validate_python(
+                surface_metadata = parse_surface_event_metadata(
                     surface_metadata_payload
                 )
             except Exception:

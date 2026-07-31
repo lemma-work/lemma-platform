@@ -9094,13 +9094,19 @@ var LemmaClient = (() => {
   __export(browser_exports, {
     ApiError: () => ApiError,
     AuthManager: () => AuthManager,
+    LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
+    LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
+    POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
+    applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
     buildFederatedLogoutUrl: () => buildFederatedLogoutUrl,
     clearTestingToken: () => clearTestingToken,
+    getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
-    setTestingToken: () => setTestingToken
+    setTestingToken: () => setTestingToken,
+    subscribeLemmaHostTheme: () => subscribeLemmaHostTheme
   });
 
   // src/config.ts
@@ -9129,7 +9135,7 @@ var LemmaClient = (() => {
     return {};
   }
   function resolveConfig(overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
     const win = windowConfig();
     const apiUrl = (_c = (_b = (_a = overrides.apiUrl) != null ? _a : win.apiUrl) != null ? _b : fromEnv("API_URL")) != null ? _c : "https://api.lemma.work";
     const authUrl = (_f = (_e = (_d = overrides.authUrl) != null ? _d : win.authUrl) != null ? _e : fromEnv("AUTH_URL")) != null ? _f : "https://lemma.work/auth";
@@ -9138,8 +9144,9 @@ var LemmaClient = (() => {
       apiUrl: apiUrl.replace(/\/$/, ""),
       authUrl: authUrl.replace(/\/$/, ""),
       podId,
-      timeoutMs: (_i = overrides.timeoutMs) != null ? _i : win.timeoutMs,
-      maxRetries: (_j = overrides.maxRetries) != null ? _j : win.maxRetries
+      app: (_i = overrides.app) != null ? _i : win.app,
+      timeoutMs: (_j = overrides.timeoutMs) != null ? _j : win.timeoutMs,
+      maxRetries: (_k = overrides.maxRetries) != null ? _k : win.maxRetries
     };
   }
 
@@ -9408,6 +9415,27 @@ var LemmaClient = (() => {
       return fallback;
     }
   }
+  function toHeaderRecord(headers) {
+    if (!headers) return {};
+    if (typeof Headers !== "undefined" && headers instanceof Headers) {
+      const result = {};
+      headers.forEach((value, key) => {
+        result[key] = value;
+      });
+      return result;
+    }
+    if (Array.isArray(headers)) {
+      return Object.fromEntries(headers);
+    }
+    return { ...headers };
+  }
+  function setHeader(headers, name, value) {
+    const existingName = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
+    headers[existingName != null ? existingName : name] = value;
+  }
+  function hasHeader(headers, name) {
+    return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
+  }
   var AuthManager = class {
     constructor(apiUrl, authUrl) {
       __publicField(this, "apiUrl");
@@ -9415,6 +9443,7 @@ var LemmaClient = (() => {
       __publicField(this, "injectedToken");
       __publicField(this, "state", { status: "loading", user: null });
       __publicField(this, "listeners", /* @__PURE__ */ new Set());
+      __publicField(this, "authCheckPromise", null);
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = detectInjectedToken();
@@ -9598,13 +9627,16 @@ var LemmaClient = (() => {
      * and lets cookies carry the session.
      */
     getRequestInit(init = {}) {
-      const headers = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...init.headers
-      };
+      const headers = toHeaderRecord(init.headers);
+      if (!hasHeader(headers, "Accept")) {
+        setHeader(headers, "Accept", "application/json");
+      }
+      const isFormData2 = typeof FormData !== "undefined" && init.body instanceof FormData;
+      if (init.body !== void 0 && !isFormData2 && !hasHeader(headers, "Content-Type")) {
+        setHeader(headers, "Content-Type", "application/json");
+      }
       if (this.injectedToken) {
-        headers["Authorization"] = `Bearer ${this.injectedToken}`;
+        setHeader(headers, "Authorization", `Bearer ${this.injectedToken}`);
       }
       return {
         ...init,
@@ -9616,7 +9648,16 @@ var LemmaClient = (() => {
      * Call GET /users/me to determine auth state.
      * Sets internal state and notifies listeners.
      */
-    async checkAuth() {
+    checkAuth() {
+      if (this.authCheckPromise) {
+        return this.authCheckPromise;
+      }
+      this.authCheckPromise = this.performAuthCheck().finally(() => {
+        this.authCheckPromise = null;
+      });
+      return this.authCheckPromise;
+    }
+    async performAuthCheck() {
       this.setState({ status: "loading", user: null });
       if (!this.injectedToken && typeof window !== "undefined") {
         ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
@@ -9794,9 +9835,23 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.5.5";
+  var SDK_VERSION = "0.6.3";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
+  function shouldSendClientHeader(apiUrl, method) {
+    const normalizedMethod = method.toUpperCase();
+    if (normalizedMethod !== "GET" && normalizedMethod !== "HEAD") {
+      return true;
+    }
+    if (typeof window === "undefined") {
+      return true;
+    }
+    try {
+      return new URL(apiUrl, window.location.origin).origin === window.location.origin;
+    } catch {
+      return true;
+    }
+  }
 
   // src/http.ts
   var DEFAULT_TIMEOUT_MS = 3e4;
@@ -9978,21 +10033,13 @@ var LemmaClient = (() => {
       return JSON.stringify(options.body);
     }
     buildRequestInit(method, options) {
-      var _a;
       const initBase = {
         method,
         body: this.getRequestBody(options),
         signal: options.signal
       };
-      const withAuth = options.isFormData ? {
-        ...this.auth.getRequestInit(initBase),
-        headers: Object.fromEntries(
-          Object.entries(
-            (_a = this.auth.getRequestInit(initBase).headers) != null ? _a : {}
-          ).filter(([key]) => key.toLowerCase() !== "content-type")
-        )
-      } : this.auth.getRequestInit(initBase);
-      const withClient = this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE });
+      const withAuth = this.auth.getRequestInit(initBase);
+      const withClient = shouldSendClientHeader(this.apiUrl, method) ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE }) : withAuth;
       return this.mergeHeaders(withClient, options.headers);
     }
     async request(method, path, options = {}) {
@@ -10196,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "3.3.0",
+    VERSION: "0.6.9",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10243,7 +10290,12 @@ var LemmaClient = (() => {
       OpenAPI.WITH_CREDENTIALS = true;
       OpenAPI.CREDENTIALS = this.auth.isTokenMode ? "omit" : "include";
       OpenAPI.TOKEN = (_a = this.auth.getBearerToken()) != null ? _a : void 0;
-      OpenAPI.HEADERS = { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+      OpenAPI.HEADERS = async (options) => {
+        if (shouldSendClientHeader(this.apiUrl, options.method)) {
+          return { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+        }
+        return {};
+      };
     }
     async request(operation) {
       this.configure();
@@ -10546,19 +10598,207 @@ var LemmaClient = (() => {
     });
   };
 
-  // src/openapi_client/services/AgentRuntimeService.ts
-  var AgentRuntimeService = class {
+  // src/openapi_client/services/AgentHostService.ts
+  var AgentHostService = class {
     /**
-     * List Available Agent Harnesses
-     * @returns AgentHarnessListResponse Successful Response
+     * Append Agent Host Events
+     * Append one ordered batch to the run's stream.
+     *
+     * There is no second lane to publish on: every event type travels the one
+     * ordered stream, and the ack watermark is the stream's last entry.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostEventAck Successful Response
      * @throws ApiError
      */
-    static agentRuntimeHarnessesList() {
+    static agentHostEventsAppend(requestBody, authorization) {
       return request(OpenAPI, {
-        method: "GET",
-        url: "/agent-runtime/harnesses"
+        method: "POST",
+        url: "/agent-host/events:append",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
       });
     }
+    /**
+     * Publish Agent Host Harnesses
+     * Replace this host's harness snapshots with the reported set.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostHarnessPublishResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostHarnessesPublish(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/agent-host/harnesses",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Complete Agent Host Pairing
+     * Consume a pairing code and issue the host secret, shown exactly once.
+     * @param requestBody
+     * @returns AgentHostPairingCompleted Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingComplete(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/pairings:complete",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Poll Agent Host Commands
+     * Long-poll for commands, carrying the host's control updates up.
+     *
+     * This owns its own units of work rather than the request-scoped one: the
+     * idle wait below can hold the connection open for 25 seconds, and a
+     * transaction must not stay open across it.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostPollResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostPoll(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/poll",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Self Revoke Agent Host
+     * Let a host retire its own credential, e.g. on uninstall.
+     * @param authorization
+     * @returns AgentHostResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostSelfRevoke(authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/revoke",
+        headers: {
+          "authorization": authorization
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Agent Host Pairing
+     * Mint a short-lived pairing code for a machine this user controls.
+     * @param requestBody
+     * @returns AgentHostPairingCreated Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingCreate(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/me/runtime/agent-host-pairings",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Hosts
+     * @returns AgentHostListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostList() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/runtime/agent-hosts"
+      });
+    }
+    /**
+     * Revoke Agent Host
+     * Revoke a host, invalidating its secret immediately.
+     * @param hostId
+     * @returns AgentHostResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostRevoke(hostId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/me/runtime/agent-hosts/{host_id}",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Host Harnesses
+     * @param hostId
+     * @returns AgentHostHarnessListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostHarnessesList(hostId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/runtime/agent-hosts/{host_id}/harnesses",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/agent-host.ts
+  var AgentHostNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    list() {
+      return this.client.request(() => AgentHostService.agentHostList());
+    }
+    createPairing(request2) {
+      return this.client.request(() => AgentHostService.agentHostPairingCreate(request2));
+    }
+    listHarnesses(hostId) {
+      return this.client.request(() => AgentHostService.agentHostHarnessesList(hostId));
+    }
+    revoke(hostId) {
+      return this.client.request(() => AgentHostService.agentHostRevoke(hostId));
+    }
+  };
+
+  // src/openapi_client/services/AgentRuntimeService.ts
+  var AgentRuntimeService = class {
     /**
      * List Available Agent Runtime Profiles
      * @param orgId
@@ -10604,12 +10844,6 @@ var LemmaClient = (() => {
   var AgentRuntimeNamespace = class {
     constructor(client) {
       __publicField(this, "client", client);
-    }
-    listHarnesses() {
-      return this.client.request(() => AgentRuntimeService.agentRuntimeHarnessesList());
-    }
-    listAvailableHarnesses() {
-      return this.listHarnesses();
     }
     listRuntimes(orgId) {
       return this.listProfiles(orgId);
@@ -10860,6 +11094,7 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/conversations.ts
+  var POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT";
   function normalizeConversation(conversation) {
     var _a, _b, _c, _d, _e;
     if (!conversation) return conversation;
@@ -10885,7 +11120,6 @@ var LemmaClient = (() => {
     constructor(http, podId) {
       __publicField(this, "http", http);
       __publicField(this, "podId", podId);
-      __publicField(this, "runtimeCatalogPromise");
       __publicField(this, "profileCatalogPromises", /* @__PURE__ */ new Map());
       __publicField(this, "messages", {
         list: (conversationId, options = {}) => {
@@ -10956,14 +11190,6 @@ var LemmaClient = (() => {
       }
       return podId;
     }
-    listRuntimeCatalog() {
-      var _a;
-      (_a = this.runtimeCatalogPromise) != null ? _a : this.runtimeCatalogPromise = this.http.request(
-        "GET",
-        "/agent-runtime/harnesses"
-      );
-      return this.runtimeCatalogPromise;
-    }
     listProfileCatalog(orgId) {
       const key = orgId.trim();
       const existing = this.profileCatalogPromises.get(key);
@@ -11024,7 +11250,7 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations`, {
         params: {
-          agent_name: options.agent_name,
+          agent_name: options.agent_name === null ? POD_DEFAULT_AGENT_SELECTOR : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
           limit: (_a = options.limit) != null ? _a : 20,
@@ -11035,35 +11261,22 @@ var LemmaClient = (() => {
     listByAgent(agentName, options = {}) {
       return this.list({ ...options, agent_name: agentName });
     }
+    listDefault(options = {}) {
+      return this.list({ ...options, agent_name: POD_DEFAULT_AGENT_SELECTOR });
+    }
     async listModels(options = {}) {
       var _a;
       const orgId = (_a = options.orgId) == null ? void 0 : _a.trim();
       if (orgId) {
-        const catalog2 = await this.listProfileCatalog(orgId);
-        const items2 = this.modelOptionsFromProfiles(catalog2);
+        const catalog = await this.listProfileCatalog(orgId);
+        const items = this.modelOptionsFromProfiles(catalog);
         return {
-          items: items2,
-          limit: items2.length,
+          items,
+          limit: items.length,
           next_page_token: null
         };
       }
-      const catalog = await this.listRuntimeCatalog();
-      const items = catalog.items.flatMap(
-        (harness) => {
-          var _a2;
-          return ((_a2 = harness.models) != null ? _a2 : []).map((model) => ({
-            id: model,
-            name: model,
-            harness_kind: harness.harness_kind,
-            description: harness.daemon_display_name
-          }));
-        }
-      );
-      return {
-        items,
-        limit: items.length,
-        next_page_token: null
-      };
+      return { items: [], limit: 0, next_page_token: null };
     }
     async create(payload = {}) {
       const podId = this.requirePodId(payload.pod_id);
@@ -11123,10 +11336,21 @@ var LemmaClient = (() => {
         }
       });
     }
+    retryFailedRun(conversationId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/${conversationId}/retry`,
+        {
+          signal: options.signal
+        }
+      );
+    }
     resumeStream(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       return this.http.stream(`/pods/${podId}/conversations/${conversationId}/stream`, {
         signal: options.signal,
+        params: { agent_run_id: options.agent_run_id },
         headers: {
           Accept: "text/event-stream"
         }
@@ -11191,9 +11415,9 @@ var LemmaClient = (() => {
      * Save Widget As App
      * Promote a conversation widget into a persisted app.
      *
-     * The widget and the app are the same artifact at two lifecycle stages: this
-     * fetches the widget's stored HTML and deploys it as the app's bundle —
-     * identical to what was shown.
+     * The widget and the app share one source artifact at two lifecycle stages. This
+     * fetches the stored fragment, preserves it, and deploys it in the standalone
+     * document wrapper (without conversation-only padding or height messaging).
      * @param podId
      * @param requestBody
      * @returns AppDetailResponse Successful Response
@@ -11543,6 +11767,53 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Detach Document Markdown
+     * Remove a document's user-provided markdown so it reverts to extraction.
+     * @param podId
+     * @param path
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static fileMarkdownDetach(podId, path) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/pods/{pod_id}/datastore/files/by-path/markdown",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "path": path
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Attach Document Markdown
+     * Attach user-authored markdown and referenced images to a document.
+     *
+     * The source file remains unchanged; the markdown is indexed for agent use.
+     * @param podId
+     * @param formData
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static fileMarkdownAttach(podId, formData) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/pods/{pod_id}/datastore/files/by-path/markdown",
+        path: {
+          "pod_id": podId
+        },
+        formData,
+        mediaType: "multipart/form-data",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List a document's derived child files
      * @param podId
      * @param path
@@ -11728,21 +11999,35 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/files.ts
+  function trimLeadingSlashes(value) {
+    let start = 0;
+    while (start < value.length && value[start] === "/") {
+      start += 1;
+    }
+    return value.slice(start);
+  }
+  function trimTrailingSlashes(value) {
+    let end = value.length;
+    while (end > 0 && value[end - 1] === "/") {
+      end -= 1;
+    }
+    return value.slice(0, end);
+  }
   function joinDatastorePath(basePath, leaf) {
-    const normalizedLeaf = leaf.replace(/^\/+/, "");
+    const normalizedLeaf = trimLeadingSlashes(leaf);
     const trimmedBase = (basePath != null ? basePath : "/").trim();
     const normalizedBase = trimmedBase.length > 0 ? trimmedBase : "/";
     if (normalizedBase === "/") {
       return `/${normalizedLeaf}`;
     }
-    return `${normalizedBase.replace(/\/+$/, "")}/${normalizedLeaf}`;
+    return `${trimTrailingSlashes(normalizedBase)}/${normalizedLeaf}`;
   }
   function getDirectoryPath(path) {
     const normalized = path.trim();
     if (!normalized || normalized === "/") {
       return "/";
     }
-    const withoutTrailing = normalized.replace(/\/+$/, "");
+    const withoutTrailing = trimTrailingSlashes(normalized);
     const index = withoutTrailing.lastIndexOf("/");
     if (index <= 0) {
       return "/";
@@ -11750,7 +12035,7 @@ var LemmaClient = (() => {
     return withoutTrailing.slice(0, index);
   }
   function getBaseName(path) {
-    const normalized = path.trim().replace(/\/+$/, "");
+    const normalized = trimTrailingSlashes(path.trim());
     const index = normalized.lastIndexOf("/");
     if (index === -1) {
       return normalized;
@@ -11786,6 +12071,24 @@ var LemmaClient = (() => {
           );
         },
         markdown: (path, options = {}) => this.children.content(`${path}/document.md`, options)
+      });
+      // Bring-your-own markdown: replace a document's agent-facing `document.md`
+      // (and its referenced images) with a user-authored version, or drop it to
+      // revert to extraction. `attach` applies to non-markdown documents (PDF,
+      // Word, HTML, …); companion images are named to match the markdown's
+      // `![](fig.png)` references and served as sibling child artifacts.
+      __publicField(this, "markdown", {
+        attach: (path, markdown, options = {}) => {
+          const formData = {
+            path,
+            data: markdown,
+            images: options.images
+          };
+          return this.client.request(
+            () => FilesService.fileMarkdownAttach(this.podId(), formData)
+          );
+        },
+        detach: (path) => this.client.request(() => FilesService.fileMarkdownDetach(this.podId(), path))
       });
     }
     list(options = {}) {
@@ -12133,7 +12436,9 @@ var LemmaClient = (() => {
       });
       __publicField(this, "runs", {
         create: (name, options = {}) => this.client.request(() => {
-          const payload = { input_data: options.input };
+          const payload = {
+            input_data: options.input
+          };
           return FunctionsService.functionRun(this.podId(), name, payload);
         }),
         list: (name, params = {}) => this.client.request(() => {
@@ -12182,10 +12487,7 @@ var LemmaClient = (() => {
         method: "POST",
         url: "/icons/upload",
         formData,
-        mediaType: "multipart/form-data",
-        errors: {
-          422: `Validation Error`
-        }
+        mediaType: "multipart/form-data"
       });
     }
     /**
@@ -12393,27 +12695,6 @@ var LemmaClient = (() => {
       return request(OpenAPI, {
         method: "GET",
         url: "/organizations/{organization_id}/connectors/accounts/{account_id}",
-        path: {
-          "organization_id": organizationId,
-          "account_id": accountId
-        },
-        errors: {
-          422: `Validation Error`
-        }
-      });
-    }
-    /**
-     * Get Credentials
-     * Get the credentials for a specific account
-     * @param organizationId
-     * @param accountId
-     * @returns AccountCredentialsResponseSchema Successful Response
-     * @throws ApiError
-     */
-    static connectorAccountCredentialsGet(organizationId, accountId) {
-      return request(OpenAPI, {
-        method: "GET",
-        url: "/organizations/{organization_id}/connectors/accounts/{account_id}/credentials",
         path: {
           "organization_id": organizationId,
           "account_id": accountId
@@ -12779,10 +13060,6 @@ var LemmaClient = (() => {
           payload
         )),
         get: (organizationId, accountId) => this.client.request(() => ConnectorsService.connectorAccountGet(
-          organizationId,
-          accountId
-        )),
-        credentials: (organizationId, accountId) => this.client.request(() => ConnectorsService.connectorAccountCredentialsGet(
           organizationId,
           accountId
         )),
@@ -14005,14 +14282,62 @@ var LemmaClient = (() => {
   // src/openapi_client/services/AgentSurfacesService.ts
   var AgentSurfacesService = class {
     /**
+     * List Available Surfaces
+     * The connectable-surface catalog: every surface platform with its connector,
+     * supported credential modes, and the schema to connect an account. Platform-
+     * level (no surface need exist); the pod scopes authorization only.
+     * @param podId
+     * @returns AvailableSurfacesResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceAvailable(podId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/available-surfaces",
+        path: {
+          "pod_id": podId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Surface Setup Guide
+     * The static pre-creation checklist for a platform (env/OAuth
+     * prerequisites) — works before any surface of this platform exists.
+     * @param podId
+     * @param platform
+     * @returns SurfacePlatformSetupGuide Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSetupGuide(podId, platform) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/surface-setup/{platform}",
+        path: {
+          "pod_id": podId,
+          "platform": platform
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Surfaces
+     * List surfaces in the pod. A pod may have several surfaces of the same
+     * ``platform`` (different bots/accounts, one per agent); filter by
+     * ``platform`` and/or ``agent_name`` to narrow the results.
      * @param podId
      * @param limit
      * @param pageToken
+     * @param platform
+     * @param agentName
      * @returns AgentSurfaceListResponse Successful Response
      * @throws ApiError
      */
-    static agentSurfaceList(podId, limit = 100, pageToken) {
+    static agentSurfaceList(podId, limit = 100, pageToken, platform, agentName) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/surfaces",
@@ -14021,8 +14346,34 @@ var LemmaClient = (() => {
         },
         query: {
           "limit": limit,
-          "page_token": pageToken
+          "page_token": pageToken,
+          "platform": platform,
+          "agent_name": agentName
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Surface
+     * Create a surface. ``name`` defaults to the lowercased platform — pass an
+     * explicit name to create a second surface of the same platform (e.g. a
+     * second bot routed to a different agent).
+     * @param podId
+     * @param requestBody
+     * @returns AgentSurfaceResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceCreate(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/surfaces",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -14031,17 +14382,17 @@ var LemmaClient = (() => {
     /**
      * Delete Surface
      * @param podId
-     * @param platform
+     * @param surfaceName
      * @returns void
      * @throws ApiError
      */
-    static agentSurfaceDelete(podId, platform) {
+    static agentSurfaceDelete(podId, surfaceName) {
       return request(OpenAPI, {
         method: "DELETE",
-        url: "/pods/{pod_id}/surfaces/{platform}",
+        url: "/pods/{pod_id}/surfaces/{surface_name}",
         path: {
           "pod_id": podId,
-          "platform": platform
+          "surface_name": surfaceName
         },
         errors: {
           422: `Validation Error`
@@ -14051,17 +14402,17 @@ var LemmaClient = (() => {
     /**
      * Get Surface
      * @param podId
-     * @param platform
-     * @returns any Successful Response
+     * @param surfaceName
+     * @returns AgentSurfaceResponse Successful Response
      * @throws ApiError
      */
-    static agentSurfaceGet(podId, platform) {
+    static agentSurfaceGet(podId, surfaceName) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/pods/{pod_id}/surfaces/{platform}",
+        url: "/pods/{pod_id}/surfaces/{surface_name}",
         path: {
           "pod_id": podId,
-          "platform": platform
+          "surface_name": surfaceName
         },
         errors: {
           422: `Validation Error`
@@ -14069,26 +14420,22 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Upsert Surface
-     * Create the surface for a platform, or merge updates into the existing one.
-     *
-     * A surface is unique per ``pod_id + platform``, so this single idempotent
-     * write covers create, config edits, channel routing, account/credential
-     * changes, and enable/disable. Only fields present in the request are applied
-     * on update.
+     * Update Surface
+     * Partially update a surface. Only fields present in the request are
+     * applied; the surface's platform and name are immutable.
      * @param podId
-     * @param platform
+     * @param surfaceName
      * @param requestBody
-     * @returns any Successful Response
+     * @returns AgentSurfaceResponse Successful Response
      * @throws ApiError
      */
-    static agentSurfaceUpsert(podId, platform, requestBody) {
+    static agentSurfaceUpdate(podId, surfaceName, requestBody) {
       return request(OpenAPI, {
-        method: "PUT",
-        url: "/pods/{pod_id}/surfaces/{platform}",
+        method: "PATCH",
+        url: "/pods/{pod_id}/surfaces/{surface_name}",
         path: {
           "pod_id": podId,
-          "platform": platform
+          "surface_name": surfaceName
         },
         body: requestBody,
         mediaType: "application/json",
@@ -14104,17 +14451,17 @@ var LemmaClient = (() => {
      * Returns an empty list for platforms without an enumerable channel concept
      * (Telegram groups, WhatsApp, email).
      * @param podId
-     * @param platform
+     * @param surfaceName
      * @returns AvailableSurfaceChannelsResponse Successful Response
      * @throws ApiError
      */
-    static agentSurfaceChannels(podId, platform) {
+    static agentSurfaceChannels(podId, surfaceName) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/pods/{pod_id}/surfaces/{platform}/channels",
+        url: "/pods/{pod_id}/surfaces/{surface_name}/channels",
         path: {
           "pod_id": podId,
-          "platform": platform
+          "surface_name": surfaceName
         },
         errors: {
           422: `Validation Error`
@@ -14122,23 +14469,91 @@ var LemmaClient = (() => {
       });
     }
     /**
-     * Get Surface Setup
-     * Everything needed to finish setting up this platform's surface.
+     * Send Surface Message
+     * Proactively send a message to a pod member on this surface.
      *
-     * Merges the static platform checklist with live webhook + admin-consent
-     * state. Works before the surface exists (guide only) and after (live state).
+     * Powers notifications from functions/workflows. Reuses the member's existing
+     * thread on the surface (bots can't cold-DM), so a 404 means the member has no
+     * reachable conversation here yet.
      * @param podId
-     * @param platform
+     * @param surfaceName
+     * @param requestBody
+     * @returns SurfaceSendResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSend(podId, surfaceName, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/surfaces/{surface_name}/send",
+        path: {
+          "pod_id": podId,
+          "surface_name": surfaceName
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Surface Setup
+     * Live setup state for an existing surface: static platform checklist plus
+     * webhook URL and admin-consent status. For the pre-creation checklist (before
+     * any surface exists) use ``GET /pods/{pod_id}/surface-setup/{platform}``.
+     * @param podId
+     * @param surfaceName
      * @returns SurfaceSetupResponse Successful Response
      * @throws ApiError
      */
-    static agentSurfaceSetup(podId, platform) {
+    static agentSurfaceSetup(podId, surfaceName) {
       return request(OpenAPI, {
         method: "GET",
-        url: "/pods/{pod_id}/surfaces/{platform}/setup",
+        url: "/pods/{pod_id}/surfaces/{surface_name}/setup",
         path: {
           "pod_id": podId,
-          "platform": platform
+          "surface_name": surfaceName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Start Telegram Managed Bot Setup
+     * @param podId
+     * @param requestBody
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceTelegramManagedStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-bot-setups",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Telegram Managed Bot Setup
+     * @param podId
+     * @param setupId
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceTelegramManagedGet(podId, setupId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/telegram-bot-setups/{setup_id}",
+        path: {
+          "pod_id": podId,
+          "setup_id": setupId
         },
         errors: {
           422: `Validation Error`
@@ -14152,6 +14567,17 @@ var LemmaClient = (() => {
     constructor(client) {
       __publicField(this, "client", client);
     }
+    /**
+     * The connectable-surface catalog for a pod: every platform with its
+     * connector, supported credential modes, the schema to connect an account,
+     * and whether the org can still claim the platform's Lemma-managed
+     * bot/number. Platform-level — no surface need exist.
+     */
+    available(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceAvailable(podId)
+      );
+    }
     list(podId, options = {}) {
       return this.client.request(
         () => {
@@ -14159,28 +14585,115 @@ var LemmaClient = (() => {
           return AgentSurfacesService.agentSurfaceList(
             podId,
             (_a = options.limit) != null ? _a : 100,
-            (_b = options.pageToken) != null ? _b : options.cursor
+            (_b = options.pageToken) != null ? _b : options.cursor,
+            options.platform,
+            options.agentName
           );
         }
       );
     }
-    upsert(podId, platform, payload) {
+    create(podId, payload) {
       return this.client.request(
-        () => AgentSurfacesService.agentSurfaceUpsert(podId, platform, payload)
+        () => AgentSurfacesService.agentSurfaceCreate(podId, payload)
       );
     }
-    get(podId, platform) {
-      return this.client.request(() => AgentSurfacesService.agentSurfaceGet(podId, platform));
-    }
-    delete(podId, platform) {
-      return this.client.request(() => AgentSurfacesService.agentSurfaceDelete(podId, platform));
-    }
-    setup(podId, platform) {
-      return this.client.request(() => AgentSurfacesService.agentSurfaceSetup(podId, platform));
-    }
-    channels(podId, platform) {
+    startTelegramBotSetup(podId, payload) {
       return this.client.request(
-        () => AgentSurfacesService.agentSurfaceChannels(podId, platform)
+        () => AgentSurfacesService.agentSurfaceTelegramManagedStart(podId, payload)
+      );
+    }
+    getTelegramBotSetup(podId, setupId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceTelegramManagedGet(podId, setupId)
+      );
+    }
+    update(podId, surfaceName, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceUpdate(podId, surfaceName, payload)
+      );
+    }
+    get(podId, surfaceName) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceGet(podId, surfaceName)
+      );
+    }
+    delete(podId, surfaceName) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceDelete(podId, surfaceName)
+      );
+    }
+    send(podId, surfaceName, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSend(podId, surfaceName, payload)
+      );
+    }
+    setup(podId, surfaceName) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSetup(podId, surfaceName)
+      );
+    }
+    /** Pre-creation platform checklist — works before any surface exists. */
+    setupGuide(podId, platform) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceSetupGuide(podId, platform)
+      );
+    }
+    channels(podId, surfaceName) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceChannels(podId, surfaceName)
+      );
+    }
+  };
+
+  // src/openapi_client/services/AgentSurfacesMeService.ts
+  var AgentSurfacesMeService = class {
+    /**
+     * List My Surfaces
+     * Every surface across the current user's pods, grouped by platform, with
+     * the chosen default and a ``conflict`` flag when more than one could answer.
+     * @returns UserSurfacesResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceListMine() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/surfaces/me"
+      });
+    }
+    /**
+     * Set My Default Surface
+     * Choose which surface answers the current user for a platform when several
+     * could (e.g. a shared system bot spanning pods in different orgs).
+     * @param requestBody
+     * @returns UserSurfacesResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceSetMyDefault(requestBody) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/surfaces/me/default",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/user-surfaces.ts
+  var UserSurfacesNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    /** List my surfaces across all pods, grouped by platform. */
+    list() {
+      return this.client.request(() => AgentSurfacesMeService.agentSurfaceListMine());
+    }
+    /** Choose which surface answers me on a platform when several could. */
+    setDefault(payload) {
+      return this.client.request(
+        () => AgentSurfacesMeService.agentSurfaceSetMyDefault(payload)
       );
     }
   };
@@ -14728,6 +15241,52 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * List Schedule Runs
+     * @param podId
+     * @param scheduleId
+     * @param limit
+     * @returns ScheduleRunListResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleRunList(podId, scheduleId, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/runs",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId
+        },
+        query: {
+          "limit": limit
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Retry Schedule Run
+     * @param podId
+     * @param scheduleId
+     * @param runId
+     * @returns ScheduleRunResponse Successful Response
+     * @throws ApiError
+     */
+    static scheduleRunRetry(podId, scheduleId, runId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry",
+        path: {
+          "pod_id": podId,
+          "schedule_id": scheduleId,
+          "run_id": runId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/schedules.ts
@@ -15180,7 +15739,7 @@ var LemmaClient = (() => {
      * Create a workflow definition. The graph (`nodes`/`edges`) can be included in this call to create a ready-to-run workflow in one step, or omitted to create a shell and upload the graph later with `workflow.graph.update`.
      * @param podId
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowCreate(podId, requestBody) {
@@ -15223,7 +15782,7 @@ var LemmaClient = (() => {
      * Get a single workflow definition including graph and start configuration.
      * @param podId
      * @param workflowName
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowGet(podId, workflowName) {
@@ -15245,7 +15804,7 @@ var LemmaClient = (() => {
      * @param podId
      * @param workflowName
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowUpdate(podId, workflowName, requestBody) {
@@ -15269,7 +15828,7 @@ var LemmaClient = (() => {
      * @param podId
      * @param workflowName
      * @param requestBody
-     * @returns FlowDetailResponse Successful Response
+     * @returns WorkflowDetailResponse Successful Response
      * @throws ApiError
      */
     static workflowGraphUpdate(podId, workflowName, requestBody) {
@@ -15637,6 +16196,7 @@ var LemmaClient = (() => {
       __publicField(this, "functions");
       __publicField(this, "agents");
       __publicField(this, "agentRuntime");
+      __publicField(this, "agentHost");
       __publicField(this, "conversations");
       __publicField(this, "workflows");
       __publicField(this, "apps");
@@ -15656,6 +16216,8 @@ var LemmaClient = (() => {
       __publicField(this, "podRoles");
       __publicField(this, "organizations");
       __publicField(this, "podSurfaces");
+      /** The caller's own surfaces across all pods (grouped by platform). */
+      __publicField(this, "userSurfaces");
       var _a;
       this._config = resolveConfig(overrides);
       this._currentPodId = this._config.podId;
@@ -15683,6 +16245,7 @@ var LemmaClient = (() => {
       this.functions = new FunctionsNamespace(this._generated, podIdFn);
       this.agents = new AgentsNamespace(this._generated, podIdFn, () => this.conversations);
       this.agentRuntime = new AgentRuntimeNamespace(this._generated);
+      this.agentHost = new AgentHostNamespace(this._generated);
       this.conversations = new ConversationsNamespace(this._http, podIdFn);
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
@@ -15706,6 +16269,7 @@ var LemmaClient = (() => {
       this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
       this.organizations = new OrganizationsNamespace(this._generated, this._http);
       this.podSurfaces = new PodSurfacesNamespace(this._generated);
+      this.userSurfaces = new UserSurfacesNamespace(this._generated);
     }
     /** Change the active pod ID for subsequent calls. */
     setPodId(podId) {
@@ -15723,6 +16287,9 @@ var LemmaClient = (() => {
     }
     get authUrl() {
       return this._config.authUrl;
+    }
+    get app() {
+      return this._config.app;
     }
     /**
      * Initialize the client by checking auth state.
@@ -15744,6 +16311,50 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/browser-theme.ts
+  var LEMMA_APP_THEME_MESSAGE_TYPE = "lemma-app-theme";
+  var LEMMA_THEME_EVENT = "lemma:theme";
+  var currentHostTheme = null;
+  function isHostThemeMessage(value) {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value;
+    return candidate.type === LEMMA_APP_THEME_MESSAGE_TYPE && (candidate.theme === "light" || candidate.theme === "dark") && Boolean(candidate.tokens && typeof candidate.tokens === "object");
+  }
+  function applyLemmaHostTheme(message) {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    Object.entries(message.tokens).forEach(([name, value]) => {
+      if (!name.startsWith("--lemma-app-") || typeof value !== "string" || value.length > 512) return;
+      root.style.setProperty(name, value);
+    });
+    root.dataset.lemmaTheme = message.theme;
+    root.dataset.lemmaDensity = message.density || "compact";
+    root.classList.toggle("dark", message.theme === "dark");
+    root.style.colorScheme = message.theme;
+    currentHostTheme = message;
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+      window.dispatchEvent(new CustomEvent(LEMMA_THEME_EVENT, { detail: message }));
+    }
+  }
+  function getLemmaHostTheme() {
+    return currentHostTheme;
+  }
+  function subscribeLemmaHostTheme(listener) {
+    if (typeof window === "undefined") return () => void 0;
+    const handleTheme = (event) => {
+      listener(event.detail);
+    };
+    window.addEventListener(LEMMA_THEME_EVENT, handleTheme);
+    if (currentHostTheme) listener(currentHostTheme);
+    return () => window.removeEventListener(LEMMA_THEME_EVENT, handleTheme);
+  }
+  if (typeof window !== "undefined" && window.parent !== window) {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent || !isHostThemeMessage(event.data)) return;
+      applyLemmaHostTheme(event.data);
+    });
+  }
+
   // src/browser.ts
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
@@ -15756,7 +16367,13 @@ var LemmaClient = (() => {
       getTestingToken,
       resolveSafeRedirectUri,
       setTestingToken,
-      ApiError
+      ApiError,
+      POD_DEFAULT_AGENT_SELECTOR,
+      LEMMA_APP_THEME_MESSAGE_TYPE,
+      LEMMA_THEME_EVENT,
+      applyLemmaHostTheme,
+      getLemmaHostTheme,
+      subscribeLemmaHostTheme
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;

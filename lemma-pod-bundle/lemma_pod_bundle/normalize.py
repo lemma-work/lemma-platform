@@ -231,14 +231,29 @@ def _normalize_surface_payload(surface: dict[str, Any]) -> dict[str, Any]:
     }
     if identity_entry:
         behavior_config["identity"] = identity_entry
+    telegram = config.get("telegram") or {}
+    app_name = str(telegram.get("app_name") or "").strip()
+    if app_name:
+        behavior_config["telegram"] = {"app_name": app_name}
 
     status = str(surface.get("status") or "").upper()
+    # Prefer the surface's own pod-unique name so several surfaces of the same
+    # platform (e.g. two Slack bots) round-trip as distinct resources instead of
+    # collapsing onto the platform slug and dropping all but one. Falls back to the
+    # lowercased platform for a legacy surface with no explicit name.
+    resolved_name = str(surface.get("name") or "").strip() or platform.lower()
     payload: dict[str, Any] = {
-        "name": platform.lower(),
+        "name": resolved_name,
         "platform": platform,
         "default_agent_name": surface.get("agent_name"),
         "credential_mode": surface.get("credential_mode"),
         "account_id": surface.get("account_id"),
+        # Ground-truth connector identity for the bound account, resolved by
+        # the exporter from the account itself (never inferred from the
+        # surface's own platform) — carried through so the portable-variable
+        # tokenizer can stamp every account variable with connector/provider.
+        "connector_id": surface.get("connector_id"),
+        "provider": surface.get("provider"),
         "is_enabled": status != "INACTIVE",
     }
     if behavior_config:

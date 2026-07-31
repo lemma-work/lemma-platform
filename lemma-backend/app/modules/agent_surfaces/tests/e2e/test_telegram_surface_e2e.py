@@ -187,6 +187,50 @@ async def test_telegram_group_mention_routes_and_replies(
     assert "E2E agent reply" in telegram_messages[-1]["text"]
 
 
+async def test_telegram_group_mention_from_non_member_is_ignored(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    db_session: AsyncSession,
+    test_pod,
+    fake_telegram,
+    message_store,
+    monkeypatch,
+):
+    """Group mentions stay pod-member gated and never post onboarding/access
+    prompts into the group."""
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.agent_surfaces.events.handlers import (
+        build_surface_event_handler,
+    )
+    from app.modules.test_support.e2e_authz import signup_user
+
+    _wire_native_telegram(monkeypatch, fake_telegram)
+    pod_id = test_pod["id"]
+    await _create_surface(authenticated_client, pod_id, config={"type": "TELEGRAM"})
+
+    outsider = await signup_user(async_client, "telegram-group-outsider")
+    await _seed_external_user(
+        db_session,
+        platform="TELEGRAM",
+        external_user_id="900101",
+        resolved_user_id=UUID(outsider["id"]),
+    )
+
+    payload = _telegram_group_payload(
+        text="@lemmabot summarize this",
+        message_id=73,
+        sender_id=900101,
+        chat_id=-1004444444444,
+    )
+    handler = build_surface_event_handler(SqlAlchemyUnitOfWork(db_session))
+    context = await handler.prepare_ingress(
+        SurfacePlatformWebhookIngress(source="telegram", payload=payload, headers={})
+    )
+
+    assert context is None
+    assert message_store.get_all("TELEGRAM") == []
+
+
 async def test_telegram_group_reply_to_bot_continues_without_mention(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,

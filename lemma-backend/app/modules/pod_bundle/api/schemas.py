@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.modules.pod_bundle.domain.state import (
     BundleSourceKind,
@@ -16,6 +16,7 @@ from app.modules.pod_bundle.domain.state import (
     ImportStatus,
     Progress,
     PublishState,
+    PublishMode,
     PublishStatus,
 )
 
@@ -134,12 +135,21 @@ class VariableSpecResponse(BaseModel):
     description: str | None = None
     required: bool = False
     default: str | None = None
-    platform: str | None = Field(
+    connector: str | None = Field(
         default=None,
         description=(
-            "For a connector account variable, the platform the account must "
+            "For a connector account variable, the connector the account must "
             "belong to (e.g. 'slack'), so the importer can connect the right "
             "connector. Null for non-connector variables."
+        ),
+    )
+    provider: str | None = Field(
+        default=None,
+        description=(
+            "For a connector account variable, the auth provider backing the "
+            "connector ('LEMMA' or 'COMPOSIO'), so the importer connects/selects "
+            "an account through the right provider. Null for non-connector "
+            "variables."
         ),
     )
 
@@ -177,7 +187,8 @@ class ImportPlanResponse(BaseModel):
                     description=v.description,
                     required=v.required,
                     default=v.default,
-                    platform=v.platform,
+                    connector=v.connector,
+                    provider=v.provider,
                 )
                 for v in plan.variables
             ],
@@ -228,7 +239,7 @@ class ApplyImportRequest(BaseModel):
 
 
 class ImportStatusResponse(BaseModel):
-    """Status of a pod import job (pure Redis read)."""
+    """Status of a durable pod import job."""
 
     import_id: UUID
     pod_id: UUID
@@ -238,6 +249,12 @@ class ImportStatusResponse(BaseModel):
     progress: ExportProgressResponse = Field(default_factory=ExportProgressResponse)
     events_url: str
     error: str | None = None
+    error_code: str | None = None
+    retryable: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    cancel_requested_at: datetime | None = None
+    current_step: int | None = None
+    committed_steps: list[int] = Field(default_factory=list)
 
     @classmethod
     def from_state(cls, state: ImportState) -> "ImportStatusResponse":
@@ -252,6 +269,12 @@ class ImportStatusResponse(BaseModel):
                 f"/pods/{state.pod_id}/bundle/imports/{state.import_id}/events"
             ),
             error=state.error,
+            error_code=state.error_code,
+            retryable=state.retryable,
+            warnings=state.warnings,
+            cancel_requested_at=state.cancel_requested_at,
+            current_step=state.current_step,
+            committed_steps=state.committed_steps,
         )
 
 
@@ -261,14 +284,38 @@ class ImportStatusResponse(BaseModel):
 class PublishStartRequest(BaseModel):
     """Body for publishing a pod to GitHub."""
 
-    repo_name: str = Field(..., min_length=1, description="Name for the new GitHub repo.")
+    repo_name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="GitHub repository name (letters, numbers, dot, dash, underscore).",
+    )
+    mode: PublishMode = Field(
+        default=PublishMode.CREATE,
+        description=(
+            "CREATE refuses an existing repository. UPDATE requires an existing "
+            "repository and replaces only Lemma-managed files."
+        ),
+    )
     private: bool = Field(default=False, description="Create the repo as private.")
-    account_id: UUID | None = Field(
-        default=None, description="GitHub connector account to publish as (optional)."
+    account_id: UUID = Field(
+        ..., description="GitHub connector account to publish as."
     )
     ai_readme: bool = Field(
         default=False, description="Polish the generated README with the system model."
     )
+
+    @field_validator("repo_name")
+    @classmethod
+    def validate_repo_name(cls, value: str) -> str:
+        import re
+
+        if value in {".", ".."} or re.fullmatch(r"[A-Za-z0-9_.-]+", value) is None:
+            raise ValueError(
+                "Repository names may contain only letters, numbers, dot, dash, "
+                "and underscore."
+            )
+        return value
 
 
 class PublishStatusResponse(BaseModel):
@@ -278,10 +325,16 @@ class PublishStatusResponse(BaseModel):
     pod_id: UUID
     status: PublishStatus
     repo_name: str
+    mode: PublishMode
+    private: bool
+    account_id: UUID | None
     repo_url: str | None = None
     progress: ExportProgressResponse = Field(default_factory=ExportProgressResponse)
     events_url: str
     error: str | None = None
+    error_code: str | None = None
+    retryable: bool = False
+    warnings: list[str] = Field(default_factory=list)
 
     @classmethod
     def from_state(cls, state: PublishState) -> "PublishStatusResponse":
@@ -290,8 +343,14 @@ class PublishStatusResponse(BaseModel):
             pod_id=state.pod_id,
             status=state.status,
             repo_name=state.repo_name,
+            mode=state.mode,
+            private=state.private,
+            account_id=state.account_id,
             repo_url=state.repo_url,
             progress=ExportProgressResponse.from_domain(state.progress),
             events_url=f"/pods/{state.pod_id}/bundle/publishes/{state.publish_id}/events",
             error=state.error,
+            error_code=state.error_code,
+            retryable=state.retryable,
+            warnings=state.warnings,
         )

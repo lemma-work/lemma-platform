@@ -13,4 +13,3 @@ export type WaitUntilNode = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

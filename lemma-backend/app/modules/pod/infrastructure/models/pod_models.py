@@ -1,11 +1,12 @@
 from __future__ import annotations
-from uuid import UUID
 from datetime import datetime
+from typing import Any
+from uuid import UUID
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.infrastructure.db.base import UUIDAuditBase
-from app.modules.identity.domain.organization_entities import OrganizationRole
+from app.modules.identity.contracts import OrganizationRole
 from app.modules.pod.domain.pod_entities import (
     PodJoinRequestEntity,
     PodJoinRequestStatus,
@@ -13,11 +14,6 @@ from app.modules.pod.domain.pod_entities import (
     PodEntity,
     PodMemberEntity,
 )
-
-from app.modules.identity.infrastructure.models.organization_models import (
-    OrganizationMember,
-)
-
 
 class Pod(UUIDAuditBase):
     __tablename__ = "pods"
@@ -41,7 +37,6 @@ class Pod(UUIDAuditBase):
         nullable=False,
         index=True,
     )
-
     members: Mapped[list[PodMember]] = relationship(
         "PodMember",
         back_populates="pod",
@@ -77,9 +72,7 @@ class PodMember(UUIDAuditBase):
     )
 
     pod: Mapped[Pod] = relationship("Pod", back_populates="members")
-    organization_member: Mapped[OrganizationMember] = relationship(
-        "OrganizationMember",
-    )
+    organization_member: Mapped[Any] = relationship("OrganizationMember")
 
     __table_args__ = (
         Index(

@@ -9,12 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import type {
-  AgentHarnessListResponse,
   AgentRuntimeConfig,
   AgentRuntimeProfileListResponse,
   AvailableModelInfo,
 } from "lemma-sdk";
-import { Check, ChevronDown, Clock, Search, Settings2, Sparkles, TerminalSquare } from "lucide-react";
+import { Check, ChevronDown, Clock, Search, Settings2, Sparkles, TerminalSquare } from "@/components/ui/icons";
 
 import {
   Dialog,
@@ -25,9 +24,11 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
-  HARNESS_LOGOS,
-  isCodingAgentKind,
+  harnessLogo,
+  isLocalAgentKind,
   modelPathHint,
+  profileHarnessKey,
+  resolveRuntimeModelName,
   runtimeCatalogToModelOptions,
   runtimeKey,
   shortModelName,
@@ -65,7 +66,8 @@ function recordRecentKey(key: string): string[] {
 
 interface ProviderGroup {
   key: string;
-  harnessKind: string | null;
+  /** Which coding agent this group runs, when it is one — e.g. "claude-code". */
+  harnessKey: string | null;
   displayName: string;
   isCodingAgent: boolean;
   options: AvailableModelInfo[];
@@ -77,10 +79,10 @@ function modelRuntime(option: AvailableModelInfo): AgentRuntimeConfig | null {
   return null;
 }
 
-function providerName(harnessKind?: string | null): string {
-  if (!harnessKind) return "Models";
-  return harnessKind
-    .split("_")
+function providerName(harnessKey?: string | null): string {
+  if (!harnessKey) return "Models";
+  return harnessKey
+    .split(/[-_]/)
     .filter(Boolean)
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
@@ -109,11 +111,16 @@ export interface ModelPickerProps extends Omit<ComponentPropsWithoutRef<"div">, 
   autoSubtitle?: ReactNode;
   /** Short name of the model Auto resolves to — shown on the trigger as "Auto · <model>". */
   autoModelLabel?: string;
+  /** Optional compact trigger text when Auto is selected. The dialog row still uses autoLabel. */
+  autoTriggerLabel?: ReactNode;
   /** Footer hint, e.g. "Just for this chat" or "Default for this agent". */
   scopeHint?: ReactNode;
   /** Where "Manage models" links — connect providers, set up coding agents. */
   manageHref?: string;
   compact?: boolean;
+  /** Optional classes for the trigger button and its visible label. */
+  triggerClassName?: string;
+  triggerLabelClassName?: string;
   onChange: (value: string | null, runtime?: AgentRuntimeConfig | null) => void;
 }
 
@@ -134,9 +141,12 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
     autoLabel = "Default",
     autoSubtitle = "Use the workspace default",
     autoModelLabel,
+    autoTriggerLabel,
     scopeHint = "Just for this chat",
     manageHref,
     compact = false,
+    triggerClassName,
+    triggerLabelClassName,
     onChange,
     className,
     ...props
@@ -175,17 +185,18 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
       : null;
   // On an explicit pick, show the model. On Auto, show what it resolves to —
   // "Auto · <model>" — so a configured default is visible without opening the picker.
-  const autoTriggerLabel = autoModelLabel
+  const resolvedAutoTriggerLabel = autoTriggerLabel ?? (autoModelLabel
     ? `${typeof autoLabel === "string" ? autoLabel : "Auto"} · ${autoModelLabel}`
-    : autoLabel;
+    : autoLabel);
   // With Auto hidden, an unset value has nothing to inherit — prompt a pick.
-  const triggerLabel = selectedModelLabel ?? (allowAuto ? autoTriggerLabel : "Choose a model");
+  const triggerLabel = selectedModelLabel ?? (allowAuto ? resolvedAutoTriggerLabel : "Choose a model");
 
   const groups = useMemo<ProviderGroup[]>(() => {
     const byKey = new Map<string, ProviderGroup>();
     options.forEach((option) => {
       const optionRuntime = modelRuntime(option);
       const harnessKind = option.harness_kind ?? null;
+      const harnessKey = profileHarnessKey(option.profile);
       const key = optionRuntime?.profile_id ?? option.profile_id ?? harnessKind ?? "MODELS";
       const existing = byKey.get(key);
       if (existing) {
@@ -194,9 +205,9 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
       }
       byKey.set(key, {
         key,
-        harnessKind,
-        displayName: option.agentRuntime?.name ?? option.profile?.name ?? providerName(harnessKind),
-        isCodingAgent: isCodingAgentKind(harnessKind),
+        harnessKey,
+        displayName: option.agentRuntime?.name ?? option.profile?.name ?? providerName(harnessKey),
+        isCodingAgent: isLocalAgentKind(harnessKind),
         options: [option],
       });
     });
@@ -208,7 +219,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
     if (!q) return groups;
     return groups
       .map((group) => {
-        const groupMatches = `${group.displayName} ${group.harnessKind ?? ""}`.toLowerCase().includes(q);
+        const groupMatches = `${group.displayName} ${group.harnessKey ?? ""}`.toLowerCase().includes(q);
         if (groupMatches) return group;
         const matchingOptions = group.options.filter((option) => {
           const optionRuntime = modelRuntime(option);
@@ -280,6 +291,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
         className={cn(
           "lemma-assistant-runtime-trigger-button inline-flex max-w-[240px] items-center rounded-lg border border-[var(--row-border)] bg-[var(--field-bg)] text-left text-sm font-medium shadow-none transition-colors hover:border-[var(--field-border-hover)] disabled:cursor-not-allowed disabled:opacity-55",
           compact ? "h-8 min-w-0 gap-1.5 px-2" : "h-9 min-w-28 gap-2 px-2.5",
+          triggerClassName,
         )}
         aria-label="Conversation model"
       >
@@ -291,7 +303,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
         >
           Model
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-[var(--text-primary)]">
+        <span className={cn("min-w-0 flex-1 truncate text-sm font-semibold text-[var(--text-primary)]", triggerLabelClassName)}>
           {triggerLabel}
         </span>
         <ChevronDown className="size-3.5 shrink-0 text-[var(--text-tertiary)]" />
@@ -393,7 +405,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
                 <ProviderHeader icon={<TerminalSquare className="size-3.5" />} label="Local agents" />
                 <div className="mt-1 flex flex-col gap-2">
                   {codingGroups.map((group) => {
-                    const logo = group.harnessKind ? HARNESS_LOGOS[group.harnessKind] : undefined;
+                    const logo = harnessLogo(group.harnessKey);
                     return (
                       <ProviderCard
                         key={group.key}
@@ -469,7 +481,6 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
 
 export interface RuntimeModelPickerProps {
   catalog?: AgentRuntimeProfileListResponse;
-  availableHarnesses?: AgentHarnessListResponse;
   /** The default the "Auto" choice falls back to — shown under the Auto row. */
   defaultRuntime?: AgentRuntimeConfig | null;
   /** Current selection. null = inherit the default (Auto). */
@@ -480,6 +491,8 @@ export interface RuntimeModelPickerProps {
   scopeHint?: ReactNode;
   manageHref?: string;
   className?: string;
+  triggerClassName?: string;
+  triggerLabelClassName?: string;
   /** Dialog heading. Defaults to "Choose a model". */
   title?: string;
   /** Dialog subheading — say what picking here actually sets. */
@@ -488,6 +501,8 @@ export interface RuntimeModelPickerProps {
   autoLabel?: ReactNode;
   /** Subtitle for that row. Defaults to what the default currently resolves to. */
   autoSubtitle?: ReactNode;
+  /** Optional compact trigger text when the inherited default is selected. */
+  autoTriggerLabel?: ReactNode;
   /** Show the "inherit the default" (Auto) row. Off for surfaces that set the
    *  default themselves. Defaults to true. */
   allowAuto?: boolean;
@@ -502,7 +517,6 @@ export interface RuntimeModelPickerProps {
  */
 export function RuntimeModelPicker({
   catalog,
-  availableHarnesses,
   defaultRuntime,
   value,
   onChange,
@@ -511,17 +525,20 @@ export function RuntimeModelPicker({
   scopeHint,
   manageHref,
   className,
+  triggerClassName,
+  triggerLabelClassName,
   title,
   description,
   autoLabel,
   autoSubtitle,
+  autoTriggerLabel,
   allowAuto,
 }: RuntimeModelPickerProps) {
-  const options = useMemo(
-    () => runtimeCatalogToModelOptions(catalog, availableHarnesses),
-    [catalog, availableHarnesses],
-  );
-  const defaultModelLabel = defaultRuntime?.model_name ? shortModelName(defaultRuntime.model_name) : undefined;
+  const options = useMemo(() => runtimeCatalogToModelOptions(catalog), [catalog]);
+  // The default usually pins only a profile, so ask the catalog which model
+  // that profile will actually run rather than showing a nameless "Default".
+  const defaultModelName = resolveRuntimeModelName(defaultRuntime, catalog);
+  const defaultModelLabel = defaultModelName ? shortModelName(defaultModelName) : undefined;
   // "Currently <model>" signals this tracks the default — it'll move if the
   // default changes, unlike pinning a specific model below. Callers that *are*
   // the default (e.g. the pod-default setting) override this, since "use the
@@ -531,6 +548,8 @@ export function RuntimeModelPicker({
   return (
     <ModelPicker
       className={className}
+      triggerClassName={triggerClassName}
+      triggerLabelClassName={triggerLabelClassName}
       value={value?.model_name ?? null}
       runtime={value ?? null}
       options={options}
@@ -538,6 +557,7 @@ export function RuntimeModelPicker({
       autoLabel={autoLabel}
       autoSubtitle={resolvedAutoSubtitle}
       autoModelLabel={defaultModelLabel}
+      autoTriggerLabel={autoTriggerLabel}
       allowAuto={allowAuto}
       scopeHint={scopeHint}
       manageHref={manageHref}

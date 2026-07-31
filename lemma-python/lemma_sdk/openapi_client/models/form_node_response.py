@@ -118,7 +118,7 @@ class FormNodeResponse:
                 position_type_0 = FormNodeResponsePositionType0.from_dict(data)
 
                 return position_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FormNodeResponsePositionType0 | None | Unset, data)
 

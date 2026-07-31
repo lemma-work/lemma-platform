@@ -5,7 +5,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.slack.models import (
     SlackRecentChannelMessagesParams,
     SlackRecentChannelMessagesResult,
@@ -31,8 +31,10 @@ def build_slack_surface_toolset(
         """Get recent messages from the current Slack channel, including any shared files."""
         try:
             return await service.get_recent_channel_messages(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("Slack tool slack_get_recent_channel_messages failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.slack.history_failed", exc_info=True
+            )
             return SlackRecentChannelMessagesResult(
                 success=False,
                 error="Slack channel history lookup failed unexpectedly.",
@@ -45,8 +47,11 @@ def build_slack_surface_toolset(
         """Search recent messages in the current Slack channel without leaving the active agent conversation."""
         try:
             return await service.search_current_channel(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("Slack tool slack_search_current_channel failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.slack.search_failed",
+                exc_info=True,
+            )
             return SlackSearchChannelMessagesResult(
                 success=False,
                 error="Slack channel search failed unexpectedly.",

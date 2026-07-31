@@ -8,8 +8,8 @@ from fastapi import status
 
 from app.modules.function.domain.entities import FunctionRunStatus
 from app.modules.function.infrastructure.models import FunctionRunModel
-from app.modules.workflow.domain.run import FlowRunStatus
-from app.modules.workflow.infrastructure.models import FlowRunModel
+from app.modules.workflow.domain.run import WorkflowRunStatus
+from app.modules.workflow.infrastructure.models import WorkflowRunModel
 
 pytestmark = pytest.mark.e2e
 
@@ -212,13 +212,13 @@ async def test_run_lists_are_latest_first_page_to_older_and_return_summaries(
         await db_session.flush()
         function_run_ids.append(str(function_run.id))
 
-        workflow_run = FlowRunModel(
+        workflow_run = WorkflowRunModel(
             flow_id=UUID(workflow["id"]),
             pod_id=UUID(pod_id),
             user_id=UUID(fixed_test_user["id"]),
             start_type="MANUAL",
             start_payload={"large": "payload"},
-            status=FlowRunStatus.COMPLETED.value,
+            status=WorkflowRunStatus.COMPLETED.value,
             execution_context={"nodes": {"node": {"large": "context"}}},
             step_history=[
                 {

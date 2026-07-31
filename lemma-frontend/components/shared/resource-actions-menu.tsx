@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { MoreHorizontal, Trash2 } from 'lucide-react';
+import { MoreHorizontal, Trash2 } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import {

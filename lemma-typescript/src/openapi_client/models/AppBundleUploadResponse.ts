@@ -7,4 +7,3 @@ export type AppBundleUploadResponse = {
     app: AppDetailResponse;
     message: string;
 };
-

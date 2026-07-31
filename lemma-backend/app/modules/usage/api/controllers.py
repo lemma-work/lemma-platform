@@ -9,9 +9,7 @@ from fastapi import APIRouter, Depends, Request, status
 
 from app.core.api.dependencies import UoWDep
 from app.modules.usage.domain.errors import UsageAccessDeniedError
-from app.modules.identity.domain.organization_entities import OrganizationRole
-from app.modules.identity.domain.user_entities import UserEntity
-from app.modules.identity.infrastructure.organization_repositories import OrganizationRepository
+from app.modules.identity.contracts import AuthenticatedUser as UserEntity
 from app.modules.usage.api.dependencies import UsageServiceDep
 from app.modules.usage.api.schemas import (
     UsageLimitsResponse,
@@ -94,9 +92,15 @@ async def _require_usage_org_access(
     organization_id: UUID,
     uow: UoWDep,
 ) -> None:
-    org_repo = OrganizationRepository(uow)
-    member = await org_repo.get_member(user.id, organization_id)
-    if not member or member.role not in {OrganizationRole.ORG_OWNER, OrganizationRole.ORG_EDITOR}:
+    from app.composition.identity_notifications import (
+        user_can_view_organization_usage,
+    )
+
+    if not await user_can_view_organization_usage(
+        uow,
+        user_id=user.id,
+        organization_id=organization_id,
+    ):
         raise UsageAccessDeniedError(
             "Only organization owners and editors can view usage"
         )

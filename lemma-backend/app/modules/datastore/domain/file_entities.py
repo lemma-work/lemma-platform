@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -19,6 +20,12 @@ class FileStatus(str, Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    # Terminal failure: the file exhausted its processing-retry budget (or is
+    # unprocessable, e.g. too large). Unlike FAILED, the recovery cron never
+    # re-drives a FAILED_PERMANENT file, so it cannot rejoin the poison queue.
+    # A fresh upload / content update re-opens it (status -> PENDING, attempts
+    # reset) via mark_content_updated / set_search_enabled below.
+    FAILED_PERMANENT = "FAILED_PERMANENT"
 
 
 class FileKind(str, Enum):
@@ -48,6 +55,7 @@ class DatastoreFileEntity(AggregateRoot):
     indexed_at: datetime | None = None
     last_processing_error: str | None = None
     processing_attempts: int = 0
+    content_sha256: str | None = None
     allowed_actions: list[str] = Field(default_factory=list)
 
     @property
@@ -64,7 +72,7 @@ class DatastoreFileEntity(AggregateRoot):
             return self.mime_type
         if self.is_folder:
             return "application/x-directory"
-        from app.modules.agent.domain.file_entities import get_content_type
+        from app.core.file_types import get_content_type
 
         return get_content_type(self.name)
 
@@ -100,6 +108,7 @@ class DatastoreFileEntity(AggregateRoot):
             self.status = FileStatus.PENDING
             self.indexed_at = None
             self.processing_attempts = 0
+            self.last_processing_error = None
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
@@ -137,6 +146,7 @@ class DatastoreFileEntity(AggregateRoot):
             self.indexed_at = None
             # New content gets a fresh processing-retry budget.
             self.processing_attempts = 0
+            self.last_processing_error = None
         else:
             self.status = FileStatus.NOT_REQUIRED
             self.indexed_at = None
@@ -161,6 +171,11 @@ class DatastoreFileEntity(AggregateRoot):
         self.status = FileStatus.FAILED
         self.last_processing_error = error
 
+    def mark_failed_permanent(self, error: str | None = None) -> None:
+        """Terminal failure the recovery cron never re-drives (see FileStatus)."""
+        self.status = FileStatus.FAILED_PERMANENT
+        self.last_processing_error = error
+
     def mark_deleted(self, actor_id: UUID | None = None) -> None:
         from app.modules.datastore.domain.events import DatastoreFileDeletedEvent
 
@@ -182,7 +197,7 @@ class DatastoreFileUpdateEntity(BaseModel):
     metadata: dict[str, Any] | None = None
     visibility: str | None = None
     search_enabled: bool | None = None
-    content: bytes | None = None
+    content: bytes | Path | None = None
 
 
 class DatastoreFileSearchResult(BaseModel):

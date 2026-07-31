@@ -12,4 +12,3 @@ export type ManualWorkflowStartOutput = {
      */
     type?: string;
 };
-

@@ -30,22 +30,26 @@ class AuthConfigRepository(
         if message_bus is not None:
             self.uow.set_message_bus(message_bus)
 
-    def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
+    async def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
         data = entity.model_dump(exclude_unset=True)
-        data["provider_config"] = self.encryption.encrypt_json(entity.provider_config)
+        data["provider_config"] = await self.encryption.encrypt_json_async(
+            entity.provider_config
+        )
         data["metadata_"] = data.pop("metadata", None)
         return self.model_cls(**data)
 
-    def _to_entity(self, instance: AuthConfig) -> AuthConfigEntity:
+    async def _to_entity(self, instance: AuthConfig) -> AuthConfigEntity:
         entity = instance.to_entity()
-        entity.provider_config = self.encryption.decrypt_json(entity.provider_config)
+        entity.provider_config = await self.encryption.decrypt_json_async(
+            entity.provider_config
+        )
         return entity
 
     async def create(self, entity: AuthConfigEntity) -> AuthConfigEntity:
-        instance = self._to_model(entity)
+        instance = await self._to_model(entity)
         self.session.add(instance)
         await self.session.flush()
-        return self._to_entity(instance)
+        return await self._to_entity(instance)
 
     async def update(self, entity: AuthConfigEntity) -> AuthConfigEntity:
         stmt = select(AuthConfig).where(AuthConfig.id == entity.id)
@@ -62,17 +66,19 @@ class AuthConfigRepository(
             else str(entity.config_source)
         )
         instance.status = entity.status.value if hasattr(entity.status, "value") else str(entity.status)
-        instance.provider_config = self.encryption.encrypt_json(entity.provider_config)
+        instance.provider_config = await self.encryption.encrypt_json_async(
+            entity.provider_config
+        )
         instance.metadata_ = entity.metadata
         instance.updated_by_user_id = entity.updated_by_user_id
         await self.session.flush()
-        return self._to_entity(instance)
+        return await self._to_entity(instance)
 
     async def get(self, id: UUID) -> AuthConfigEntity | None:
         stmt = select(AuthConfig).where(AuthConfig.id == id)
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def get_active_by_org_and_app(
         self, organization_id: UUID, connector_id: str
@@ -84,7 +90,7 @@ class AuthConfigRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def get_active_by_org_and_name(
         self, organization_id: UUID, name: str
@@ -96,7 +102,7 @@ class AuthConfigRepository(
         )
         result = await self.session.execute(stmt)
         instance = result.scalars().first()
-        return self._to_entity(instance) if instance else None
+        return await self._to_entity(instance) if instance else None
 
     async def list_by_org(
         self,
@@ -114,7 +120,7 @@ class AuthConfigRepository(
         if len(instances) > limit:
             next_cursor = instances[limit - 1].id
             instances = instances[:limit]
-        return [self._to_entity(instance) for instance in instances], next_cursor
+        return [await self._to_entity(instance) for instance in instances], next_cursor
 
     async def delete(self, id: UUID) -> bool:
         stmt = select(AuthConfig).where(AuthConfig.id == id)

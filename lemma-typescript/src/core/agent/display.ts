@@ -9,6 +9,7 @@
 // the hooks, web components, and the app. Formatting/labels and JSX stay in the
 // caller.
 import { isFinalResultToolName } from "./output.js";
+import { normalizeAgentToolName } from "./tool-names.js";
 import type {
   AssistantMessagePart,
   AssistantRenderableMessage,
@@ -38,8 +39,11 @@ export interface PlanSummaryState {
   steps: PlanStepState[];
   completedCount: number;
   inProgressCount: number;
+  pendingCount: number;
   running: boolean;
+  isComplete: boolean;
   activeStep?: string;
+  nextStep?: string;
 }
 
 // --- small utils ------------------------------------------------------------
@@ -318,14 +322,14 @@ function completedTurnTraceDurations(messages: AssistantRenderableMessage[]): Ma
       .find((index) => messages[index].role === "assistant" && isFinalAnswerMessage(messages[index]));
 
     if (typeof finalIndex === "number") {
-      const finalMessageTimeMs = messageTimeMs(messages[finalIndex]);
       turnIndexes.forEach((index) => {
         const message = messages[index];
         if (index >= finalIndex) return;
         if (!shouldConvertMessageToTraceNote(message)) return;
-        const messageTime = messageTimeMs(message);
-        const durationMs = finalMessageTimeMs && messageTime ? finalMessageTimeMs - messageTime : undefined;
-        traceDurations.set(index, durationMs && durationMs > 0 ? durationMs : undefined);
+        const explicitDurationMs = (message.parts || [])
+          .filter((part): part is Extract<AssistantMessagePart, { type: "reasoning" }> => part.type === "reasoning")
+          .reduce((total, part) => total + (part.durationMs ?? 0), 0);
+        traceDurations.set(index, explicitDurationMs > 0 ? explicitDurationMs : undefined);
       });
     }
 
@@ -768,19 +772,32 @@ function rowIsAfterIndex(row: DisplayMessageRow, index: number): boolean {
 /** Whether a tool is the higher-order approval gate (`request_approval`, or the
  * legacy `user_approval`). */
 export function isUserApprovalToolName(toolName: string): boolean {
-  const normalized = toolName.trim().toLowerCase();
+  const normalized = normalizeAgentToolName(toolName).toLowerCase();
   return normalized === "request_approval" || normalized === "user_approval";
 }
 
 /** Whether a tool is the multiple-choice question gate (`ask_user`). */
 export function isAskUserToolName(toolName: string): boolean {
-  return toolName.trim().toLowerCase() === "ask_user";
+  return normalizeAgentToolName(toolName).toLowerCase() === "ask_user";
 }
 
 /** Whether a tool pauses the run for the user (an approval OR a question). Both
  * end the run (conversation -> WAITING) and resume via the approvals endpoint. */
 export function isUserInteractionToolName(toolName: string): boolean {
   return isUserApprovalToolName(toolName) || isAskUserToolName(toolName);
+}
+
+/** Whether an interaction invocation should use the specialized question /
+ * approval UI. Failed daemon fallbacks have a terminal result but no user
+ * decision or answers, so they deliberately render as ordinary tool activity. */
+export function isRenderableUserInteractionInvocation(
+  invocation: AssistantToolInvocation,
+): boolean {
+  if (!isUserInteractionToolName(invocation.toolName)) return false;
+  if (invocation.state !== "result") return true;
+  const result = (invocation.result || {}) as Record<string, unknown>;
+  const output = asRecord(result.output);
+  return result.interaction_fallback !== true && output.interaction_fallback !== true;
 }
 
 export function userApprovalResolvedDecision(resultData: Record<string, unknown>): string | undefined {
@@ -816,85 +833,263 @@ function normalizePlanStatus(rawStatus: unknown): PlanStatus {
   return "pending";
 }
 
+const PLAN_XML_TAG_PATTERN =
+  /<\/?\s*(?:todos?|item)\b[^>]*>|<\/\s*td\s*>(?=\s*(?:<\s*(?:item|\/?todos?)\b|$))/gi;
+const DUPLICATE_CHECKBOX_PREFIX_PATTERN = /^\s*(?:(?:[-*]\s*)?\[[ xX*~-]\]\s*){2,}/;
+const TEXT_PLAN_STATUS_PATTERN =
+  /^(.*?)\s+(?:([-—:])\s*)?(done|complete|completed|in[\s_-]*progress|pending|todo)\s*$/i;
+
+function planStatusFromMark(mark: string): PlanStatus {
+  const normalized = mark.toLowerCase();
+  if (normalized === "x" || normalized === "*") return "completed";
+  if (normalized === "~" || normalized === "-") return "in_progress";
+  return "pending";
+}
+
+function stripDuplicatePlanCheckboxPrefix(value: string): string {
+  const prefix = DUPLICATE_CHECKBOX_PREFIX_PATTERN.exec(value);
+  if (!prefix) return value;
+  const marks = [...prefix[0].matchAll(/\[([ xX*~-])\]/g)];
+  const lastMark = marks[marks.length - 1]?.[1];
+  return lastMark ? `[${lastMark}] ${value.slice(prefix[0].length).trimStart()}` : value;
+}
+
+function parseTextPlanStatus(
+  text: string,
+  { inferStatus }: {
+    inferStatus: boolean;
+  },
+): { step: string; status?: PlanStatus } {
+  const match = TEXT_PLAN_STATUS_PATTERN.exec(text);
+  if (!match) return { step: text };
+  const hasExplicitSeparator = Boolean(match[2]);
+  const isUppercaseLabel = text === text.toUpperCase();
+  if (!inferStatus && !hasExplicitSeparator && !isUppercaseLabel) return { step: text };
+  const normalized = match[3].toLowerCase().replace(/[_-]/g, " ");
+  const status: PlanStatus = normalized === "done"
+    || normalized === "complete"
+    || normalized === "completed"
+    ? "completed"
+    : normalized.replace(/\s+/g, " ") === "in progress"
+      ? "in_progress"
+      : "pending";
+  return { step: match[1].trim(), status };
+}
+
+function parsePlanTextStep(entry: string, inferTextStatus = false): PlanStepState | null {
+  const normalizedEntry = stripDuplicatePlanCheckboxPrefix(entry);
+  const match = /^\s*[-*]?\s*\[([ xX*~-])\]\s*(.*)$/.exec(normalizedEntry);
+  if (match) {
+    const textStatus = parseTextPlanStatus(match[2].trim(), {
+      inferStatus: inferTextStatus,
+    });
+    return textStatus.step
+      ? { step: textStatus.step, status: textStatus.status ?? planStatusFromMark(match[1]) }
+      : null;
+  }
+  const text = normalizedEntry.replace(/^\s*[-*]\s*/, "").trim();
+  const textStatus = parseTextPlanStatus(text, { inferStatus: inferTextStatus });
+  return textStatus.step
+    ? { step: textStatus.step, status: textStatus.status ?? "pending" }
+    : null;
+}
+
 /** Parse one plan/to-do entry. Accepts a structured task object
  * (`{ step | title | content | text | task, status | state | done }`) or a
  * markdown checklist line (`- [ ] todo`, `- [x] done`, `- [~] in-progress`). */
-function parsePlanStep(entry: unknown, index: number): PlanStepState | null {
-  if (typeof entry === "string") {
-    const match = /^\s*[-*]?\s*\[([ xX~-])\]\s*(.*)$/.exec(entry);
-    if (match) {
-      const mark = match[1].toLowerCase();
-      const status: PlanStatus = mark === "x" ? "completed" : (mark === "~" || mark === "-") ? "in_progress" : "pending";
-      const step = match[2].trim();
-      return step ? { step, status } : null;
-    }
-    const step = entry.replace(/^\s*[-*]\s*/, "").trim();
-    return step ? { step, status: "pending" } : null;
-  }
+function parsePlanStep(entry: unknown): PlanStepState | null {
+  if (typeof entry === "string") return parsePlanTextStep(entry);
 
   const obj = asRecord(entry);
+  if (Object.keys(obj).length === 0) return null;
   const step = asString(obj.step)
     || asString(obj.title)
     || asString(obj.content)
     || asString(obj.text)
     || asString(obj.task)
     || asString(obj.label)
-    || asString(obj.name)
-    || `Step ${index + 1}`;
+    || asString(obj.name);
   if (!step) return null;
   let status = normalizePlanStatus(obj.status ?? obj.state);
   if (status === "pending" && (obj.done === true || obj.completed === true)) status = "completed";
   return { step, status };
 }
 
-function parsePlanSteps(value: unknown): PlanStepState[] {
-  return asArray(value)
-    .map(parsePlanStep)
-    .filter((entry): entry is PlanStepState => entry !== null);
+function parsePlanEntry(entry: unknown): PlanStepState[] {
+  if (typeof entry !== "string") {
+    const step = parsePlanStep(entry);
+    return step ? [step] : [];
+  }
+  PLAN_XML_TAG_PATTERN.lastIndex = 0;
+  const hadPlanTags = PLAN_XML_TAG_PATTERN.test(entry);
+  PLAN_XML_TAG_PATTERN.lastIndex = 0;
+  if (!hadPlanTags) {
+    const step = parsePlanStep(entry);
+    return step ? [step] : [];
+  }
+  return entry
+    .replace(PLAN_XML_TAG_PATTERN, "\n")
+    .split(/\r?\n/)
+    .map((fragment) => parsePlanTextStep(fragment.trim(), true))
+    .filter((step): step is PlanStepState => step !== null);
+}
+
+export function parsePlanSteps(value: unknown): PlanStepState[] {
+  let steps: PlanStepState[] = [];
+  let indexes = new Map<string, number>();
+  for (const entry of asArray(value)) {
+    const parsed = parsePlanEntry(entry);
+    if (parsed.length > 1) {
+      // One backend row containing several XML-ish items represents a flattened
+      // plan snapshot. It supersedes older corrupted snapshots in the result.
+      steps = [];
+      indexes = new Map();
+    }
+    for (const step of parsed) {
+      const key = step.step.trim().toLowerCase();
+      const existingIndex = indexes.get(key);
+      if (typeof existingIndex === "number") {
+        steps[existingIndex] = { ...steps[existingIndex], status: step.status };
+        continue;
+      }
+      indexes.set(key, steps.length);
+      steps.push(step);
+    }
+  }
+  return steps;
+}
+
+export function isPlanToolName(toolName: string): boolean {
+  return normalizedPlanToolName(toolName) !== null;
+}
+
+function normalizedPlanToolName(toolName: string): "update_plan" | "write_todos" | null {
+  const normalized = normalizeAgentToolName(toolName)
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[.\-:\s]+/g, "_");
+  return normalized === "update_plan" || normalized === "write_todos" ? normalized : null;
+}
+
+function firstPlanSteps(candidates: unknown[]): PlanStepState[] {
+  for (const candidate of candidates) {
+    const steps = parsePlanSteps(candidate);
+    if (steps.length > 0) return steps;
+  }
+  return [];
+}
+
+function resultPlanSteps(result: Record<string, unknown> | undefined): PlanStepState[] {
+  const resultObj = asRecord(result);
+  const outputObj = asRecord(resultObj.output);
+  const dataObj = asRecord(resultObj.data);
+  return firstPlanSteps([
+    outputObj.todos, outputObj.tasks, outputObj.plan,
+    dataObj.todos, dataObj.tasks, dataObj.plan,
+    resultObj.todos, resultObj.tasks, resultObj.plan,
+  ]);
+}
+
+function argumentPlanSteps(args: Record<string, unknown>): PlanStepState[] {
+  const argsObj = asRecord(args);
+  return firstPlanSteps([argsObj.plan, argsObj.todos, argsObj.tasks]);
+}
+
+export function planStepsFromToolInvocation(
+  invocation: Pick<AssistantToolInvocation, "toolName" | "args" | "result">,
+): PlanStepState[] {
+  const toolName = normalizedPlanToolName(invocation.toolName);
+  if (!toolName) return [];
+  const resultSteps = resultPlanSteps(invocation.result);
+  const argsSteps = argumentPlanSteps(invocation.args);
+  // A multi-item write_todos call is an authoritative snapshot. Prefer it over
+  // historical backend results that may contain accumulated malformed rows.
+  if (toolName === "write_todos" && argsSteps.length > 1) return argsSteps;
+  return resultSteps.length > 0 ? resultSteps : argsSteps;
+}
+
+function mergeIncrementalPlanSteps(
+  current: PlanStepState[],
+  updates: PlanStepState[],
+): PlanStepState[] {
+  if (current.length === 0) return updates;
+  if (
+    current.every((step) => step.status === "completed")
+    && updates.some((step) => step.status !== "completed")
+  ) {
+    return updates;
+  }
+
+  const merged = current.map((step) => ({ ...step }));
+  const byText = new Map(merged.map((step, index) => [step.step.trim().toLowerCase(), index]));
+  updates.forEach((update) => {
+    const key = update.step.trim().toLowerCase();
+    const existingIndex = byText.get(key);
+    if (typeof existingIndex === "number") {
+      merged[existingIndex] = { ...merged[existingIndex], status: update.status };
+      return;
+    }
+    byText.set(key, merged.length);
+    merged.push(update);
+  });
+  return merged;
 }
 
 /** The latest plan/to-do list in the conversation, projected into a render-ready
  * summary. Recognizes both the `update_plan` tool (`{ plan: [...] }`) and the
- * `write_todos` tool (`{ todos: [...] }`, markdown or structured). The result
- * payload — which carries the full, authoritative list for incremental
- * `write_todos` upserts — is preferred over the call args. */
+ * `write_todos` tool (`{ todos: [...] }`, markdown or structured). A multi-item
+ * call is an authoritative snapshot; for a single-item incremental update, the
+ * full backend result is preferred over the call args. */
 export function latestPlanSummary(messages: AssistantRenderableMessage[]): PlanSummaryState | null {
   const displayMessages = prepareMessagesForDisplay(messages).map((entry) => entry.message);
+  let steps: PlanStepState[] = [];
+  let foundPlan = false;
 
-  for (let messageIndex = displayMessages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+  for (let messageIndex = 0; messageIndex < displayMessages.length; messageIndex += 1) {
     const invocations = dedupToolInvocations(displayMessages[messageIndex]);
-    for (let invocationIndex = invocations.length - 1; invocationIndex >= 0; invocationIndex -= 1) {
+    for (let invocationIndex = 0; invocationIndex < invocations.length; invocationIndex += 1) {
       const invocation = invocations[invocationIndex];
-      const toolName = invocation.toolName.toLowerCase();
-      if (toolName !== "update_plan" && toolName !== "write_todos") continue;
+      const toolName = normalizedPlanToolName(invocation.toolName);
+      if (!toolName) continue;
 
-      const argsObj = asRecord(invocation.args);
-      const resultObj = asRecord(invocation.result);
-      const outputObj = asRecord(resultObj.output);
-      const candidates = [
-        outputObj.todos, outputObj.tasks, outputObj.plan,
-        resultObj.todos, resultObj.tasks, resultObj.plan,
-        argsObj.plan, argsObj.todos, argsObj.tasks,
-      ];
+      const resultSteps = resultPlanSteps(invocation.result);
+      const argsSteps = argumentPlanSteps(invocation.args);
+      const invocationSteps = toolName === "write_todos" && argsSteps.length > 1
+        ? argsSteps
+        : resultSteps.length > 0
+          ? resultSteps
+          : argsSteps;
+      if (invocationSteps.length === 0) continue;
 
-      let steps: PlanStepState[] = [];
-      for (const candidate of candidates) {
-        steps = parsePlanSteps(candidate);
-        if (steps.length > 0) break;
-      }
-
-      if (steps.length === 0) continue;
-
-      const completedCount = steps.filter((step) => step.status === "completed").length;
-      const inProgressCount = steps.filter((step) => step.status === "in_progress").length;
-      const activeStep = steps.find((step) => step.status === "in_progress")?.step;
-      const running = invocation.state !== "result" || inProgressCount > 0;
-
-      return { steps, completedCount, inProgressCount, running, activeStep };
+      foundPlan = true;
+      steps = toolName === "write_todos"
+        && resultSteps.length === 0
+        && argsSteps.length <= 1
+        ? mergeIncrementalPlanSteps(steps, argsSteps)
+        : invocationSteps;
     }
   }
 
-  return null;
+  if (!foundPlan || steps.length === 0) return null;
+
+  const completedCount = steps.filter((step) => step.status === "completed").length;
+  const inProgressCount = steps.filter((step) => step.status === "in_progress").length;
+  const pendingCount = steps.filter((step) => step.status === "pending").length;
+  const activeStep = steps.find((step) => step.status === "in_progress")?.step;
+  const nextStep = steps.find((step) => step.status === "pending")?.step;
+  const isComplete = completedCount === steps.length;
+
+  return {
+    steps,
+    completedCount,
+    inProgressCount,
+    pendingCount,
+    running: !isComplete,
+    isComplete,
+    activeStep,
+    nextStep,
+  };
 }
 
 // --- pipeline internals -----------------------------------------------------

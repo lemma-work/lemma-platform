@@ -19,4 +19,3 @@ export type ConnectorDetailResponseSchema = {
     title?: (string | null);
     updated_at: string;
 };
-

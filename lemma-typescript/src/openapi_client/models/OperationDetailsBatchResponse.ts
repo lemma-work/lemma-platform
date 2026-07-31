@@ -20,4 +20,3 @@ export type OperationDetailsBatchResponse = {
      */
     returned_count: number;
 };
-

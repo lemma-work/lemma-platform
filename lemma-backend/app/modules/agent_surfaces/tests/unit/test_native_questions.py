@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from app.modules.agent_surfaces.domain.models import (
     SurfaceQuestion,
     SurfaceQuestionOption,
     SurfaceQuestionRenderPlan,
+)
+from app.modules.agent_surfaces.domain.entities import (
+    ConversationType,
+    ParsedInboundSurfaceEvent,
+    SurfacePlatform,
 )
 from app.modules.agent_surfaces.platforms.slack.service import _question_blocks
 from app.modules.agent_surfaces.platforms.slack.parser import SlackMessageParser
@@ -15,6 +24,9 @@ from app.modules.agent_surfaces.platforms.teams.parser import (
 from app.modules.agent_surfaces.api.controllers.webhook_controller import (
     _decode_webhook_payload,
 )
+from app.modules.agent_surfaces.platforms.telegram.adapter import TelegramSurfaceAdapter
+from app.modules.agent_surfaces.platforms.telegram.service import _OTHER_CALLBACK_VALUE
+from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
 
 
 def _plan() -> SurfaceQuestionRenderPlan:
@@ -191,18 +203,6 @@ def test_decode_webhook_payload_handles_form_encoded_and_json():
 
 # ── Telegram native inline keyboards ─────────────────────────────────────────
 
-import pytest
-from unittest.mock import AsyncMock, patch
-
-from app.modules.agent_surfaces.domain.entities import (
-    ConversationType,
-    ParsedInboundSurfaceEvent,
-    SurfacePlatform,
-)
-from app.modules.agent_surfaces.platforms.telegram.adapter import TelegramSurfaceAdapter
-from app.modules.agent_surfaces.platforms.telegram.service import _OTHER_CALLBACK_VALUE
-
-
 def _single_question_plan() -> SurfaceQuestionRenderPlan:
     return SurfaceQuestionRenderPlan(
         title="Which country?",
@@ -310,7 +310,31 @@ async def test_telegram_parse_inbound_interaction_resolves_tap():
 
 
 @pytest.mark.asyncio
-async def test_telegram_parse_inbound_interaction_other_and_unknown_return_none():
+async def test_telegram_parse_retry_resolves_current_chat_without_conversation_id():
+    adapter = TelegramSurfaceAdapter()
+    payload = {
+        "callback_query": {
+            "id": "cbq-retry",
+            "data": "retry-token",
+            "from": {"id": 555},
+            "message": {"chat": {"id": 123}},
+        }
+    }
+    with patch(
+        "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
+        new=AsyncMock(return_value={"action": "retry"}),
+    ):
+        interaction = await adapter.parse_inbound_interaction(payload)
+
+    assert interaction is not None
+    assert interaction.action == "retry"
+    assert interaction.external_channel_id == "123"
+    assert interaction.external_thread_id == "123"
+    assert "conversation_id" not in interaction.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_telegram_parse_inbound_interaction_other_and_unknown_are_acknowledgeable():
     adapter = TelegramSurfaceAdapter()
     payload = {"callback_query": {"id": "c", "data": "tok", "from": {"id": 1}, "message": {"chat": {"id": 1}}}}
     other = {"callback_id": "conv-1|tool-1", "header": "country", "value": _OTHER_CALLBACK_VALUE}
@@ -318,18 +342,19 @@ async def test_telegram_parse_inbound_interaction_other_and_unknown_return_none(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
         new=AsyncMock(return_value=other),
     ):
-        assert await adapter.parse_inbound_interaction(payload) is None
+        interaction = await adapter.parse_inbound_interaction(payload)
+        assert interaction is not None
+        assert interaction.interaction_state == "other"
     with patch(
         "app.modules.agent_surfaces.platforms.telegram.adapter.get_callback_token",
         new=AsyncMock(return_value=None),
     ):
-        assert await adapter.parse_inbound_interaction(payload) is None
+        interaction = await adapter.parse_inbound_interaction(payload)
+        assert interaction is not None
+        assert interaction.interaction_state == "expired"
 
 
 # ── WhatsApp native interactive replies ──────────────────────────────────────
-
-from app.modules.agent_surfaces.platforms.whatsapp.adapter import WhatsAppSurfaceAdapter
-
 
 def _whatsapp_event() -> ParsedInboundSurfaceEvent:
     return ParsedInboundSurfaceEvent(
@@ -352,6 +377,11 @@ async def test_whatsapp_send_questions_uses_buttons_for_few_options():
         captured["payload"] = json
 
         class _Resp:
+            status_code = 200
+
+            def json(self):
+                return {"messages": [{"id": "wamid.1"}]}
+
             def raise_for_status(self):
                 return None
 

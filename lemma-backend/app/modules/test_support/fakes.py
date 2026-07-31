@@ -84,3 +84,10 @@ class InMemoryRepository(Generic[E]):
 
     def all(self) -> list[E]:
         return list(self._items.values())
+class PassthroughEventInbox:
+    """Unit-test inbox double that executes one delivery without persistence."""
+
+    async def process(self, consumer, event, handler):
+        del consumer, event
+        await handler()
+        return True

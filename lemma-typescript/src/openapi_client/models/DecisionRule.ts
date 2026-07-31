@@ -9,4 +9,3 @@ export type DecisionRule = {
     condition: string;
     next_node_id: string;
 };
-

@@ -65,4 +65,3 @@ export type ColumnSchema = {
      */
     unique?: boolean;
 };
-

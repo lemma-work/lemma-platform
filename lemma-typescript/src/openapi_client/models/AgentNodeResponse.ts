@@ -10,4 +10,3 @@ export type AgentNodeResponse = {
     position?: (Record<string, number> | null);
     type?: string;
 };
-

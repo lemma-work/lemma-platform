@@ -2,24 +2,40 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import UUID
 
+from app.core.api.uploads import upload_source_sha256
+from app.core.log.log import get_logger
+from app.core.concurrency.offload import run_blocking
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
+from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.document_processing import (
     DocumentExtraction,
     DocumentImage,
+    IndexingMetrics,
     DocumentPage,
+    chunks_for_index,
 )
-from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError
+from app.modules.datastore.domain.errors import (
+    DatastoreObjectIntegrityError,
+    DatastoreObjectNotFoundError,
+)
 from app.modules.datastore.domain.file_entities import FileStatus
 from app.modules.datastore.domain.ports import DocumentProcessorPort
 from app.modules.datastore.infrastructure.document_processor import (
     create_document_processor,
 )
+from app.modules.datastore.infrastructure.inflight_budget import (
+    get_inflight_byte_budget,
+)
 from app.modules.datastore.infrastructure.markdown_chunker import chunk_markdown
+from app.modules.datastore.infrastructure.streaming import stream_to_tempfile
 from app.modules.datastore.infrastructure.markdown_images import (
     rewrite_image_references,
 )
@@ -41,20 +57,17 @@ from app.modules.datastore.services.files.projection import FileProjection
 from app.modules.datastore.services.search.postgres_search_service import (
     PostgresSearchService,
 )
-import logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-# Manifest format version for the colocated child container.
+
+class _StaleProcessingClaim(Exception):
+    pass
+
+
 _MANIFEST_VERSION = 3
 
-# ``file_metadata["markdown_source"]`` value marking a file whose agent-facing
-# markdown is user-provided (bring-your-own) rather than engine-extracted. When
-# set, the processor chunks/indexes the stored ``source.md`` and skips the
-# document processor entirely.
 _USER_MARKDOWN_SOURCE = "user"
-# ``file_metadata["markdown_asset_names"]`` — basenames of the companion images
-# the user uploaded with their markdown (stored as sibling child artifacts).
 _MARKDOWN_ASSET_NAMES_KEY = "markdown_asset_names"
 
 _CONVERTED_MARKDOWN_MIME_TYPES: frozenset[str] = frozenset(
@@ -79,13 +92,13 @@ class DatastoreFileProcessingService:
         pod_id: UUID,
         *,
         uow_factory: UnitOfWorkFactory,
-        search_service: PostgresSearchService | None = None,
+        search_service: PostgresSearchService,
         storage: DatastoreStoragePort | None = None,
         document_processor: DocumentProcessorPort | None = None,
     ):
         self.pod_id = pod_id
         self._uow_factory = uow_factory
-        self.search_service = search_service or PostgresSearchService(pod_id)
+        self.search_service = search_service
         self.storage = storage or create_datastore_storage()
         self.document_processor = document_processor or create_document_processor()
 
@@ -114,6 +127,10 @@ class DatastoreFileProcessingService:
         guessed, _ = mimetypes.guess_type(getattr(file_entity, "name", "") or "")
         return guessed.lower() if guessed else None
 
+    @staticmethod
+    def _exceeds_size_limit(size_bytes: int, max_file_bytes: int) -> bool:
+        return bool(max_file_bytes and size_bytes > max_file_bytes)
+
     def _should_store_converted_projection(self, file_entity: DatastoreFile) -> bool:
         mime_type = self._base_mime_type(file_entity)
         return mime_type in _CONVERTED_MARKDOWN_MIME_TYPES if mime_type else False
@@ -122,15 +139,11 @@ class DatastoreFileProcessingService:
     def _sanitize_error(exc: Exception) -> str:
         """Return a safe, user-facing error string for storage in the DB.
 
-        The full exception (with HTTP bodies, object keys, SQL) is logged at
-        error level; only a short class-based summary is persisted so file-status
-        queries don't leak internal infrastructure details.
+        Provider bodies, object keys, SQL, URLs, and credentials may all appear
+        in an exception message. Persist only the failure class and a stable
+        summary; detailed diagnostics belong in redacted structured telemetry.
         """
-        exc_name = type(exc).__name__
-        message = str(exc).split("\n")[0].strip()
-        if len(message) > 200:
-            message = message[:200] + "..."
-        return f"{exc_name}: {message}" if message else exc_name
+        return f"{type(exc).__name__}: document processing failed"
 
     async def process_file_async(
         self,
@@ -147,15 +160,13 @@ class DatastoreFileProcessingService:
         async with self._file_repo() as files:
             file_entity = await files.get_model(file_id)
             if file_entity is None:
-                logger.warning("File %s not found for processing", file_id)
+                logger.debug(
+                    'datastore.file_processing_service.file_s_not_found_processing.diagnostic',
+                    file_id=file_id,
+                )
                 return
 
             if file_entity.status != FileStatus.PENDING.value:
-                logger.info(
-                    "Skipping processing for %s because status is %s",
-                    file_id,
-                    file_entity.status,
-                )
                 return
 
             if file_entity.kind != "FILE":
@@ -163,6 +174,7 @@ class DatastoreFileProcessingService:
                 return
 
             search_enabled = bool(file_entity.search_enabled)
+            content_sha256 = getattr(file_entity, "content_sha256", None)
 
         # Safety net: the indexing-eligibility policy is applied early (at write
         # time) and the reindex queue only enqueues PENDING + search_enabled
@@ -172,7 +184,11 @@ class DatastoreFileProcessingService:
             try:
                 await self.search_service.remove_file(file_id)
             except Exception:
-                logger.warning("Failed removing search projection for %s", file_id, exc_info=True)
+                logger.debug(
+                    'datastore.file_processing_service.removing_search_projection_s.diagnostic',
+                    file_id=file_id,
+                    exc_info=True,
+                )
             await self._file_projection.delete_child_artifacts(
                 self.pod_id, file_entity.path
             )
@@ -180,72 +196,140 @@ class DatastoreFileProcessingService:
                 await files.mark_not_required(file_id)
             return
 
+        max_file_bytes = datastore_settings.document_processing_max_file_bytes
+        size_bytes = int(getattr(file_entity, "size_bytes", 0) or 0)
+        if self._exceeds_size_limit(size_bytes, max_file_bytes):
+            logger.debug(
+                'datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic',
+                file_id=file_id,
+                size_bytes=size_bytes,
+                max_file_bytes=max_file_bytes,
+            )
+            async with self._file_repo() as files:
+                await files.mark_failed_permanent(
+                    file_id,
+                    error=(
+                        f"file exceeds max processing size "
+                        f"({size_bytes} > {max_file_bytes} bytes)"
+                    ),
+                )
+            return
+
         # Claim PENDING -> PROCESSING in its own committed transaction so the
         # claim is durable before the long extraction begins. A crash mid-work
         # then leaves a recoverable PROCESSING row for recover_stuck_processing_files.
         async with self._file_repo() as files:
-            claimed = await files.claim_for_processing(file_id)
-        if not claimed:
-            logger.info(
-                "Skipping processing for %s because another worker already claimed it",
-                file_id,
+            processing_attempt = await files.claim_for_processing(
+                file_id, content_sha256=content_sha256
             )
+        if processing_attempt is None:
             return
 
         try:
-            # --- External I/O: NO DB connection held across any of this. ---
-            current_metadata = dict(metadata or {})
-            current_metadata.update(file_entity.file_metadata or {})
-            search_metadata = await self._build_search_metadata(file_entity, current_metadata)
-            extraction, user_markdown_bytes = await self._build_extraction(file_entity)
-            chunks = self._chunks_for_index(extraction)
-            page_count = 0
-            has_markdown = False
-            if self._should_store_converted_projection(file_entity):
-                page_count = extraction.page_count
-                has_markdown = extraction.has_markdown
-                await self._write_converted_projection(
-                    file_entity,
-                    extraction,
+            # Reserve this file's bytes against the aggregate in-flight budget
+            # (soft cap; disabled by default) so concurrent large documents can't
+            # stack to an OOM. Held only for the memory-heavy extract+index span,
+            async with get_inflight_byte_budget().reserve(size_bytes):
+                current_metadata = dict(metadata or {})
+                current_metadata.update(file_entity.file_metadata or {})
+                search_metadata = await self._build_search_metadata(
+                    file_entity, current_metadata
+                )
+                extraction_started = time.perf_counter()
+                extraction, user_markdown_bytes = await self._build_extraction(
+                    file_entity
+                )
+                extraction_seconds = time.perf_counter() - extraction_started
+                chunks = chunks_for_index(extraction)
+                page_count = 0
+                has_markdown = False
+                projection_started = time.perf_counter()
+                if self._should_store_converted_projection(file_entity):
+                    page_count = extraction.page_count
+                    has_markdown = extraction.has_markdown
+                    await self._ensure_claim_current(
+                        file_id, content_sha256, processing_attempt
+                    )
+                    await self._write_converted_projection(
+                        file_entity,
+                        extraction,
+                        search_metadata,
+                        user_markdown_bytes=user_markdown_bytes,
+                    )
+                else:
+                    await self._file_projection.delete_child_artifacts(
+                        self.pod_id, file_entity.path
+                    )
+                projection_seconds = time.perf_counter() - projection_started
+                await self._ensure_claim_current(
+                    file_id, content_sha256, processing_attempt
+                )
+                indexing_started = time.perf_counter()
+                index_result = await self.search_service.index_file_chunks(
+                    file_id,
+                    chunks,
                     search_metadata,
-                    user_markdown_bytes=user_markdown_bytes,
                 )
-            else:
-                await self._file_projection.delete_child_artifacts(
-                    self.pod_id, file_entity.path
+                indexing_seconds = time.perf_counter() - indexing_started
+                indexing_stages = (
+                    index_result if isinstance(index_result, IndexingMetrics) else None
                 )
-            await self.search_service.index_file_chunks(
-                file_id,
-                chunks,
-                search_metadata,
-            )
-            # Persist page metadata so listing/markdown tools can report page
-            # count without a storage round-trip.
             merged_metadata = {
                 **(file_entity.file_metadata or {}),
                 "page_count": page_count,
                 "has_markdown": has_markdown,
+                "processing_metrics": {
+                    "extraction_seconds": round(extraction_seconds, 6),
+                    "projection_seconds": round(projection_seconds, 6),
+                    "indexing_seconds": round(indexing_seconds, 6),
+                    **(indexing_stages.as_metadata() if indexing_stages else {}),
+                    "page_count": page_count,
+                    "chunk_count": len(chunks),
+                },
             }
             async with self._file_repo() as files:
-                completed = await files.mark_completed(
-                    file_id, file_metadata=merged_metadata
-                )
-            if not completed:
-                logger.info(
-                    "Skipped marking %s as COMPLETED because a newer update already reset it",
+                await files.mark_completed(
                     file_id,
+                    content_sha256=content_sha256,
+                    processing_attempt=processing_attempt,
+                    file_metadata=merged_metadata,
                 )
+            logger.debug(
+                "datastore.file_processing_service.datastore_completion_persisted_s_file.observed",
+                file_id=file_id,
+                page_count=page_count,
+                count=len(chunks),
+                extraction_seconds=extraction_seconds,
+                projection_seconds=projection_seconds,
+                indexing_seconds=indexing_seconds,
+            )
+        except _StaleProcessingClaim:
+            return
         except Exception as exc:
-            logger.error("Search processing failed for %s: %s", file_id, exc)
+            logger.debug(
+                'datastore.file_processing_service.search_processing_s.propagated',
+                file_id=file_id,
+            exc_info=True,
+        )
             async with self._file_repo() as files:
-                failed = await files.mark_failed(
-                    file_id, error=self._sanitize_error(exc)
+                missing_original = isinstance(
+                    exc, (DatastoreObjectNotFoundError, DatastoreObjectIntegrityError)
                 )
-            if not failed:
-                logger.info(
-                    "Skipped marking %s as FAILED because a newer update already reset it",
+                method_name = {
+                    True: "mark_missing_original",
+                    False: "mark_failed",
+                }[missing_original]
+                mark_failure = getattr(files, method_name)
+                await mark_failure(
                     file_id,
+                    content_sha256=content_sha256,
+                    processing_attempt=processing_attempt,
+                    error=self._sanitize_error(exc),
                 )
+            logger.debug(
+                "datastore.file_processing_service.datastore_persisted_s_file_s.observed",
+                file_id=file_id,
+            )
             raise
 
     async def _build_extraction(
@@ -260,7 +344,9 @@ class DatastoreFileProcessingService:
         can re-persist ``source.md`` (delete_child_artifacts wipes the container).
         Everything else goes through the configured document processor.
         """
-        if (file_entity.file_metadata or {}).get("markdown_source") == _USER_MARKDOWN_SOURCE:
+        if (file_entity.file_metadata or {}).get(
+            "markdown_source"
+        ) == _USER_MARKDOWN_SOURCE:
             try:
                 raw = await self.storage.download_file(
                     build_datastore_child_user_markdown_key(
@@ -273,22 +359,57 @@ class DatastoreFileProcessingService:
                 markdown = raw.decode("utf-8", "replace")
                 if markdown.strip():
                     images = await self._load_user_markdown_images(file_entity)
-                    return self._extraction_from_user_markdown(markdown, images), raw
-            logger.warning(
-                "File %s is flagged markdown_source=user but its source.md is "
-                "missing/empty; falling back to document extraction",
-                file_entity.path,
+                    extraction = await self._extraction_from_user_markdown(
+                        markdown, images
+                    )
+                    return extraction, raw
+            logger.debug(
+                'datastore.file_processing_service.file_s_flagged_markdown_source.diagnostic'
             )
 
-        source_content = await self.storage.download_file(
-            build_datastore_file_storage_key(self.pod_id, file_entity.path)
-        )
-        extraction = await self.document_processor.extract(
-            source_content,
-            file_entity.name,
-            mime_type=self._base_mime_type(file_entity),
-        )
+        # Stream the source to a temp file instead of buffering the whole file in
+        # memory. The processor extracts from the path (Kreuzberg streams it to
+        # its multipart body; markitdown/docling read it off the loop), so peak
+        # memory stays ~one chunk rather than the file plus a BytesIO copy.
+        storage_key = build_datastore_file_storage_key(self.pod_id, file_entity.path)
+        tmp_path = await stream_to_tempfile(self.storage.iter_download(storage_key))
+        try:
+            expected_sha256 = getattr(file_entity, "content_sha256", None)
+            if expected_sha256:
+                actual_sha256 = await run_blocking(
+                    upload_source_sha256,
+                    Path(tmp_path),
+                    limiter="cpu_bound",
+                )
+                if actual_sha256 != expected_sha256:
+                    raise DatastoreObjectIntegrityError()
+            extraction = await self.document_processor.extract(
+                None,
+                file_entity.name,
+                mime_type=self._base_mime_type(file_entity),
+                content_path=tmp_path,
+            )
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
         return extraction, None
+
+    async def _ensure_claim_current(
+        self,
+        file_id: UUID,
+        content_sha256: str | None,
+        processing_attempt: int,
+    ) -> None:
+        async with self._file_repo() as files:
+            current = await files.is_processing_claim_current(
+                file_id,
+                content_sha256=content_sha256,
+                processing_attempt=processing_attempt,
+            )
+        if not current:
+            raise _StaleProcessingClaim
 
     async def _load_user_markdown_images(
         self, file_entity: DatastoreFile
@@ -307,8 +428,8 @@ class DatastoreFileProcessingService:
                     )
                 )
             except DatastoreObjectNotFoundError:
-                logger.warning(
-                    "User markdown asset %s missing for %s", name, file_entity.path
+                logger.debug(
+                    'datastore.file_processing_service.user_markdown_asset_s_missing.diagnostic'
                 )
                 continue
             images.append(
@@ -321,7 +442,7 @@ class DatastoreFileProcessingService:
             )
         return images
 
-    def _extraction_from_user_markdown(
+    async def _extraction_from_user_markdown(
         self, markdown: str, images: list[DocumentImage]
     ) -> DocumentExtraction:
         """Build a ``DocumentExtraction`` from user-provided markdown: rewrite its
@@ -329,9 +450,13 @@ class DatastoreFileProcessingService:
         sibling child artifacts), chunk it in-process, and derive per-page
         summaries from any ``<!-- PAGE n -->`` markers."""
         markdown = rewrite_image_references(markdown, {image.name for image in images})
-        chunks = chunk_markdown(markdown)
+        # chunk_markdown is a pure-Python loop over the whole document; keep it
+        # off the event loop so a large doc doesn't stall the worker.
+        chunks = await run_blocking(chunk_markdown, markdown, limiter="cpu_bound")
         page_count = max((page for _, page in parse_page_offsets(markdown)), default=0)
-        pages = [DocumentPage(page_number=number) for number in range(1, page_count + 1)]
+        pages = [
+            DocumentPage(page_number=number) for number in range(1, page_count + 1)
+        ]
         return DocumentExtraction(
             markdown=markdown,
             chunks=chunks,
@@ -341,26 +466,13 @@ class DatastoreFileProcessingService:
             extraction_mode="user_markdown",
         )
 
-    def _chunks_for_index(self, extraction: DocumentExtraction) -> list[dict]:
-        """Flatten domain chunks into the ``{text, metadata}`` shape the search
-        index expects, surfacing native page spans as ``page_number``/``page_end``
-        (the columns the search SQL reads)."""
-        chunks: list[dict] = []
-        for chunk in extraction.chunks:
-            metadata = dict(chunk.metadata or {})
-            if chunk.page_start is not None:
-                metadata["page_number"] = chunk.page_start
-            if chunk.page_end is not None:
-                metadata["page_end"] = chunk.page_end
-            chunks.append({"text": chunk.text, "metadata": metadata})
-        return chunks
-
     async def _build_search_metadata(
         self,
         file_entity: DatastoreFile,
         metadata: dict,
     ) -> dict:
         enriched = dict(metadata)
+        enriched.pop("processing_metrics", None)
         enriched["parent_path"] = None
         enriched["path"] = file_entity.path
         owner_user_id = getattr(file_entity, "owner_user_id", None)
@@ -398,9 +510,7 @@ class DatastoreFileProcessingService:
         )
         if user_markdown_bytes is not None:
             await self.storage.upload_file(
-                build_datastore_child_user_markdown_key(
-                    self.pod_id, file_entity.path
-                ),
+                build_datastore_child_user_markdown_key(self.pod_id, file_entity.path),
                 user_markdown_bytes,
             )
 
@@ -409,9 +519,12 @@ class DatastoreFileProcessingService:
             "source_path": file_entity.path,
             "source_name": file_entity.name,
             "source_mime_type": file_entity.mime_type,
+            "source_sha256": getattr(file_entity, "content_sha256", None),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "markdown_source": (
-                _USER_MARKDOWN_SOURCE if user_markdown_bytes is not None else "extracted"
+                _USER_MARKDOWN_SOURCE
+                if user_markdown_bytes is not None
+                else "extracted"
             ),
             "extraction_mode": extraction.extraction_mode,
             "detected_languages": extraction.detected_languages,
@@ -436,7 +549,14 @@ class DatastoreFileProcessingService:
             "search_metadata": search_metadata,
         }
 
-        for image in extraction.images:
+        # Drain the list rather than iterating it: each image's ``content`` bytes
+        # can be large (base64-decoded figures from a scanned doc), and holding the
+        # whole list resident until this method returns is the biggest avoidable
+        # chunk of steady-state memory during ingestion. Popping each image before
+        # uploading lets the GC reclaim its bytes as soon as the upload completes,
+        # so only one image's bytes are held at a time instead of all of them.
+        while extraction.images:
+            image = extraction.images.pop(0)
             await self.storage.upload_file(
                 build_datastore_child_artifact_key(
                     self.pod_id,

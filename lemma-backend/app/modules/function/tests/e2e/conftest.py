@@ -12,11 +12,12 @@ from app.modules.test_support.e2e import fixtures as e2e_fixtures
 from app.modules.test_support.e2e.runtime import (
     backend_server,
     configure_workspace_api_url,
+    function_image,
     local_agentbox_server,
     workspace_image,
 )
 
-pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
+pytestmark = pytest.mark.e2e
 
 test_network = e2e_fixtures.test_network
 postgres_container = e2e_fixtures.postgres_container
@@ -34,13 +35,6 @@ authenticated_client = e2e_fixtures.authenticated_client
 fixed_test_org = e2e_fixtures.fixed_test_org
 db_session = e2e_fixtures.db_session
 scenario = e2e_fixtures.scenario
-
-
-@pytest_asyncio.fixture(autouse=True)
-async def _configure_function_workspace_api_url(configure_workspace_api_url):
-    """Preserve the function e2e autouse backend URL setup."""
-
-    yield configure_workspace_api_url
 
 
 @pytest_asyncio.fixture
@@ -71,6 +65,7 @@ __all__ = [
     "e2e_settings",
     "fixed_test_org",
     "fixed_test_user",
+    "function_image",
     "postgres_container",
     "redis_container",
     "scenario",

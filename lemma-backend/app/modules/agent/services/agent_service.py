@@ -11,6 +11,8 @@ from app.core.authorization.context import (
     ResourceType,
     ResourceVisibility,
 )
+from app.core.authorization.delegation import POD_DEFAULT_AGENT_SELECTOR_ALIASES
+from app.core.authorization.delegation_revocation import revoke_delegation
 from app.core.authorization.permissions import Permissions
 from app.modules.agent.domain.entities import Agent
 from app.modules.agent.domain.errors import (
@@ -98,6 +100,10 @@ class AgentService:
         normalized_name = name.strip()
         if not normalized_name:
             raise AgentValidationError("Agent name is required")
+        if normalized_name in POD_DEFAULT_AGENT_SELECTOR_ALIASES:
+            raise AgentValidationError(
+                f"Agent name {normalized_name!r} is reserved for the pod-default assistant"
+            )
         if not instruction.strip():
             raise AgentValidationError("Agent instruction is required")
         normalized_visibility = _normalize_agent_visibility(visibility)
@@ -258,6 +264,9 @@ class AgentService:
                 ctx=ctx,
             )
         await self.agent_repository.delete(agent.id)
+        # Revoke any in-flight delegated token minted for this agent so it stops
+        # working immediately rather than lingering until the token expires.
+        await revoke_delegation(actor_id=agent.id)
 
     def _normalize_names(self, values: list[str], *, label: str) -> list[str]:
         normalized: list[str] = []

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import re
 from datetime import datetime
 from typing import Any, Optional, Sequence
@@ -28,25 +30,23 @@ from app.modules.datastore.services.authorization import DatastoreAuthorization
 from app.modules.datastore.services.files.authorizer import FileAuthorizer
 from app.modules.datastore.services.files.lookup import FileLookup
 from app.modules.datastore.services.files.path_resolver import PathResolver
-from app.modules.datastore.services.files.projection import FileProjection
+from app.modules.datastore.services.files.projection import (
+    FileProjection,
+    datastore_storage_key,
+)
 from app.modules.datastore.services.files.file_url import build_file_url
 from app.modules.datastore.services.files.signed_url import get_signed_url_store
-from app.modules.datastore.infrastructure.storage_paths import (
-    build_datastore_file_storage_key,
-    is_child_page_artifact,
-)
+from app.modules.datastore.infrastructure.storage_paths import is_child_page_artifact
 from app.modules.datastore.services.files.reader import FileReader
 from app.modules.datastore.services.files.renderer import FilePageRenderer, RenderedPage
 from app.modules.datastore.services.files.searcher import FileSearcher
 from app.modules.datastore.services.files.skills_overlay import SkillsOverlay
 from app.modules.datastore.services.files.tree import DirectoryTreeBuilder
 from app.modules.datastore.services.files.writer import FileWriter
-from app.modules.datastore.services.search.postgres_search_service import PostgresSearchService
+from app.modules.datastore.services.files.transaction_facade import (
+    FileTransactionFacade,
+)
 from app.modules.datastore.services.system_skill_files import SystemSkillFileProvider
-
-
-def _default_search_factory(pod_id: UUID):
-    return PostgresSearchService(pod_id)
 
 
 _CHILD_PAGE_RE = re.compile(r"page_(\d+)\.jpg$")
@@ -57,7 +57,7 @@ def _child_page_number(artifact_rel: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-class DatastoreFileService:
+class DatastoreFileService(FileTransactionFacade):
     """Thin facade over the datastore file collaborators. Public method names
     and signatures are part of the frozen contract; each delegates to the
     collaborator that owns the behaviour."""
@@ -67,16 +67,18 @@ class DatastoreFileService:
         file_repository: DatastoreFileRepositoryPort,
         storage: DatastoreStoragePort,
         authorization_service: object,
-        search_service_factory: DatastoreSearchFactoryPort | None = None,
+        search_service_factory: DatastoreSearchFactoryPort,
         system_skill_file_provider: SystemSkillFileProvider | None = None,
         document_processor: DocumentProcessorPort | None = None,
     ):
         self.file_repository = file_repository
         self.storage = storage
-        self.search_service_factory = search_service_factory or _default_search_factory
+        self.search_service_factory = search_service_factory
         self.authorization_service = authorization_service
         self.authz = DatastoreAuthorization(authorization_service)
-        self.system_skill_files = system_skill_file_provider or SystemSkillFileProvider()
+        self.system_skill_files = (
+            system_skill_file_provider or SystemSkillFileProvider()
+        )
         self.document_processor = document_processor or create_document_processor()
 
         path_resolver = PathResolver()
@@ -95,9 +97,11 @@ class DatastoreFileService:
             path_resolver,
             lookup,
         )
+
         # Resolve the search factory lazily so tests (and callers) can reassign
         # ``self.search_service_factory`` after construction.
-        search_factory_provider = lambda: self.search_service_factory
+        def search_factory_provider():
+            return self.search_service_factory
 
         reader = FileReader(
             file_repository,
@@ -154,7 +158,7 @@ class DatastoreFileService:
         self,
         pod_id: UUID,
         name: str,
-        file_content: bytes,
+        file_content: bytes | Path,
         ctx: Context,
         description: Optional[str] = None,
         metadata: Optional[dict] = None,
@@ -194,9 +198,9 @@ class DatastoreFileService:
         self,
         pod_id: UUID,
         path: str,
-        markdown_content: bytes,
+        markdown_content: bytes | Path,
         ctx: Context,
-        images: list[tuple[str, bytes]] | None = None,
+        images: list[tuple[str, bytes | Path]] | None = None,
     ) -> DatastoreFileEntity:
         """Attach/replace a user-provided markdown version of a document (plus any
         images it references), then re-queue it so the user's markdown is
@@ -241,6 +245,9 @@ class DatastoreFileService:
         """Persist the mutated row (+ descendant paths) for a resolved update
         plan — DB only, in its own short UoW."""
         return await self._writer.persist_update_file(plan)
+
+    async def cleanup_uncommitted_update(self, plan) -> None:
+        await self._writer.cleanup_uncommitted_update(plan)
 
     async def finalize_update_file(self, plan, updated_entity) -> None:
         """Storage + search-index sync after the update row is persisted. No DB
@@ -564,11 +571,17 @@ class DatastoreFileService:
         entity = await self._reader.get_file_by_path(pod_id, path, ctx.user_id, ctx=ctx)
         if entity.is_folder:
             raise DatastoreValidationError("Folders do not have a downloadable URL")
-        object_key = build_datastore_file_storage_key(entity.pod_id, entity.path)
-        _code, signed_url, expires_at, effective_max_hits = await get_signed_url_store().create(
+        object_key = datastore_storage_key(entity)
+        (
+            _code,
+            signed_url,
+            expires_at,
+            effective_max_hits,
+        ) = await get_signed_url_store().create(
             object_key=object_key,
             pod_id=entity.pod_id,
             path=entity.path,
+            content_sha256=entity.content_sha256,
             expires_seconds=expires_seconds,
             max_hits=max_hits,
         )

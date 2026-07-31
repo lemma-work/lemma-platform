@@ -268,8 +268,7 @@ async def resolve_outbound_email_attachments(
     """
     # Imported lazily to avoid a module-load cycle (email_common is imported by
     # the platform services).
-    from app.modules.agent.tools.file_access import is_datastore_path
-    from app.modules.agent.tools.pod.pod_data_access import pod_services
+    from app.composition.surface_agent import is_datastore_path, pod_services
 
     inline: list[tuple[str, bytes, str]] = []
     links: list[tuple[str, str]] = []
@@ -285,7 +284,10 @@ async def resolve_outbound_email_attachments(
                 # unbounded file whose size wasn't stamped can't be inlined at full
                 # size and blow the provider's hard limit.
                 if isinstance(size, int) and 0 < size <= inline_cap_bytes:
-                    _entity, content = await services.file.download_file_content_by_path(
+                    (
+                        _entity,
+                        content,
+                    ) = await services.file.download_file_content_by_path(
                         deps.pod_id, path, services.ctx
                     )
                     inline.append(
@@ -296,10 +298,13 @@ async def resolve_outbound_email_attachments(
                         )
                     )
                 else:
-                    _entity, signed_url, _expires, _hits = (
-                        await services.file.create_signed_url(
-                            deps.pod_id, path, services.ctx
-                        )
+                    (
+                        _entity,
+                        signed_url,
+                        _expires,
+                        _hits,
+                    ) = await services.file.create_signed_url(
+                        deps.pod_id, path, services.ctx
                     )
                     links.append((entity.name, signed_url))
         else:
@@ -310,11 +315,10 @@ async def resolve_outbound_email_attachments(
             # actual byte length — an oversize workspace file inlined unconditionally
             # would fail the whole send. Skip (with a warning) rather than hard-fail.
             if len(content) > inline_cap_bytes:
-                logger.warning(
-                    "Skipping oversize workspace email attachment %s (%d bytes > cap %d)",
-                    name,
-                    len(content),
-                    inline_cap_bytes,
+                logger.debug(
+                    'agent_surfaces.email_common.skipping_oversize_workspace_email_attachment.diagnostic',
+                    count=len(content),
+                    inline_cap_bytes=inline_cap_bytes,
                 )
                 continue
             inline.append((name, content, guess_content_type(name)))
@@ -333,8 +337,7 @@ async def resolve_outbound_email_attachment_urls(
     returned as unresolved names (the caller notes them). Returns
     ``(url_attachments, unresolved_names)``.
     """
-    from app.modules.agent.tools.file_access import is_datastore_path
-    from app.modules.agent.tools.pod.pod_data_access import pod_services
+    from app.composition.surface_agent import is_datastore_path, pod_services
 
     resolved: list[tuple[str, str]] = []
     unresolved: list[str] = []
@@ -344,10 +347,13 @@ async def resolve_outbound_email_attachment_urls(
                 entity = await services.file.get_file_by_path(
                     deps.pod_id, path, services.ctx
                 )
-                _entity, signed_url, _expires, _hits = (
-                    await services.file.create_signed_url(
-                        deps.pod_id, path, services.ctx
-                    )
+                (
+                    _entity,
+                    signed_url,
+                    _expires,
+                    _hits,
+                ) = await services.file.create_signed_url(
+                    deps.pod_id, path, services.ctx
                 )
                 resolved.append((entity.name, signed_url))
         else:

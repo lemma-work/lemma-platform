@@ -6,31 +6,31 @@ from typing import Any, Dict
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.modules.workflow.domain.flow import FlowEntity
-from app.modules.workflow.domain.run import FlowRunEntity
+from app.modules.workflow.domain.workflow import WorkflowEntity
+from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.domain.wait import (
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
 
 
-class FlowRepository(ABC):
+class WorkflowRepository(ABC):
     @abstractmethod
-    async def create(self, flow: FlowEntity) -> FlowEntity: ...
+    async def create(self, flow: WorkflowEntity) -> WorkflowEntity: ...
 
     @abstractmethod
-    async def get(self, flow_id: UUID, ctx: Context | None = None) -> FlowEntity | None: ...
+    async def get(self, flow_id: UUID, ctx: Context | None = None) -> WorkflowEntity | None: ...
 
     @abstractmethod
-    async def get_for_update(self, flow_id: UUID) -> FlowEntity | None: ...
+    async def get_for_update(self, flow_id: UUID) -> WorkflowEntity | None: ...
 
     @abstractmethod
     async def get_by_name(
         self, pod_id: UUID, name: str, ctx: Context | None = None
-    ) -> FlowEntity | None: ...
+    ) -> WorkflowEntity | None: ...
 
     @abstractmethod
-    async def update(self, flow: FlowEntity) -> FlowEntity: ...
+    async def update(self, flow: WorkflowEntity) -> WorkflowEntity: ...
 
     @abstractmethod
     async def delete(self, flow_id: UUID) -> None: ...
@@ -42,7 +42,7 @@ class FlowRepository(ABC):
         *,
         limit: int = 100,
         cursor: UUID | None = None,
-    ) -> tuple[list[FlowEntity], UUID | None]: ...
+    ) -> tuple[list[WorkflowEntity], UUID | None]: ...
 
     @abstractmethod
     async def list_visible_by_pod(
@@ -52,21 +52,21 @@ class FlowRepository(ABC):
         ctx: Context,
         limit: int = 100,
         cursor: UUID | None = None,
-    ) -> tuple[list[FlowEntity], UUID | None]: ...
+    ) -> tuple[list[WorkflowEntity], UUID | None]: ...
 
 
-class FlowRunRepository(ABC):
+class WorkflowRunRepository(ABC):
     @abstractmethod
-    async def create(self, run: FlowRunEntity) -> FlowRunEntity: ...
-
-    @abstractmethod
-    async def get(self, run_id: UUID) -> FlowRunEntity | None: ...
+    async def create(self, run: WorkflowRunEntity) -> WorkflowRunEntity: ...
 
     @abstractmethod
-    async def get_for_update(self, run_id: UUID) -> FlowRunEntity | None: ...
+    async def get(self, run_id: UUID) -> WorkflowRunEntity | None: ...
 
     @abstractmethod
-    async def update(self, run: FlowRunEntity) -> FlowRunEntity: ...
+    async def get_for_update(self, run_id: UUID) -> WorkflowRunEntity | None: ...
+
+    @abstractmethod
+    async def update(self, run: WorkflowRunEntity) -> WorkflowRunEntity: ...
 
     @abstractmethod
     async def list_by_flow(
@@ -75,7 +75,7 @@ class FlowRunRepository(ABC):
         *,
         limit: int = 100,
         cursor: UUID | None = None,
-    ) -> tuple[list[FlowRunEntity], UUID | None]: ...
+    ) -> tuple[list[WorkflowRunEntity], UUID | None]: ...
 
     @abstractmethod
     async def find_by_schedule_event(
@@ -84,7 +84,7 @@ class FlowRunRepository(ABC):
         flow_id: UUID,
         user_id: UUID,
         schedule_event_id: str,
-    ) -> FlowRunEntity | None: ...
+    ) -> WorkflowRunEntity | None: ...
 
 
 class WorkflowRunWaitRepository(ABC):

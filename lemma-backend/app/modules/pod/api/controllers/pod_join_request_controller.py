@@ -6,8 +6,9 @@ from fastapi import APIRouter, status
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.authorization.dependencies import reject_delegated_workload_pod
 from app.core.authorization.service import AuthorizationDataService
-from app.modules.identity.domain.organization_entities import OrganizationRole
+from app.modules.identity.contracts import OrganizationRole
 from app.modules.pod.api.dependencies import PodJoinRequestServiceDep
 from app.modules.pod.api.schemas.pod_schemas import (
     PodJoinRequestApproveRequest,
@@ -110,6 +111,7 @@ async def list_join_requests(
     summary="Approve Pod Join Request",
     description="Approve a pending pod join request and add user to org/pod",
     response_model=PodJoinRequestCreateResponse,
+    dependencies=[reject_delegated_workload_pod("approve join requests")],
 )
 async def approve_join_request(
     pod_id: UUID,

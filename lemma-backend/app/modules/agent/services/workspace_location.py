@@ -45,11 +45,13 @@ def generate_cwd_slug() -> str:
 
 
 def default_workspace_cwd(conversation: Conversation) -> str:
-    """The default ``/workspace/c/{date}/{slug}`` cwd for a root conversation.
+    """A deterministic fallback for legacy rows missing persisted cwd metadata."""
+    date = conversation.created_at.date().isoformat()
+    return f"{_WORKSPACE_ROOT}/c/{date}/{conversation.id.hex[:_SLUG_LENGTH]}"
 
-    Generates a fresh slug; callers persist the result into conversation
-    metadata (at creation) so it stays stable across later runs.
-    """
+
+def new_workspace_cwd(conversation: Conversation) -> str:
+    """Generate the human-friendly cwd stamped onto a new root conversation."""
     date = conversation.created_at.date().isoformat()
     return f"{_WORKSPACE_ROOT}/c/{date}/{generate_cwd_slug()}"
 

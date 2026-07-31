@@ -20,6 +20,7 @@ class UsageLimitScopeResponse:
         allowed (bool):
         reserved_usd (float):
         reset_at (datetime.datetime):
+        scope (str):
         used_usd (float):
         window_start (datetime.datetime):
         limit_usd (float | None | Unset):
@@ -29,6 +30,7 @@ class UsageLimitScopeResponse:
     allowed: bool
     reserved_usd: float
     reset_at: datetime.datetime
+    scope: str
     used_usd: float
     window_start: datetime.datetime
     limit_usd: float | None | Unset = UNSET
@@ -41,6 +43,8 @@ class UsageLimitScopeResponse:
         reserved_usd = self.reserved_usd
 
         reset_at = self.reset_at.isoformat()
+
+        scope = self.scope
 
         used_usd = self.used_usd
 
@@ -65,6 +69,7 @@ class UsageLimitScopeResponse:
                 "allowed": allowed,
                 "reserved_usd": reserved_usd,
                 "reset_at": reset_at,
+                "scope": scope,
                 "used_usd": used_usd,
                 "window_start": window_start,
             }
@@ -84,6 +89,8 @@ class UsageLimitScopeResponse:
         reserved_usd = d.pop("reserved_usd")
 
         reset_at = isoparse(d.pop("reset_at"))
+
+        scope = d.pop("scope")
 
         used_usd = d.pop("used_usd")
 
@@ -111,6 +118,7 @@ class UsageLimitScopeResponse:
             allowed=allowed,
             reserved_usd=reserved_usd,
             reset_at=reset_at,
+            scope=scope,
             used_usd=used_usd,
             window_start=window_start,
             limit_usd=limit_usd,

@@ -5,7 +5,7 @@ from typing import Any
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.platforms.email_models import (
     OutlookReplyEmailParams,
     OutlookReplyEmailResult,
@@ -31,8 +31,11 @@ def build_outlook_surface_toolset(
         """Reply to the current Outlook thread with formatted content and optional pod-file attachments."""
         try:
             return await service.reply_email(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("Outlook tool outlook_reply_email failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.email.reply_failed",
+                exc_info=True,
+            )
             return OutlookReplyEmailResult(
                 success=False,
                 error="Outlook reply failed unexpectedly.",

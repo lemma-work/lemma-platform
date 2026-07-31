@@ -31,9 +31,11 @@ import {
   Users,
   Volume2,
   Wrench,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
+import { formatAgentName } from "@/lib/utils/agents";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
+import { playSoundFeedback } from "@/lib/feedback/sound-feedback";
 // Pure formatting / label / tool-payload helpers (extracted from assistant-experience).
 import {
   asArray,
@@ -71,6 +73,7 @@ export function DetailsWithCopy({ label, value }: { label: string; value: string
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
+      playSoundFeedback('action-success');
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }
   };
@@ -200,6 +203,7 @@ function CodeBlock({ label, value, tone = "default" }: { label?: string; value?:
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
+      playSoundFeedback('action-success');
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }
   };
@@ -977,7 +981,7 @@ function SpawnSubagentDetails({ args, state, result }: { args: ToolCardArgs; sta
   const staticOutput = resultText(result, ["output", "message", "text", "result"]);
   const live = useSubagentLive(conversationId);
 
-  const title = agentName ? `Sub-agent · ${agentName}` : "Sub-agent";
+  const title = agentName ? `Sub-agent · ${formatAgentName(agentName)}` : "Sub-agent";
   const headerStatus = conversationId ? childStatusLabel(live.status ?? childStatus) : toolStatusLabel(state, result);
   const output = conversationId ? (live.latest || (live.settled ? staticOutput : undefined)) : staticOutput;
 

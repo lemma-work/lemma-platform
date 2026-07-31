@@ -3,7 +3,7 @@
 The LEMMA harness contributes per-toolset prompt guidance through capabilities
 (``get_instructions``). Web search and todo have bespoke capability classes; this
 generic one carries the fragment for any other visible toolset (workspace CLI,
-skills, …) so the in-process and daemon paths stay in sync — both ultimately read
+skills, …) so the in-process and remote paths stay in sync — both ultimately read
 the same fragment files via the loaders in ``domain.prompts``.
 """
 

@@ -15,4 +15,3 @@ export type ConnectRequestInitiateSchema = {
      */
     connector_id?: (string | null);
 };
-

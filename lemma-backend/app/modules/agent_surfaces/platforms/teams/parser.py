@@ -14,6 +14,8 @@ from app.modules.agent_surfaces.platforms.common import render_attachment_prompt
 
 # Key carrying the form callback id inside an Adaptive Card Action.Submit `data`.
 TEAMS_FORM_CALLBACK_KEY = "lemma_form_callback_id"
+# Key carrying the approval decision on an approval-card Action.Submit `data`.
+TEAMS_APPROVAL_DECISION_KEY = "lemma_approval_decision"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
@@ -112,9 +114,20 @@ class TeamsMessageParser:
         callback_id = str(value.get(TEAMS_FORM_CALLBACK_KEY) or "").strip()
         if not callback_id:
             return None
-        field_values = {
-            k: v for k, v in value.items() if k != TEAMS_FORM_CALLBACK_KEY
-        }
+        # An approval-card submit carries the tapped decision; it has no form
+        # inputs, so its values map is empty.
+        approval_decision = (
+            str(value.get(TEAMS_APPROVAL_DECISION_KEY) or "").strip() or None
+        )
+        field_values = (
+            {}
+            if approval_decision is not None
+            else {
+                k: v
+                for k, v in value.items()
+                if k not in (TEAMS_FORM_CALLBACK_KEY, TEAMS_APPROVAL_DECISION_KEY)
+            }
+        )
         from_user = payload.get("from") or {}
         conversation = payload.get("conversation") or {}
         channel_data = payload.get("channelData") or {}
@@ -138,6 +151,7 @@ class TeamsMessageParser:
             ),
             callback_id=callback_id,
             values=field_values,
+            approval_decision=approval_decision,
             reply_target={
                 "service_url": service_url,
                 "conversation_id": conversation_id,

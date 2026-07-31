@@ -17,6 +17,10 @@ from uuid import UUID, uuid4
 from fastapi import status
 from httpx import AsyncClient
 
+from app.modules.test_support.e2e_authz import (
+    signup_user as signup_verified_user,
+)
+
 # Real arXiv papers (under tests/fixtures/arxiv/) used by the indexing/search
 # e2e so conversion + full-text/vector search run against genuine PDF text
 # rather than synthetic stand-ins. Each entry pairs a paper with a phrase that
@@ -128,8 +132,9 @@ class DatastoreApi:
         return auth_headers(self.user["token"])
 
     async def request(self, method: str, path: str, **kwargs):
+        headers = {**(self._headers() or {}), **kwargs.pop("headers", {})}
         return await self.client.request(
-            method, path, headers=self._headers(), **kwargs
+            method, path, headers=headers or None, **kwargs
         )
 
     async def create_folder(
@@ -222,19 +227,24 @@ class DatastoreApi:
         search_enabled: bool | None = None,
         expected_status: int = status.HTTP_200_OK,
     ) -> dict:
-        data = {"path": path}
+        fields: list[tuple[str, tuple[str | None, str | bytes, str | None]]] = [
+            ("path", (None, path, None))
+        ]
         if new_path is not None:
-            data["new_path"] = new_path
+            fields.append(("new_path", (None, new_path, None)))
         if search_enabled is not None:
-            data["search_enabled"] = "true" if search_enabled else "false"
-        files = None
+            fields.append(
+                (
+                    "search_enabled",
+                    (None, "true" if search_enabled else "false", None),
+                )
+            )
         if content is not None:
-            files = {"data": (filename, content, "text/markdown")}
+            fields.append(("data", (filename, content, "text/markdown")))
         response = await self.request(
             "PATCH",
             f"/pods/{self.pod_id}/datastore/files/by-path",
-            data=data,
-            files=files,
+            files=fields,
         )
         assert response.status_code == expected_status, response.text
         return response.json() if response.content else {}
@@ -625,24 +635,7 @@ class DatastoreApi:
 
 
 async def signup_user(async_client: AsyncClient, prefix: str) -> dict[str, str]:
-    email = f"test+{prefix}-{uuid4().hex[:8]}@example.com"
-    response = await async_client.post(
-        "/st/auth/signup",
-        json={
-            "formFields": [
-                {"id": "email", "value": email},
-                {"id": "password", "value": "TestPassword@123"},
-            ]
-        },
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    token = response.headers.get("st-access-token") or response.cookies.get(
-        "sAccessToken"
-    )
-    assert payload.get("status") == "OK", payload
-    assert token
-    return {"email": email, "token": token, "id": payload["user"]["id"]}
+    return await signup_verified_user(async_client, prefix)
 
 
 async def invite_to_pod(

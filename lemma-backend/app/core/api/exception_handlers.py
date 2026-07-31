@@ -24,16 +24,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.core.domain.errors import DomainError
-from app.core.log.log import get_logger
 from app.core.observability.telemetry import record_exception_on_current_span
-
-logger = get_logger(__name__)
+from app.core.redaction import redact_text, redact_value
 
 
 def _sanitize_validation_payload(value: object) -> object:
     """Convert non-JSON-safe validation payload values into serializable forms."""
     if isinstance(value, BaseException):
-        return str(value)
+        return {"type": type(value).__name__}
     if isinstance(value, Mapping):
         return {key: _sanitize_validation_payload(item) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
@@ -41,9 +39,38 @@ def _sanitize_validation_payload(value: object) -> object:
     return value
 
 
-def _error_body(message: str, code: str, details: object | None = None) -> dict:
+def _error_body(
+    request: Request,
+    message: str,
+    code: str,
+    details: object | None = None,
+) -> dict:
     """The unified error envelope shared by every handler."""
-    return {"message": message, "code": code, "details": details}
+    return {
+        "message": redact_text(message),
+        "code": code,
+        "request_id": request.headers.get("x-request-id"),
+        "details": redact_value(details),
+    }
+
+
+def _record_request_failure(
+    request: Request,
+    *,
+    code: str,
+    error_type: str,
+    exception: BaseException | None = None,
+) -> None:
+    """Pass bounded failure metadata to the outer request observer.
+
+    The observer owns the single terminal request log, avoiding duplicate
+    records from exception handlers and middleware.
+    """
+    state = request.scope.setdefault("state", {})
+    state["lemma_error_code"] = code
+    state["lemma_error_type"] = error_type
+    if exception is not None:
+        state["lemma_exception"] = exception
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -60,19 +87,10 @@ def register_exception_handlers(app: FastAPI) -> None:
             },
             mark_span_as_error=exc.status_code >= 500,
         )
-        log_method = logger.error if exc.status_code >= 500 else logger.warning
-        log_method(
-            "Domain error",
-            path=request.url.path,
-            method=request.method,
-            code=exc.code,
-            status_code=exc.status_code,
-            message=exc.message,
-            details=exc.details,
-        )
+        _record_request_failure(request, code=exc.code, error_type=type(exc).__name__)
         return JSONResponse(
             status_code=exc.status_code,
-            content=_error_body(exc.message, exc.code, exc.details),
+            content=_error_body(request, exc.message, exc.code, exc.details),
         )
 
     @app.exception_handler(RequestValidationError)
@@ -86,17 +104,13 @@ def register_exception_handlers(app: FastAPI) -> None:
             },
             mark_span_as_error=False,
         )
-        logger.warning(
-            "Request validation error",
-            path=request.url.path,
-            method=request.method,
-            status_code=422,
-            error_count=len(errors) if isinstance(errors, Sequence) else 0,
+        _record_request_failure(
+            request, code="VALIDATION_ERROR", error_type=type(exc).__name__
         )
         return JSONResponse(
             status_code=422,
             content=_error_body(
-                "Request validation failed", "VALIDATION_ERROR", errors
+                request, "Request validation failed", "VALIDATION_ERROR", errors
             ),
         )
 
@@ -107,17 +121,16 @@ def register_exception_handlers(app: FastAPI) -> None:
             attributes={"http.response.status_code": exc.status_code},
             mark_span_as_error=exc.status_code >= 500,
         )
-        log_method = logger.error if exc.status_code >= 500 else logger.info
-        log_method(
-            "HTTP exception",
-            path=request.url.path,
-            method=request.method,
-            status_code=exc.status_code,
-            detail=str(exc.detail),
+        _record_request_failure(
+            request,
+            code=f"HTTP_{exc.status_code}",
+            error_type=type(exc).__name__,
         )
         return JSONResponse(
             status_code=exc.status_code,
-            content=_error_body(str(exc.detail), f"HTTP_{exc.status_code}"),
+            content=_error_body(
+                request, str(redact_value(exc.detail)), f"HTTP_{exc.status_code}"
+            ),
         )
 
     @app.exception_handler(Exception)
@@ -130,13 +143,13 @@ def register_exception_handlers(app: FastAPI) -> None:
             },
             mark_span_as_error=True,
         )
-        logger.exception(
-            "Unhandled exception",
-            path=request.url.path,
-            method=request.method,
-            status_code=500,
+        _record_request_failure(
+            request,
+            code="INTERNAL_ERROR",
+            error_type=type(exc).__name__,
+            exception=exc,
         )
         return JSONResponse(
             status_code=500,
-            content=_error_body("Internal server error", "INTERNAL_ERROR"),
+            content=_error_body(request, "Internal server error", "INTERNAL_ERROR"),
         )

@@ -1,4 +1,4 @@
-import type { ProductIconTone } from '@/components/pod/product-icon';
+import type { ProductIconKind } from '@/components/pod/product-icon';
 
 export type ConceptId =
     | 'pod'
@@ -25,7 +25,7 @@ export interface ConceptEntry {
     oneLiner: string;
     explainer: string[];
     example: string;
-    tone: ProductIconTone;
+    iconKind: ProductIconKind;
     guideSlug: string;
     related: ConceptId[];
 }
@@ -42,7 +42,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'A "Customer support" pod holds the triage agent, the Tickets table, the escalation flow, and the connected support inbox.',
-        tone: 'pods',
+        iconKind: 'pods',
         guideSlug: 'concepts/pods',
         related: ['agent', 'table', 'flow', 'grant'],
     },
@@ -57,7 +57,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'A triage agent reads each new support email, labels the issue, and files a row in the Tickets table.',
-        tone: 'agents',
+        iconKind: 'agents',
         guideSlug: 'concepts/agents',
         related: ['runtime', 'flow', 'surface', 'function'],
     },
@@ -72,7 +72,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'New lead arrives → agent enriches it → function scores it → if score is high, a human approves → agent drafts the outreach email.',
-        tone: 'workflows',
+        iconKind: 'workflows',
         guideSlug: 'concepts/workflows',
         related: ['agent', 'function', 'approval', 'schedule'],
     },
@@ -86,8 +86,8 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
             'Because access is controlled per row and per agent, an agent can work the Tickets table without ever seeing Payroll.',
         ],
         example:
-            'A Leads table with name, company, source, and status — agents append rows, your team works them from a app.',
-        tone: 'tables',
+            'A Leads table with name, company, source, and status — agents append rows, your team works them from an app.',
+        iconKind: 'tables',
         guideSlug: 'concepts/tables',
         related: ['file', 'agent', 'app', 'grant'],
     },
@@ -101,7 +101,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'Upload the returns policy PDF and the support agent quotes the actual policy when replying to customers.',
-        tone: 'files',
+        iconKind: 'files',
         guideSlug: 'concepts/files',
         related: ['table', 'agent'],
     },
@@ -116,7 +116,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'Connect the support Gmail inbox; the triage agent labels each email and files a row in the Tickets table.',
-        tone: 'surfaces',
+        iconKind: 'surfaces',
         guideSlug: 'concepts/surfaces',
         related: ['agent', 'connector', 'conversation'],
     },
@@ -131,7 +131,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'A support app where every ticket opens with an agent’s draft reply already written — a teammate sends it, refines it, or asks the assistant for another angle.',
-        tone: 'apps',
+        iconKind: 'apps',
         guideSlug: 'concepts/apps',
         related: ['agent', 'table', 'grant'],
     },
@@ -146,7 +146,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'The hiring kit installs a candidate table, a sourcing agent, a review app, and a weekly follow-up schedule in one click.',
-        tone: 'pods',
+        iconKind: 'pods',
         guideSlug: 'concepts/kits',
         related: ['pod', 'app', 'agent', 'schedule'],
     },
@@ -161,7 +161,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'A lead-scoring function applies your exact point rules, so the same lead always gets the same score.',
-        tone: 'functions',
+        iconKind: 'functions',
         guideSlug: 'concepts/functions',
         related: ['flow', 'agent'],
     },
@@ -176,7 +176,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'Every weekday at 8am, the reporting agent posts yesterday’s ad spend summary to Slack.',
-        tone: 'schedules',
+        iconKind: 'schedules',
         guideSlug: 'concepts/schedules',
         related: ['flow', 'agent', 'surface'],
     },
@@ -191,7 +191,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'Connect Salesforce and the sales agent updates opportunity stages instead of just telling you to.',
-        tone: 'connectors',
+        iconKind: 'connectors',
         guideSlug: 'concepts/connectors',
         related: ['surface', 'agent', 'grant'],
     },
@@ -206,7 +206,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'Open yesterday’s triage conversation to see exactly why the agent escalated ticket #482.',
-        tone: 'conversation',
+        iconKind: 'conversation',
         guideSlug: 'concepts/conversations',
         related: ['agent', 'surface'],
     },
@@ -221,7 +221,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'Keep the salary table private to HR while the headcount app stays visible to the whole pod.',
-        tone: 'auth-rbac',
+        iconKind: 'auth-rbac',
         guideSlug: 'concepts/sharing',
         related: ['pod', 'table', 'scope'],
     },
@@ -236,7 +236,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'The triage agent reads the support folder and writes to the Tickets table — payroll doesn’t exist as far as it knows.',
-        tone: 'auth-rbac',
+        iconKind: 'auth-rbac',
         guideSlug: 'concepts/access-scope',
         related: ['agent', 'function', 'table', 'grant'],
     },
@@ -251,7 +251,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'The refund flow drafts everything automatically but waits for a manager’s click before money moves.',
-        tone: 'workflows',
+        iconKind: 'workflows',
         guideSlug: 'concepts/approvals',
         related: ['flow', 'surface'],
     },
@@ -266,7 +266,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'A scoring agent takes { company, employees } and returns { score, reason } — so a workflow can branch on score without re-reading prose.',
-        tone: 'agents',
+        iconKind: 'agents',
         guideSlug: 'concepts/variables',
         related: ['agent', 'flow', 'function'],
     },
@@ -280,7 +280,7 @@ export const CONCEPTS: Record<ConceptId, ConceptEntry> = {
         ],
         example:
             'The contract-review agent runs the strongest model; the email-labeling agent runs the fast one.',
-        tone: 'agents',
+        iconKind: 'agents',
         guideSlug: 'concepts/runtimes',
         related: ['agent'],
     },

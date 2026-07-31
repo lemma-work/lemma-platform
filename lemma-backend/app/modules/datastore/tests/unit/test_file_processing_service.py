@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -14,7 +14,10 @@ from app.modules.datastore.domain.document_processing import (
     DocumentImage,
     DocumentPage,
 )
-from app.modules.datastore.domain.errors import DatastoreObjectNotFoundError
+from app.modules.datastore.domain.errors import (
+    DatastoreObjectIntegrityError,
+    DatastoreObjectNotFoundError,
+)
 from app.modules.datastore.services.file_processing_service import (
     DatastoreFileProcessingService,
 )
@@ -31,6 +34,9 @@ class _ScalarResult:
 class _ExecuteResult:
     def __init__(self, rowcount: int = 1):
         self.rowcount = rowcount
+
+    def scalar_one_or_none(self):
+        return self.rowcount or None
 
 
 class _RecordingUowFactory:
@@ -50,7 +56,7 @@ class _RecordingUowFactory:
 
     @asynccontextmanager
     async def __call__(self):
-        result = self._results.pop(0)
+        result = self._results.pop(0) if self._results else _ExecuteResult()
         session = AsyncMock()
         session.execute = AsyncMock(side_effect=[result])
         self.sessions.append(session)
@@ -62,10 +68,38 @@ class _RecordingUowFactory:
             self.active -= 1
 
 
+def _make_iter_download(data: bytes):
+    async def _iter(*_args, **_kwargs):
+        yield data
+
+    return _iter
+
+
+def _make_iter_download_raising(exc: BaseException):
+    async def _iter(*_args, **_kwargs):
+        raise exc
+        yield  # pragma: no cover — makes this an async generator
+
+    return _iter
+
+
+def _set_source_bytes(service, data: bytes) -> None:
+    """Point the streamed extraction read (iter_download) at these bytes.
+
+    _build_extraction streams the original document via storage.iter_download to a
+    temp file and passes the path to the processor as content_path, so extraction
+    tests configure iter_download (download_file remains for the user-markdown
+    source.md path)."""
+    service.storage.iter_download = _make_iter_download(data)
+
+
 def _build_service(factory: _RecordingUowFactory) -> DatastoreFileProcessingService:
-    service = DatastoreFileProcessingService(uuid4(), uow_factory=factory)
+    search_service = AsyncMock()
+    service = DatastoreFileProcessingService(
+        uuid4(), uow_factory=factory, search_service=search_service
+    )
     service.storage = AsyncMock()
-    service.search_service = AsyncMock()
+    service.storage.iter_download = _make_iter_download(b"")
     service.document_processor = AsyncMock()
     return service
 
@@ -90,7 +124,7 @@ async def test_process_file_async_writes_child_container_and_indexes_chunks():
     service = _build_service(factory)
     pod_id = service.pod_id
 
-    service.storage.download_file.return_value = b"pdf-bytes"
+    _set_source_bytes(service, b"pdf-bytes")
     service.document_processor.extract.return_value = DocumentExtraction(
         markdown="<!-- PAGE 1 -->\n\n# OCR Output\n\n![](image_0.png)",
         chunks=[DocumentChunk(text="OCR Output", page_start=1, page_end=1)],
@@ -111,14 +145,19 @@ async def test_process_file_async_writes_child_container_and_indexes_chunks():
 
     assert service.storage.upload_file.await_count == 3
     service.document_processor.extract.assert_awaited_once_with(
-        b"pdf-bytes",
+        None,
         "scan.pdf",
         mime_type="application/pdf",
+        content_path=ANY,
     )
     service.search_service.index_file_chunks.assert_awaited_once()
-    assert service.search_service.index_file_chunks.await_args.args[2]["source"] == "test"
+    assert (
+        service.search_service.index_file_chunks.await_args.args[2]["source"] == "test"
+    )
     # Child artifacts are colocated under the source file's hidden container.
-    uploaded_paths = [call.args[0] for call in service.storage.upload_file.await_args_list]
+    uploaded_paths = [
+        call.args[0] for call in service.storage.upload_file.await_args_list
+    ]
     assert uploaded_paths == [
         f"pods/{pod_id}/files/manuals/.scan.pdf/document.md",
         f"pods/{pod_id}/files/manuals/.scan.pdf/image_0.png",
@@ -230,7 +269,9 @@ async def test_process_file_async_user_markdown_with_companion_images():
     await service.process_file_async(file_id)
 
     service.document_processor.extract.assert_not_awaited()
-    uploaded = {c.args[0]: c.args[1] for c in service.storage.upload_file.await_args_list}
+    uploaded = {
+        c.args[0]: c.args[1] for c in service.storage.upload_file.await_args_list
+    }
     prefix = f"pods/{pod_id}/files/manuals/.scan.pdf"
     # document.md + re-persisted source.md + the companion image + manifest.
     assert set(uploaded) == {
@@ -289,7 +330,7 @@ async def test_process_file_async_byo_holds_no_db_session_during_io():
 
     service.document_processor.extract.assert_not_awaited()
     # get_model, claim, mark_completed — all short UoWs, none left open.
-    assert factory.opened == 3
+    assert factory.opened == 5
     assert factory.active == 0
 
 
@@ -311,11 +352,11 @@ async def test_process_file_async_falls_back_to_extraction_when_source_md_missin
         results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
     )
     service = _build_service(factory)
-    # First download (source.md) 404s; second (the original) returns bytes.
+    # source.md 404s (buffered read); the original is then streamed for extraction.
     service.storage.download_file.side_effect = [
         DatastoreObjectNotFoundError("missing"),
-        b"pdf-bytes",
     ]
+    _set_source_bytes(service, b"pdf-bytes")
     service.document_processor.extract.return_value = DocumentExtraction(
         markdown="extracted text",
         chunks=[DocumentChunk(text="extracted text")],
@@ -347,7 +388,7 @@ async def test_process_file_async_persists_processor_markdown_verbatim():
         results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
     )
     service = _build_service(factory)
-    service.storage.download_file.return_value = b"pdf-bytes"
+    _set_source_bytes(service, b"pdf-bytes")
     service.document_processor.extract.return_value = DocumentExtraction(
         markdown="<!-- PAGE 1 -->\n\n# Rich heading\n\n| A | B |\n| - | - |\n| 1 | 2 |",
         chunks=[DocumentChunk(text="Rich heading", page_start=1)],
@@ -381,7 +422,7 @@ async def test_process_file_async_surfaces_native_chunk_pages_to_index():
         results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
     )
     service = _build_service(factory)
-    service.storage.download_file.return_value = b"pdf-bytes"
+    _set_source_bytes(service, b"pdf-bytes")
     service.document_processor.extract.return_value = DocumentExtraction(
         markdown="<!-- PAGE 1 -->\n\nA\n\n<!-- PAGE 2 -->\n\nB",
         chunks=[
@@ -420,7 +461,13 @@ async def test_process_file_async_indexes_personal_file_when_search_enabled():
     )
     service = _build_service(factory)
     pod_id = service.pod_id
-    service.storage.download_file.return_value = b"private-bytes"
+    streamed_keys: list[str] = []
+
+    def _iter_download(key, *_a, **_k):
+        streamed_keys.append(key)
+        return _make_iter_download(b"private-bytes")()
+
+    service.storage.iter_download = _iter_download
     service.document_processor.extract.return_value = DocumentExtraction(
         markdown="private text",
         chunks=[DocumentChunk(text="private text")],
@@ -429,9 +476,8 @@ async def test_process_file_async_indexes_personal_file_when_search_enabled():
 
     await service.process_file_async(file_id)
 
-    service.storage.download_file.assert_awaited_once_with(
-        f"pods/{pod_id}/files/{owner_user_id}/private.txt"
-    )
+    # The original was streamed (not buffered) from the right storage key.
+    assert streamed_keys == [f"pods/{pod_id}/files/{owner_user_id}/private.txt"]
     service.document_processor.extract.assert_awaited_once()
     service.search_service.index_file_chunks.assert_awaited_once()
     service.search_service.remove_file.assert_not_awaited()
@@ -455,7 +501,7 @@ async def test_process_file_async_uses_latest_file_metadata_over_stale_job_metad
         results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
     )
     service = _build_service(factory)
-    service.storage.download_file.return_value = b"pdf-bytes"
+    _set_source_bytes(service, b"pdf-bytes")
     service.document_processor.extract.return_value = DocumentExtraction(
         markdown="<!-- PAGE 1 -->\n\nlatest content",
         chunks=[DocumentChunk(text="latest content", page_start=1)],
@@ -465,10 +511,16 @@ async def test_process_file_async_uses_latest_file_metadata_over_stale_job_metad
 
     await service.process_file_async(file_id, {"source": "stale"})
 
-    assert service.search_service.index_file_chunks.await_args.args[2]["source"] == "latest"
-    assert service.search_service.index_file_chunks.await_args.args[2]["editor"] == "frontend"
+    assert (
+        service.search_service.index_file_chunks.await_args.args[2]["source"]
+        == "latest"
+    )
+    assert (
+        service.search_service.index_file_chunks.await_args.args[2]["editor"]
+        == "frontend"
+    )
     # Three short UoWs: get_model, claim_for_processing, mark_completed.
-    assert factory.opened == 3
+    assert factory.opened == 5
 
 
 @pytest.mark.asyncio
@@ -560,9 +612,9 @@ async def test_process_file_async_scopes_short_uows_and_holds_no_session_during_
         extraction_mode="ocr",
     )
 
-    async def _download(*_args, **_kwargs):
+    async def _iter_download(*_args, **_kwargs):
         _assert_no_open_session()
-        return b"pdf-bytes"
+        yield b"pdf-bytes"
 
     async def _extract(*_args, **_kwargs):
         _assert_no_open_session()
@@ -574,18 +626,18 @@ async def test_process_file_async_scopes_short_uows_and_holds_no_session_during_
     async def _index(*_args, **_kwargs):
         _assert_no_open_session()
 
-    service.storage.download_file.side_effect = _download
+    service.storage.iter_download = _iter_download
     service.storage.upload_file.side_effect = _upload
     service.document_processor.extract.side_effect = _extract
     service.search_service.index_file_chunks.side_effect = _index
 
     await service.process_file_async(file_id, {"source": "test"})
 
-    # Three distinct short UoWs opened (get_model, claim, mark_completed),
-    # all closed (none left dangling), each issuing exactly one statement.
-    assert factory.opened == 3
+    # Five distinct short UoWs opened (get, claim, two claim checks,
+    # completion), all closed and each issuing exactly one statement.
+    assert factory.opened == 5
     assert factory.active == 0
-    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 1]
+    assert [s.execute.await_count for s in factory.sessions] == [1, 1, 0, 0, 1]
     service.search_service.index_file_chunks.assert_awaited_once()
     # PDF projection uploads document.md + manifest.json (no images here).
     assert service.storage.upload_file.await_count == 2
@@ -611,7 +663,9 @@ async def test_process_file_async_marks_failed_in_own_uow_on_error():
         results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
     )
     service = _build_service(factory)
-    service.storage.download_file.side_effect = RuntimeError("storage down")
+    service.storage.iter_download = _make_iter_download_raising(
+        RuntimeError("storage down")
+    )
 
     with pytest.raises(RuntimeError, match="storage down"):
         await service.process_file_async(file_id)
@@ -619,3 +673,112 @@ async def test_process_file_async_marks_failed_in_own_uow_on_error():
     # get_model + claim + mark_failed, all closed.
     assert factory.opened == 3
     assert factory.active == 0
+
+
+@pytest.mark.asyncio
+async def test_process_file_async_terminally_fails_missing_original():
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="missing.pdf",
+        path="/manuals/missing.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_sha256="a" * 64,
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    service.storage.iter_download = _make_iter_download_raising(
+        DatastoreObjectNotFoundError("missing")
+    )
+
+    with pytest.raises(DatastoreObjectNotFoundError):
+        await service.process_file_async(file_id)
+
+    terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
+    compiled = str(terminal_stmt.compile().params)
+    assert "FAILED_PERMANENT" in compiled
+    assert "content_sha256" in str(terminal_stmt)
+    assert "processing_attempts" in str(terminal_stmt)
+    service.document_processor.extract.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_file_async_terminally_fails_corrupt_original():
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="corrupt.pdf",
+        path="/manuals/corrupt.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        content_sha256="0" * 64,
+    )
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult(), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+    _set_source_bytes(service, b"tampered bytes")
+
+    with pytest.raises(DatastoreObjectIntegrityError):
+        await service.process_file_async(file_id)
+
+    terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
+    assert "FAILED_PERMANENT" in str(terminal_stmt.compile().params)
+    service.document_processor.extract.assert_not_awaited()
+
+
+def test_processing_error_summary_never_persists_provider_payload():
+    canary = "CANARY_DATASTORE_PROVIDER_SECRET"
+
+    summary = DatastoreFileProcessingService._sanitize_error(
+        RuntimeError(f"provider response api_key={canary}")
+    )
+
+    assert summary == "RuntimeError: document processing failed"
+    assert canary not in summary
+
+
+@pytest.mark.asyncio
+async def test_process_file_async_terminally_fails_oversize_file():
+    """A file larger than the size cap is FAILED_PERMANENT without being claimed
+    or downloaded, so it never enters the processing/recovery loop or holds
+    memory."""
+    file_id = uuid4()
+    file_model = SimpleNamespace(
+        id=file_id,
+        kind="FILE",
+        status="PENDING",
+        search_enabled=True,
+        name="huge.pdf",
+        path="/manuals/huge.pdf",
+        mime_type="application/pdf",
+        file_metadata={},
+        size_bytes=10**12,  # 1 TB, far over the 100 MB default cap
+    )
+
+    # get_model + mark_failed_permanent — no claim, no extraction.
+    factory = _RecordingUowFactory(
+        results=[_ScalarResult(file_model), _ExecuteResult()]
+    )
+    service = _build_service(factory)
+
+    await service.process_file_async(file_id)
+
+    service.storage.download_file.assert_not_awaited()
+    service.document_processor.extract.assert_not_awaited()
+    # Only get_model + the terminal-fail UoW were opened.
+    assert factory.opened == 2
+    assert factory.active == 0
+    # The terminal-fail statement carried FAILED_PERMANENT.
+    terminal_stmt = factory.sessions[-1].execute.await_args.args[0]
+    compiled = str(terminal_stmt.compile().params)
+    assert "FAILED_PERMANENT" in compiled

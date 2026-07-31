@@ -4,6 +4,7 @@
 /* eslint-disable */
 import type { FunctionStatus } from './FunctionStatus.js';
 import type { FunctionType } from './FunctionType.js';
+import type { JsonObject } from './JsonObject.js';
 /**
  * Lean function shape for list responses.
  *
@@ -13,20 +14,18 @@ import type { FunctionType } from './FunctionType.js';
  */
 export type FunctionSummaryResponse = {
     allowed_actions?: Array<string>;
-    code_hash?: (string | null);
     code_path?: (string | null);
-    config?: (Record<string, any> | null);
-    created_at: any;
+    config?: (JsonObject | null);
+    created_at: (string | null);
     description?: (string | null);
     icon_url?: (string | null);
     id: string;
     name: string;
     pod_id: string;
-    python_packages?: Array<string>;
+    revision_hash?: (string | null);
     status: FunctionStatus;
     type: FunctionType;
-    updated_at: any;
+    updated_at: (string | null);
     user_id: string;
     visibility?: string;
 };
-

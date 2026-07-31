@@ -1,7 +1,5 @@
 import type {
   AgentRuntimeConfig,
-  AgentHarnessInfo,
-  AgentHarnessListResponse,
   AgentDetailResponse,
   AgentSummaryResponse,
   AgentRuntimeProfileListResponse,
@@ -16,8 +14,8 @@ import type {
   FileSummaryResponse,
   FileSearchResponse,
   FileSearchResultSchema,
-  FlowDetailResponse,
-  FlowSummaryResponse,
+  WorkflowDetailResponse,
+  WorkflowSummaryResponse,
   TableSummaryResponse,
   WorkflowRunResponse,
   FunctionDetailResponse,
@@ -64,8 +62,6 @@ export interface AvailableModelInfo {
 
 export type AvailableModels = ConversationModel;
 export type AgentRuntime = AgentRuntimeConfig;
-export type AgentRuntimeAvailability = AgentHarnessInfo;
-export type AgentRuntimeAvailabilityList = AgentHarnessListResponse;
 export type AgentRuntimeListResponse = AgentRuntimeProfileListResponse;
 export type AgentRuntimeResponse = AgentRuntimeProfileResponse;
 
@@ -156,11 +152,9 @@ export type FunctionRun = FunctionRunResponse;
 export type FunctionRunSummary = FunctionRunSummaryResponse;
 export type FlowRun = WorkflowRunResponse;
 export type WorkflowRunSummary = WorkflowRunSummaryResponse;
-/** @deprecated Use Workflow or FlowDetailResponse. */
-export type FlowResponse = FlowDetailResponse;
-export type Workflow = FlowDetailResponse;
+export type Workflow = WorkflowDetailResponse;
 /** Lean workflow shape returned by list endpoints (no graph; node_count/node_types only). */
-export type WorkflowSummary = FlowSummaryResponse;
+export type WorkflowSummary = WorkflowSummaryResponse;
 export type WorkflowStart = Workflow["start"];
 export type WorkflowStartType = NonNullable<WorkflowStart>["type"];
 export type Schedule = ScheduleDetailResponse;

@@ -350,3 +350,61 @@ async def test_teams_get_recent_thread_messages_include_files(
     assert [message.text for message in response.messages] == ["[File shared: diagram.png]"]
     assert response.messages[0].attachments[0].download_url == "https://files.example/diagram.png"
     assert response.messages[0].attachments[0].content_type == "image/png"
+
+
+def test_teams_download_helper_classifies_urls_and_credentials():
+    from app.modules.agent_surfaces.platforms.teams.service import (
+        _is_raw_sharepoint_document_url,
+        _looks_like_bot_attachment_url,
+        _split_sharepoint_site_and_item_path,
+        _tenant_id_from_credentials,
+    )
+
+    assert (
+        _tenant_id_from_credentials({"user_data": {"tenant_id": "tenant-user"}})
+        == "tenant-user"
+    )
+    assert (
+        _tenant_id_from_credentials({"raw_response": {"tid": "tenant-raw"}})
+        == "tenant-raw"
+    )
+    assert _looks_like_bot_attachment_url(
+        "https://smba.trafficmanager.net/amer/v3/attachments/abc/views/original"
+    )
+    assert _is_raw_sharepoint_document_url(
+        "https://example.sharepoint.com/sites/Eng/Shared%20Documents/report.docx"
+    )
+    assert _split_sharepoint_site_and_item_path(
+        "/sites/Eng/Shared Documents/report.docx"
+    ) == ("/sites/Eng", "/Shared Documents/report.docx")
+
+
+@pytest.mark.asyncio
+async def test_teams_download_attachment_returns_none_without_tokens(monkeypatch):
+    from app.modules.agent_surfaces.domain.entities import (
+        ConversationType,
+        ParsedInboundSurfaceEvent,
+    )
+    from app.modules.agent_surfaces.platforms.teams.service import TeamsPlatformService
+
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.teams.client.get_bot_token",
+        AsyncMock(return_value=None),
+    )
+    service = TeamsPlatformService(credentials={"tenant_id": "tenant-1"})
+
+    result = await service.download_attachment_bytes(
+        ParsedInboundSurfaceEvent(
+            platform="TEAMS",
+            conversation_type=ConversationType.EXTERNAL_GROUP,
+            external_thread_id="thread",
+            message_text="file",
+        ),
+        {
+            "download_url": "https://smba.trafficmanager.net/amer/v3/attachments/abc",
+            "name": "file.txt",
+            "content_type": "text/plain",
+        },
+    )
+
+    assert result is None

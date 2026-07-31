@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import logging
 from typing import Any
 
 from app.modules.connectors.domain.errors import (
@@ -26,7 +25,9 @@ from app.modules.connectors.infrastructure.adapters.openapi_http_executor import
 )
 from app.modules.connectors.infrastructure.adapters.mcp_executor import McpExecutor
 from app.modules.connectors.infrastructure.adapters.sql_executor import SqlExecutor
-logger = logging.getLogger(__name__)
+from app.core.log.log import get_logger
+
+logger = get_logger(__name__)
 
 # Process-shared executors for kinds that hold reusable resources (SQL engine
 # pools). The gateway is constructed per-request, so a fresh executor per request
@@ -113,20 +114,21 @@ class LemmaOperationGateway(AppOperationGatewayPort):
     ) -> Exception:
         details = getattr(exc, "details", None)
         status_code = getattr(exc, "status_code", None)
-        upstream_message = str(exc)
-        normalized_error = upstream_message.lower()
-        payload = {
-            "upstream_message": upstream_message,
-        }
+        # Exception text is useful for local classification but may contain
+        # provider request bodies, callback URLs, or credentials. Never attach
+        # it to a domain error or log record.
+        normalized_error = str(exc).lower()
+        payload: dict[str, object] = {"error_type": type(exc).__name__}
+        if isinstance(status_code, int):
+            payload["upstream_status"] = status_code
         if isinstance(details, dict):
-            payload.update(details)
             error_value = details.get("error")
             if isinstance(error_value, str):
                 normalized_error = error_value.lower()
+                if len(error_value) <= 100:
+                    payload["upstream_code"] = error_value
 
-        message = upstream_message or (
-            f"Failed to execute '{operation_name}' for '{connector_id}'."
-        )
+        message = f"Connector operation '{operation_name}' failed."
         if status_code == 400 or any(
             token in normalized_error
             for token in ("bad_request", "invalid", "validation")
@@ -173,8 +175,8 @@ class LemmaOperationGateway(AppOperationGatewayPort):
         fields = getattr(input_model, "model_fields", None)
         if not isinstance(fields, dict):
             logger.debug(
-                "Skipping token autofill for %s because operation metadata is unavailable",
-                operation_name,
+                "connectors.lemma_operation_gateway.skipping_token_autofill_s_because.observed",
+                operation_name=operation_name,
             )
             return prepared
         access_token = (
@@ -199,11 +201,10 @@ class LemmaOperationGateway(AppOperationGatewayPort):
         connection_config: dict[str, Any] | None = None,
     ) -> Any:
         del auth_token, api_url, provider
-        logger.info(
-            "calling %s native operation %s with payload keys=%s",
-            connector_id,
-            operation_name,
-            sorted((payload or {}).keys()),
+        logger.debug(
+            "connectors.lemma_operation_gateway.calling_s_native_operation_s.observed",
+            connector_id=connector_id,
+            operation_name=operation_name,
         )
         try:
             if execution:
@@ -218,7 +219,9 @@ class LemmaOperationGateway(AppOperationGatewayPort):
                     third_party_credentials=third_party_credentials,
                     connection_config=connection_config,
                 )
-            client = create_lemma_execution_client(connector_id, third_party_credentials)
+            client = create_lemma_execution_client(
+                connector_id, third_party_credentials
+            )
             operation = await client.get_operation(operation_name)
             prepared_payload = self._prepare_payload(
                 operation, operation_name, payload, third_party_credentials

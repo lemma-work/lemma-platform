@@ -83,7 +83,9 @@ from lemma_pod_bundle.portability import (
     _slug_var_name,
     _strip_unresolved_placeholders,
     _tokenize_ref_fields,
+    require_account_variable_metadata,
 )
+from lemma_pod_bundle.apply_fields import SCHEDULE_APPLY_FIELDS, SURFACE_APPLY_FIELDS
 
 from lemma_sdk import Lemma
 from lemma_sdk.errors import LemmaAPIError
@@ -91,7 +93,7 @@ from lemma_sdk.openapi_client.models.add_column_request import AddColumnRequest
 from lemma_sdk.openapi_client.models.agent_permissions_replace_request import (
     AgentPermissionsReplaceRequest,
 )
-from lemma_sdk.openapi_client.models.body_file_update import BodyFileUpdate
+from lemma_sdk.openapi_client.models.update import Update
 from lemma_sdk.openapi_client.models.create_agent_request import CreateAgentRequest
 from lemma_sdk.openapi_client.models.create_app_request import CreateAppRequest
 from lemma_sdk.openapi_client.models.create_function_request import CreateFunctionRequest
@@ -370,17 +372,49 @@ def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int
 
 
 def _surface_upsert_body(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: payload[key]
-        for key in (
-            "account_id",
-            "config",
-            "credential_mode",
-            "default_agent_name",
-            "is_enabled",
+    return {key: payload[key] for key in SURFACE_APPLY_FIELDS if key in payload}
+
+
+def _resolve_account_connector_info(client: Lemma, account_id: str) -> tuple[str, str]:
+    """Ground-truth ``(connector_id, provider)`` for an account, resolved via
+    the connectors API — never inferred from a resource's own name, since that
+    guess is wrong for any resource type with no platform concept of its own
+    (e.g. a schedule). Raises if the account (or its provider) can't be
+    resolved, since a bundle can't be tokenized without this metadata."""
+    try:
+        account = to_plain(client.connectors.accounts.get(account_id))
+    except LemmaAPIError as exc:
+        raise ValueError(
+            f"Could not resolve connector info for account {account_id}: {exc}"
+        ) from exc
+    connector_id = account.get("connector_id")
+    provider = account.get("provider")
+    if not connector_id or not provider:
+        raise ValueError(
+            f"Account {account_id} is missing connector_id/provider info — "
+            "upgrade the backend or lemma-sdk before exporting connector-bound "
+            "resources."
         )
-        if key in payload
-    }
+    return str(connector_id), str(provider)
+
+
+def _stamp_cli_account_defaults(bundle_root: Path, variables: dict[str, Any]) -> None:
+    """CLI-only convenience: record each account variable's source account id
+    as its ``default``, so re-importing into the same org (a common local dev
+    loop — export, tweak, reimport) doesn't require ``--var`` every time. A
+    backend/UI-triggered export never does this — the importer there must
+    always be prompted to supply their own account."""
+    changed = False
+    for meta in variables.values():
+        if str((meta or {}).get("type") or "") == "account" and not meta.get("default"):
+            meta["default"] = meta["source_value"]
+            changed = True
+    if not changed:
+        return
+    pod_path = bundle_root / "pod.json"
+    pod_data = _read_json(pod_path)
+    pod_data["variables"] = variables
+    _write_json(pod_path, pod_data)
 
 
 def _app_payload_with_unique_public_slug(
@@ -407,13 +441,20 @@ def _build_variable_applier(
 ):
     """Return ``apply(payload) -> payload`` that resolves the bundle's ``${name}``
     variables (and the legacy ``$POD_MEMBER`` token) and drops any that stay
-    unresolved. ``pod_member`` variables default to the importing user; account
-    variables must be supplied via ``--var``/``--values`` or are left unresolved.
+    unresolved. ``pod_member`` variables default to the importing user; an
+    account variable falls back to its recorded ``default`` (the source
+    account id, stamped by this CLI's own export for same-org re-import
+    convenience) once that account is verified reachable, otherwise it must be
+    supplied via ``--var``/``--values`` or is left unresolved.
     """
     from .scaffold import substitute_placeholders
 
     pod_path = source_dir / "pod.json"
     declared = (_read_json(pod_path).get("variables") or {}) if pod_path.is_file() else {}
+    try:
+        require_account_variable_metadata(declared)
+    except ValueError as exc:
+        raise ValueError(f"{exc} Re-export this bundle with a newer lemma-cli.") from exc
     overrides = dict(var_overrides or {})
     unknown = sorted(set(overrides) - set(declared))
     if unknown:
@@ -422,6 +463,7 @@ def _build_variable_applier(
             f"This bundle declares: {', '.join(sorted(declared)) or '(none)'}."
         )
     member_cache: list[str] = []
+    account_default_cache: dict[str, str | None] = {}
 
     def member_default() -> str:
         if not member_cache:
@@ -429,6 +471,32 @@ def _build_variable_applier(
                 _resolve_import_pod_member_id(client, pod_sdk, member_override)
             )
         return member_cache[0]
+
+    def verified_account_default(name: str, spec: dict[str, Any]) -> str | None:
+        """Never blindly reuse a bundle's recorded source account id: confirm
+        it still exists (and is reachable to the current session) before
+        treating it as resolved, since a stale/foreign id would otherwise
+        silently bind the wrong account."""
+        if name not in account_default_cache:
+            default_id = spec.get("default")
+            resolved: str | None = None
+            if default_id:
+                try:
+                    client.connectors.accounts.get(str(default_id))
+                except LemmaAPIError as exc:
+                    # A 404/403 means the recorded source account isn't ours to
+                    # reuse — leave the variable unresolved. But a 429 (rate
+                    # limited) or 5xx is transient/systemic: treating it as
+                    # "account gone" would silently drop the binding and import a
+                    # half-wired resource, so surface it instead.
+                    if getattr(exc, "status_code", None) in (403, 404):
+                        resolved = None
+                    else:
+                        raise
+                else:
+                    resolved = str(default_id)
+            account_default_cache[name] = resolved
+        return account_default_cache[name]
 
     def apply(payload: dict[str, Any]) -> dict[str, Any]:
         serialized = json.dumps(payload)
@@ -439,10 +507,15 @@ def _build_variable_applier(
             token = _placeholder(name)
             if token not in serialized:
                 continue
+            vtype = str((spec or {}).get("type") or "")
             if name in overrides:
                 replacements[token] = overrides[name]
-            elif str((spec or {}).get("type") or "") == "pod_member":
+            elif vtype == "pod_member":
                 replacements[token] = member_default()
+            elif vtype == "account":
+                default_value = verified_account_default(name, spec or {})
+                if default_value is not None:
+                    replacements[token] = default_value
         if replacements:
             payload = substitute_placeholders(payload, replacements)
         return _strip_unresolved_placeholders(payload)
@@ -806,6 +879,13 @@ def export_pod_bundle(
                 if schedule_id
                 else schedule
             )
+            account_id = full_schedule.get("account_id")
+            if account_id:
+                connector_id, provider = _resolve_account_connector_info(
+                    client, str(account_id)
+                )
+                full_schedule["connector_id"] = connector_id
+                full_schedule["provider"] = provider
             _write_json(
                 resource_dir / f"{schedule_name}.json",
                 _normalize_schedule_payload(full_schedule),
@@ -815,7 +895,15 @@ def export_pod_bundle(
     if should_export("surfaces"):
         seen_platforms: set[str] = set()
         for surface in list_items(pod_sdk.surfaces.list(limit=100)):
-            payload = _normalize_surface_payload(to_plain(surface))
+            raw_surface = to_plain(surface)
+            account_id = raw_surface.get("account_id")
+            if account_id:
+                connector_id, provider = _resolve_account_connector_info(
+                    client, str(account_id)
+                )
+                raw_surface["connector_id"] = connector_id
+                raw_surface["provider"] = provider
+            payload = _normalize_surface_payload(raw_surface)
             platform = str(payload.get("platform") or "")
             if not platform or platform in seen_platforms:
                 continue
@@ -858,6 +946,7 @@ def export_pod_bundle(
     # Replace non-portable member/account ids with ${name} variables recorded in
     # pod.json, so the bundle can be re-imported into another pod/org.
     variables = _extract_portable_variables(bundle_root)
+    _stamp_cli_account_defaults(bundle_root, variables)
 
     # Record what this bundle carries (selective scope + whether row data / file
     # bytes were captured) so a re-import seeds them automatically and a re-export
@@ -1364,7 +1453,7 @@ def _import_pod_files(
         _progress_start("file", path_key, "updating folder")
         updated = to_plain(pod_sdk.files.update(
             "/" + path_key,
-            BodyFileUpdate.from_dict({"path": "/" + path_key, **update_args}),
+            Update.from_dict({"path": "/" + path_key, **update_args}),
         ))
         folders_by_path[path_key] = updated
         folder_summaries.append(f"updated-folder:{path_key}")
@@ -1546,17 +1635,7 @@ def _update_app_with_conflict_retry(
 def _schedule_create_fields(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         key: payload[key]
-        for key in (
-            "name",
-            "schedule_type",
-            "config",
-            "agent_name",
-            "workflow_name",
-            "account_id",
-            "connector_trigger_id",
-            "filter_instruction",
-            "filter_output_schema",
-        )
+        for key in SCHEDULE_APPLY_FIELDS
         if key in payload and payload[key] is not None
     }
 

@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { attach } from '../models/attach.js';
 import type { CreateFolderRequest } from '../models/CreateFolderRequest.js';
 import type { DatastoreFileUploadRequest } from '../models/DatastoreFileUploadRequest.js';
 import type { DirectoryTreeResponse } from '../models/DirectoryTreeResponse.js';
@@ -137,6 +138,59 @@ export class FilesService {
         return __request(OpenAPI, {
             method: 'PATCH',
             url: '/pods/{pod_id}/datastore/files/by-path',
+            path: {
+                'pod_id': podId,
+            },
+            formData: formData,
+            mediaType: 'multipart/form-data',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Detach Document Markdown
+     * Remove a document's user-provided markdown so it reverts to extraction.
+     * @param podId
+     * @param path
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static fileMarkdownDetach(
+        podId: string,
+        path: string,
+    ): CancelablePromise<FileDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'DELETE',
+            url: '/pods/{pod_id}/datastore/files/by-path/markdown',
+            path: {
+                'pod_id': podId,
+            },
+            query: {
+                'path': path,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Attach Document Markdown
+     * Attach user-authored markdown and referenced images to a document.
+     *
+     * The source file remains unchanged; the markdown is indexed for agent use.
+     * @param podId
+     * @param formData
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static fileMarkdownAttach(
+        podId: string,
+        formData: attach,
+    ): CancelablePromise<FileDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'PUT',
+            url: '/pods/{pod_id}/datastore/files/by-path/markdown',
             path: {
                 'pod_id': podId,
             },

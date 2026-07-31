@@ -25,6 +25,7 @@ def _routers():
 
 def _register_streaq() -> None:
     import app.modules.pod_bundle.events.handlers  # noqa: F401
+    import app.modules.pod_bundle.events.publish_task  # noqa: F401
 
 
 module = LemmaModule(

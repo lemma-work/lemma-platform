@@ -8,4 +8,3 @@ export type AgentSurfaceListResponse = {
     limit: number;
     next_page_token?: (string | null);
 };
-

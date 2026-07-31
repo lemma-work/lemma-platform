@@ -41,7 +41,7 @@ def _app_subdomain_origin_regex() -> str | None:
 
     No-build apps are served from per-slug subdomains and call the API with
     credentials, so each subdomain must be an allowed CORS origin. The base
-    domain may carry a port locally (e.g. ``127-0-0-1.sslip.io:8711``).
+    domain may carry a port locally (e.g. ``apps.lemma.localhost:8711``).
     """
     base_domain = (settings.app_base_domain or "").strip()
     if not base_domain:

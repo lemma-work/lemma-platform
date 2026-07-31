@@ -17,6 +17,10 @@ import Session, {
 } from "supertokens-auth-react/recipe/session";
 import { EmailPasswordPreBuiltUI } from "supertokens-auth-react/recipe/emailpassword/prebuiltui";
 import { ThirdPartyPreBuiltUI } from "supertokens-auth-react/recipe/thirdparty/prebuiltui";
+import { EmailVerificationPreBuiltUI } from "supertokens-auth-react/recipe/emailverification/prebuiltui";
+import EmailVerification, {
+  EmailVerificationClaim,
+} from "supertokens-auth-react/recipe/emailverification";
 
 import { authConfig, buildApiUrl, refreshSessionPath } from "@/components/auth/portal/auth/config";
 import {
@@ -29,7 +33,30 @@ import {
   readRawRedirectUriFromSearch,
   readRedirectUriFromSearch,
 } from "@/components/auth/portal/auth/redirects";
-import { ensureSuperTokensInit } from "@/components/auth/portal/auth/supertokens";
+import {
+  canCompleteAuthenticatedNavigation,
+  shouldFetchCurrentUser,
+} from "@/components/auth/portal/auth/verification-controller";
+import {
+  challengeForDesktopVerifier,
+  clearPendingDesktopAuth,
+  clearStoredDesktopRequestId,
+  createDesktopVerifier,
+  getPendingDesktopAuth,
+  getStoredDesktopRequestId,
+  readDesktopRequestIdFromSearch,
+  shouldUseDesktopBrowserHandoff,
+  storeDesktopRequestId,
+  storePendingDesktopAuth,
+  type PendingDesktopAuth,
+} from "@/components/auth/portal/auth/desktop";
+import {
+  ensureSuperTokensInit,
+  isTelegramMiniApp,
+} from "@/components/auth/portal/auth/supertokens";
+import { VerificationScreen } from "@/components/auth/portal/auth/verification-screen";
+import { PasswordResetScreen } from "@/components/auth/portal/auth/password-reset-screen";
+import { AuthProtectionNotice } from "@/components/auth/portal/auth/auth-protection-notice";
 import {
   getDestinationLabel,
   getRedirectDestinationFallback,
@@ -75,7 +102,44 @@ type CliSessionResponse = {
 
 type AuthMode = "signin" | "signup";
 
-const preBuiltUiList = [EmailPasswordPreBuiltUI, ThirdPartyPreBuiltUI] as const;
+const preBuiltUiList = [
+  EmailPasswordPreBuiltUI,
+  EmailVerificationPreBuiltUI,
+  ThirdPartyPreBuiltUI,
+] as const;
+
+function TelegramLoginButton({ visible }: { visible: boolean }) {
+  const [enabled, setEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    let active = true;
+    void fetch(buildApiUrl("/auth/telegram/config"))
+      .then((response) => (response.ok ? response.json() : { enabled: false }))
+      .then((payload: { enabled?: boolean }) => {
+        if (active) setEnabled(payload.enabled === true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [visible]);
+
+  if (!visible || !enabled) return null;
+  return (
+    <button
+      type="button"
+      className="secondary-button auth-portal-session-button"
+      onClick={() => {
+        const start = new URL(buildApiUrl("/auth/telegram/start"));
+        start.searchParams.set("purpose", "signin");
+        start.searchParams.set("return_to", window.location.href);
+        window.location.assign(start.toString());
+      }}
+    >
+      Sign in with Telegram
+    </button>
+  );
+}
 
 function resolveAuthMode(
   pathname: string,
@@ -145,6 +209,10 @@ function AuthLanding() {
   const doesSessionExist = session.loading ? false : session.doesSessionExist;
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [isFetchingUser, setIsFetchingUser] = useState(false);
+  const [desktopCompletion, setDesktopCompletion] = useState<
+    "idle" | "completing" | "complete" | "error"
+  >("idle");
+  const desktopCompletionPromiseRef = useRef<Promise<void> | null>(null);
   const [urlSnapshot, setUrlSnapshot] = useState<UrlSnapshot>(() =>
     readWindowUrlSnapshot(),
   );
@@ -186,6 +254,9 @@ function AuthLanding() {
   const effectiveHash =
     location.hash || urlSnapshot.hash || liveUrlSnapshot.hash;
   const rawRedirectUri = readRawRedirectUriFromSearch(effectiveSearch);
+  const queryDesktopRequestId = readDesktopRequestIdFromSearch(effectiveSearch);
+  const desktopRequestId =
+    queryDesktopRequestId || getStoredDesktopRequestId();
   const queryRedirectUri = readRedirectUriFromSearch(effectiveSearch);
   const hasExplicitRedirectUri = hasRedirectUriInSearch(effectiveSearch);
   const redirectUri =
@@ -203,8 +274,41 @@ function AuthLanding() {
     effectiveSearch,
     effectiveHash,
   );
+  const isEmailVerificationRoute = effectivePathname
+    .toLowerCase()
+    .endsWith("/verify-email");
+  const isPasswordResetRoute = effectivePathname
+    .toLowerCase()
+    .endsWith("/reset-password");
+  const invalidClaims = session.loading ? [] : session.invalidClaims;
+  const hasInvalidClaims = invalidClaims.length > 0;
+  const needsEmailVerification = invalidClaims.some(
+    (claim) => claim.id === EmailVerificationClaim.id,
+  );
+  const isVerificationExperience =
+    !isPasswordResetRoute && (isEmailVerificationRoute || needsEmailVerification);
+  const canNavigateAsAuthenticated = canCompleteAuthenticatedNavigation({
+    sessionLoading: session.loading,
+    doesSessionExist,
+    hasInvalidClaims,
+    isVerificationExperience,
+  });
   const authHeroCopy: HeroCopy =
-    authMode === "signup"
+    isPasswordResetRoute
+      ? {
+          eyebrow: "Account recovery",
+          title: "A secure way back in.",
+          description:
+            "Reset your password privately, then continue with your Lemma account.",
+        }
+      : isVerificationExperience
+      ? {
+          eyebrow: "Account security",
+          title: "One quick verification.",
+          description:
+            "Confirm your email once, then continue securely with your Lemma account.",
+        }
+      : authMode === "signup"
       ? {
           eyebrow: "Create account for",
           title: destinationLabel || "Create your Lemma identity",
@@ -219,6 +323,12 @@ function AuthLanding() {
             ? `Sign in with Lemma, then head back to ${destinationLabel}.`
             : "Sign in once and continue with your Lemma account.",
         };
+
+  useEffect(() => {
+    if (queryDesktopRequestId) {
+      storeDesktopRequestId(queryDesktopRequestId);
+    }
+  }, [queryDesktopRequestId]);
 
   useEffect(() => {
     if (session.loading) {
@@ -241,7 +351,15 @@ function AuthLanding() {
   ]);
 
   useEffect(() => {
-    if (session.loading || !doesSessionExist) {
+    if (
+      !shouldFetchCurrentUser({
+        sessionLoading: session.loading,
+        doesSessionExist,
+        hasInvalidClaims,
+        desktopRequestId,
+        isVerificationExperience,
+      })
+    ) {
       return;
     }
 
@@ -276,10 +394,53 @@ function AuthLanding() {
     return () => {
       isActive = false;
     };
+  }, [
+    desktopRequestId,
+    doesSessionExist,
+    hasInvalidClaims,
+    isVerificationExperience,
+    session.loading,
+  ]);
+
+  useEffect(() => {
+    if (session.loading || !doesSessionExist || !isTelegramMiniApp()) {
+      return;
+    }
+
+    let cancelled = false;
+    let observedUnverified = false;
+    const checkVerification = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const result = await EmailVerification.isEmailVerified();
+        if (!result.isVerified) {
+          observedUnverified = true;
+          return;
+        }
+        if (observedUnverified && !cancelled) {
+          await Session.attemptRefreshingSession();
+          if (!cancelled) window.location.reload();
+        }
+      } catch {
+        // A transient network failure is retried on the next poll/focus event.
+      }
+    };
+
+    const handleReturn = () => void checkVerification();
+    void checkVerification();
+    const pollId = window.setInterval(handleReturn, 3000);
+    window.addEventListener("focus", handleReturn);
+    document.addEventListener("visibilitychange", handleReturn);
+    return () => {
+      cancelled = true;
+      window.clearInterval(pollId);
+      window.removeEventListener("focus", handleReturn);
+      document.removeEventListener("visibilitychange", handleReturn);
+    };
   }, [doesSessionExist, session.loading]);
 
   useEffect(() => {
-    if (session.loading || !doesSessionExist) {
+    if (!canNavigateAsAuthenticated || desktopRequestId) {
       return;
     }
 
@@ -290,7 +451,52 @@ function AuthLanding() {
     }
 
     window.location.replace(finalRedirectUri);
-  }, [doesSessionExist, queryRedirectUri, redirectUri, session.loading]);
+  }, [
+    desktopRequestId,
+    canNavigateAsAuthenticated,
+    queryRedirectUri,
+    redirectUri,
+  ]);
+
+  useEffect(() => {
+    if (!canNavigateAsAuthenticated || !desktopRequestId) {
+      return;
+    }
+
+    let cancelled = false;
+    if (!desktopCompletionPromiseRef.current) {
+      setDesktopCompletion("completing");
+      desktopCompletionPromiseRef.current = fetch(
+        buildApiUrl(
+          `/auth/desktop/requests/${encodeURIComponent(desktopRequestId)}/complete`,
+        ),
+        { method: "POST", credentials: "include" },
+      ).then((response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to complete desktop login: ${response.status}`);
+        }
+      });
+    }
+
+    void desktopCompletionPromiseRef.current
+      .then(() => {
+        if (cancelled) return;
+        setDesktopCompletion("complete");
+        clearStoredDesktopRequestId();
+        window.setTimeout(() => {
+          window.location.assign(
+            `lemma://auth/complete?request_id=${encodeURIComponent(desktopRequestId)}`,
+          );
+        }, 350);
+      })
+      .catch(() => {
+        if (!cancelled) setDesktopCompletion("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canNavigateAsAuthenticated, desktopRequestId]);
 
   if (session.loading) {
     return (
@@ -298,6 +504,54 @@ function AuthLanding() {
         message="Checking your session…"
         destination={destination}
       />
+    );
+  }
+
+  if (isPasswordResetRoute) {
+    return (
+      <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
+        <div className="auth-form-stack">
+          <AuthProtectionNotice />
+          <PasswordResetScreen />
+        </div>
+      </AuthScreenLayout>
+    );
+  }
+
+  if (isVerificationExperience) {
+    return (
+      <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
+        <div className="auth-form-stack">
+          <AuthProtectionNotice />
+          <VerificationScreen doesSessionExist={doesSessionExist} />
+        </div>
+      </AuthScreenLayout>
+    );
+  }
+
+  if (doesSessionExist && desktopRequestId) {
+    const failed = desktopCompletion === "error";
+    return (
+      <AuthScreenLayout
+        heroCopy={{
+          eyebrow: "Lemma Desktop",
+          title: "Return to the app.",
+          description: "Your browser session is being handed back securely.",
+        }}
+      >
+        <StatusPanel
+          eyebrow={failed ? "Handoff failed" : "Signed in"}
+          title={failed ? "We couldn't reach Lemma Desktop." : "You're signed in."}
+          description={
+            failed
+              ? "Return to Lemma Desktop and start the sign-in again."
+              : "Lemma Desktop will come back to the foreground and finish opening your workspace."
+          }
+          tone={failed ? "danger" : "neutral"}
+        >
+          {!failed ? <div className="spinner" aria-hidden="true" /> : null}
+        </StatusPanel>
+      </AuthScreenLayout>
     );
   }
 
@@ -375,10 +629,209 @@ function AuthLanding() {
   return (
     <AuthScreenLayout destination={destination} heroCopy={authHeroCopy}>
       <div className="auth-form-stack">
+        <TelegramLoginButton visible={authMode === "signin"} />
+        <AuthProtectionNotice />
         {getRoutingComponent([...preBuiltUiList])}
       </div>
     </AuthScreenLayout>
   );
+}
+
+function DesktopSignInPage() {
+  const session = useSessionContext();
+  const doesSessionExist = session.loading ? false : session.doesSessionExist;
+  const [pending, setPending] = useState<PendingDesktopAuth | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const startPromiseRef = useRef<Promise<PendingDesktopAuth> | null>(null);
+  const exchangePromiseRef = useRef<Promise<void> | null>(null);
+  const automaticallyOpenedRequestRef = useRef<string | null>(null);
+
+  const openBrowser = (browserUrl: string, force = false) => {
+    // The desktop shell intercepts this marked first-party navigation, opens it
+    // in the system browser, and cancels navigation in the webview.
+    if (!force && automaticallyOpenedRequestRef.current === browserUrl) return;
+    automaticallyOpenedRequestRef.current = browserUrl;
+    window.location.assign(browserUrl);
+  };
+
+  useEffect(() => {
+    if (session.loading) return;
+    if (doesSessionExist) {
+      window.location.replace(
+        consumeStoredRedirectUri() || getDefaultPostAuthRedirect(),
+      );
+      return;
+    }
+
+    let cancelled = false;
+    const existing = getPendingDesktopAuth();
+    if (existing) {
+      setPending(existing);
+      openBrowser(existing.browserUrl);
+      return;
+    }
+
+    if (!startPromiseRef.current) {
+      startPromiseRef.current = (async () => {
+        const verifier = createDesktopVerifier();
+        const codeChallenge = await challengeForDesktopVerifier(verifier);
+        const response = await fetch(buildApiUrl("/auth/desktop/requests"), {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code_challenge: codeChallenge }),
+        });
+        if (!response.ok) {
+          throw new Error(`Unable to start desktop login: ${response.status}`);
+        }
+        const created = (await response.json()) as {
+          request_id: string;
+          expires_in_seconds: number;
+        };
+        const browserUrl = new URL(authConfig.websiteBasePath, window.location.origin);
+        browserUrl.searchParams.set("desktop_browser", "1");
+        browserUrl.searchParams.set("desktop_request", created.request_id);
+        const mode = new URLSearchParams(window.location.search).get("mode");
+        if (mode === "signup") browserUrl.searchParams.set("show", "signup");
+        const next: PendingDesktopAuth = {
+          requestId: created.request_id,
+          verifier,
+          browserUrl: browserUrl.toString(),
+          expiresAt: Date.now() + created.expires_in_seconds * 1000,
+        };
+        storePendingDesktopAuth(next);
+        return next;
+      })();
+    }
+
+    void startPromiseRef.current
+      .then((next) => {
+        if (cancelled) return;
+        setPending(next);
+        openBrowser(next.browserUrl);
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : "Unable to start sign-in");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [doesSessionExist, session.loading]);
+
+  useEffect(() => {
+    if (!pending) return;
+    let cancelled = false;
+    if (!exchangePromiseRef.current) {
+      exchangePromiseRef.current = (async () => {
+        while (Date.now() < pending.expiresAt) {
+          const response = await fetch(buildApiUrl("/auth/desktop/session"), {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              "st-auth-mode": "cookie",
+            },
+            body: JSON.stringify({
+              request_id: pending.requestId,
+              code_verifier: pending.verifier,
+            }),
+          });
+          if (response.status === 409) {
+            await new Promise((resolve) => window.setTimeout(resolve, 1200));
+            continue;
+          }
+          if (!response.ok) {
+            throw new Error(
+              response.status === 404
+                ? "This sign-in request expired. Start again."
+                : `Unable to finish desktop login: ${response.status}`,
+            );
+          }
+          return;
+        }
+        throw new Error("This sign-in request expired. Start again.");
+      })();
+    }
+
+    void exchangePromiseRef.current
+      .then(() => {
+        clearPendingDesktopAuth();
+        if (!cancelled) {
+          window.location.replace(
+            consumeStoredRedirectUri() || getDefaultPostAuthRedirect(),
+          );
+        }
+      })
+      .catch((cause) => {
+        clearPendingDesktopAuth();
+        if (!cancelled) {
+          setError(cause instanceof Error ? cause.message : "Unable to finish sign-in");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pending]);
+
+  if (session.loading) {
+    return <LoadingState message="Checking your desktop session…" />;
+  }
+
+  return (
+    <AuthScreenLayout
+      heroCopy={{
+        eyebrow: "Lemma Desktop",
+        title: "Sign in with your browser.",
+        description:
+          "Your browser handles account security; Lemma Desktop opens automatically when you're done.",
+      }}
+    >
+      {error ? (
+        <StatusPanel
+          eyebrow="Sign-in stopped"
+          title="Let's try that again."
+          description={error}
+          tone="danger"
+        >
+          <button
+            type="button"
+            className="primary-button auth-portal-session-button"
+            onClick={() => {
+              clearPendingDesktopAuth();
+              window.location.reload();
+            }}
+          >
+            Start again
+          </button>
+        </StatusPanel>
+      ) : (
+        <StatusPanel
+          eyebrow="Browser sign-in"
+          title="Finish signing in in your browser."
+          description="This window is waiting securely and will update as soon as authentication completes."
+        >
+          <div className="button-row">
+            <button
+              type="button"
+              className="secondary-button auth-portal-session-button"
+              disabled={!pending}
+              onClick={() => pending && openBrowser(pending.browserUrl, true)}
+            >
+              Open browser again
+            </button>
+          </div>
+        </StatusPanel>
+      )}
+    </AuthScreenLayout>
+  );
+}
+
+function DesktopAwareAuthLanding() {
+  return shouldUseDesktopBrowserHandoff() ? <DesktopSignInPage /> : <AuthLanding />;
 }
 
 function RefreshSessionPage() {
@@ -575,8 +1028,9 @@ function AppShell() {
       <main className="simple-auth-shell">
         <Routes>
           <Route path="/cli/login" element={<CliLoginPage />} />
+          <Route path="/desktop" element={<DesktopSignInPage />} />
           <Route path={refreshSessionPath} element={<RefreshSessionPage />} />
-          <Route path="*" element={<AuthLanding />} />
+          <Route path="*" element={<DesktopAwareAuthLanding />} />
         </Routes>
       </main>
     </div>

@@ -9,15 +9,15 @@ import pytest
 from app.core.authorization.context import ResourceType
 from app.core.authorization.permissions import Permissions
 from app.modules.workflow.domain.errors import WorkflowConflictError
-from app.modules.workflow.services.flow_service import FlowService
+from app.modules.workflow.services.workflow_service import WorkflowService
 from app.modules.workflow.execution.engine import WorkflowEngine
 
 
 pytestmark = pytest.mark.asyncio
 
 
-def _flow_service_with_mocks(authz: AsyncMock) -> FlowService:
-    service = object.__new__(FlowService)
+def _flow_service_with_mocks(authz: AsyncMock) -> WorkflowService:
+    service = object.__new__(WorkflowService)
     service.authorization_service = authz
     service.flow_repo = AsyncMock()
     service.uow = SimpleNamespace()
@@ -33,7 +33,7 @@ async def test_flow_service_create_requires_workflow_write():
     service.flow_repo.get_by_name.return_value = None
     service.flow_repo.create.return_value = created
 
-    await service.create_flow(
+    await service.create_workflow(
         pod_id=pod_id,
         name="flow-authz",
         requester_user_id=requester_user_id,
@@ -73,7 +73,7 @@ async def test_flow_service_create_persists_inline_graph():
     ]
     edges = [WorkflowEdge(id="e1", source="save", target="end")]
 
-    await service.create_flow(
+    await service.create_workflow(
         pod_id=uuid4(),
         name="inline-graph",
         nodes=nodes,
@@ -94,7 +94,7 @@ async def test_flow_service_create_without_graph_is_shell():
     service.flow_repo.get_by_name.return_value = None
     service.flow_repo.create.side_effect = lambda flow: flow
 
-    await service.create_flow(
+    await service.create_workflow(
         pod_id=uuid4(),
         name="shell-only",
         requester_user_id=uuid4(),
@@ -112,7 +112,7 @@ async def test_flow_service_create_denied_does_not_persist():
     ctx.require.side_effect = PermissionError("denied")
 
     with pytest.raises(PermissionError):
-        await service.create_flow(
+        await service.create_workflow(
             pod_id=uuid4(),
             name="blocked",
             requester_user_id=uuid4(),
@@ -130,7 +130,7 @@ async def test_flow_service_create_rejects_duplicate_names():
     )
 
     with pytest.raises(WorkflowConflictError):
-        await service.create_flow(
+        await service.create_workflow(
             pod_id=pod_id,
             name="duplicate-flow",
             requester_user_id=uuid4(),

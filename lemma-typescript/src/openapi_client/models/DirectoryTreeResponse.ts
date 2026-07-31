@@ -8,4 +8,3 @@ export type DirectoryTreeResponse = {
     root_path: string;
     tree: DirectoryTreeNode;
 };
-

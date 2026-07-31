@@ -29,4 +29,3 @@ export type CreateTableRequest = {
     primary_key_column?: string;
     visibility?: (string | null);
 };
-

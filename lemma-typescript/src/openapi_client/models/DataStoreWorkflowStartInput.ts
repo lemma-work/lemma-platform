@@ -2,15 +2,14 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { DataStoreFlowStartInput } from './DataStoreFlowStartInput.js';
+import type { DataStoreWorkflowStartConfigInput } from './DataStoreWorkflowStartConfigInput.js';
 export type DataStoreWorkflowStartInput = {
     /**
      * Datastore trigger configuration for this workflow.
      */
-    config: DataStoreFlowStartInput;
+    config: DataStoreWorkflowStartConfigInput;
     /**
      * Datastore-event workflow start.
      */
     type?: string;
 };
-

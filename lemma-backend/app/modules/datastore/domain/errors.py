@@ -23,12 +23,16 @@ class DatastoreValidationError(DatastoreDomainError):
 
 class DatastoreAccessDeniedError(DatastoreDomainError):
     def __init__(self, message: str = "Access denied", details: object | None = None):
-        super().__init__(message, code="DATASTORE_ACCESS_DENIED", status_code=403, details=details)
+        super().__init__(
+            message, code="DATASTORE_ACCESS_DENIED", status_code=403, details=details
+        )
 
 
 class DatastoreConflictError(DatastoreDomainError):
     def __init__(self, message: str, details: object | None = None):
-        super().__init__(message, code="DATASTORE_CONFLICT", status_code=409, details=details)
+        super().__init__(
+            message, code="DATASTORE_CONFLICT", status_code=409, details=details
+        )
 
 
 class DatastoreNotFoundError(DatastoreDomainError):
@@ -64,6 +68,13 @@ class DatastoreObjectNotFoundError(DatastoreDomainError):
         super().__init__(message, code="DATASTORE_OBJECT_NOT_FOUND", status_code=404)
 
 
+class DatastoreObjectIntegrityError(DatastoreDomainError):
+    """Stored original bytes do not match the content accepted by the API."""
+
+    def __init__(self, message: str = "Storage object failed integrity verification"):
+        super().__init__(message, code="DATASTORE_OBJECT_INTEGRITY", status_code=500)
+
+
 class DatastoreReservedResourceError(DatastoreDomainError):
     def __init__(self, message: str):
         super().__init__(message, code="DATASTORE_RESERVED_RESOURCE", status_code=403)
@@ -71,7 +82,9 @@ class DatastoreReservedResourceError(DatastoreDomainError):
 
 class DatastoreQueryError(DatastoreDomainError):
     def __init__(self, message: str, details: object | None = None):
-        super().__init__(message, code="DATASTORE_QUERY_ERROR", status_code=400, details=details)
+        super().__init__(
+            message, code="DATASTORE_QUERY_ERROR", status_code=400, details=details
+        )
 
 
 class DatastoreInfrastructureError(DatastoreDomainError):

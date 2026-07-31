@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any, Callable, Optional, Protocol, Sequence, Tuple
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Sequence, Tuple
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -13,13 +14,20 @@ from app.modules.datastore.domain.datastore_entities import (
     DatastoreTableEntity,
     DatastoreTableSummaryEntity,
 )
-from app.modules.datastore.domain.document_processing import DocumentExtraction
+from app.modules.datastore.domain.document_processing import (
+    DocumentExtraction,
+    IndexingMetrics,
+)
 from app.modules.datastore.domain.file_entities import (
     DatastoreFileEntity,
     DatastoreFileSearchResult,
     FileStatus,
     SearchMethod,
 )
+
+if TYPE_CHECKING:
+    from app.core.domain.events import DomainEvent
+    from app.modules.datastore.domain.record_entities import RecordEntity
 
 
 class DatastoreTableRepositoryPort(Protocol):
@@ -57,6 +65,8 @@ class DatastoreTableRepositoryPort(Protocol):
 
 
 class DatastoreFileRepositoryPort(Protocol):
+    async def acquire_path_lock(self, pod_id: UUID, path: str) -> None: ...
+
     async def create(self, entity: DatastoreFileEntity) -> DatastoreFileEntity: ...
 
     async def get(self, id: UUID) -> Optional[DatastoreFileEntity]: ...
@@ -123,7 +133,15 @@ class DatastoreFileRepositoryPort(Protocol):
         pending_cutoff: datetime,
         processing_cutoff: datetime,
         failed_cutoff: datetime | None = None,
-        max_attempts: int = 5,
+        max_attempts: int = 3,
+    ) -> Sequence[DatastoreFileEntity]: ...
+
+    async def list_exhausted_recovery_candidates(
+        self,
+        *,
+        processing_cutoff: datetime,
+        failed_cutoff: datetime | None = None,
+        max_attempts: int = 3,
     ) -> Sequence[DatastoreFileEntity]: ...
 
     async def bulk_update_status(
@@ -132,6 +150,15 @@ class DatastoreFileRepositoryPort(Protocol):
         file_ids: Sequence[UUID],
         status: FileStatus,
     ) -> int: ...
+
+    async def bulk_mark_failed_permanent(
+        self,
+        *,
+        file_ids: Sequence[UUID],
+        error: str,
+    ) -> int: ...
+
+    async def mark_failed_permanent(self, file_id: UUID, *, error: str) -> bool: ...
 
 
 class DatastoreSchemaPort(Protocol):
@@ -182,14 +209,31 @@ class DatastoreSchemaPort(Protocol):
 
 
 class DatastoreRecordRepositoryPort(Protocol):
-    async def create_record(self, ctx, data: dict, user_id: UUID): ...
+    async def create_record(
+        self,
+        ctx,
+        data: dict,
+        user_id: UUID,
+        *,
+        event_factory: Callable[["RecordEntity"], "DomainEvent"] | None = None,
+    ): ...
 
     async def bulk_create_records(
-        self, ctx, records: list[dict], user_id: UUID
+        self,
+        ctx,
+        records: list[dict],
+        user_id: UUID,
+        *,
+        events: list["DomainEvent"] | None = None,
     ) -> int: ...
 
     async def bulk_upsert_records(
-        self, ctx, records: list[dict], user_id: UUID
+        self,
+        ctx,
+        records: list[dict],
+        user_id: UUID,
+        *,
+        events: list["DomainEvent"] | None = None,
     ) -> int: ...
 
     async def get_record(
@@ -199,6 +243,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
+        event_factory: Callable[["RecordEntity"], "DomainEvent"] | None = None,
     ): ...
 
     async def execute_readonly_query(
@@ -220,6 +265,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         filters: list[tuple[str, str, object]] | None = None,
         *,
         enforce_user_scope: bool = True,
+        event: "DomainEvent" | None = None,
     ) -> Tuple[list, int]: ...
 
     async def update_record(
@@ -241,14 +287,21 @@ class DatastoreRecordRepositoryPort(Protocol):
         enforce_user_scope: bool = True,
     ) -> bool: ...
 
+
 class DatastoreStoragePort(Protocol):
-    async def upload_file(self, destination_blob_name: str, file_content: bytes) -> bool: ...
+    async def upload_file(
+        self, destination_blob_name: str, file_content: bytes | Path
+    ) -> bool: ...
 
     async def download_file(self, source_blob_name: str) -> bytes: ...
 
-    def iter_download(
-        self, source_blob_name: str
-    ) -> AsyncIterator[bytes]: ...
+    async def stat_file(self, source_blob_name: str) -> int: ...
+
+    async def copy_file(
+        self, source_blob_name: str, destination_blob_name: str
+    ) -> bool: ...
+
+    def iter_download(self, source_blob_name: str) -> AsyncIterator[bytes]: ...
 
     async def get_signed_url(self, blob_name: str, expires_hours: int = 1) -> str: ...
 
@@ -266,11 +319,21 @@ class DocumentProcessorPort(Protocol):
 
     async def extract(
         self,
-        content: bytes,
+        content: bytes | None,
         filename: str,
         *,
         mime_type: str | None = None,
-    ) -> DocumentExtraction: ...
+        content_path: str | None = None,
+    ) -> DocumentExtraction:
+        """Extract from either in-memory ``content`` or an on-disk ``content_path``.
+
+        ``content_path`` lets the caller stream a large file to a temp file and
+        hand the path down, so the extractor can stream it (Kreuzberg) rather than
+        holding the whole file — plus a multipart copy — in memory. Processors
+        that must work in-process (markitdown/docling) read the path into bytes.
+        Exactly one of ``content`` / ``content_path`` is provided.
+        """
+        ...
 
     def supports_page_rendering(self, mime_type: str | None, filename: str) -> bool: ...
 
@@ -304,7 +367,7 @@ class DatastoreSearchPort(Protocol):
         file_id: UUID,
         chunks: list[dict],
         metadata: dict | None = None,
-    ) -> bool: ...
+    ) -> IndexingMetrics: ...
 
     async def remove_file(self, file_id: UUID) -> None: ...
 

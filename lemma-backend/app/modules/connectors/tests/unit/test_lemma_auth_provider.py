@@ -11,25 +11,33 @@ pytestmark = pytest.mark.asyncio
 
 
 class FakeOAuth2Session:
+    """Stands in for authlib's AsyncOAuth2Client: an async context manager whose
+    fetch_token/refresh_token are awaitable."""
+
     last_init: dict[str, object] = {}
     last_fetch_token: dict[str, object] = {}
 
-    def __init__(
-        self,
-        *,
-        client_id: str,
-        client_secret: str,
-        redirect_uri: str,
-        scope: list[str],
-    ):
-        FakeOAuth2Session.last_init = {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "redirect_uri": redirect_uri,
-            "scope": scope,
+    def __init__(self, **kwargs):
+        FakeOAuth2Session.last_init = dict(kwargs)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    def create_authorization_url(self, url, state=None, **kwargs):
+        return f"{url}?state={state}", state
+
+    async def fetch_token(self, **kwargs):
+        FakeOAuth2Session.last_fetch_token = kwargs
+        return {
+            "access_token": "access-token",
+            "refresh_token": "refresh-token",
+            "token_type": "Bearer",
         }
 
-    def fetch_token(self, **kwargs):
+    async def refresh_token(self, **kwargs):
         FakeOAuth2Session.last_fetch_token = kwargs
         return {
             "access_token": "access-token",
@@ -39,7 +47,7 @@ class FakeOAuth2Session:
 
 
 class FakeSlackOAuth2Session(FakeOAuth2Session):
-    def fetch_token(self, **kwargs):
+    async def fetch_token(self, **kwargs):
         FakeOAuth2Session.last_fetch_token = kwargs
         return {
             "access_token": "xoxp-user-token",

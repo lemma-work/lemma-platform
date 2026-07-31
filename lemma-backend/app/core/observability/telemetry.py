@@ -1,16 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
+import hashlib
 import logging
-import socket
+from pathlib import Path
+import re
 import time
+import traceback
 from typing import Any
-from urllib.parse import urlparse
 
 from fastapi import FastAPI
-from opentelemetry._logs import set_logger_provider
+from opentelemetry._logs import NoOpLoggerProvider, set_logger_provider
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
     OTLPLogExporter as GrpcOTLPLogExporter,
@@ -32,10 +34,22 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
 )
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.metrics import NoOpMeterProvider
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics._internal.exemplar.exemplar_filter import (
+    AlwaysOffExemplarFilter,
+)
+from opentelemetry.sdk.metrics.view import View
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor, TracerProvider
+from opentelemetry.sdk.trace.sampling import (
+    ALWAYS_OFF,
+    ALWAYS_ON,
+    ParentBased,
+    Sampler,
+    TraceIdRatioBased,
+)
 from opentelemetry.sdk.trace.export import (
     BatchSpanProcessor,
     SpanExporter,
@@ -45,9 +59,15 @@ from opentelemetry.trace import Status, StatusCode
 from opentelemetry.util.types import Attributes
 from openinference.instrumentation.pydantic_ai import OpenInferenceSpanProcessor
 from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
-from pydantic_ai.agent import Agent
+from pydantic_ai import Agent, InstrumentationSettings
 
 from app.core.log.log import get_logger
+from app.core.redaction import redact_text
+from app.core.observability.span_sanitizer import (
+    METRIC_ATTRIBUTE_KEYS,
+    SanitizingSpanExporter,
+    sanitize_http_route,
+)
 
 logger = get_logger(__name__)
 
@@ -56,6 +76,10 @@ _libraries_instrumented = False
 _instrumented_app_ids: set[int] = set()
 _instrumented_engine_ids: set[int] = set()
 _logs_initialized = False
+_trace_provider: TracerProvider | None = None
+_llm_trace_provider: TracerProvider | None = None
+_meter_provider: MeterProvider | None = None
+_logger_provider: LoggerProvider | None = None
 _agent_run_context: ContextVar[dict[str, str]] = ContextVar(
     "agent_run_context",
     default={},
@@ -168,17 +192,56 @@ def _get_settings():
 
 def _resolve_service_name(default_service_name: str) -> str:
     settings = _get_settings()
-    return settings.otel_service_name or default_service_name
+    configured = settings.otel_service_name or default_service_name
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", configured):
+        return configured
+    return default_service_name
 
 
 def _build_resource(service_name: str) -> Resource:
     settings = _get_settings()
     attributes: dict[str, str] = {"service.name": service_name}
-    if settings.otel_service_namespace:
+    if settings.otel_service_namespace and re.fullmatch(
+        r"[A-Za-z0-9_.-]{1,128}", settings.otel_service_namespace
+    ):
         attributes["service.namespace"] = settings.otel_service_namespace
     if settings.environment:
         attributes["deployment.environment"] = settings.environment
+    # Release identity on the OTLP resource (mirrors the log context fields).
+    # Present even when exporters are disabled so Phase 3 trace enablement is a
+    # config flip, not a code change.
+    from app.core.log.log import release_sha_for_resource
+
+    attributes["service.version"] = release_sha_for_resource()
     return Resource.create(attributes)
+
+
+def _build_sampler(
+    settings,
+    *,
+    strategy: str | None = None,
+    ratio: float | None = None,
+) -> Sampler:
+    """Build an exact standard OTel sampler; invalid values fail closed."""
+    selected = (
+        strategy if strategy is not None else settings.otel_traces_sampler
+    ) or "parentbased_traceidratio"
+    selected = selected.strip().lower()
+    selected_ratio = float(settings.otel_traces_sampler_arg if ratio is None else ratio)
+    if not 0.0 <= selected_ratio <= 1.0:
+        raise ValueError("OTEL trace sampler ratio must be between 0 and 1")
+    samplers: dict[str, Sampler] = {
+        "always_on": ALWAYS_ON,
+        "always_off": ALWAYS_OFF,
+        "traceidratio": TraceIdRatioBased(selected_ratio),
+        "parentbased_always_on": ParentBased(ALWAYS_ON),
+        "parentbased_always_off": ParentBased(ALWAYS_OFF),
+        "parentbased_traceidratio": ParentBased(TraceIdRatioBased(selected_ratio)),
+    }
+    try:
+        return samplers[selected]
+    except KeyError as exc:
+        raise ValueError(f"unsupported OTEL trace sampler: {selected}") from exc
 
 
 def _endpoint_is_insecure(endpoint: str) -> bool:
@@ -189,51 +252,11 @@ def _normalize_otlp_protocol(protocol: str | None) -> str:
     if not protocol:
         return "grpc"
     normalized = protocol.strip().lower()
-    if normalized in {"http", "http/protobuf", "http_proto", "http-protobuf"}:
+    if normalized in {"http", "http/protobuf"}:
         return "http/protobuf"
-    return "grpc"
-
-
-def _endpoint_host_port(endpoint: str, *, protocol: str) -> tuple[str, int] | None:
-    normalized = endpoint.strip()
-    if not normalized:
-        return None
-    parsed = urlparse(normalized if "://" in normalized else f"//{normalized}")
-    host = parsed.hostname
-    if not host:
-        return None
-    if parsed.port:
-        return host, parsed.port
-    if parsed.scheme == "https":
-        return host, 443
-    if parsed.scheme == "http":
-        return host, 80
-    if _normalize_otlp_protocol(protocol) == "http/protobuf":
-        return host, 4318
-    return host, 4317
-
-
-def _endpoint_reachable(endpoint: str, *, protocol: str, signal: str) -> bool:
-    host_port = _endpoint_host_port(endpoint, protocol=protocol)
-    if host_port is None:
-        logger.warning(
-            "Skipping OTEL export for invalid endpoint",
-            endpoint=endpoint,
-            signal=signal,
-        )
-        return False
-    host, port = host_port
-    try:
-        with socket.create_connection((host, port), timeout=0.5):
-            return True
-    except OSError as exc:
-        logger.warning(
-            "Skipping OTEL export because collector is unreachable",
-            endpoint=endpoint,
-            signal=signal,
-            error=str(exc),
-        )
-        return False
+    if normalized == "grpc":
+        return "grpc"
+    raise ValueError(f"unsupported OTLP protocol: {normalized}")
 
 
 def _build_span_exporter(
@@ -304,41 +327,73 @@ def _parse_otlp_headers(raw_headers: str | None) -> dict[str, str] | None:
     return headers or None
 
 
-def _otlp_headers() -> dict[str, str] | None:
-    """OTLP headers applied to every signal (traces, metrics, logs)."""
-    return _parse_otlp_headers(_get_settings().otel_exporter_otlp_headers)
+_SIGNALS = frozenset({"traces", "metrics", "logs"})
 
 
-def _otlp_endpoint() -> str | None:
-    """Single OTLP endpoint shared by traces, metrics, and logs."""
-    return _get_settings().otel_exporter_otlp_endpoint
-
-
-def _otlp_signal_endpoint(signal: str) -> str | None:
-    """Return the full OTLP endpoint for a signal by appending its path to the base URL.
-
-    The HTTP exporters do not auto-append signal paths when endpoint is passed
-    explicitly, so we must include the path ourselves.
-    """
-    base = _otlp_endpoint()
-    if not base:
-        return None
-    path = {"traces": "/v1/traces", "metrics": "/v1/metrics", "logs": "/v1/logs"}.get(
-        signal, f"/v1/{signal}"
-    )
-    return base.rstrip("/") + path
+def _legacy_enabled_signals(raw: str | None) -> set[str]:
+    selected = {part.strip().lower() for part in (raw or "").split(",") if part.strip()}
+    if not selected:
+        return {"traces"}
+    invalid = selected - _SIGNALS
+    if invalid:
+        raise ValueError("OTEL_SIGNALS contains unsupported signals")
+    return selected
 
 
 def _enabled_signals() -> set[str]:
-    raw = _get_settings().otel_signals or ""
-    selected = {part.strip().lower() for part in raw.split(",") if part.strip()}
-    # Empty/unset means export everything — the default once an endpoint is
-    # given. A non-empty subset (e.g. "traces") narrows what gets exported.
-    return selected or {"traces", "metrics", "logs"}
+    """Resolve standard per-signal selectors over the legacy OTEL_SIGNALS alias."""
+    settings = _get_settings()
+    fields_set = getattr(settings, "model_fields_set", set())
+    legacy_configured = settings.otel_signals is not None
+    selected = (
+        _legacy_enabled_signals(settings.otel_signals)
+        if legacy_configured
+        else {"traces"}
+    )
+    for signal in _SIGNALS:
+        field = f"otel_{signal}_exporter"
+        # Standard selectors always win when explicitly supplied. Otherwise a
+        # configured legacy selector controls all signals; with neither, the
+        # safe defaults are traces=otlp and metrics/logs=none.
+        if field in fields_set or not legacy_configured:
+            exporter = str(getattr(settings, field)).strip().lower()
+            if exporter == "otlp":
+                selected.add(signal)
+            elif exporter == "none":
+                selected.discard(signal)
+            else:
+                raise ValueError(f"unsupported {field}: {exporter}")
+    return selected
 
 
 def _signal_enabled(signal: str) -> bool:
     return signal in _enabled_signals()
+
+
+def _signal_protocol(signal: str) -> str:
+    settings = _get_settings()
+    specific = getattr(settings, f"otel_exporter_otlp_{signal}_protocol")
+    return _normalize_otlp_protocol(specific or settings.otel_exporter_otlp_protocol)
+
+
+def _otlp_signal_endpoint(signal: str) -> str | None:
+    """Resolve standard signal endpoints without adding HTTP paths to gRPC."""
+    settings = _get_settings()
+    specific = getattr(settings, f"otel_exporter_otlp_{signal}_endpoint")
+    if specific:
+        return specific
+    base = settings.otel_exporter_otlp_endpoint
+    if not base:
+        return None
+    if _signal_protocol(signal) == "grpc":
+        return base
+    return f"{base.rstrip('/')}/v1/{signal}"
+
+
+def _otlp_signal_headers(signal: str) -> dict[str, str] | None:
+    settings = _get_settings()
+    specific = getattr(settings, f"otel_exporter_otlp_{signal}_headers")
+    return _parse_otlp_headers(specific or settings.otel_exporter_otlp_headers)
 
 
 def _llm_otlp_headers() -> dict[str, str] | None:
@@ -346,148 +401,206 @@ def _llm_otlp_headers() -> dict[str, str] | None:
     return _parse_otlp_headers(settings.llm_otel_exporter_otlp_headers)
 
 
-def _setup_tracing(service_name: str) -> None:
+def _setup_tracing(service_name: str) -> TracerProvider | None:
     settings = _get_settings()
-    provider = TracerProvider(resource=_build_resource(service_name))
+    if not _signal_enabled("traces"):
+        return None
+    traces_endpoint = _otlp_signal_endpoint("traces")
+    if not traces_endpoint:
+        return None
+    provider = TracerProvider(
+        resource=_build_resource(service_name),
+        sampler=_build_sampler(settings),
+    )
 
     provider.add_span_processor(AgentRunSpanEnricher())
 
-    traces_endpoint = _otlp_signal_endpoint("traces")
-    if (
-        traces_endpoint
-        and _signal_enabled("traces")
-        and _endpoint_reachable(
-            traces_endpoint,
-            protocol=settings.otel_exporter_otlp_protocol,
-            signal="traces",
-        )
-    ):
-        provider.add_span_processor(
-            BatchSpanProcessor(
+    provider.add_span_processor(
+        BatchSpanProcessor(
+            SanitizingSpanExporter(
                 _build_span_exporter(
                     traces_endpoint,
-                    protocol=settings.otel_exporter_otlp_protocol,
-                    headers=_otlp_headers(),
-                )
+                    protocol=_signal_protocol("traces"),
+                    headers=_otlp_signal_headers("traces"),
+                ),
             )
         )
-        logger.info(
-            "Starting OTEL trace export",
-            endpoint=traces_endpoint,
-            protocol=_normalize_otlp_protocol(settings.otel_exporter_otlp_protocol),
-        )
+    )
+    trace.set_tracer_provider(provider)
+    return provider
 
-    if (
-        settings.llm_otel_enabled
-        and settings.llm_otel_exporter_otlp_endpoint
-        and _endpoint_reachable(
-            settings.llm_otel_exporter_otlp_endpoint,
-            protocol=settings.llm_otel_exporter_otlp_protocol,
-            signal="llm_traces",
-        )
-    ):
-        provider.add_span_processor(
-            OpenInferenceSpanProcessor(span_filter=_is_llm_span)
-        )
-        provider.add_span_processor(
-            BatchSpanProcessor(
-                FilteringSpanExporter(
+
+def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
+    settings = _get_settings()
+    endpoint = settings.llm_otel_exporter_otlp_endpoint
+    if not settings.llm_otel_enabled or not endpoint:
+        return None
+    provider = TracerProvider(
+        resource=_build_resource(service_name),
+        sampler=_build_sampler(
+            settings,
+            strategy=settings.llm_otel_traces_sampler,
+            ratio=settings.llm_otel_traces_sampler_arg,
+        ),
+    )
+    provider.add_span_processor(AgentRunSpanEnricher())
+    provider.add_span_processor(OpenInferenceSpanProcessor(span_filter=_is_llm_span))
+    provider.add_span_processor(
+        BatchSpanProcessor(
+            FilteringSpanExporter(
+                SanitizingSpanExporter(
                     _build_span_exporter(
-                        settings.llm_otel_exporter_otlp_endpoint,
+                        endpoint,
                         protocol=settings.llm_otel_exporter_otlp_protocol,
                         headers=_llm_otlp_headers(),
                     ),
-                    _is_llm_span,
-                )
+                    llm=True,
+                ),
+                _is_llm_span,
             )
         )
-        logger.info(
-            "Starting LLM OTEL trace export",
-            endpoint=settings.llm_otel_exporter_otlp_endpoint,
-            protocol=_normalize_otlp_protocol(
-                settings.llm_otel_exporter_otlp_protocol
-            ),
+    )
+    Agent.instrument_all(
+        InstrumentationSettings(
+            tracer_provider=provider,
+            meter_provider=NoOpMeterProvider(),
+            logger_provider=NoOpLoggerProvider(),
+            include_content=False,
+            include_binary_content=False,
+            version=2,
+            event_mode="attributes",
+            use_aggregated_usage_attribute_names=True,
         )
+    )
+    return provider
 
-    trace.set_tracer_provider(provider)
 
-
-def _setup_metrics(service_name: str) -> None:
+def _setup_metrics(service_name: str) -> MeterProvider | None:
     settings = _get_settings()
     readers: list[PeriodicExportingMetricReader] = []
 
+    if not _signal_enabled("metrics"):
+        return None
     metrics_endpoint = _otlp_signal_endpoint("metrics")
-    if (
-        metrics_endpoint
-        and _signal_enabled("metrics")
-        and _endpoint_reachable(
-            metrics_endpoint,
-            protocol=settings.otel_exporter_otlp_protocol,
-            signal="metrics",
-        )
-    ):
+    if metrics_endpoint:
         readers.append(
             PeriodicExportingMetricReader(
                 _build_metric_exporter(
                     metrics_endpoint,
-                    protocol=settings.otel_exporter_otlp_protocol,
-                    headers=_otlp_headers(),
+                    protocol=_signal_protocol("metrics"),
+                    headers=_otlp_signal_headers("metrics"),
                 ),
                 export_interval_millis=settings.observability_metrics_export_interval_millis,
             )
         )
-        logger.info(
-            "Starting OTEL metric export",
-            endpoint=metrics_endpoint,
-            protocol=_normalize_otlp_protocol(settings.otel_exporter_otlp_protocol),
-        )
 
     if not readers:
-        return
+        return None
 
     provider = MeterProvider(
         resource=_build_resource(service_name),
         metric_readers=readers,
+        exemplar_filter=AlwaysOffExemplarFilter(),
+        views=[View(instrument_name="*", attribute_keys=set(METRIC_ATTRIBUTE_KEYS))],
     )
     metrics.set_meter_provider(provider)
+    return provider
 
 
-def _setup_logs(service_name: str) -> None:
+_SAFE_OTEL_LOG_FIELDS = frozenset(
+    {
+        "request_id",
+        "correlation_id",
+        "event_id",
+        "causation_id",
+        "job_id",
+        "event_type",
+        "consumer",
+        "task_name",
+        "job_attempt",
+        "attempt",
+        "outcome",
+        "duration_ms",
+        "incident_duration_ms",
+        "failure_count",
+        "count",
+        "method",
+        "route",
+        "status_code",
+        "latency_kind",
+        "error_type",
+        "error_code",
+        "error_stack_hash",
+        "retryable",
+    }
+)
+
+
+class SanitizingLoggingHandler(LoggingHandler):
+    """Translate only bounded structured fields into OTLP log records."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        candidate = record.msg if isinstance(record.msg, Mapping) else None
+        event = candidate.get("event") if isinstance(candidate, Mapping) else None
+        if isinstance(candidate, Mapping):
+            if not isinstance(event, str) or len(event) > 128:
+                event = "logging.contract.violation"
+        else:
+            try:
+                event = redact_text(record.getMessage())
+            except Exception:
+                event = "unrenderable log record"
+        safe_record = logging.LogRecord(
+            name=record.name,
+            level=record.levelno,
+            pathname="",
+            lineno=0,
+            msg=event[:512],
+            args=(),
+            exc_info=None,
+        )
+        source_fields: dict[str, Any] = {}
+        if isinstance(candidate, Mapping):
+            source_fields.update(candidate)
+        lemma_fields = getattr(record, "lemma_fields", None)
+        if isinstance(lemma_fields, Mapping):
+            source_fields.update(lemma_fields)
+        for key, value in source_fields.items():
+            if key not in _SAFE_OTEL_LOG_FIELDS:
+                continue
+            if isinstance(value, str):
+                setattr(safe_record, key, " ".join(value.splitlines())[:256])
+            elif isinstance(value, bool | int | float):
+                setattr(safe_record, key, value)
+        super().emit(safe_record)
+
+
+def _setup_logs(service_name: str) -> LoggerProvider | None:
     global _logs_initialized
     if _logs_initialized:
-        return
+        return _logger_provider
 
-    settings = _get_settings()
+    if not _signal_enabled("logs"):
+        return None
     logs_endpoint = _otlp_signal_endpoint("logs")
-    if not logs_endpoint or not _signal_enabled("logs"):
-        return
-    if not _endpoint_reachable(
-        logs_endpoint,
-        protocol=settings.otel_exporter_otlp_protocol,
-        signal="logs",
-    ):
-        return
-
+    if not logs_endpoint:
+        return None
     provider = LoggerProvider(resource=_build_resource(service_name))
     provider.add_log_record_processor(
         BatchLogRecordProcessor(
             _build_log_exporter(
                 logs_endpoint,
-                protocol=settings.otel_exporter_otlp_protocol,
-                headers=_otlp_headers(),
+                protocol=_signal_protocol("logs"),
+                headers=_otlp_signal_headers("logs"),
             )
         )
     )
     set_logger_provider(provider)
     logging.getLogger().addHandler(
-        LoggingHandler(level=logging.NOTSET, logger_provider=provider)
+        SanitizingLoggingHandler(level=logging.NOTSET, logger_provider=provider)
     )
     _logs_initialized = True
-    logger.info(
-        "Starting OTEL log export",
-        endpoint=logs_endpoint,
-        protocol=_normalize_otlp_protocol(settings.otel_exporter_otlp_protocol),
-    )
+    return provider
 
 
 def _instrument_libraries() -> None:
@@ -498,11 +611,10 @@ def _instrument_libraries() -> None:
     from opentelemetry.instrumentation.aiohttp_client import (
         AioHttpClientInstrumentor,
     )
-    from opentelemetry.instrumentation.redis import RedisInstrumentor
+    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
     AioHttpClientInstrumentor().instrument()
-    RedisInstrumentor().instrument()
-    Agent.instrument_all(True)
+    HTTPXClientInstrumentor().instrument()
     _libraries_instrumented = True
 
 
@@ -559,29 +671,90 @@ def _quiet_otlp_export_logs() -> None:
     _otlp_logs_quieted = True
 
 
+def _validate_telemetry_config() -> None:
+    settings = _get_settings()
+    if settings.observability_enabled:
+        selected = _enabled_signals()
+        for signal in selected:
+            _signal_protocol(signal)
+            if not _otlp_signal_endpoint(signal):
+                raise ValueError(f"{signal} exporter selected without an OTLP endpoint")
+        if "traces" in selected:
+            _build_sampler(settings)
+    if settings.llm_otel_enabled:
+        if not settings.llm_otel_exporter_otlp_endpoint:
+            raise ValueError("LLM OTEL is enabled without an OTLP endpoint")
+        _normalize_otlp_protocol(settings.llm_otel_exporter_otlp_protocol)
+        _build_sampler(
+            settings,
+            strategy=settings.llm_otel_traces_sampler,
+            ratio=settings.llm_otel_traces_sampler_arg,
+        )
+
+
 def init_telemetry(service_name: str = "lemma-api") -> None:
+    global _logger_provider
+    global _llm_trace_provider
+    global _meter_provider
     global _telemetry_initialized
+    global _trace_provider
     if _telemetry_initialized:
         return
 
     settings = _get_settings()
-    if not settings.observability_enabled:
-        logger.info("Observability disabled, skipping OTEL setup")
+    if settings.otel_sdk_disabled or not (
+        settings.observability_enabled or settings.llm_otel_enabled
+    ):
         return
 
     resolved_service_name = _resolve_service_name(service_name)
+    _validate_telemetry_config()
     try:
         _quiet_otlp_export_logs()
-        _setup_tracing(resolved_service_name)
-        _setup_metrics(resolved_service_name)
-        _setup_logs(resolved_service_name)
-        _instrument_libraries()
+        if settings.observability_enabled:
+            _trace_provider = _setup_tracing(resolved_service_name)
+            _meter_provider = _setup_metrics(resolved_service_name)
+            _logger_provider = _setup_logs(resolved_service_name)
+        _llm_trace_provider = _setup_llm_tracing(resolved_service_name)
+        if _trace_provider is not None or _meter_provider is not None:
+            _instrument_libraries()
     except Exception as exc:
-        logger.warning(
-            "Observability setup failed; continuing without OTEL",
-            error=str(exc),
+        logger.debug(
+            "observability.telemetry.observability_setup_continuing_without_otel.diagnostic",
+            error_type=type(exc).__name__,
         )
     _telemetry_initialized = True
+
+
+def shutdown_telemetry(timeout_millis: int = 5_000) -> None:
+    """Flush and stop every owned provider without delaying process shutdown."""
+    global _logger_provider
+    global _llm_trace_provider
+    global _meter_provider
+    global _trace_provider
+    providers = (
+        _llm_trace_provider,
+        _trace_provider,
+        _meter_provider,
+        _logger_provider,
+    )
+    for provider in providers:
+        if provider is None:
+            continue
+        try:
+            force_flush = getattr(provider, "force_flush", None)
+            if callable(force_flush):
+                force_flush(timeout_millis=timeout_millis)
+        except Exception:
+            pass
+        try:
+            provider.shutdown()
+        except Exception:
+            pass
+    _llm_trace_provider = None
+    _trace_provider = None
+    _meter_provider = None
+    _logger_provider = None
 
 
 _fastapi_route_details_patched = False
@@ -608,7 +781,7 @@ def _patch_fastapi_route_details() -> None:
 
     def _safe_get_route_details(scope: Any):
         try:
-            return original(scope)
+            return sanitize_http_route(original(scope))
         except AttributeError:
             return None
 
@@ -617,6 +790,9 @@ def _patch_fastapi_route_details() -> None:
 
 
 def instrument_fastapi_app(app: FastAPI) -> None:
+    settings = _get_settings()
+    if not settings.observability_enabled or settings.otel_sdk_disabled:
+        return
     app_id = id(app)
     if app_id in _instrumented_app_ids:
         return
@@ -628,12 +804,15 @@ def instrument_fastapi_app(app: FastAPI) -> None:
         app,
         tracer_provider=trace.get_tracer_provider(),
         meter_provider=metrics.get_meter_provider(),
-        excluded_urls="/health",
+        excluded_urls="/health,/health/live,/health/ready,/livez",
     )
     _instrumented_app_ids.add(app_id)
 
 
 def instrument_database_engine(engine: Any) -> None:
+    settings = _get_settings()
+    if not settings.observability_enabled or settings.otel_sdk_disabled:
+        return
     engine_to_instrument = getattr(engine, "sync_engine", engine)
     engine_id = id(engine_to_instrument)
     if engine_id in _instrumented_engine_ids:
@@ -659,12 +838,25 @@ def record_exception_on_current_span(
     if not span or not span.is_recording():
         return
 
-    span.record_exception(exc, attributes=attributes)
+    frames = traceback.extract_tb(exc.__traceback__)[-8:] if exc.__traceback__ else []
+    descriptors = [
+        f"{Path(frame.filename).stem}:{frame.name}:{frame.lineno}" for frame in frames
+    ]
+    fingerprint = "|".join([type(exc).__name__, *descriptors])
+    safe_attributes: dict[str, Any] = {
+        "error.type": type(exc).__name__,
+        "error.stack_hash": hashlib.sha256(fingerprint.encode()).hexdigest(),
+    }
+    if descriptors:
+        safe_attributes["error.frames"] = descriptors
+    if attributes:
+        safe_attributes.update(attributes)
+    span.add_event("exception", attributes=safe_attributes)
     if attributes:
         for key, value in attributes.items():
             span.set_attribute(key, value)
     if mark_span_as_error:
-        span.set_status(Status(StatusCode.ERROR, str(exc)))
+        span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
 
 
 def get_current_trace_context() -> dict[str, str]:

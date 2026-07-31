@@ -51,6 +51,10 @@ export function useSchedules(podId: string | undefined, filters: ScheduleFilters
             };
         },
         enabled: !!podId,
+        // Schedules are read from several places at once (schedules page, agents
+        // list, agent/workflow detail). A short stale window lets them share one
+        // cache entry instead of refetching on every mount.
+        staleTime: 60_000,
     });
 }
 

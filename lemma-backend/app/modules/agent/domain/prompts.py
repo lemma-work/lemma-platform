@@ -34,7 +34,7 @@ _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
 # instead. The pod-default assistant has all of these, so it gets them all.
 # NB: in-process runs get these fragments through the matching pydantic-ai
 # capabilities (build_agent_instructions is called with include_toolset_prompts=
-# False); this map is the daemon-harness path, which has no capability layer.
+# False); this map is the remote-harness path, which has no capability layer.
 FRAGMENT_BY_TOOLSET: dict[AgentToolset, Path] = {
     AgentToolset.WORKSPACE_CLI: _WORKSPACE_CLI_PROMPT_PATH,
     AgentToolset.SKILLS: _SKILLS_PROMPT_PATH,
@@ -99,7 +99,7 @@ def build_agent_instructions(
     ``include_toolset_prompts`` controls whether the per-toolset fragments are
     folded in here. The in-process LEMMA harness passes ``False`` because those
     fragments are contributed by the matching pydantic-ai capabilities instead;
-    daemon harnesses keep ``True`` since they have no capability layer.
+    remote harnesses keep ``True`` since they have no capability layer.
     """
 
     if conversation.is_pod_assistant:
@@ -114,16 +114,14 @@ def build_agent_instructions(
             if toolset in enabled:
                 sections.append(_read_required_prompt(path))
 
-        # Per-platform surface guidance for daemon harnesses (which have no
+        # Per-platform surface guidance for remote harnesses (which have no
         # capability layer). The in-process LEMMA harness passes
         # include_toolset_prompts=False and gets this from SurfacePlatformCapability
         # instead, so this never double-injects. Lazy import avoids an
         # agent -> agent_surfaces module-load cycle.
         surface_platform = getattr(ctx, "surface_platform", None)
         if surface_platform:
-            from app.modules.agent_surfaces.platforms.platform_capabilities import (
-                platform_agent_guidance,
-            )
+            from app.composition.agent_surface_runtime import platform_agent_guidance
 
             fragment = platform_agent_guidance(surface_platform)
             if fragment:
@@ -131,7 +129,7 @@ def build_agent_instructions(
 
     # The agent's actual working directory is dynamic (per conversation), so it
     # can't live in a static fragment. Inject it here so BOTH harnesses (in-process
-    # passes include_toolset_prompts=False; daemon passes True) and BOTH agent types
+    # passes include_toolset_prompts=False; remote passes True) and BOTH agent types
     # (pod-default + user) get told their cwd whenever they can run workspace tools.
     if AgentToolset.WORKSPACE_CLI in enabled:
         sections.append(_workspace_directory_section(ctx=ctx, conversation=conversation))
@@ -183,7 +181,9 @@ def _workspace_directory_section(
         "# Working Directory\n"
         f"Your working directory in the workspace sandbox is `{cwd}`. The whole "
         "sandbox is yours: do all of your work here by default and create "
-        "subfolders under it as you need them. Files you write here persist for "
+        "subfolders under it as you need them. Never create a parallel project "
+        "root directly under `/workspace`; if uncertain, run `pwd` once and then "
+        "use relative paths. Files you write here persist for "
         "this conversation and are private to you — the user does not see them. "
         "Do NOT work in `/tmp` or other locations; they are scratch space that "
         "gets wiped.\n\n"

@@ -14,7 +14,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
+  actions: read
   contents: read
+  id-token: write
 
 concurrency:
   group: release-lemma-typescript-${{ github.event.release.tag_name || inputs.version }}
@@ -29,15 +31,23 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
+
+      - name: Require fresh backend protected E2E
+        uses: ./.github/actions/require-backend-protected-e2e
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: lemma-typescript/package-lock.json
+
+      - name: Use npm with trusted publishing support
+        run: npm install --global npm@11.18.0
 
       - name: Set package version from release tag
         id: version
@@ -52,6 +62,12 @@ jobs:
           fi
 
           npm version "${version}" --no-git-tag-version --allow-same-version
+
+          source_version="$(node -e 'const fs=require("fs"); const m=fs.readFileSync("src/version.ts","utf8").match(/SDK_VERSION = "([^"]+)"/); if (!m) process.exit(1); process.stdout.write(m[1])')"
+          if [[ "${source_version}" != "${version}" ]]; then
+            echo "src/version.ts SDK_VERSION (${source_version}) must match release version ${version}. Commit the release version before publishing." >&2
+            exit 1
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
@@ -59,6 +75,12 @@ jobs:
 
       - name: Build package
         run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Verify registry blocks
+        run: npm run registry:check
 
       - name: Check whether version is already published
         id: published
@@ -80,6 +102,4 @@ jobs:
 
       - name: Publish package
         if: steps.published.outputs.should_publish == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish

@@ -17948,7 +17948,7 @@
                                 "examples": {
                                     "response": {
                                         "value": {
-                                            "access_token": "xoxp-XXXXXXXX-XXXXXXXX-XXXXX",
+                                            "access_token": "[REDACTED_EXAMPLE_TOKEN]",
                                             "enterprise_id": null,
                                             "scope": "groups:write",
                                             "team_id": "TXXXXXXXXX",
@@ -18073,7 +18073,7 @@
                                 "examples": {
                                     "response": {
                                         "value": {
-                                            "access_token": "xoxa-access-token-string",
+                                            "access_token": "[REDACTED_EXAMPLE_TOKEN]",
                                             "app_id": "A012345678",
                                             "app_user_id": "U0AB12ABC",
                                             "authorizing_user_id": "U0HTT3Q0G",
@@ -18206,10 +18206,10 @@
                                 "examples": {
                                     "response": {
                                         "value": {
-                                            "access_token": "xoxb-17653672481-19874698323-pdFZKVeTuE8sk7oOcBrzbqgy",
+                                            "access_token": "[REDACTED_EXAMPLE_TOKEN]",
                                             "app_id": "A0KRD7HC3",
                                             "authed_user": {
-                                                "access_token": "xoxp-1234",
+                                                "access_token": "[REDACTED_EXAMPLE_TOKEN]",
                                                 "id": "U1234",
                                                 "scope": "chat:write",
                                                 "token_type": "user"

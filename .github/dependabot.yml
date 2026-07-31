@@ -1,0 +1,78 @@
+version: 2
+
+# Version updates are intentionally low-frequency and grouped into one PR per
+# ecosystem, including major updates. Security updates remain immediate, but are
+# grouped per ecosystem instead of opening one PR per vulnerable dependency.
+updates:
+  - package-ecosystem: uv
+    directories:
+      - /agentbox
+      - /agentbox-client
+      - /lemma-backend
+      - /lemma-backend/lemma-connectors
+      - /lemma-cli
+      - /lemma-pod-bundle
+      - /lemma-python
+      - /lemma-stack
+    schedule:
+      interval: monthly
+      time: "04:00"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 1
+    groups:
+      python-routine-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      python-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directories:
+      - /lemma-typescript
+      - /lemma-frontend
+    schedule:
+      interval: monthly
+      time: "04:15"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 1
+    groups:
+      javascript-routine-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      javascript-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      time: "04:30"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 1
+    groups:
+      github-actions-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      github-actions-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directories:
+      - /agentbox
+      - /lemma-backend
+      - /lemma-frontend
+    schedule:
+      interval: monthly
+      time: "04:45"
+      timezone: Asia/Kolkata
+    open-pull-requests-limit: 1
+    groups:
+      docker-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+      docker-security-updates:
+        applies-to: security-updates
+        patterns: ["*"]

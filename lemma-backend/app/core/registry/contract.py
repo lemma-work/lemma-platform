@@ -64,3 +64,7 @@ class LemmaModule:
     event_routers: EventRouterProvider | None = None
     register_streaq: StreaqRegistrar | None = None
     worker_lifespans: Sequence[WorkerLifespan] = ()
+
+    # Redis Streams owned by this module's durable consumers. Publishers use
+    # this topology before XADD, even in processes that never import handlers.
+    stream_groups: Sequence[tuple[str, str]] = ()

@@ -12,7 +12,6 @@ from ..openapi_client.api.connectors import (
 )
 from ..openapi_client.api.connectors import (
     connector_account_create,
-    connector_account_credentials_get,
     connector_account_delete,
     connector_account_get,
     connector_account_list,
@@ -23,9 +22,6 @@ from ..openapi_client.api.connectors import (
     connector_connect_request_create,
 )
 from ..openapi_client.models.account_create_schema import AccountCreateSchema
-from ..openapi_client.models.account_credentials_response_schema import (
-    AccountCredentialsResponseSchema,
-)
 from ..openapi_client.models.account_list_response_schema import AccountListResponseSchema
 from ..openapi_client.models.account_response_schema import AccountResponseSchema
 from ..openapi_client.models.connector_detail_response_schema import (
@@ -129,22 +125,24 @@ class ConnectorAccounts:
         )
 
     def create(self, auth_config: str, request: AccountCreateSchema) -> AccountResponseSchema:
+        body = request.to_dict()
+        auth_config_name = body.get("auth_config_name")
+        auth_config_id = body.get("auth_config_id")
+        if auth_config_name and auth_config_id:
+            raise ValueError("Specify only one of auth_config_name or auth_config_id")
+        if not auth_config_name and not auth_config_id:
+            if not auth_config:
+                raise ValueError("Either auth_config_name or auth_config_id is required")
+            body["auth_config_name"] = auth_config
+        request = AccountCreateSchema.from_dict(body)
         return self._parent._call(
             connector_account_create,
             self._parent._org_uuid(),
-            auth_config,
             body=request,
         )
 
     def get(self, account_id: str) -> AccountResponseSchema:
         return self._parent._call(connector_account_get, self._parent._org_uuid(), account_id)
-
-    def credentials(self, account_id: str) -> AccountCredentialsResponseSchema:
-        return self._parent._call(
-            connector_account_credentials_get,
-            self._parent._org_uuid(),
-            account_id,
-        )
 
     def delete(self, account_id: str) -> None:
         self._parent._call(connector_account_delete, self._parent._org_uuid(), account_id)

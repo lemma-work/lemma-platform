@@ -1,0 +1,214 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect security-relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      python: ${{ steps.scope.outputs.python }}
+      javascript: ${{ steps.scope.outputs.javascript }}
+      dependencies: ${{ steps.scope.outputs.dependencies }}
+      python_dependencies: ${{ steps.scope.outputs.python_dependencies }}
+      backend_image: ${{ steps.scope.outputs.backend_image }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            python:
+              - '**/*.py'
+              - '**/pyproject.toml'
+              - '**/uv.lock'
+              - '.github/workflows/security.yml'
+            javascript:
+              - '**/*.js'
+              - '**/*.jsx'
+              - '**/*.mjs'
+              - '**/*.cjs'
+              - '**/*.ts'
+              - '**/*.tsx'
+              - '**/package.json'
+              - '**/package-lock.json'
+              - '.github/workflows/security.yml'
+            dependencies:
+              - '**/pyproject.toml'
+              - '**/uv.lock'
+              - '**/package.json'
+              - '**/package-lock.json'
+              - '**/Dockerfile'
+              - '.github/dependabot.yml'
+              - '.github/workflows/**'
+            python_dependencies:
+              - '**/pyproject.toml'
+              - '**/uv.lock'
+              - '.github/workflows/security.yml'
+            backend_image:
+              - 'lemma-backend/Dockerfile'
+              - 'lemma-backend/pyproject.toml'
+              - 'lemma-backend/uv.lock'
+              - 'lemma-backend/lemma-connectors/pyproject.toml'
+              - 'lemma-backend/lemma-connectors/uv.lock'
+              - 'agentbox-client/pyproject.toml'
+              - 'agentbox-client/uv.lock'
+              - 'lemma-pod-bundle/pyproject.toml'
+              - 'lemma-pod-bundle/uv.lock'
+              - '.github/workflows/security.yml'
+      - name: Resolve scheduled/manual scope
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PYTHON_CHANGED: ${{ steps.filter.outputs.python }}
+          JAVASCRIPT_CHANGED: ${{ steps.filter.outputs.javascript }}
+          DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.dependencies }}
+          PYTHON_DEPENDENCIES_CHANGED: ${{ steps.filter.outputs.python_dependencies }}
+          BACKEND_IMAGE_CHANGED: ${{ steps.filter.outputs.backend_image }}
+        run: |
+          if [[ "$EVENT_NAME" == "schedule" || "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "python=true" >> "$GITHUB_OUTPUT"
+            echo "javascript=true" >> "$GITHUB_OUTPUT"
+            echo "dependencies=true" >> "$GITHUB_OUTPUT"
+            echo "python_dependencies=true" >> "$GITHUB_OUTPUT"
+            echo "backend_image=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "python=$PYTHON_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "javascript=$JAVASCRIPT_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "dependencies=$DEPENDENCIES_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "python_dependencies=$PYTHON_DEPENDENCIES_CHANGED" >> "$GITHUB_OUTPUT"
+            echo "backend_image=$BACKEND_IMAGE_CHANGED" >> "$GITHUB_OUTPUT"
+          fi
+
+  dependency-review:
+    name: Dependency review
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.dependencies == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  codeql-python:
+    name: CodeQL (python)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: python
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+
+  codeql-javascript:
+    name: CodeQL (javascript-typescript)
+    needs: changes
+    if: needs.changes.outputs.javascript == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+
+  secrets:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Scan commits introduced by this change
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        env:
+          SCAN_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || format('{0}..{1}', github.event.before, github.sha) }}
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.0
+          detect --source=/repo --redact --no-banner --exit-code=1
+          --log-opts="$SCAN_RANGE"
+      - name: Scan the current repository tree
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: >-
+          docker run --rm
+          -v "$PWD:/repo"
+          ghcr.io/gitleaks/gitleaks:v8.30.0
+          detect --source=/repo --redact --no-banner --exit-code=1 --no-git
+
+  python-audit:
+    name: Python dependency audit
+    needs: changes
+    if: needs.changes.outputs.python_dependencies == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --extra local
+      - name: Export locked third-party dependency graph
+        run: >-
+          uv export --frozen --no-dev --extra local --no-emit-project
+          --no-emit-package agentbox
+          --no-emit-package agentbox-client
+          --no-emit-package lemma-pod-bundle
+          --no-emit-package lemma-connectors
+          --output-file /tmp/lemma-backend-audit.txt
+      - name: Audit locked third-party dependency graph
+        run: >-
+          uv run pip-audit --strict --disable-pip
+          --requirement /tmp/lemma-backend-audit.txt
+
+  container:
+    name: Backend image vulnerability scan
+    needs: changes
+    if: needs.changes.outputs.backend_image == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build backend image
+        run: docker build -f lemma-backend/Dockerfile -t lemma-backend:security .
+      - name: Scan high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: lemma-backend:security
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          # Gitleaks owns repository secret detection. Keep this job focused on
+          # actionable OS/library CVEs so test fixtures inside dependencies do
+          # not masquerade as image vulnerabilities.
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL

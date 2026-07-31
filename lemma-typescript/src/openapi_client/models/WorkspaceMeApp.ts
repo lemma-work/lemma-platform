@@ -7,4 +7,3 @@ export type WorkspaceMeApp = {
     expires_at: string;
     url: string;
 };
-

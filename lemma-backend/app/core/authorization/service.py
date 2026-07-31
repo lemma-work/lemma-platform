@@ -31,6 +31,7 @@ from app.core.authorization.delegation import (
     WorkloadPrincipalType,
 )
 from app.core.authorization.session_approvals import has_session_approval
+from app.core.domain.errors import DomainError
 from app.core.authorization.grants import (
     delete_grantee_grants,
     grant_resource_type_values,
@@ -70,7 +71,7 @@ from app.modules.pod.domain.visibility import (
 )
 from app.modules.pod.infrastructure.models.pod_models import Pod, PodMember
 from app.modules.schedule.infrastructure.models.schedule import Schedule
-from app.modules.workflow.infrastructure.models import FlowModel
+from app.modules.workflow.infrastructure.models import WorkflowModel
 
 
 SYSTEM_ORG_ROLES = {"ORG_MEMBER", "ORG_EDITOR", "ORG_OWNER"}
@@ -80,6 +81,17 @@ SYSTEM_POD_ROLES = {"POD_VIEWER", "POD_USER", "POD_EDITOR", "POD_ADMIN"}
 # added when an ensure pass found nothing to write, so a rolled-back transaction
 # can never mark a scope as provisioned.
 _ENSURED_ROLE_SCOPES: set[tuple[UUID, UUID | None]] = set()
+
+
+@dataclass(frozen=True, slots=True)
+class MemberAuthorizationTargets:
+    """Authorization data tied to an org member, captured before removal so the
+    (FK-less, non-cascading) role assignments/grants can be purged afterward."""
+
+    user_id: UUID | None
+    organization_member_id: UUID
+    # (pod_member_id, pod_id) for each pod membership under this org member.
+    pod_memberships: tuple[tuple[UUID, UUID], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,7 +319,7 @@ class AuthorizationDataService:
         elif resource_type == ResourceType.DATASTORE_TABLE:
             stmt = select(DatastoreTable.user_id).where(DatastoreTable.id == resource_id)
         elif resource_type == ResourceType.WORKFLOW:
-            stmt = select(FlowModel.user_id).where(FlowModel.id == resource_id)
+            stmt = select(WorkflowModel.user_id).where(WorkflowModel.id == resource_id)
         elif resource_type == ResourceType.SCHEDULE:
             stmt = select(Schedule.user_id).where(Schedule.id == resource_id)
         else:
@@ -360,8 +372,17 @@ class AuthorizationDataService:
                 )
             )
         await self.session.flush()
+        # Targeted invalidation: an assignment change touches exactly one
+        # principal, so drop only that principal's snapshots rather than flushing
+        # every user's. Falls back to a full clear when the principal can't be
+        # mapped to its snapshot key (safe superset).
+        snapshot_principal_id = await self._resolve_snapshot_principal_id(
+            principal_type, principal_id
+        )
         await invalidate_role_snapshot_cache(
-            organization_id=organization_id, pod_id=pod_id
+            organization_id=organization_id,
+            pod_id=pod_id,
+            user_id=snapshot_principal_id,
         )
         return normalized
 
@@ -621,6 +642,16 @@ class AuthorizationDataService:
         request_id: str | None = None,
         is_default_pod_agent: bool = False,
     ) -> Context:
+        # Defense in depth: the claims and the session are minted together, so
+        # the claim's invoked_by_user_id must match the authenticated session
+        # user. A mismatch means the token was tampered with or mis-minted — never
+        # build a context that delegates for a different user than the token.
+        if claims.invoked_by_user_id != user_id:
+            raise DomainError(
+                "Delegation invoked_by_user_id does not match the session user",
+                code="DELEGATION_USER_MISMATCH",
+                status_code=403,
+            )
         return await self.build_delegated_workload_context(
             user_id=user_id,
             principal_type=claims.actor_type.value,
@@ -818,6 +849,112 @@ class AuthorizationDataService:
             role_names.add(role_name)
             if permission_id is not None:
                 permission_ids.add(permission_id)
+
+    async def _resolve_snapshot_principal_id(
+        self, principal_type: str, principal_id: UUID
+    ) -> UUID | None:
+        """Map a role-assignment principal to the id its role snapshot is cached
+        under (see ``cache._snapshot_suffix``), or ``None`` when it can't be
+        resolved so the caller falls back to a full-cache invalidation.
+
+        Workload snapshots are cached under the workload principal id itself;
+        org/pod member snapshots are cached under the human ``user_id``.
+        """
+        normalized = principal_type.upper()
+        if normalized in ("AGENT", "FUNCTION"):
+            return principal_id
+        if normalized == "ORG_MEMBER":
+            return (
+                await self.session.execute(
+                    select(OrganizationMember.user_id).where(
+                        OrganizationMember.id == principal_id
+                    )
+                )
+            ).scalar_one_or_none()
+        if normalized == "POD_MEMBER":
+            return (
+                await self.session.execute(
+                    select(OrganizationMember.user_id)
+                    .join(
+                        PodMember,
+                        PodMember.organization_member_id == OrganizationMember.id,
+                    )
+                    .where(PodMember.id == principal_id)
+                )
+            ).scalar_one_or_none()
+        return None
+
+    async def delete_principal_role_assignments(
+        self, *, principal_type: str, principal_id: UUID
+    ) -> None:
+        """Delete every role assignment held by a principal.
+
+        ``RoleAssignmentModel.principal_id`` is polymorphic and carries no FK, so
+        these rows do not cascade when the underlying member/workload is deleted.
+        Call this on removal to avoid orphaned assignments. Parallel to
+        ``delete_grantee_grants`` for resource grants.
+        """
+        await self.session.execute(
+            delete(RoleAssignmentModel).where(
+                RoleAssignmentModel.principal_type == principal_type,
+                RoleAssignmentModel.principal_id == principal_id,
+            )
+        )
+        await self.session.flush()
+
+    async def member_authorization_targets(
+        self, *, organization_member_id: UUID
+    ) -> "MemberAuthorizationTargets | None":
+        """Snapshot the authorization data tied to an org member before it is
+        removed: the human ``user_id`` and the pod memberships that will
+        cascade-delete with it (their role assignments/grants do not cascade).
+
+        Returns ``None`` when the org member does not exist. Read-only, so it is
+        safe to call before the removal is authorized.
+        """
+        row = (
+            await self.session.execute(
+                select(OrganizationMember.user_id).where(
+                    OrganizationMember.id == organization_member_id
+                )
+            )
+        ).first()
+        if row is None:
+            return None
+        pod_rows = (
+            await self.session.execute(
+                select(PodMember.id, PodMember.pod_id).where(
+                    PodMember.organization_member_id == organization_member_id
+                )
+            )
+        ).all()
+        return MemberAuthorizationTargets(
+            user_id=row[0],
+            organization_member_id=organization_member_id,
+            pod_memberships=tuple((r[0], r[1]) for r in pod_rows),
+        )
+
+    async def purge_member_authorization(
+        self, targets: "MemberAuthorizationTargets"
+    ) -> None:
+        """Delete the role assignments + resource grants for a removed org member
+        and its (cascade-deleted) pod memberships, then invalidate the removed
+        user's cached role snapshots so access is revoked on the next request."""
+        for pod_member_id, pod_id in targets.pod_memberships:
+            await self.delete_principal_role_assignments(
+                principal_type="POD_MEMBER", principal_id=pod_member_id
+            )
+            await delete_grantee_grants(
+                self.session,
+                pod_id=pod_id,
+                grantee_type="POD_MEMBER",
+                grantee_id=pod_member_id,
+            )
+        await self.delete_principal_role_assignments(
+            principal_type="ORG_MEMBER",
+            principal_id=targets.organization_member_id,
+        )
+        await invalidate_role_snapshot_cache(user_id=targets.user_id)
 
 
 class Authorizer:
@@ -1279,11 +1416,11 @@ class Authorizer:
                 AppModel.visibility,
             ),
             ResourceType.WORKFLOW: (
-                FlowModel,
-                FlowModel.id,
-                FlowModel.pod_id,
-                FlowModel.user_id,
-                FlowModel.visibility,
+                WorkflowModel,
+                WorkflowModel.id,
+                WorkflowModel.pod_id,
+                WorkflowModel.user_id,
+                WorkflowModel.visibility,
             ),
             ResourceType.SCHEDULE: (
                 Schedule,

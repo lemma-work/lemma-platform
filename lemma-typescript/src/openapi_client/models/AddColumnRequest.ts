@@ -12,4 +12,3 @@ export type AddColumnRequest = {
      */
     column: ColumnSchema;
 };
-

@@ -151,6 +151,10 @@ export function parseAssistantStreamEvent(value: unknown): ParsedAssistantStream
     return { status };
   }
 
+  if (eventType === "stopped") {
+    return { status: "STOPPED" };
+  }
+
   if (eventType === "error" || eventType === "stream_error") {
     return {
       status: "FAILED",

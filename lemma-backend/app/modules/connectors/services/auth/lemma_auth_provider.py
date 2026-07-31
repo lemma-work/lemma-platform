@@ -1,10 +1,9 @@
-import asyncio
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from authlib.integrations.requests_client import OAuth2Session
+from authlib.integrations.httpx_client import AsyncOAuth2Client
 
 from app.modules.connectors.domain.account import OAuthCredentials
 from app.modules.connectors.domain.connector import ConnectorEntity
@@ -23,7 +22,7 @@ class LemmaAuthProvider(AuthProviderInterface):
 
     def __init__(
         self,
-        oauth_session_factory: type[OAuth2Session] = OAuth2Session,
+        oauth_session_factory: type[AsyncOAuth2Client] = AsyncOAuth2Client,
         cloud_id_resolver: CloudIdResolver = get_atlassian_cloud_id,
     ):
         self._oauth_session_factory = oauth_session_factory
@@ -53,19 +52,19 @@ class LemmaAuthProvider(AuthProviderInterface):
 
         oauth_config = connector.oauth2_config
 
-        oauth = self._oauth_session_factory(
+        # create_authorization_url is pure URL/PKCE building (no network), so it
+        # stays synchronous even on the async client — no thread hop needed.
+        async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             redirect_uri=redirect_uri,
             scope=oauth_config.default_scopes,
-        )
-
-        authorization_url, provider_state = await asyncio.to_thread(
-            oauth.create_authorization_url,
-            url=oauth_config.authorization_url,
-            state=state,
-            **(oauth_config.extra_params or {})
-        )
+        ) as oauth:
+            authorization_url, provider_state = oauth.create_authorization_url(
+                url=oauth_config.authorization_url,
+                state=state,
+                **(oauth_config.extra_params or {}),
+            )
 
         return authorization_url, provider_state
 
@@ -85,22 +84,21 @@ class LemmaAuthProvider(AuthProviderInterface):
         authorization_response = redirect_uri
         normalized_redirect_uri = self._normalize_redirect_uri(authorization_response)
 
-        oauth = self._oauth_session_factory(
+        async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             redirect_uri=normalized_redirect_uri,
             scope=oauth_config.default_scopes,
-        )
-
-        token_data = await asyncio.to_thread(
-            oauth.fetch_token,
-            url=oauth_config.token_url,
-            authorization_response=authorization_response,
-            # GitHub's token endpoint returns form-encoded data unless JSON is
-            # explicitly requested; authlib can only parse the access_token when
-            # the response is JSON. Harmless for providers that already return JSON.
-            headers={"Accept": "application/json"},
-        )
+        ) as oauth:
+            token_data = await oauth.fetch_token(
+                url=oauth_config.token_url,
+                authorization_response=authorization_response,
+                # GitHub's token endpoint returns form-encoded data unless JSON
+                # is explicitly requested; authlib can only parse the
+                # access_token when the response is JSON. Harmless for
+                # providers that already return JSON.
+                headers={"Accept": "application/json"},
+            )
 
         return await self._create_oauth_credentials(token_data, connector)
 
@@ -127,17 +125,15 @@ class LemmaAuthProvider(AuthProviderInterface):
 
         oauth_config = connector.oauth2_config
 
-        oauth = self._oauth_session_factory(
+        async with self._oauth_session_factory(
             client_id=oauth_config.client_id,
             client_secret=oauth_config.client_secret,
             token=credentials.raw_response,
-        )
-
-        token_data = await asyncio.to_thread(
-            oauth.refresh_token,
-            url=oauth_config.token_url,
-            refresh_token=credentials.refresh_token,
-        )
+        ) as oauth:
+            token_data = await oauth.refresh_token(
+                url=oauth_config.token_url,
+                refresh_token=credentials.refresh_token,
+            )
 
         return await self._create_oauth_credentials(token_data, connector)
 
@@ -161,21 +157,19 @@ class LemmaAuthProvider(AuthProviderInterface):
             token_data, access_token_path or "access_token", fallback_key="access_token"
         )
         if not access_token:
-            logger.warning(
-                "Access token not found at %s for connector %s",
-                access_token_path,
-                connector.id,
+            logger.debug(
+                'connectors.lemma_auth_provider.access_token_not_found_s.diagnostic'
             )
 
         refresh_token_path = oauth_config.refresh_token_path if oauth_config else None
         refresh_token = self._extract_token_field(
-            token_data, refresh_token_path or "refresh_token", fallback_key="refresh_token"
+            token_data,
+            refresh_token_path or "refresh_token",
+            fallback_key="refresh_token",
         )
         if not refresh_token:
-            logger.warning(
-                "Refresh token not found at %s for connector %s",
-                refresh_token_path,
-                connector.id,
+            logger.debug(
+                'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic'
             )
 
         expires_at = None
@@ -185,7 +179,7 @@ class LemmaAuthProvider(AuthProviderInterface):
             expires_at = datetime.now().replace(microsecond=0) + timedelta(
                 seconds=token_data["expires_in"]
             )
-        if connector.id == "teams":
+        if connector.id == "microsoft_teams":
             import base64
             import json as _json
 
@@ -211,7 +205,6 @@ class LemmaAuthProvider(AuthProviderInterface):
             user_data = {"tid": tid, "tenant_id": tid, "oid": oid} if tid else None
 
         elif connector.id in ["jira", "confluence"]:
-            logger.info("Getting Atlassian cloud id for connector: %s", connector.id)
             cloud_id = await self._cloud_id_resolver(access_token)
             if "jira" in connector.id:
                 server_url = f"https://api.atlassian.com/ex/jira/{cloud_id}"

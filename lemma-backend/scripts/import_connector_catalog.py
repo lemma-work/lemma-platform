@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import ast
 import asyncio
+import importlib
 import json
 import os
 import sys
@@ -54,6 +55,33 @@ def _load_repo_env() -> None:
 
 
 _load_repo_env()
+
+
+def _load_model_registry() -> None:
+    """Import every ORM model package before repositories configure mappers.
+
+    The API and migration entrypoints naturally import the complete model
+    graph. This standalone catalog command does not, which leaves cross-module
+    relationship names such as ``Organization`` unresolved on a fresh process.
+    """
+
+    for module_name in (
+        "app.core.infrastructure.events.models",
+        "app.modules.datastore.infrastructure.models",
+        "app.modules.identity.infrastructure.models",
+        "app.modules.pod.infrastructure.models",
+        "app.modules.agent.infrastructure.models",
+        "app.modules.schedule.infrastructure.models",
+        "app.modules.connectors.infrastructure.models",
+        "app.modules.function.infrastructure.models",
+        "app.modules.apps.infrastructure.models",
+        "app.modules.workflow.infrastructure.models",
+        "app.modules.agent_surfaces.infrastructure.models",
+        "app.modules.usage.infrastructure.models",
+        "app.modules.pod_bundle.infrastructure.models",
+    ):
+        importlib.import_module(module_name)
+
 
 from app.core.config import settings
 from app.modules.connectors.config import connector_settings
@@ -133,6 +161,14 @@ COMPOSIO_EXCLUDED_CONNECTOR_IDS = {
     "microsoft_teams",
     "splitwise",
 }
+# One-time id renames applied on catalog import: the value connector is synced
+# from config first, then existing accounts/auth-configs are re-pointed to it and
+# the old (key) connector is removed. ``teams`` -> ``microsoft_teams`` aligns the
+# native Teams surface connector with the Composio toolkit slug so every surface
+# platform maps to a single, consistently-named connector.
+CONNECTOR_ID_RENAMES: dict[str, str] = {
+    "teams": "microsoft_teams",
+}
 DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "gmail",
     "googlecalendar",
@@ -140,6 +176,7 @@ DEFAULT_COMPOSIO_CONNECTOR_IDS: tuple[str, ...] = (
     "googledocs",
     "googlesheets",
     "airtable",
+    "apollo",
     "asana",
     "box",
     "cal",
@@ -213,10 +250,52 @@ LEMMA_APPS_CONFIG_PATH = Path(__file__).parent / "lemma_apps_config.json"
 def _load_lemma_apps_config() -> list[dict]:
     """Load Lemma native apps configuration from JSON file."""
     if not LEMMA_APPS_CONFIG_PATH.exists():
-        logger.warning("Lemma apps config not found at %s", LEMMA_APPS_CONFIG_PATH)
+        logger.warning(
+            "connector_catalog.config.missing",
+            config_name="lemma_apps",
+        )
         return []
     with open(LEMMA_APPS_CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+# Curated map of connector_id -> {provider: [operation names]} for the
+# operation to call right after connecting an account to fetch its own
+# profile (email/name/workspace) -- so display_name resolution doesn't
+# depend solely on whatever the OAuth token-exchange response happens to
+# carry. Human-curated rather than auto-detected: Composio's operation
+# naming is not standardized across toolkits (GMAIL_GET_PROFILE vs
+# DISCORD_GET_MY_USER vs a generic about_get), so guessing by name alone
+# risks silently picking the wrong operation. Candidates are tried in order
+# by the service layer; a connector/provider with no entry here simply gets
+# no profile-operation enrichment (falls back to raw OAuth-response data).
+CONNECTOR_PROFILE_OPERATIONS_PATH = (
+    Path(__file__).parent / "connector_profile_operations.json"
+)
+
+
+def _load_connector_profile_operations() -> dict[str, dict[str, list[str]]]:
+    """Load the curated connector_id -> {provider: [operation names]} map."""
+    if not CONNECTOR_PROFILE_OPERATIONS_PATH.exists():
+        logger.warning(
+            "connector_catalog.config.missing",
+            config_name="connector_profile_operations",
+        )
+        return {}
+    with open(CONNECTOR_PROFILE_OPERATIONS_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _profile_operation_names(
+    profile_operations: dict[str, dict[str, list[str]]],
+    connector_id: str,
+    provider: AuthProvider,
+) -> list[str] | None:
+    """Look up curated profile-operation candidates for a connector+provider."""
+    by_provider = profile_operations.get(_normalize_connector_id(connector_id))
+    if not by_provider:
+        return None
+    return by_provider.get(provider.value) or None
 
 
 def _build_operation_search_document(
@@ -483,13 +562,18 @@ def _merge_provider_capabilities(
 def _native_package_provider_capability(
     connector_id: str,
     existing: ConnectorEntity | None,
+    *,
+    profile_operation_names: list[str] | None = None,
 ) -> LemmaProviderCapability:
     auth_method = _infer_native_auth_method(connector_id, existing)
     if existing:
         try:
             capability = existing.capability_for(AuthProvider.LEMMA)
             if isinstance(capability, LemmaProviderCapability):
-                updates: dict[str, object] = {"auth_scheme": auth_method}
+                updates: dict[str, object] = {
+                    "auth_scheme": auth_method,
+                    "profile_operation_names": profile_operation_names,
+                }
                 if capability.auth_config_schema is None:
                     updates["auth_config_schema"] = _default_auth_config_schema(
                         auth_method
@@ -498,7 +582,9 @@ def _native_package_provider_capability(
         except ValueError:
             pass
 
-    return _lemma_provider_capability(auth_method=auth_method)
+    return _lemma_provider_capability(
+        auth_method=auth_method, profile_operation_names=profile_operation_names
+    )
 
 
 def _default_auth_config_schema(auth_method: AuthMethod) -> dict:
@@ -529,6 +615,7 @@ def _lemma_provider_capability(
     auth_config_schema: dict | None = None,
     credential_schema: dict | None = None,
     system_oauth: dict | None = None,
+    profile_operation_names: list[str] | None = None,
     kind: str | None = None,
     supports_multiple_instances: bool = False,
 ) -> LemmaProviderCapability:
@@ -549,6 +636,7 @@ def _lemma_provider_capability(
         else None,
         supports_org_custom_oauth=auth_method == AuthMethod.OAUTH2,
         system_default_available=system_default_available,
+        profile_operation_names=profile_operation_names,
         kind=kind,
         supports_multiple_instances=supports_multiple_instances,
     )
@@ -592,6 +680,7 @@ def _composio_provider_capability(
     auth_method: AuthMethod,
     toolkit_slug: str,
     auth_config_schema: dict | None = None,
+    profile_operation_names: list[str] | None = None,
 ) -> ComposioProviderCapability:
     return ComposioProviderCapability(
         auth_scheme=auth_method,
@@ -599,6 +688,7 @@ def _composio_provider_capability(
         auth_config_schema=auth_config_schema,
         system_default_available=True,
         supports_org_custom_auth_config=False,
+        profile_operation_names=profile_operation_names,
     )
 
 
@@ -769,7 +859,10 @@ async def _deactivate_excluded_composio_connectors(
             existing.model_copy(update={"is_active": False})
         )
         deactivated_count += 1
-        logger.info("Deactivated excluded Composio app: %s", existing.id)
+        logger.debug(
+            "connector_catalog.connector.deactivated",
+            connector_id=existing.id,
+        )
 
     return deactivated_count
 
@@ -789,10 +882,16 @@ async def _upsert_connector(
 ) -> ConnectorEntity:
     existing = await connector_repository.get(entity.id)
     if existing:
-        logger.info("Updating connector %s", entity.id)
+        logger.debug(
+            "connector_catalog.connector.updating",
+            connector_id=entity.id,
+        )
         return await connector_repository.update(entity)
 
-    logger.info("Creating connector %s", entity.id)
+    logger.debug(
+        "connector_catalog.connector.creating",
+        connector_id=entity.id,
+    )
     return await connector_repository.create(entity)
 
 
@@ -1044,12 +1143,15 @@ def _list_composio_toolkits(
         try:
             items.append(composio.toolkits.get(toolkit_slug))
         except Exception as exc:
-            logger.warning("Skipping unknown Composio toolkit %s: %s", toolkit_slug, exc)
-    logger.info(
-        "Selected %s Composio toolkits for import (%s managed_by): %s",
-        len(items),
-        managed_by,
-        ", ".join(sorted(item.slug for item in items)),
+            logger.debug(
+                "connector_catalog.toolkit.skipped",
+                toolkit_id=toolkit_slug,
+                error_type=type(exc).__name__,
+            )
+    logger.debug(
+        "connector_catalog.toolkits.selected",
+        toolkit_count=len(items),
+        managed_by=managed_by,
     )
     return items
 
@@ -1065,6 +1167,8 @@ async def _sync_native_catalog(
     total_apps = 0
     total_operations = 0
     total_triggers = 0
+
+    profile_operations = _load_connector_profile_operations()
 
     # First sync Lemma-managed apps from JSON config (Slack, Jira, Confluence)
     lemma_apps = _load_lemma_apps_config()
@@ -1099,6 +1203,9 @@ async def _sync_native_catalog(
                     auth_config_schema=app_config.get("auth_config_schema"),
                     credential_schema=app_config.get("credential_schema"),
                     system_oauth=app_config.get("system_oauth"),
+                    profile_operation_names=_profile_operation_names(
+                        profile_operations, connector_id, AuthProvider.LEMMA
+                    ),
                     kind=app_config.get("kind"),
                     supports_multiple_instances=app_config.get(
                         "supports_multiple_instances", False
@@ -1111,7 +1218,10 @@ async def _sync_native_catalog(
         )
         await _upsert_connector(connector_repository, entity)
         total_apps += 1
-        logger.info("Synced Lemma app config: %s", app_name)
+        logger.debug(
+            "connector_catalog.app.synced",
+            connector_id=app_name,
+        )
 
         # Sync triggers for this app
         for trigger_data in app_config.get("triggers", []):
@@ -1156,7 +1266,11 @@ async def _sync_native_catalog(
                 operation_repository, connector_id, static_ops
             )
             total_operations += op_count
-            logger.info("Synced %d static operations for %s", op_count, app_name)
+            logger.info(
+                "connector_catalog.static_operations.synced",
+                connector_id=connector_id,
+                count=op_count,
+            )
 
         # Import OpenAPI-driven operations for connectors that declare a spec.
         # These run through the generic HTTP executor at runtime — no package.
@@ -1166,7 +1280,11 @@ async def _sync_native_catalog(
                 operation_repository, connector_id, openapi_cfg
             )
             total_operations += op_count
-            logger.info("Synced %d OpenAPI operations for %s", op_count, app_name)
+            logger.info(
+                "connector_catalog.openapi_operations.synced",
+                connector_id=connector_id,
+                count=op_count,
+            )
 
     # Then sync native package apps that still run through Lemma packages.
     for app_slug in _list_native_apps(app_filters):
@@ -1196,9 +1314,9 @@ async def _sync_native_catalog(
                 ]
         except Exception as exc:
             logger.warning(
-                "Lemma package unavailable for %s; keeping native app registration without operations: %s",
-                connector_id,
-                exc,
+                "connector_catalog.native_package.unavailable",
+                connector_id=connector_id,
+                error_type=type(exc).__name__,
             )
 
         entity = ConnectorEntity(
@@ -1208,7 +1326,13 @@ async def _sync_native_catalog(
             icon=existing.icon if existing else None,
             provider_capabilities=_merge_provider_capabilities(
                 existing,
-                _native_package_provider_capability(connector_id, existing),
+                _native_package_provider_capability(
+                    connector_id,
+                    existing,
+                    profile_operation_names=_profile_operation_names(
+                        profile_operations, connector_id, AuthProvider.LEMMA
+                    ),
+                ),
             ),
             agent_instruction=existing.agent_instruction if existing else None,
             is_active=True,
@@ -1291,10 +1415,7 @@ async def _sync_composio_catalog(
 ) -> tuple[int, int, int]:
     api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
     if not api_key:
-        logger.info(
-            "Skipping Composio catalog sync — COMPOSIO_API_KEY is not set. "
-            "Only native apps will be imported."
-        )
+        logger.debug("connector_catalog.composio.disabled")
         return 0, 0, 0
 
     composio = Composio(api_key=api_key)
@@ -1349,15 +1470,24 @@ async def _sync_single_composio_toolkit(
     composio_auth_config_schema = _composio_credential_schema(
         toolkit_detail, composio_auth_method
     )
+    profile_operations = _load_connector_profile_operations()
     lemma_capability = None
     if supports_native:
+        lemma_profile_operation_names = _profile_operation_names(
+            profile_operations, connector_id, AuthProvider.LEMMA
+        )
         try:
             lemma_capability = existing.capability_for(AuthProvider.LEMMA) if existing else None
         except ValueError:
             lemma_capability = None
-        if lemma_capability is None:
+        if lemma_capability is not None:
+            lemma_capability = lemma_capability.model_copy(
+                update={"profile_operation_names": lemma_profile_operation_names}
+            )
+        else:
             lemma_capability = _lemma_provider_capability(
                 auth_method=_infer_native_auth_method(connector_id, existing),
+                profile_operation_names=lemma_profile_operation_names,
             )
 
     entity = ConnectorEntity(
@@ -1383,6 +1513,9 @@ async def _sync_single_composio_toolkit(
                 auth_method=composio_auth_method,
                 toolkit_slug=toolkit_item.slug,
                 auth_config_schema=composio_auth_config_schema,
+                profile_operation_names=_profile_operation_names(
+                    profile_operations, connector_id, AuthProvider.COMPOSIO
+                ),
             ),
             lemma_capability,
         ),
@@ -1475,6 +1608,87 @@ async def _run_in_session_batch(
             raise
 
 
+# Child tables that hold a live per-org/user reference to a connector and must be
+# re-pointed to the new id before the old connector row is deleted. Operations and
+# triggers are intentionally NOT here — they belong to the connector definition and
+# cascade-delete with the old row (the new connector already re-synced its own).
+_CONNECTOR_RENAME_REPOINT_TABLES = ("accounts", "auth_configs")
+
+
+async def _apply_connector_renames(connector_repository, session) -> int:
+    """Apply :data:`CONNECTOR_ID_RENAMES` as a safe, idempotent data migration.
+
+    ``connectors.id`` is a string primary key that ``accounts``, ``auth_configs``,
+    ``connector_operations`` and ``connector_triggers`` reference with
+    ``ON DELETE CASCADE`` — so this must (1) confirm the new connector already
+    exists (synced from config), (2) re-point accounts + auth configs off the old
+    id, then (3) delete the old connector (its stale operations/triggers cascade
+    away; the new connector carries its own freshly-synced set). Deleting the old
+    row *before* re-pointing would cascade-delete every connected account.
+
+    Idempotent: a rename whose old connector is already gone (or whose target
+    hasn't been synced yet) is skipped. Returns the number of renames applied.
+    """
+    from sqlalchemy import text
+
+    renamed = 0
+    for old_id, new_id in CONNECTOR_ID_RENAMES.items():
+        old = await connector_repository.get(old_id)
+        if old is None:
+            continue  # already migrated (or never existed)
+        new = await connector_repository.get(new_id)
+        if new is None:
+            logger.warning(
+                "connector_catalog.rename.target_missing",
+                old_connector_id=old_id,
+                new_connector_id=new_id,
+            )
+            continue
+        for table in _CONNECTOR_RENAME_REPOINT_TABLES:
+            result = await session.execute(
+                text(
+                    f"UPDATE {table} SET connector_id = :new "  # noqa: S608 - table names are a fixed literal allow-list
+                    "WHERE connector_id = :old"
+                ),
+                {"new": new_id, "old": old_id},
+            )
+            logger.debug(
+                "connector_catalog.rename.rows_repointed",
+                count=int(getattr(result, "rowcount", 0) or 0),
+                table=table,
+                old_connector_id=old_id,
+                new_connector_id=new_id,
+            )
+        await session.execute(
+            text("DELETE FROM connectors WHERE id = :old"),
+            {"old": old_id},
+        )
+        renamed += 1
+        logger.debug(
+            "connector_catalog.connector.renamed",
+            old_connector_id=old_id,
+            new_connector_id=new_id,
+        )
+    return renamed
+
+
+async def _run_connector_id_renames(*, dry_run: bool) -> int:
+    """Session wrapper around :func:`_apply_connector_renames` (commit unless dry-run)."""
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        connector_repository = ConnectorRepository(uow)
+        try:
+            renamed = await _apply_connector_renames(connector_repository, session)
+            if dry_run:
+                await uow.rollback()
+            else:
+                await uow.commit()
+            return renamed
+        except Exception:
+            await uow.rollback()
+            raise
+
+
 async def _sync_native_catalog_batched(
     *,
     app_filters: set[str] | None,
@@ -1484,7 +1698,10 @@ async def _sync_native_catalog_batched(
     total_apps = total_operations = total_triggers = 0
 
     for app_slug in _list_native_sync_targets(app_filters):
-        logger.info("Importing native app batch: %s", app_slug)
+        logger.debug(
+            "connector_catalog.native_batch.started",
+            connector_id=app_slug,
+        )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
             lambda connector_repository, operation_repository, trigger_repository: _sync_native_catalog(
                 connector_repository,
@@ -1512,10 +1729,7 @@ async def _sync_composio_catalog_batched(
 ) -> tuple[int, int, int]:
     api_key = connector_settings.composio_api_key or os.getenv("COMPOSIO_API_KEY")
     if not api_key:
-        logger.info(
-            "Skipping Composio catalog sync — COMPOSIO_API_KEY is not set. "
-            "Only native apps will be imported."
-        )
+        logger.debug("connector_catalog.composio.disabled")
         return 0, 0, 0
 
     composio = Composio(api_key=api_key)
@@ -1533,7 +1747,10 @@ async def _sync_composio_catalog_batched(
         dry_run=dry_run,
     )
     for toolkit_item in toolkit_items:
-        logger.info("Importing Composio app batch: %s", toolkit_item.slug)
+        logger.debug(
+            "connector_catalog.composio_batch.started",
+            connector_id=toolkit_item.slug,
+        )
         app_count, operation_count, trigger_count = await _run_in_session_batch(
             lambda connector_repository, operation_repository, trigger_repository: _sync_single_composio_toolkit(
                 composio,
@@ -1636,9 +1853,18 @@ async def _generate_skill_doc(
             skill_file = skills_dir / f"{app_id}.md"
         skills_dir.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(result.output, encoding="utf-8")
-        logger.info("Generated skill doc: %s", skill_file.name)
+        logger.debug(
+            "connector_catalog.skill.generated",
+            connector_id=app_id,
+            provider=provider or "default",
+        )
     except Exception as exc:
-        logger.warning("Failed to generate skill for %s (provider=%s): %s", app_id, provider, exc)
+        logger.warning(
+            "connector_catalog.skill.failed",
+            connector_id=app_id,
+            provider=provider or "default",
+            error_type=type(exc).__name__,
+        )
 
 
 def _app_providers(app) -> list[str]:
@@ -1731,18 +1957,29 @@ async def _generate_all_skills(app_filters: set[str] | None = None) -> None:
         if app_filters:
             apps = [a for a in apps if a.id in app_filters]
 
-        logger.info("Generating skill docs for %d apps...", len(apps))
+        logger.debug(
+            "connector_catalog.skills.started",
+            app_count=len(apps),
+        )
 
         batch_size = 5
         for i in range(0, len(apps), batch_size):
             batch = apps[i : i + batch_size]
             await asyncio.gather(*[_generate_app_skills(skill_agent, session, app, SKILLS_DIR) for app in batch])
-            logger.info("Completed batch %d/%d", min(i + batch_size, len(apps)), len(apps))
+            logger.debug(
+                "connector_catalog.skill_batch.completed",
+                count=min(i + batch_size, len(apps)),
+                total_count=len(apps),
+            )
 
-        logger.info("Skill generation complete.")
+        logger.info(
+            "connector_catalog.skills.completed",
+            app_count=len(apps),
+        )
 
 
 async def main() -> None:
+    _load_model_registry()
     args = _parse_args()
     app_filters = {
         app_slug.strip() for app_slug in (args.apps or []) if app_slug.strip()
@@ -1796,26 +2033,35 @@ async def main() -> None:
             dry_run=args.dry_run,
         )
 
+    # Apply any one-time connector id renames now that the target connectors have
+    # been synced (idempotent; skips renames whose old connector is already gone).
+    renamed_connectors = await _run_connector_id_renames(dry_run=args.dry_run)
+    if renamed_connectors:
+        logger.debug(
+            "connector_catalog.renames.applied",
+            count=renamed_connectors,
+        )
+
     if args.dry_run:
         logger.info(
-            "Dry run complete: native=%s apps/%s operations/%s triggers, composio=%s apps/%s operations/%s triggers",
-            native_apps,
-            native_operations,
-            native_triggers,
-            composio_apps,
-            composio_operations,
-            composio_triggers,
+            "connector_catalog.dry_run.completed",
+            native_app_count=native_apps,
+            native_operation_count=native_operations,
+            native_trigger_count=native_triggers,
+            composio_app_count=composio_apps,
+            composio_operation_count=composio_operations,
+            composio_trigger_count=composio_triggers,
         )
         return
 
     logger.info(
-        "Imported native=%s apps/%s operations/%s triggers, composio=%s apps/%s operations/%s triggers",
-        native_apps,
-        native_operations,
-        native_triggers,
-        composio_apps,
-        composio_operations,
-        composio_triggers,
+        "connector_catalog.import.completed",
+        native_app_count=native_apps,
+        native_operation_count=native_operations,
+        native_trigger_count=native_triggers,
+        composio_app_count=composio_apps,
+        composio_operation_count=composio_operations,
+        composio_trigger_count=composio_triggers,
     )
 
     if getattr(args, "generate_skills", False):

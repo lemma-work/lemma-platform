@@ -13,4 +13,3 @@ export type OperationSummary = {
      */
     relevance_score?: (number | null);
 };
-

@@ -1,0 +1,2791 @@
+/**
+ * Landing narrative sections — the gap (§2), the journey (§3), pod primitives
+ * (§4), build (§6), and portable (§7). Shared section chrome (.lp-section,
+ * .lp-section-title, .lp-terminal, .lp-showcase-grid) lives in landing-page.css;
+ * this file only styles what the narrative rebuild added.
+ *
+ * Palette is borrowed from the hero collage so these sections read as the same
+ * page rather than a spec sheet bolted underneath it.
+ */
+
+@layer components {
+  .lp-react {
+    --lp-c-cream: #f1ecdd;
+    --lp-c-purple: #a79bf2;
+    --lp-c-blue: #1e56dd;
+    --lp-c-yellow: #ffce1f;
+    --lp-c-green: #1fb463;
+    --lp-c-ink: #262038;
+  }
+
+  /* ── Mobile menu ────────────────────────────────────────────────────────
+   * .lp-nav is display:none under 980px. Without this the header offered a
+   * single button and nothing else — no Templates, no Docs, no GitHub.
+   */
+
+  .lp-menu-toggle {
+    display: none;
+    width: 34px;
+    height: 34px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--lp-rule);
+    border-radius: 9px;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .lp-menu-toggle > span,
+  .lp-menu-toggle > span::before,
+  .lp-menu-toggle > span::after {
+    display: block;
+    width: 15px;
+    height: 1.5px;
+    border-radius: 1px;
+    background: var(--lp-ink);
+    transition: transform 0.22s ease, opacity 0.16s ease;
+  }
+
+  .lp-menu-toggle > span::before,
+  .lp-menu-toggle > span::after {
+    content: "";
+    position: relative;
+  }
+
+  .lp-menu-toggle > span::before { top: -5.5px; }
+  .lp-menu-toggle > span::after { top: 4px; }
+
+  .lp-menu-toggle > span.is-open { background: transparent; }
+  .lp-menu-toggle > span.is-open::before { transform: translateY(5.5px) rotate(45deg); }
+  .lp-menu-toggle > span.is-open::after { transform: translateY(-4px) rotate(-45deg); }
+
+  /* Matches the width at which landing-page.css hides .lp-nav. Above it the
+     toggle and the panel are both gone, so a menu left open before a resize
+     can't strand itself over the desktop nav. */
+  @media (max-width: 980px) {
+    .lp-menu-toggle {
+      display: inline-flex;
+    }
+
+    .lp-mobile-menu.is-open {
+      display: grid;
+    }
+  }
+
+  .lp-mobile-menu {
+    position: fixed;
+    z-index: 19;
+    top: 60px;
+    right: 0;
+    left: 0;
+    display: none;
+    padding: 10px max(16px, calc((100vw - 1180px) / 2)) 18px;
+    border-bottom: 1px solid var(--lp-rule);
+    background: color-mix(in srgb, var(--lp-paper) 97%, transparent);
+    box-shadow: 0 18px 34px rgba(13, 15, 18, 0.09);
+    backdrop-filter: blur(14px);
+  }
+
+  .lp-mobile-menu a {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    padding: 13px 2px;
+    color: var(--lp-ink);
+    font-size: 0.98rem;
+  }
+
+  .lp-mobile-menu a + a {
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  /* ── Site footer ────────────────────────────────────────────────────── */
+
+  .lp-site-footer {
+    padding: clamp(40px, 5vw, 64px) max(16px, calc((100vw - 1180px) / 2))
+      clamp(24px, 3vw, 34px);
+    border-top: 1px solid var(--lp-rule);
+    background: var(--lp-paper);
+  }
+
+  .lp-site-footer-inner {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr));
+    gap: clamp(24px, 3vw, 44px);
+  }
+
+  .lp-site-footer-brand p {
+    margin-top: 12px;
+    max-width: 30ch;
+    color: var(--lp-muted);
+    font-size: 0.84rem;
+    line-height: 1.55;
+  }
+
+  .lp-site-footer-inner nav {
+    display: grid;
+    align-content: start;
+    gap: 9px;
+  }
+
+  .lp-site-footer-label {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.62rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .lp-site-footer-inner nav a {
+    display: inline-flex;
+    gap: 7px;
+    align-items: center;
+    color: var(--lp-muted);
+    font-size: 0.86rem;
+  }
+
+  .lp-site-footer-inner nav a:hover {
+    color: var(--lp-ink);
+  }
+
+  .lp-site-footer-base {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    justify-content: space-between;
+    margin-top: clamp(28px, 3.4vw, 44px);
+    padding-top: 18px;
+    border-top: 1px solid var(--lp-rule);
+    color: var(--lp-faint);
+    font-size: 0.78rem;
+  }
+
+  /* ── Shared mock pills ──────────────────────────────────────────────── */
+
+  .lp-jr-mock .lp-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.58rem;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  .lp-jr-mock .lp-pill.green {
+    background: #d9f5e3;
+    color: #11743c;
+  }
+
+  .lp-jr-mock .lp-pill.red {
+    background: #ffe1da;
+    color: #c22f15;
+  }
+
+  .lp-jr-mock .lp-pill.yellow {
+    background: #fff3c4;
+    color: #8a6400;
+  }
+
+  .lp-jr-mock .lp-pill.purple {
+    background: #e6e0ff;
+    color: #5a3fd4;
+  }
+
+  .lp-jr-mock .lp-pill.grey {
+    background: #eceae6;
+    color: #6b6a66;
+  }
+
+  /* ── §2 The gap ─────────────────────────────────────────────────────
+   * Two columns per beat: the line on the left, what actually goes wrong on
+   * the right. Beats alone read as a poem and left the section half empty.
+   */
+
+  .lp-gap-beats {
+    display: grid;
+    gap: 0;
+    max-width: 62ch;
+    margin: clamp(26px, 3.2vw, 40px) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-gap-beats > li {
+    position: relative;
+    padding: 16px 0;
+  }
+
+  .lp-gap-beats > li + li {
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  /* One rule threading every beat, drawn as each lands. */
+  .lp-gap-rail {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -26px;
+    width: 1px;
+    background: var(--lp-rule-strong);
+    transform: scaleY(0);
+    transform-origin: top;
+    transition: transform 0.55s cubic-bezier(0.3, 0.1, 0.2, 1);
+  }
+
+  .lp-js .lp-gap-beats > li.is-inview .lp-gap-rail {
+    transform: scaleY(1);
+  }
+
+  .lp-gap-beats > li:nth-child(2) .lp-gap-rail { transition-delay: 0.06s; }
+  .lp-gap-beats > li:nth-child(3) .lp-gap-rail { transition-delay: 0.12s; }
+  .lp-gap-beats > li:nth-child(4) .lp-gap-rail { transition-delay: 0.18s; }
+  .lp-gap-beats > li:nth-child(5) .lp-gap-rail { transition-delay: 0.24s; }
+  .lp-gap-beats > li:nth-child(6) .lp-gap-rail { transition-delay: 0.30s; }
+
+  .lp-gap-beats > li::before {
+    content: "";
+    position: absolute;
+    top: 28px;
+    left: -29px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--lp-rule-strong);
+    transform: scale(0);
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1) 0.25s;
+  }
+
+  .lp-js .lp-gap-beats > li.is-inview::before {
+    transform: scale(1);
+  }
+
+  .lp-gap-beat {
+    color: var(--lp-ink);
+    font-size: 1.12rem;
+    line-height: 1.4;
+    letter-spacing: -0.016em;
+  }
+
+  /* The right column is the consequence: what the reader actually hits. */
+  .lp-gap-then {
+    max-width: 54ch;
+    margin-top: 6px;
+    color: var(--lp-muted);
+    font-size: var(--lp-t-lead);
+    line-height: 1.6;
+  }
+
+  .lp-gap-then b {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--lp-ink);
+    font-weight: 500;
+  }
+
+  /* The turn — the page's thesis. It leaves the beat list and takes the full
+     measure, because "shared means running" is the sentence §3–§5 then prove. */
+  .lp-gap-turn {
+    margin-top: clamp(28px, 3.4vw, 44px);
+    padding-top: clamp(24px, 2.6vw, 34px);
+    border-top: 2px solid var(--lp-c-yellow);
+  }
+
+  .lp-gap-turn-line {
+    max-width: 24ch;
+    color: var(--lp-ink);
+    font-size: clamp(1.6rem, 2.4vw, 2.15rem);
+    font-weight: 500;
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+  }
+
+  .lp-gap-turn-line span {
+    color: var(--lp-muted);
+  }
+
+  /* Three short proofs under the turn: team, agents, surfaces. Laid out as a
+     row so the section fills its measure instead of trailing off left. */
+  .lp-gap-means {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: clamp(18px, 2.4vw, 34px);
+    margin: clamp(22px, 2.6vw, 32px) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-gap-means li {
+    padding-top: 14px;
+    border-top: 1px solid var(--lp-rule);
+    color: var(--lp-muted);
+    font-size: var(--lp-t-body);
+    line-height: 1.55;
+  }
+
+  .lp-gap-means b {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--lp-ink);
+    font-weight: 500;
+  }
+
+  .lp-gap-close {
+    margin-top: clamp(26px, 3vw, 34px);
+    padding-top: 20px;
+    border-top: 1px solid var(--lp-rule);
+    color: var(--lp-muted);
+  }
+
+  .lp-gap-close strong {
+    color: var(--lp-ink);
+    font-weight: 500;
+  }
+
+  /* ── §3 The journey ─────────────────────────────────────────────────── */
+
+  .lp-journey-head {
+    max-width: 940px;
+    margin-bottom: clamp(30px, 3.6vw, 46px);
+  }
+
+  .lp-journey-layers {
+    display: grid;
+    gap: clamp(14px, 1.6vw, 20px);
+  }
+
+  /* One band shell for §3, §5 and §6. Those three sections previously each
+     invented their own container, so the middle of the page read as three
+     unrelated designs stacked together. §4 (sticky stack) and §7 (card grid)
+     stay distinct on purpose — they are doing a different job. */
+  .lp-jr-layer,
+  .lp-surfaces-stage,
+  .lp-build-grid {
+    padding: clamp(24px, 3vw, 40px);
+    border: 1px solid var(--lp-rule);
+    border-radius: 20px;
+    background: var(--lp-paper);
+  }
+
+  .lp-jr-layer {
+    display: grid;
+    grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
+    gap: clamp(24px, 3vw, 48px);
+    align-items: center;
+  }
+
+  .lp-jr-layer:nth-child(even) .lp-jr-copy {
+    order: 2;
+  }
+
+  .lp-jr-step {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    margin-bottom: 14px;
+    border-radius: 9px;
+    background: var(--lp-c-cream);
+    color: var(--lp-ink);
+    font-family: var(--font-mono-family);
+    font-size: 0.7rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-layer.is-deploy .lp-jr-step {
+    background: var(--lp-c-green);
+    color: #ffffff;
+  }
+
+  .lp-jr-layer.is-invite .lp-jr-step {
+    background: var(--lp-c-purple);
+  }
+
+  .lp-jr-layer.is-access .lp-jr-step {
+    background: var(--lp-c-yellow);
+  }
+
+  .lp-jr-layer.is-use .lp-jr-step {
+    background: var(--lp-c-blue);
+    color: #ffffff;
+  }
+
+  .lp-jr-copy h3 {
+    margin-bottom: 10px;
+    color: var(--lp-ink);
+    font-size: clamp(1.28rem, 2.1vw, 1.72rem);
+    font-weight: 500;
+    line-height: 1.12;
+    letter-spacing: -0.035em;
+  }
+
+  .lp-jr-body {
+    max-width: 44ch;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.88rem;
+    line-height: 1.62;
+  }
+
+  .lp-jr-depth {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-jr-depth li {
+    padding: 5px 10px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 999px;
+    color: var(--lp-muted);
+    font-size: 0.7rem;
+  }
+
+  /* Stage — the colour block each mock floats on. */
+  .lp-jr-stage {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 240px;
+    padding: clamp(18px, 2.4vw, 30px);
+    border-radius: 16px;
+    background: var(--lp-c-cream);
+  }
+
+  .lp-jr-layer.is-deploy .lp-jr-stage {
+    background: var(--lp-c-green);
+  }
+
+  .lp-jr-layer.is-invite .lp-jr-stage {
+    background: var(--lp-c-purple);
+  }
+
+  .lp-jr-layer.is-access .lp-jr-stage {
+    background: var(--lp-c-yellow);
+  }
+
+  .lp-jr-layer.is-use .lp-jr-stage {
+    background: var(--lp-c-blue);
+  }
+
+  .lp-jr-mock {
+    width: 100%;
+    max-width: 460px;
+  }
+
+  /* 01 Build */
+  .lp-jr-sources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .lp-jr-sources span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.82);
+    color: var(--lp-ink);
+    font-size: 0.68rem;
+  }
+
+  .lp-jr-sources .is-lemma {
+    background: var(--lp-c-ink);
+    color: #ffffff;
+  }
+
+  .lp-jr-term {
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--lp-c-ink);
+    box-shadow: 0 14px 34px rgba(13, 15, 18, 0.18);
+    font-family: var(--font-mono-family);
+    font-size: 0.7rem;
+  }
+
+  .lp-jr-term header {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-bottom: 11px;
+  }
+
+  .lp-jr-term header i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .lp-jr-term header small {
+    margin-left: 6px;
+    color: rgba(255, 255, 255, 0.44);
+    font-size: 0.64rem;
+  }
+
+  .lp-jr-term p {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+    color: rgba(255, 255, 255, 0.86);
+  }
+
+  .lp-jr-term p b {
+    color: var(--lp-c-yellow);
+    font-weight: 500;
+  }
+
+  .lp-jr-term p.is-ok em {
+    color: #5fdc95;
+    font-style: normal;
+  }
+
+  .lp-jr-term p.is-ok span {
+    color: #ffffff;
+  }
+
+  .lp-jr-term p.is-ok small {
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 0.64rem;
+  }
+
+  /* 02 Deploy */
+  .lp-jr-app-card,
+  .lp-jr-agents,
+  .lp-jr-invite,
+  .lp-jr-access {
+    border-radius: 12px;
+    background: #ffffff;
+    box-shadow: 0 14px 34px rgba(13, 15, 18, 0.14);
+  }
+
+  .lp-jr-app-card {
+    margin-bottom: 10px;
+    padding: 14px 16px;
+  }
+
+  .lp-jr-app-card header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 4px;
+  }
+
+  .lp-jr-app-card header strong {
+    color: var(--lp-ink);
+    font-size: 0.92rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--lp-c-green);
+  }
+
+  .lp-jr-app-card header small {
+    color: #11743c;
+    font-size: 0.66rem;
+  }
+
+  .lp-jr-url {
+    margin-bottom: 10px;
+    color: var(--lp-muted);
+    font-family: var(--font-mono-family);
+    font-size: 0.7rem;
+  }
+
+  .lp-jr-app-meta {
+    display: flex;
+    gap: 18px;
+    padding-top: 10px;
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  .lp-jr-app-meta span {
+    display: flex;
+    flex-direction: column;
+    color: var(--lp-faint);
+    font-size: 0.64rem;
+  }
+
+  .lp-jr-app-meta b {
+    color: var(--lp-ink);
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-agents {
+    padding: 8px;
+  }
+
+  .lp-jr-agents p,
+  .lp-jr-invite p {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 8px;
+    border-radius: 8px;
+  }
+
+  .lp-jr-agents p + p,
+  .lp-jr-invite p + p {
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  .lp-jr-agent-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 7px;
+    background: var(--lp-c-ink);
+    color: #ffffff;
+    font-size: 0.56rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-agents strong,
+  .lp-jr-invite strong {
+    display: block;
+    color: var(--lp-ink);
+    font-size: 0.78rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-agents small,
+  .lp-jr-invite small {
+    color: var(--lp-faint);
+    font-size: 0.64rem;
+  }
+
+  /* 03 Invite */
+  .lp-jr-invite {
+    padding: 8px;
+  }
+
+  .lp-jr-panel-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 8px 8px 10px;
+    border-bottom: 1px solid var(--lp-rule);
+  }
+
+  .lp-jr-panel-head strong {
+    color: var(--lp-ink);
+    font-size: 0.82rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-panel-head small {
+    color: var(--lp-faint);
+    font-size: 0.64rem;
+  }
+
+  .lp-jr-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-size: 0.58rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-avatar.is-purple {
+    background: #e6e0ff;
+    color: #5a3fd4;
+  }
+
+  .lp-jr-avatar.is-grey {
+    background: #eceae6;
+    color: #6b6a66;
+  }
+
+  .lp-jr-avatar.is-yellow {
+    background: #fff3c4;
+    color: #8a6400;
+  }
+
+  .lp-jr-invite-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 4px;
+    padding: 10px 8px 4px;
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  .lp-jr-invite-foot span {
+    color: var(--lp-muted);
+    font-size: 0.7rem;
+  }
+
+  .lp-jr-invite-foot em {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.64rem;
+    font-style: normal;
+  }
+
+  /* 04 Access */
+  .lp-jr-access {
+    padding: 8px;
+  }
+
+  .lp-jr-matrix {
+    padding-top: 4px;
+  }
+
+  .lp-jr-matrix-head,
+  .lp-jr-matrix-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) repeat(3, minmax(0, 1fr));
+    align-items: center;
+    gap: 6px;
+    padding: 7px 8px;
+  }
+
+  .lp-jr-matrix-head span {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+  }
+
+  .lp-jr-matrix-row + .lp-jr-matrix-row {
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  .lp-jr-matrix-row strong {
+    display: block;
+    color: var(--lp-ink);
+    font-size: 0.74rem;
+    font-weight: 500;
+  }
+
+  .lp-jr-matrix-row small {
+    color: var(--lp-faint);
+    font-size: 0.6rem;
+  }
+
+  /* 05 Use */
+  .lp-jr-use-row {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .lp-jr-use-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 11px;
+    border-radius: 11px;
+    background: #ffffff;
+    box-shadow: 0 12px 30px rgba(13, 15, 18, 0.16);
+  }
+
+  .lp-jr-use-card header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--lp-muted);
+    font-size: 0.64rem;
+  }
+
+  .lp-jr-gpt,
+  .lp-jr-appmark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 4px;
+    background: var(--lp-c-ink);
+    color: #ffffff;
+    font-size: 0.46rem;
+  }
+
+  .lp-jr-appmark {
+    background: var(--lp-c-blue);
+  }
+
+  .lp-jr-use-card p {
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 0.65rem;
+    line-height: 1.4;
+  }
+
+  .lp-jr-use-card p.them {
+    background: #f1f0ec;
+    color: var(--lp-muted);
+  }
+
+  .lp-jr-use-card p.me {
+    background: var(--lp-c-ink);
+    color: #ffffff;
+  }
+
+  .lp-jr-use-rows {
+    display: grid;
+    gap: 5px;
+    padding: 4px 0;
+  }
+
+  .lp-jr-use-rows i {
+    height: 7px;
+    border-radius: 3px;
+    background: #eceae6;
+  }
+
+  .lp-jr-use-rows i.short {
+    width: 62%;
+  }
+
+  .lp-jr-use-cta {
+    margin-top: auto;
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: var(--lp-c-blue);
+    color: #ffffff;
+    font-size: 0.62rem;
+    text-align: center;
+  }
+
+  .lp-jr-use-base {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 12px;
+    padding: 9px 12px;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+    font-size: 0.68rem;
+  }
+
+  .lp-jr-use-base span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--lp-c-yellow);
+  }
+
+  /* ── §5 surfaces note ───────────────────────────────────────────────── */
+
+  /* ── §6 Build ───────────────────────────────────────────────────────── */
+
+  .lp-build-harnesses {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 0 0 22px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-build-harnesses li {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 11px 7px 8px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 999px;
+    background: var(--lp-paper);
+    color: var(--lp-muted);
+    font-size: 0.74rem;
+  }
+
+  .lp-build-harnesses img {
+    border-radius: 5px;
+  }
+
+  .lp-build-prompts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .lp-build-prompt-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 14px;
+    border: 1px solid var(--lp-rule-strong);
+    border-radius: 9px;
+    background: var(--lp-paper);
+    color: var(--lp-ink);
+    font-family: inherit;
+    font-size: 0.76rem;
+    cursor: pointer;
+    transition:
+      background 0.16s ease,
+      transform 0.16s ease;
+  }
+
+  .lp-build-prompt-button:hover {
+    background: var(--lp-soft);
+    transform: translateY(-1px);
+  }
+
+  .lp-build-prompt-button svg {
+    width: 13px;
+    height: 13px;
+  }
+
+  .lp-build-copy-status {
+    color: var(--lp-faint);
+    font-size: 0.72rem;
+  }
+
+  /* ── §4 Pod, built from the ground up ───────────────────────────────
+   * Sticky isometric stack on the left; detail cards scroll past on the right
+   * and drive which plane is lit. Data at the bottom, surfaces at the top.
+   */
+
+  .lp-podsys-head {
+    max-width: 940px;
+  }
+
+  .lp-podsys-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    gap: clamp(24px, 4vw, 64px);
+    align-items: stretch;
+    margin-top: clamp(24px, 3vw, 44px);
+  }
+
+  /* The column stretches to the full row; the block inside it is what sticks,
+     otherwise there is no travel and it pins at the wrong offset. */
+  .lp-podsys-col {
+    position: relative;
+  }
+
+  .lp-podsys-sticky {
+    position: sticky;
+    top: 88px;
+    display: flex;
+    align-items: center;
+    min-height: min(560px, calc(100vh - 128px));
+  }
+
+  .lp-podsys-sticky > * {
+    width: 100%;
+  }
+
+  /* The scene angle lives in custom properties so the label counter-rotation
+     below stays exactly inverse to it — change one and the other follows. */
+  .lp-iso {
+    --iso-rx: 56deg;
+    --iso-rz: -40deg;
+    --iso-scale: 0.66;
+    position: relative;
+    height: min(580px, 64vh);
+    /* Sits lower than the sticky column's centre — level with the head above it
+       the stack read as if it were floating off the top of the section. */
+    margin-top: 96px;
+    perspective: 1500px;
+  }
+
+  /* Offset right so the callout column on the left has room; the planes stay
+     centred inside this box, so the scene centre lands at 50% + 73px. */
+  .lp-iso-scene {
+    position: absolute;
+    inset: 0 0 0 146px;
+    transform: rotateX(var(--iso-rx)) rotateZ(var(--iso-rz))
+      scale(var(--iso-scale)) translateZ(-30px);
+    transform-style: preserve-3d;
+  }
+
+  .lp-iso-plane {
+    position: absolute;
+    z-index: 0;
+    top: 50%;
+    left: 50%;
+    width: 300px;
+    height: 300px;
+    margin: -150px 0 0 -150px;
+    transform-style: preserve-3d;
+    opacity: 0;
+    transition:
+      transform 1.05s cubic-bezier(0.32, 0.08, 0.24, 1),
+      opacity 0.8s ease;
+  }
+
+  /* Each plane carries its layer's colour at full strength. The old shared
+     #f7f5f1 sat within a couple of percent of the page background, so the
+     stack read as five faint ghosts instead of five distinct slabs. */
+  .lp-iso-plane-face {
+    position: absolute;
+    inset: 0;
+    border: 1.5px solid var(--iso-edge, rgba(13, 15, 18, 0.3));
+    border-radius: 18px;
+    background-color: var(--iso-fill, #f7f5f1);
+    box-shadow: 0 18px 34px rgba(13, 15, 18, 0.14);
+    transition:
+      background 0.6s ease,
+      border-color 0.6s ease,
+      box-shadow 0.6s ease,
+      opacity 0.6s ease;
+  }
+
+  /* Each plane wears a texture of what that layer actually is: a record grid
+     for data, machined repeats for functions, routed nodes for agents, layered
+     panes for apps, a lattice boundary for permissions. Generated assets. */
+  .lp-iso-plane-face {
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: cover;
+    background-blend-mode: multiply;
+  }
+
+  /* Same palette as the detail cards beside them, so a plane and its card are
+     obviously the same layer. */
+  .lp-iso-plane.is-data {
+    --iso-fill: color-mix(in srgb, var(--lp-c-green) 38%, #ffffff);
+    --iso-edge: color-mix(in srgb, var(--lp-c-green) 72%, #2a2a26);
+  }
+
+  .lp-iso-plane.is-data .lp-iso-plane-face {
+    background-image: url("/landing-page/pod-layers/01-data.webp");
+  }
+
+  .lp-iso-plane.is-functions {
+    --iso-fill: color-mix(in srgb, var(--lp-c-blue) 26%, #ffffff);
+    --iso-edge: color-mix(in srgb, var(--lp-c-blue) 70%, #2a2a26);
+  }
+
+  .lp-iso-plane.is-functions .lp-iso-plane-face {
+    background-image: url("/landing-page/pod-layers/02-functions.webp");
+  }
+
+  .lp-iso-plane.is-agents {
+    --iso-fill: color-mix(in srgb, var(--lp-c-purple) 46%, #ffffff);
+    --iso-edge: color-mix(in srgb, var(--lp-c-purple) 72%, #2a2a26);
+  }
+
+  .lp-iso-plane.is-agents .lp-iso-plane-face {
+    background-image: url("/landing-page/pod-layers/03-agents.webp");
+  }
+
+  .lp-iso-plane.is-apps {
+    --iso-fill: color-mix(in srgb, var(--lp-c-cream) 88%, #b9b09a);
+    --iso-edge: #8d846f;
+  }
+
+  .lp-iso-plane.is-apps .lp-iso-plane-face {
+    background-image: url("/landing-page/pod-layers/04-apps.webp");
+  }
+
+  .lp-iso-plane.is-base {
+    --iso-fill: #ffeaa0;
+    --iso-edge: rgba(180, 132, 6, 0.9);
+  }
+
+  .lp-iso-plane.is-base .lp-iso-plane-face {
+    border-style: dashed;
+    background-image: url("/landing-page/pod-layers/05-permissions.webp");
+    background-blend-mode: multiply;
+  }
+
+  /* Same read as the detail cards: the layer you are on is fully painted, the
+     rest sit back. Opacity carries it so the plane, its glyph and its texture
+     all recede together. */
+  .lp-iso.is-assembled .lp-iso-plane {
+    opacity: 0.42;
+  }
+
+  .lp-iso.is-assembled .lp-iso-plane.is-active {
+    opacity: 1;
+  }
+
+  /* Tables on top, down to permissions as the base plate. Gaps widened from
+     100px to 145px: at the old spacing the plane in front overlapped the next
+     plane's label, which is why the labels had nowhere legible to sit. */
+  .lp-iso.is-assembled .lp-iso-plane.is-base {
+    width: 366px;
+    height: 366px;
+    margin: -183px 0 0 -183px;
+    transform: translateZ(-270px);
+    transition-delay: 0.05s;
+  }
+
+  .lp-iso.is-assembled .lp-iso-plane.is-data {
+    transform: translateZ(310px);
+    transition-delay: 0.14s;
+  }
+
+  .lp-iso.is-assembled .lp-iso-plane.is-functions {
+    transform: translateZ(165px);
+    transition-delay: 0.23s;
+  }
+
+  .lp-iso.is-assembled .lp-iso-plane.is-agents {
+    transform: translateZ(20px);
+    transition-delay: 0.32s;
+  }
+
+  .lp-iso.is-assembled .lp-iso-plane.is-apps {
+    transform: translateZ(-125px);
+    transition-delay: 0.41s;
+  }
+
+  .lp-iso-plane.is-active {
+    z-index: 3;
+  }
+
+  /* Emphasis without movement: the lit plane keeps its slot in the stack — and
+     keeps its colour. Washing it to white broke the one thing tying a plane to
+     its detail card. */
+  .lp-iso .lp-iso-plane.is-active .lp-iso-plane-face {
+    border-color: var(--lp-c-ink);
+    border-width: 2px;
+    box-shadow: 0 44px 76px rgba(13, 15, 18, 0.26);
+  }
+
+  /* Flat overlay — deliberately NOT inside .lp-iso-scene, so labels never join
+     the 3D depth sort and can never be clipped by a plane.
+
+     Each label is pinned to its plane's projected centre. The offsets are
+     measured, not derived: `perspective` makes the spacing non-uniform, so the
+     nearer planes spread further apart than the far ones. Re-measure the plane
+     centres against .lp-iso's centre if --iso-rx, --iso-scale or the translateZ
+     values change. */
+  .lp-iso-labels {
+    position: absolute;
+    z-index: 2;
+    inset: 0 auto 0 0;
+    /* Stops short of the widest rhombus's left vertex (the base plate's, which
+       reaches ~171px in from this edge), leaving the leader line to bridge. */
+    width: calc(50% - 90px);
+  }
+
+  .lp-iso-label {
+    position: absolute;
+    top: 50%;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    padding: 2px 0;
+    border: 0;
+    background: none;
+    text-align: right;
+    cursor: pointer;
+    opacity: 0.62;
+    transition: opacity 0.4s ease;
+  }
+
+  .lp-iso-label.is-data { transform: translateY(-50%) translateY(-254px); }
+  .lp-iso-label.is-functions { transform: translateY(-50%) translateY(-112px); }
+  .lp-iso-label.is-agents { transform: translateY(-50%) translateY(14px); }
+  .lp-iso-label.is-apps { transform: translateY(-50%) translateY(118px); }
+  .lp-iso-label.is-base { transform: translateY(-50%) translateY(233px); }
+
+  .lp-iso-label:hover,
+  .lp-iso-label:focus-visible {
+    opacity: 0.85;
+  }
+
+  .lp-iso-label.is-active {
+    opacity: 1;
+  }
+
+  .lp-iso-name {
+    color: var(--lp-ink);
+    font-size: 0.92rem;
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+
+  .lp-iso-hint {
+    color: var(--lp-faint);
+    font-size: 0.72rem;
+    line-height: 1.3;
+  }
+
+  /* Large faint glyph so a plane still reads as its layer when the chips are
+     small — without it each plane was mostly empty surface. */
+  .lp-iso-mark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    display: flex;
+    transform: translate(-50%, -50%);
+    color: rgba(38, 32, 56, 0.1);
+    transition: color 0.6s ease;
+  }
+
+  .lp-iso-mark svg {
+    width: 132px;
+    height: 132px;
+  }
+
+  .lp-iso-plane.is-active .lp-iso-mark {
+    color: rgba(38, 32, 56, 0.16);
+  }
+
+  .lp-iso-plane.is-base .lp-iso-mark {
+    color: rgba(122, 92, 0, 0.18);
+  }
+
+  .lp-iso-chip.is-green i { background: var(--lp-c-green); }
+  .lp-iso-chip.is-purple i { background: var(--lp-c-purple); }
+  .lp-iso-chip.is-blue i { background: var(--lp-c-blue); }
+  .lp-iso-chip.is-yellow i { background: var(--lp-c-yellow); }
+  .lp-iso-chip.is-red i { background: #ef4a2d; }
+  .lp-iso-chip.is-grey i { background: #c9c6bf; }
+
+  /* ── Detail cards ───────────────────────────────────────────────────── */
+
+  .lp-podsys-cards {
+    display: grid;
+    gap: clamp(18px, 2.2vw, 30px);
+    padding: 40px 0 60px;
+  }
+
+  .lp-pd-card {
+    padding: clamp(20px, 2.4vw, 30px);
+    border-radius: 20px;
+    opacity: 0.5;
+    transition:
+      opacity 0.7s ease,
+      background 0.7s ease;
+  }
+
+  /* Card backgrounds share the hero-collage palette so §4 reads as the same
+     page as §2 and §3, and each layer keeps one colour across the section. */
+  .lp-pd-card.is-data {
+    background: color-mix(in srgb, var(--lp-c-green) 24%, var(--lp-paper));
+  }
+
+  .lp-pd-card.is-functions {
+    background: color-mix(in srgb, var(--lp-c-blue) 15%, var(--lp-paper));
+  }
+
+  .lp-pd-card.is-agents {
+    background: color-mix(in srgb, var(--lp-c-purple) 34%, var(--lp-paper));
+  }
+
+  .lp-pd-card.is-apps {
+    background: var(--lp-c-cream);
+  }
+
+  .lp-pd-card.is-base {
+    background: color-mix(in srgb, var(--lp-c-yellow) 34%, var(--lp-paper));
+  }
+
+  /* Panels stay paper-white so the schemas and code keep their contrast. */
+  .lp-pd-card .lp-pd-panel {
+    border-color: rgba(13, 15, 18, 0.09);
+    background: #fdfcfa;
+  }
+
+  .lp-pd-card .lp-pd-panel > header {
+    background: rgba(255, 255, 255, 0.6);
+  }
+
+  .lp-pd-card.is-active {
+    opacity: 1;
+  }
+
+  /* The layer glyph picks up the card's own colour. */
+  .lp-pd-card.is-data .lp-pd-glyph { background: #11743c; }
+  .lp-pd-card.is-functions .lp-pd-glyph { background: var(--lp-c-blue); }
+  .lp-pd-card.is-agents .lp-pd-glyph { background: #5a3fd4; }
+  .lp-pd-card.is-apps .lp-pd-glyph { background: var(--lp-c-ink); }
+  .lp-pd-card.is-base .lp-pd-glyph { background: #8a6400; }
+
+  .lp-pd-head {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .lp-pd-glyph {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--lp-c-ink);
+    color: #ffffff;
+  }
+
+  .lp-pd-glyph svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .lp-pd-head h3 {
+    color: var(--lp-ink);
+    font-size: clamp(1.2rem, 2vw, 1.55rem);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+  }
+
+  .lp-pd-head p {
+    margin-top: 2px;
+    color: var(--lp-faint);
+    font-size: 0.82rem;
+  }
+
+  .lp-pd-body {
+    display: grid;
+    gap: 14px;
+  }
+
+  .lp-pd-panel {
+    border: 1px solid var(--lp-rule);
+    border-radius: 14px;
+    background: var(--lp-paper);
+    overflow: hidden;
+  }
+
+  .lp-pd-panel > header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px 15px;
+    border-bottom: 1px solid var(--lp-rule);
+    background: var(--lp-soft);
+  }
+
+  .lp-pd-panel > header strong {
+    color: var(--lp-ink);
+    font-family: var(--font-mono-family);
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .lp-pd-badge {
+    margin-left: auto;
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: #eceae6;
+    color: #6b6a66;
+    font-size: 0.62rem;
+  }
+
+  .lp-pd-badge.is-blue { background: #dce6ff; color: #2544a8; }
+  .lp-pd-badge.is-purple { background: #e6e0ff; color: #5a3fd4; }
+  .lp-pd-badge.is-green { background: #d9f5e3; color: #11743c; }
+  .lp-pd-badge.is-yellow { background: #fff3c4; color: #8a6400; }
+
+  .lp-pd-schema {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono-family);
+    font-size: 0.72rem;
+  }
+
+  .lp-pd-schema td {
+    padding: 7px 15px;
+    border-bottom: 1px solid var(--lp-rule);
+    color: var(--lp-ink);
+  }
+
+  .lp-pd-schema td:nth-child(2) { width: 26%; }
+
+  .lp-pd-schema td:nth-child(3) {
+    width: 34%;
+    color: var(--lp-faint);
+    font-size: 0.68rem;
+  }
+
+  .lp-pd-schema em {
+    color: var(--lp-c-blue);
+    font-style: normal;
+  }
+
+  .lp-pd-rls {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .lp-pd-rls,
+  .lp-pd-note {
+    padding: 11px 15px;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.78rem;
+    line-height: 1.55;
+  }
+
+  .lp-pd-rls i {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin-top: 6px;
+    border-radius: 50%;
+    background: var(--lp-c-green);
+  }
+
+  .lp-pd-note b {
+    color: var(--lp-ink);
+    font-weight: 500;
+  }
+
+  .lp-pd-md {
+    padding: 13px 15px;
+    font-family: var(--font-mono-family);
+    font-size: 0.73rem;
+    line-height: 1.75;
+    color: var(--lp-muted);
+  }
+
+  .lp-pd-md p:first-child {
+    color: var(--lp-ink);
+  }
+
+  .lp-pd-panel.is-code pre {
+    padding: 14px 15px;
+    background: var(--lp-c-ink);
+    overflow-x: auto;
+  }
+
+  .lp-pd-panel.is-code code {
+    display: grid;
+    gap: 2px;
+    color: rgba(255, 255, 255, 0.82);
+    font-family: var(--font-mono-family);
+    font-size: 0.73rem;
+    line-height: 1.6;
+  }
+
+  .lp-pd-panel.is-code b {
+    color: var(--lp-c-yellow);
+    font-weight: 500;
+  }
+
+  .lp-pd-list {
+    display: grid;
+    gap: 9px;
+    margin: 0;
+    padding: 13px 15px;
+    list-style: none;
+  }
+
+  .lp-pd-list li {
+    display: flex;
+    gap: 9px;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.8rem;
+    line-height: 1.55;
+  }
+
+  .lp-pd-list i {
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin-top: 6px;
+    border-radius: 2px;
+    background: var(--lp-rule-strong);
+  }
+
+  .lp-pd-list i.is-blue { background: var(--lp-c-blue); }
+
+  .lp-pd-scope {
+    display: grid;
+  }
+
+  .lp-pd-scope p {
+    display: grid;
+    grid-template-columns: 110px minmax(0, 1fr);
+    gap: 12px;
+    padding: 9px 15px;
+    border-bottom: 1px solid var(--lp-rule);
+  }
+
+  .lp-pd-scope p:last-child { border-bottom: 0; }
+
+  .lp-pd-scope span {
+    color: var(--lp-faint);
+    font-size: 0.72rem;
+  }
+
+  .lp-pd-scope em {
+    color: var(--lp-ink);
+    font-family: var(--font-mono-family);
+    font-size: 0.73rem;
+    font-style: normal;
+  }
+
+  .lp-pd-scope p.is-deny em { color: #c22f15; }
+
+  .lp-pd-flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 14px 15px;
+  }
+
+  .lp-pd-node {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    gap: 0 8px;
+    padding: 9px 12px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 10px;
+    background: var(--lp-bg);
+  }
+
+  .lp-pd-node i {
+    grid-row: span 2;
+    align-self: center;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--lp-rule-strong);
+  }
+
+  .lp-pd-node strong {
+    color: var(--lp-ink);
+    font-family: var(--font-mono-family);
+    font-size: 0.73rem;
+    font-weight: 500;
+  }
+
+  .lp-pd-node small {
+    color: var(--lp-faint);
+    font-size: 0.64rem;
+  }
+
+  .lp-pd-node.is-done i { background: var(--lp-c-green); }
+
+  .lp-pd-node.is-wait {
+    border-color: rgba(212, 160, 10, 0.6);
+    background: #fff9e4;
+  }
+
+  .lp-pd-node.is-wait i {
+    background: #d4a00a;
+    animation: lpPdWait 1.5s ease-in-out infinite;
+  }
+
+  @keyframes lpPdWait {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
+  }
+
+  .lp-pd-app {
+    padding: 14px 15px;
+  }
+
+  .lp-pd-app-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--lp-rule);
+  }
+
+  .lp-pd-app-bar span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--lp-rule-strong);
+  }
+
+  .lp-pd-app-bar em {
+    margin-left: 6px;
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.68rem;
+    font-style: normal;
+  }
+
+  .lp-pd-app-rows p {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 0;
+    border-bottom: 1px solid var(--lp-rule);
+    color: var(--lp-muted);
+    font-size: 0.76rem;
+  }
+
+  .lp-pd-app-rows p:last-child { border-bottom: 0; }
+
+  .lp-pd-app-rows b {
+    color: var(--lp-ink);
+    font-family: var(--font-mono-family);
+    font-weight: 500;
+  }
+
+  .lp-pd-chip {
+    margin-left: auto;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.62rem;
+  }
+
+  .lp-pd-chip.is-amber { background: #fff3c4; color: #8a6400; }
+  .lp-pd-chip.is-green { background: #d9f5e3; color: #11743c; }
+
+  .lp-pd-surfaces {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    padding: 14px 15px;
+  }
+
+  .lp-pd-surfaces span {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 11px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 999px;
+    color: var(--lp-muted);
+    font-size: 0.74rem;
+  }
+
+  .lp-pd-matrix {
+    padding: 6px 0;
+  }
+
+  .lp-pd-matrix-head,
+  .lp-pd-matrix-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    align-items: center;
+    padding: 8px 15px;
+  }
+
+  .lp-pd-matrix-head span {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.62rem;
+  }
+
+  .lp-pd-matrix-row + .lp-pd-matrix-row {
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  .lp-pd-matrix-row strong {
+    display: block;
+    color: var(--lp-ink);
+    font-size: 0.76rem;
+    font-weight: 500;
+  }
+
+  .lp-pd-matrix-row small {
+    color: var(--lp-faint);
+    font-size: 0.64rem;
+  }
+
+  .lp-pd-grant {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-style: normal;
+  }
+
+  .lp-pd-grant.is-edit,
+  .lp-pd-grant.is-manage { background: #d9f5e3; color: #11743c; }
+  .lp-pd-grant.is-approve { background: #e6e0ff; color: #5a3fd4; }
+  .lp-pd-grant.is-request { background: #fff3c4; color: #8a6400; }
+  .lp-pd-grant.is-none { background: #ffe1da; color: #c22f15; }
+
+  .lp-pd-conns p {
+    display: grid;
+    grid-template-columns: 90px minmax(0, 1fr);
+    gap: 4px 12px;
+    padding: 11px 15px;
+    border-bottom: 1px solid var(--lp-rule);
+  }
+
+  .lp-pd-conns p:last-child { border-bottom: 0; }
+
+  .lp-pd-conns strong {
+    color: var(--lp-ink);
+    font-size: 0.8rem;
+    font-weight: 500;
+  }
+
+  .lp-pd-conns small {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.68rem;
+  }
+
+  .lp-pd-conns em {
+    grid-column: 2;
+    color: var(--lp-muted);
+    font-size: 0.72rem;
+    font-style: normal;
+  }
+
+  /* ── §5 Surfaces ────────────────────────────────────────────────────── */
+
+  .lp-surfaces-head {
+    max-width: 940px;
+  }
+
+  /* One compact rail instead of a nine-cell button wall. */
+  .lp-surface-rail {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+    margin-top: clamp(22px, 2.6vw, 32px);
+  }
+
+  .lp-surface-rail button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px 8px 10px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 999px;
+    background: var(--lp-paper);
+    color: var(--lp-muted);
+    font-family: inherit;
+    font-size: 0.82rem;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background 0.18s ease,
+      color 0.18s ease,
+      border-color 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  .lp-surface-rail button img {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+  }
+
+  .lp-surface-rail button:hover {
+    border-color: var(--lp-rule-strong);
+    transform: translateY(-1px);
+  }
+
+  .lp-surface-rail button.is-active {
+    border-color: transparent;
+    background: var(--lp-c-ink);
+    color: #ffffff;
+  }
+
+  .lp-surfaces-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+    gap: clamp(20px, 2.6vw, 36px);
+    align-items: start;
+    margin-top: clamp(20px, 2.4vw, 30px);
+  }
+
+  /* One fixed stage height for every surface, so switching tabs never moves
+     anything below it. The base rule pins a 620px row plus a 44px slot left
+     over from the footnote that used to sit under the mockup. */
+  .lp-surfaces-stage {
+    --lp-stage-h: 524px;
+  }
+
+  .lp-surfaces-stage .lp-surface-preview {
+    grid-template-rows: var(--lp-stage-h);
+    gap: 0;
+    height: var(--lp-stage-h);
+    min-height: 0;
+  }
+
+  .lp-surfaces-stage .lp-surface-window {
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+  }
+
+  /* ChatGPT, Claude and the phones render a single child, so the two-row track
+     dropped them into the auto row and left the 1fr row as dead white space at
+     the bottom of the card. One row, full height. */
+  .lp-surfaces-stage .lp-assistant-window,
+  .lp-surfaces-stage .lp-phone-window {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  /* The panel matches the mockup's height so the two columns square off, and
+     the closing line is pinned to the bottom as a footer. Sizing the panel to
+     its content instead just moved the imbalance into the column gutter. */
+  /* White inside the band — paper-on-paper made the panel disappear. */
+  .lp-surfaces-stage .lp-surface-effect {
+    height: var(--lp-stage-h);
+    overflow: hidden;
+    background: #ffffff;
+  }
+
+  .lp-surfaces-stage .lp-surface-effect-foot {
+    margin-top: auto;
+    padding-top: 18px;
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  /* The phone previews shipped on a painted landscape photo, which fought with
+     every other surface. Plain surface, and let the phone fill the stage. */
+  .lp-surfaces-stage .lp-surface-preview .lp-phone-window,
+  .lp-surfaces-stage .lp-surface-preview.is-telegram .lp-phone-window,
+  .lp-surfaces-stage .lp-surface-preview.is-whatsapp .lp-phone-window {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    place-items: stretch;
+    padding: 0;
+    background: var(--lp-bg);
+  }
+
+  .lp-surfaces-stage .lp-surface-preview .lp-phone-window > * {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  /* Every mock fills the fixed stage rather than floating inside it. */
+  .lp-surfaces-stage .lp-surface-window > * {
+    min-height: 0;
+  }
+
+  /* Slack's five-step sequence overshot the stage by ~10px. */
+  .lp-surfaces-stage .lp-surface-sequence {
+    gap: 8px;
+  }
+
+  .lp-surfaces-stage .lp-surface-approval {
+    padding: 11px 13px;
+  }
+
+  /* The payoff: the state each door actually changed. */
+  .lp-surface-effect {
+    display: flex;
+    flex-direction: column;
+    padding: clamp(20px, 2.4vw, 28px);
+    border: 1px solid var(--lp-rule);
+    border-radius: 18px;
+    background: var(--lp-paper);
+  }
+
+  .lp-surface-effect-lead {
+    color: var(--lp-ink);
+    font-size: clamp(1.05rem, 1.5vw, 1.25rem);
+    font-weight: 500;
+    line-height: 1.2;
+    letter-spacing: -0.028em;
+  }
+
+  .lp-surface-effect-body {
+    margin-top: 10px;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.84rem;
+    line-height: 1.6;
+  }
+
+  .lp-surface-effect-label {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--lp-rule);
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.62rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .lp-surface-effect ul {
+    display: grid;
+    gap: 7px;
+    margin: 11px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-surface-effect li {
+    position: relative;
+    padding-left: 16px;
+    color: var(--lp-ink);
+    font-family: var(--font-mono-family);
+    font-size: 0.72rem;
+    line-height: 1.5;
+  }
+
+  .lp-surface-effect li::before {
+    content: "";
+    position: absolute;
+    top: 7px;
+    left: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 2px;
+    background: var(--lp-c-green);
+  }
+
+  .lp-surface-effect-foot {
+    margin-top: auto;
+    padding-top: 18px;
+    color: var(--lp-faint);
+    font-family: var(--font-document-sans);
+    font-size: 0.76rem;
+    line-height: 1.55;
+  }
+
+  /* Play the scene in once and hold. The shared loop reset to an empty panel,
+     so the mockup sat half-blank for most of its cycle. */
+  .lp-surfaces-section .lp-surface-sequence > * {
+    animation-name: lpSurfaceEnter;
+    animation-duration: 0.5s;
+    animation-iteration-count: 1;
+    animation-fill-mode: both;
+    animation-timing-function: cubic-bezier(0.22, 0.7, 0.24, 1);
+  }
+
+  .lp-surfaces-section .lp-surface-sequence .is-sequence-1 { animation-delay: 0.06s; }
+  .lp-surfaces-section .lp-surface-sequence .is-sequence-2 { animation-delay: 0.34s; }
+  .lp-surfaces-section .lp-surface-sequence .is-sequence-3 { animation-delay: 0.62s; }
+  .lp-surfaces-section .lp-surface-sequence .is-sequence-4 { animation-delay: 0.98s; }
+  .lp-surfaces-section .lp-surface-sequence .is-sequence-5 { animation-delay: 1.26s; }
+
+  @keyframes lpSurfaceEnter {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* ── §6 Agent terminals ─────────────────────────────────────────────── */
+
+  /* The terminal was running the full 1180px, which read as a banner rather
+     than a terminal. Half the width, with the harnesses and prompts beside it. */
+  .lp-build-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
+    gap: clamp(22px, 3vw, 44px);
+    align-items: start;
+    margin-top: 30px;
+  }
+
+  .lp-build-shell {
+    min-width: 0;
+  }
+
+  .lp-build-side {
+    display: flex;
+    flex-direction: column;
+    padding-top: 42px;
+  }
+
+  .lp-build-side-label {
+    margin-bottom: 10px;
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.62rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .lp-build-side-foot {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--lp-rule);
+    color: var(--lp-faint);
+    font-family: var(--font-document-sans);
+    font-size: 0.78rem;
+    line-height: 1.6;
+  }
+
+  .lp-build-tabs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .lp-build-tabs button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 999px;
+    background: var(--lp-paper);
+    color: var(--lp-muted);
+    font-family: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: background 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+  }
+
+  .lp-build-tabs button img {
+    border-radius: 4px;
+  }
+
+  .lp-build-tabs button.is-active {
+    border-color: transparent;
+    background: var(--lp-c-ink);
+    color: #ffffff;
+  }
+
+  .lp-term {
+    border-radius: 16px;
+    background: #16161c;
+    box-shadow: 0 24px 60px rgba(13, 15, 18, 0.24);
+    font-family: var(--font-mono-family);
+    overflow: hidden;
+  }
+
+  .lp-term-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .lp-term-dots {
+    display: flex;
+    gap: 6px;
+  }
+
+  .lp-term-dots i {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .lp-term-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 0.76rem;
+  }
+
+  .lp-term-star {
+    color: #d97757;
+    font-style: normal;
+  }
+
+  .lp-term-mark {
+    color: #7ee0a8;
+    font-style: normal;
+  }
+
+  .lp-term-cwd {
+    margin-left: auto;
+    color: rgba(255, 255, 255, 0.34);
+    font-size: 0.7rem;
+  }
+
+  .lp-term-body {
+    display: grid;
+    gap: 7px;
+    padding: 14px 14px 12px;
+    font-size: 0.66rem;
+    line-height: 1.5;
+  }
+
+  .lp-term-user {
+    display: flex;
+    gap: 9px;
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .lp-term-user b {
+    color: #7ee0a8;
+    font-weight: 500;
+  }
+
+  .lp-term-think {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .lp-term-think small {
+    color: rgba(255, 255, 255, 0.28);
+    font-size: 0.66rem;
+  }
+
+  .lp-term-tool {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 5px 9px;
+    border-left: 2px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.035);
+  }
+
+  .lp-term-tool-name {
+    color: #8fb1ff;
+    font-size: 0.64rem;
+  }
+
+  .lp-term-tool-arg {
+    color: rgba(255, 255, 255, 0.66);
+    font-size: 0.64rem;
+  }
+
+  .lp-term-tool-diff {
+    margin-left: auto;
+    font-size: 0.66rem;
+  }
+
+  .lp-term-tool-diff b {
+    color: #5fdc95;
+    font-weight: 400;
+  }
+
+  .lp-term-tool-diff i {
+    color: #ff8a70;
+    font-style: normal;
+  }
+
+  .lp-term-tool-ok {
+    margin-left: auto;
+    color: #5fdc95;
+    font-size: 0.72rem;
+  }
+
+  .lp-term-todo {
+    display: grid;
+    gap: 4px;
+    margin: 4px 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-term-todo li {
+    display: flex;
+    gap: 8px;
+    color: rgba(255, 255, 255, 0.44);
+    font-size: 0.65rem;
+  }
+
+  .lp-term-todo li i {
+    font-style: normal;
+  }
+
+  .lp-term-todo li.is-done {
+    color: rgba(255, 255, 255, 0.4);
+    text-decoration: line-through;
+  }
+
+  .lp-term-todo li.is-done i {
+    color: #5fdc95;
+  }
+
+  .lp-term-todo li.is-active {
+    color: rgba(255, 255, 255, 0.92);
+  }
+
+  .lp-term-todo li.is-active i {
+    color: #ffce1f;
+    animation: lpTermSpin 1.6s steps(4) infinite;
+  }
+
+  @keyframes lpTermSpin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .lp-term-out {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(126, 224, 168, 0.09);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.65rem;
+  }
+
+  .lp-term-out b {
+    color: #7ee0a8;
+    font-weight: 400;
+  }
+
+  .lp-term-steps {
+    display: grid;
+    gap: 5px;
+  }
+
+  .lp-term-steps p {
+    display: flex;
+    gap: 9px;
+    color: rgba(255, 255, 255, 0.44);
+    font-size: 0.72rem;
+  }
+
+  .lp-term-steps p i {
+    font-style: normal;
+  }
+
+  .lp-term-steps p b {
+    color: rgba(255, 255, 255, 0.78);
+    font-weight: 400;
+  }
+
+  .lp-term-steps p.is-done i {
+    color: #5fdc95;
+  }
+
+  .lp-term-steps p.is-active {
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .lp-term-steps p.is-active i {
+    color: #ffce1f;
+  }
+
+  .lp-term-progress {
+    height: 4px;
+    margin-top: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    overflow: hidden;
+  }
+
+  .lp-term-progress span.is-62 {
+    width: 62%;
+  }
+
+  .lp-term-progress span {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: #5fdc95;
+    animation: lpTermFill 2.6s ease-in-out infinite alternate;
+  }
+
+  @keyframes lpTermFill {
+    from {
+      opacity: 0.6;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .lp-term-count {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.68rem;
+  }
+
+  .lp-term-diff {
+    margin-top: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .lp-term-diff-head {
+    padding: 6px 11px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.56);
+    font-size: 0.66rem;
+  }
+
+  .lp-term-diff p.is-add {
+    display: flex;
+    gap: 9px;
+    padding: 2px 11px;
+    background: rgba(95, 220, 149, 0.08);
+    color: rgba(255, 255, 255, 0.76);
+    font-size: 0.68rem;
+  }
+
+  .lp-term-diff p.is-add span {
+    color: #5fdc95;
+  }
+
+  .lp-term-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 16px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .lp-term-chip {
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.64rem;
+  }
+
+  .lp-term-chip.is-accept {
+    background: rgba(95, 220, 149, 0.14);
+    color: #7ee0a8;
+  }
+
+  .lp-term-hint {
+    margin-left: auto;
+    color: rgba(255, 255, 255, 0.26);
+    font-size: 0.64rem;
+  }
+
+  .lp-build-side .lp-build-harnesses {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-bottom: 18px;
+  }
+
+  .lp-build-side .lp-build-prompts {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 7px;
+  }
+
+  .lp-build-side .lp-build-prompt-button {
+    justify-content: flex-start;
+  }
+
+  /* ── §7 Examples ────────────────────────────────────────────────────── */
+
+  .lp-examples-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 34px;
+  }
+
+  .lp-examples-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 28px;
+  }
+
+  /* Portable, remixable, open — the proof behind the hero's "open source" and
+     "run anywhere", and behind every "Install and remix" above it. */
+  .lp-portable {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: clamp(24px, 4vw, 56px);
+    margin-top: clamp(40px, 4.5vw, 64px);
+    padding-top: clamp(28px, 3vw, 40px);
+    border-top: 1px solid var(--lp-rule);
+  }
+
+  .lp-portable-lead {
+    max-width: 20ch;
+    color: var(--lp-ink);
+    font-size: clamp(1.35rem, 1.9vw, 1.72rem);
+    font-weight: 500;
+    line-height: 1.12;
+    letter-spacing: -0.032em;
+  }
+
+  .lp-portable-lead span {
+    color: var(--lp-muted);
+  }
+
+  .lp-portable-code {
+    margin-top: 18px;
+    padding: 16px 18px;
+    overflow-x: auto;
+    border: 1px solid var(--lp-rule);
+    border-radius: 14px;
+    background: var(--lp-c-ink);
+  }
+
+  .lp-portable-code code {
+    display: grid;
+    gap: 7px;
+    font-family: var(--font-mono-family);
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+
+  .lp-portable-code span {
+    display: block;
+    color: #f2efe8;
+    white-space: nowrap;
+  }
+
+  .lp-portable-code b {
+    margin-right: 8px;
+    color: #7f8b7d;
+    font-weight: 500;
+  }
+
+  .lp-portable-code em {
+    margin-left: 10px;
+    color: #7a776f;
+    font-style: normal;
+  }
+
+  .lp-portable-claims {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(14px, 1.8vw, 22px);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .lp-portable-claims li {
+    padding-top: 13px;
+    border-top: 1px solid var(--lp-rule);
+    color: var(--lp-muted);
+    font-size: var(--lp-t-body);
+    line-height: 1.5;
+  }
+
+  .lp-portable-claims b {
+    display: block;
+    margin-bottom: 4px;
+    color: var(--lp-ink);
+    font-weight: 500;
+  }
+
+  /* ── Responsive ─────────────────────────────────────────────────────── */
+
+  @media (max-width: 1100px) {
+    .lp-build-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-build-side {
+      padding-top: 0;
+    }
+
+    .lp-build-side .lp-build-harnesses {
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
+
+    .lp-surfaces-stage {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-surfaces-stage .lp-surface-effect {
+      height: auto;
+    }
+
+    .lp-examples-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 1100px) {
+    .lp-build-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-build-side {
+      padding-top: 0;
+    }
+
+    .lp-build-side .lp-build-harnesses {
+      flex-direction: row;
+      flex-wrap: wrap;
+    }
+
+    .lp-surfaces-stage {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-surfaces-stage .lp-surface-effect {
+      height: auto;
+    }
+
+    .lp-podsys-layout {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-podsys-sticky {
+      position: static;
+      max-height: none;
+    }
+
+    .lp-podsys-cards {
+      padding: 20px 0 0;
+    }
+
+    .lp-pd-card {
+      opacity: 1;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .lp-gap-beats > li {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      padding-left: 22px;
+    }
+
+    /* No outer margin to hang the rail in at this width. */
+    .lp-gap-rail {
+      left: 0;
+    }
+
+    .lp-gap-beats li::before {
+      left: -3px;
+    }
+
+    .lp-gap-means {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-site-footer-inner {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .lp-portable {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-portable-claims {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-surfaces-stage {
+      --lp-stage-h: 600px;
+    }
+
+    /* Don't touch --iso-rx / --iso-scale here: the callout offsets are measured
+       against that exact scene and would come unpinned. Instead give the
+       diagram a fixed 560px canvas so its internal geometry still fits, then
+       scale the whole thing — planes and labels together — down to the phone.
+       The negative margin reclaims the height the scale frees up. */
+    /* The 640px canvas below is wider than the phone by design; its right edge
+       is empty scene box, but it still counts toward page width. Clip it here
+       rather than shrink the canvas, which would unpin the callouts. */
+    .lp-podsys-section {
+      overflow-x: clip;
+    }
+
+    /* flex:none — .lp-podsys-sticky is a flex container, so without it the
+       640px canvas just shrinks back to the phone width and the geometry the
+       callout offsets depend on collapses. */
+    .lp-iso {
+      width: 640px;
+      flex: none;
+      margin-left: calc(50% - 320px);
+      margin-bottom: -244px;
+      transform: scale(0.58);
+      transform-origin: top center;
+    }
+
+    /* More room for the callouts and a bigger type size, both of which the
+       0.58 scale then takes back down to roughly phone-normal. */
+    .lp-iso-scene {
+      inset: 0 0 0 270px;
+    }
+
+    .lp-iso-labels {
+      width: 296px;
+    }
+
+    .lp-iso-name {
+      font-size: 1.6rem;
+    }
+
+    .lp-iso-hint {
+      font-size: 1.15rem;
+    }
+
+    .lp-pd-scope p,
+    .lp-pd-conns p {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 3px;
+    }
+
+    .lp-jr-layer {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-jr-layer:nth-child(even) .lp-jr-copy {
+      order: 0;
+    }
+
+    .lp-jr-mock {
+      max-width: none;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .lp-examples-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-jr-use-row {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .lp-jr-matrix-head,
+    .lp-jr-matrix-row {
+      grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(0, 1fr));
+      font-size: 0.9em;
+    }
+
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* The beats still arrive, just without the rule drawing itself. */
+    .lp-gap-rail,
+    .lp-gap-beats > li::before {
+      transform: none;
+      transition: none;
+    }
+
+    .lp-surfaces-section .lp-surface-sequence > * {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+
+    .lp-iso-plane,
+    .lp-iso-plane-face,
+    .lp-iso-chips {
+      transition: none;
+    }
+
+    .lp-pd-node.is-wait i {
+      animation: none;
+      opacity: 1;
+    }
+
+    .lp-pd-card {
+      opacity: 1;
+      transition: none;
+    }
+  }
+
+  /* ── Mobile: reflow the mockups, don't scale them ────────────────────
+   * These are real desktop product UIs, and they used to be kept intact and
+   * scaled to 0.52 to fit a phone. That preserved the layout and destroyed the
+   * content: 12.5px body copy rendered at ~6.5px, so §5 — the section carrying
+   * the core claim — was unreadable on the device most people arrive on.
+   *
+   * Reflowing spilled previously because the body grid could not shrink below
+   * its ~580px min-content and the window clips. That is fixed at the source
+   * (min-width:0 down the chain in landing-page.css), so the mock can now
+   * reflow to one column at full type size. Fidelity to a desktop layout is
+   * worth less than being able to read the conversation.
+   */
+  @media (max-width: 700px) {
+    .lp-surfaces-stage .lp-surface-preview {
+      grid-template-rows: auto;
+      align-content: start;
+      height: auto;
+      min-height: 0;
+    }
+
+    .lp-surfaces-stage .lp-surface-window,
+    .lp-surfaces-stage .lp-assistant-window,
+    .lp-surfaces-stage .lp-mail-window,
+    .lp-surfaces-stage .lp-api-window,
+    .lp-surfaces-stage .lp-surface-preview .lp-phone-window {
+      width: 100%;
+      height: auto;
+      min-width: 0;
+      min-height: 0;
+      transform: none;
+    }
+
+    /* One column, and every descendant allowed to shrink into it. */
+    .lp-surfaces-stage .lp-surface-window-body,
+    .lp-surfaces-stage .lp-email-surface {
+      grid-template-columns: minmax(0, 1fr);
+      min-width: 0;
+    }
+
+    .lp-surfaces-stage .lp-surface-thread,
+    .lp-surfaces-stage .lp-surface-sequence,
+    .lp-surfaces-stage .lp-surface-message,
+    .lp-surfaces-stage .lp-surface-approval,
+    .lp-surfaces-stage .lp-mail-window-body {
+      min-width: 0;
+    }
+
+    /* Channels become a swipeable strip rather than a column that eats half
+       the width. */
+    .lp-surfaces-stage .lp-surface-sidebar {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 10px 12px;
+      border-right: 0;
+      border-bottom: 1px solid var(--lp-rule);
+    }
+
+    .lp-surfaces-stage .lp-surface-sidebar span {
+      flex: 0 0 auto;
+      white-space: nowrap;
+    }
+
+    .lp-surfaces-stage .lp-surface-search {
+      display: none;
+    }
+
+    /* The desktop assistant mocks put the chat and the app side by side; on a
+       phone they stack, and the icon rails are noise. */
+    .lp-surfaces-stage .lp-gpt,
+    .lp-surfaces-stage .lp-cl {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /* Vertical rails reflow into tall dead columns — the mail rail alone ate
+       ~180px of height to show four letters. */
+    .lp-surfaces-stage .lp-gpt-side,
+    .lp-surfaces-stage .lp-cl-rail,
+    .lp-surfaces-stage .lp-email-rail {
+      display: none;
+    }
+
+    /* key/value on one line needs ~314px and the card has ~250px, so the value
+       spilled out of the card and pushed the page into horizontal scroll. */
+    .lp-surfaces-stage .lp-api-row,
+    .lp-surfaces-stage .lp-api-call {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 3px;
+    }
+
+    .lp-surfaces-stage .lp-api-row span,
+    .lp-surfaces-stage .lp-api-row strong,
+    .lp-surfaces-stage .lp-api-call strong {
+      margin-top: 0;
+      overflow-wrap: anywhere;
+    }
+  }
+
+}

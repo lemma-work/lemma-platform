@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from slack_sdk.errors import SlackApiError
 from slack_sdk.web.async_client import AsyncWebClient
 
 from app.modules.agent_surfaces.domain.entities import (
@@ -63,3 +64,66 @@ async def test_slack_stream_progress_posts_updates_then_deletes(monkeypatch):
     # end_progress deletes the placeholder.
     await svc.end_progress(event, handle)
     assert deletes and deletes[0]["ts"] == "200.5"
+
+
+async def test_slack_send_file_bytes_retries_without_customized_identity(monkeypatch):
+    completions: list[dict] = []
+    uploads: list[dict] = []
+
+    async def fake_upload_ticket(self, **kwargs):
+        uploads.append(kwargs)
+        return {"ok": True, "upload_url": "https://upload.example.test", "file_id": "F1"}
+
+    async def fake_complete(self, **kwargs):
+        completions.append(kwargs)
+        if len(completions) == 1:
+            raise SlackApiError(
+                "custom identity rejected",
+                {
+                    "ok": False,
+                    "error": "invalid_arguments",
+                    "response_metadata": {"messages": ["username is not allowed"]},
+                },
+            )
+        return {"ok": True}
+
+    class FakeUploadResponse:
+        def raise_for_status(self):
+            return None
+
+    class FakeHttpClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, url, files):
+            assert url == "https://upload.example.test"
+            assert files["file"][0] == "report.txt"
+            return FakeUploadResponse()
+
+    monkeypatch.setattr(AsyncWebClient, "files_getUploadURLExternal", fake_upload_ticket)
+    monkeypatch.setattr(AsyncWebClient, "files_completeUploadExternal", fake_complete)
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.platforms.slack.service.httpx.AsyncClient",
+        FakeHttpClient,
+    )
+
+    svc = SlackPlatformService(credentials={"access_token": "xoxb-test"})
+    sent = await svc.send_file_bytes(
+        _event(),
+        file_name="report.txt",
+        file_bytes=b"hello",
+        mime_type="text/plain",
+        caption="Report",
+    )
+
+    assert sent is True
+    assert uploads == [{"filename": "report.txt", "length": 5}]
+    assert len(completions) == 2
+    assert completions[0]["initial_comment"] == "Report"
+    assert completions[1]["files"] == [{"id": "F1", "title": "Report"}]

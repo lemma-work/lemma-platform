@@ -1,4 +1,4 @@
-import { Bot, GitBranch, MessageCircle, Scale, ShieldCheck } from 'lucide-react';
+import { Bot, GitBranch, MessageCircle, Scale, ShieldCheck } from '@/components/ui/icons';
 
 import type { DocsPage } from '@/lib/data/docs';
 

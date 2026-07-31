@@ -9,4 +9,3 @@ export type CreateFolderRequest = {
     path?: (string | null);
     visibility?: (string | null);
 };
-

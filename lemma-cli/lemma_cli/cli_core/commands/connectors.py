@@ -256,23 +256,30 @@ def create_account(
     ),
 ) -> None:
     """Connect an account with credentials."""
+    if bool(auth_config) == bool(auth_config_id):
+        raise typer.BadParameter(
+            "Use exactly one: --auth-config or --auth-config-id",
+        )
     credentials = read_json(credentials_json, credentials_file, required=True)
     preferences = read_json(preferences_json, preferences_file, required=False) or None
+    request_data = {
+        "credentials": credentials,
+        "provider_account_id": provider_account_id,
+        "email": email,
+        "preferences": preferences,
+        "allowed_scopes": allowed_scope or None,
+    }
+    if auth_config:
+        request_data["auth_config_name"] = auth_config
+    if auth_config_id:
+        request_data["auth_config_id"] = auth_config_id
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
         lambda client, s: (
             client.connectors.accounts.create(
                 auth_config or auth_config_id or "",
-                AccountCreateSchema.from_dict(
-                    {
-                        "credentials": credentials,
-                        "provider_account_id": provider_account_id,
-                        "email": email,
-                        "preferences": preferences,
-                        "allowed_scopes": allowed_scope or None,
-                    }
-                ),
+                AccountCreateSchema.from_dict(request_data),
             )
             if hasattr(client.connectors, "accounts")
             else client.connectors.create_account(

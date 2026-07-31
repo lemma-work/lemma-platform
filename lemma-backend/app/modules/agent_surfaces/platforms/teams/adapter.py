@@ -7,7 +7,6 @@ from urllib.parse import quote
 
 import aiohttp
 
-from app.modules.agent_surfaces.config import surface_settings
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.domain.entities import (
     ParsedInboundSurfaceEvent,
@@ -15,6 +14,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.models import (
     OTHER_ANSWER_SUFFIX,
+    SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestion,
     SurfaceQuestionRenderPlan,
@@ -24,6 +24,7 @@ from app.modules.agent_surfaces.platforms.base import BaseSurfaceAdapter
 from app.modules.agent_surfaces.platforms.teams import client
 from app.modules.agent_surfaces.platforms.teams.client import GRAPH_BASE
 from app.modules.agent_surfaces.platforms.teams.parser import (
+    TEAMS_APPROVAL_DECISION_KEY,
     TEAMS_FORM_CALLBACK_KEY,
     TeamsMessageParser,
     extract_graph_message_attachments,
@@ -49,19 +50,14 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         del credentials
         attachments = event.metadata.get("attachments") or []
         if attachments:
-            logger.info(
-                "Teams inbound event already includes %d attachment(s) message_id=%s",
-                len(attachments),
-                event.external_message_id,
+            logger.debug(
+                "agent_surfaces.adapter.teams_inbound_event_already_includes.observed",
+                count=len(attachments),
             )
             return event
 
         if event.is_dm:
-            logger.warning(
-                "Teams inbound DM event has no attachment metadata message_id=%s conversation_id=%s",
-                event.external_message_id,
-                event.reply_target.get("conversation_id"),
-            )
+            logger.debug('agent_surfaces.adapter.teams_inbound_dm_event_has.diagnostic')
             return event
 
         tenant_id = event.tenant_id
@@ -69,21 +65,19 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         channel_id = event.reply_target.get("channel_id")
         message_id = event.external_message_id
         if not tenant_id or not team_id or not channel_id or not message_id:
-            logger.warning(
-                "Teams inbound event cannot be enriched due to missing graph identifiers tenant=%s team=%s channel=%s message_id=%s",
-                tenant_id,
-                team_id,
-                channel_id,
-                message_id,
+            logger.debug(
+                'agent_surfaces.adapter.teams_inbound_event_cannot_be.diagnostic',
+                tenant_id=tenant_id,
+                team_id=team_id,
+                channel_id=channel_id,
             )
             return event
 
         token = await self._get_graph_token(tenant_id)
         if not token:
-            logger.warning(
-                "Teams inbound event enrichment skipped because Graph token could not be acquired tenant=%s message_id=%s",
-                tenant_id,
-                message_id,
+            logger.debug(
+                'agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic',
+                tenant_id=tenant_id,
             )
             return event
 
@@ -93,10 +87,9 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
             service_url=event.reply_target.get("service_url"),
         )
         if not graph_team_id:
-            logger.warning(
-                "Teams inbound event enrichment skipped because Graph team id could not be resolved raw_team=%s message_id=%s",
-                team_id,
-                message_id,
+            logger.debug(
+                'agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic',
+                team_id=team_id,
             )
             return event
 
@@ -116,18 +109,15 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
 
         item = await client.get_json(url, token)
         if not isinstance(item, dict):
-            logger.warning(
-                "Teams inbound event enrichment could not load current message from Graph message_id=%s url=%s",
-                message_id,
-                url,
+            logger.debug(
+                'agent_surfaces.adapter.teams_inbound_event_enrichment_could.diagnostic'
             )
             return event
 
         graph_attachments = extract_graph_message_attachments(item)
         if not graph_attachments:
-            logger.warning(
-                "Teams inbound event enrichment found no attachments in Graph message_id=%s",
-                message_id,
+            logger.debug(
+                'agent_surfaces.adapter.teams_inbound_event_enrichment_found.diagnostic'
             )
             return event
 
@@ -139,10 +129,9 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         enriched = event.model_copy(deep=True)
         enriched.message_text = text
         enriched.metadata = {**event.metadata, "attachments": graph_attachments}
-        logger.info(
-            "Teams inbound event enriched from Graph with %d attachment(s) message_id=%s",
-            len(graph_attachments),
-            message_id,
+        logger.debug(
+            "agent_surfaces.adapter.teams_inbound_event_enriched_graph.observed",
+            count=len(graph_attachments),
         )
         return enriched
 
@@ -157,11 +146,13 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
         bf_user_id = event.sender_external_user_id
 
         if not tenant_id:
-            logger.warning("Teams fetch_sender_profile: missing tenant_id in event")
+            logger.debug(
+                'agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic'
+            )
             return None
         if not aad_id and not bf_user_id:
-            logger.warning(
-                "Teams fetch_sender_profile: missing both aad_object_id and external_user_id"
+            logger.debug(
+                'agent_surfaces.adapter.teams_fetch_sender_profile_missing.diagnostic'
             )
             return None
 
@@ -180,12 +171,6 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                     if response.status < 400:
                         data = await response.json()
                         email = data.get("mail") or data.get("userPrincipalName")
-                        logger.info(
-                            "Teams fetch_sender_profile (Graph): resolved user %s → email=%s display_name=%s",
-                            identifier,
-                            email,
-                            data.get("displayName"),
-                        )
                         return SurfaceSenderProfile(
                             external_user_id=str(data.get("id") or bf_user_id or ""),
                             email=email,
@@ -194,23 +179,16 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                             or event.sender_display_name,
                             raw_profile=data,
                         )
-                    body = await response.text()
-                    logger.warning(
-                        "Teams fetch_sender_profile: Graph API returned %s for user %s "
-                        "in tenant %s — response: %s",
-                        response.status,
-                        identifier,
-                        tenant_id,
-                        body[:500],
+                    await response.text()
+                    logger.debug(
+                        'agent_surfaces.adapter.teams_fetch_sender_profile_graph.diagnostic',
+                        status=response.status,
+                        tenant_id=tenant_id,
                     )
         else:
-            logger.warning(
-                "Teams fetch_sender_profile: could not acquire Graph token for tenant=%s — "
-                "tenant admin must grant admin consent at: "
-                "https://login.microsoftonline.com/%s/adminconsent?client_id=%s",
-                tenant_id,
-                tenant_id,
-                surface_settings.microsoft_bot_app_id or "<MICROSOFT_BOT_APP_ID>",
+            logger.debug(
+                'agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic',
+                tenant_id=tenant_id,
             )
 
         # ── Strategy 2: Bot Framework Connector getConversationMember ──
@@ -226,11 +204,9 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                 )
 
         # Return partial profile (no email) so at least display_name is captured.
-        logger.warning(
-            "Teams fetch_sender_profile: could not resolve email for user %s in tenant %s — "
-            "identity resolution will fall back to phone or return unresolved.",
-            aad_id or bf_user_id,
-            tenant_id,
+        logger.debug(
+            'agent_surfaces.adapter.teams_fetch_sender_profile_could.diagnostic',
+            tenant_id=tenant_id,
         )
         return SurfaceSenderProfile(
             external_user_id=str(aad_id or bf_user_id or ""),
@@ -388,6 +364,53 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                 response.raise_for_status()
         return True
 
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as an Adaptive Card with
+        Approve/Deny Action.Submit buttons carrying the decision."""
+        del credentials, metadata
+        tenant_id = event.tenant_id
+        conversation_id = event.reply_target.get("conversation_id")
+        if not tenant_id or not conversation_id:
+            return False
+        token = await self._get_bot_token(tenant_id)
+        if not token:
+            return False
+
+        url = (
+            f"{client.bf_service_url(event.reply_target.get('service_url'))}"
+            f"/v3/conversations/{quote(str(conversation_id))}/activities"
+        )
+        body: dict[str, Any] = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": _teams_approval_card(approval_plan),
+                }
+            ],
+        }
+        reply_to_id = event.reply_target.get("reply_to_id")
+        if reply_to_id:
+            body["replyToId"] = reply_to_id
+
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=30)
+        ) as session:
+            async with session.post(
+                url,
+                headers=client.auth_headers(token),
+                json=body,
+            ) as response:
+                response.raise_for_status()
+        return True
+
     async def parse_inbound_interaction(
         self, payload: dict[str, Any], headers: dict[str, str] | None = None
     ) -> ParsedSurfaceInteraction | None:
@@ -448,7 +471,9 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                 ):
                     pass  # best-effort, ignore status
         except Exception:
-            pass
+            logger.debug(
+                "agent_surfaces.adapter.teams_typing_indicator_best_effort.observed"
+            )
 
     async def stream_progress(
         self,
@@ -482,9 +507,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                     ) as response:
                         response.raise_for_status()
                 return progress_handle
-            url = (
-                f"{base}/v3/conversations/{quote(str(conversation_id))}/activities"
-            )
+            url = f"{base}/v3/conversations/{quote(str(conversation_id))}/activities"
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
                     url, headers=client.auth_headers(bot_token), json=body
@@ -586,8 +609,10 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
                     if response.status >= 400:
                         return None
                     data = await response.json()
-        except Exception as exc:
-            logger.debug("Teams _fetch_email_from_bf_connector failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "agent_surfaces.adapter.teams_fetch_email_bf_connector.observed"
+            )
             return None
 
         # Standard fields: id, name, aadObjectId
@@ -600,11 +625,7 @@ class TeamsSurfaceAdapter(BaseSurfaceAdapter):
             # Some tenants return email directly on the member object
             email = data.get("email") or data.get("userPrincipalName")
         if email:
-            logger.info(
-                "Teams fetch_sender_profile (BF Connector): resolved user %s → email=%s",
-                bf_user_id,
-                email,
-            )
+            pass
         return email or None
 
 
@@ -663,9 +684,7 @@ def _teams_question_input(question: SurfaceQuestion) -> dict[str, Any]:
     """An Input.ChoiceSet keyed by the question header; values are option labels."""
     choices = [
         {
-            "title": (
-                f"{opt.label} (recommended)" if opt.recommended else opt.label
-            ),
+            "title": (f"{opt.label} (recommended)" if opt.recommended else opt.label),
             "value": opt.label,
         }
         for opt in question.options
@@ -716,4 +735,48 @@ def _teams_question_card(plan: SurfaceQuestionRenderPlan) -> dict[str, Any]:
                 "data": {TEAMS_FORM_CALLBACK_KEY: plan.callback_id},
             }
         ],
+    }
+
+
+def _teams_approval_card(plan: SurfaceApprovalRenderPlan) -> dict[str, Any]:
+    """Adaptive Card with the approval title/reason and one Action.Submit per
+    decision (Approve / Deny / optionally Approve-for-session), each carrying the
+    callback id + its decision in ``data``."""
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": f"Approval needed: {plan.title}",
+            "weight": "Bolder",
+            "size": "Medium",
+            "wrap": True,
+        }
+    ]
+    if plan.reason:
+        body.append({"type": "TextBlock", "text": plan.reason, "wrap": True})
+    if plan.action_summary:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": f"Action: {plan.action_summary}",
+                "isSubtle": True,
+                "wrap": True,
+            }
+        )
+    actions = [
+        {
+            "type": "Action.Submit",
+            "title": button.label,
+            "data": {
+                TEAMS_FORM_CALLBACK_KEY: plan.callback_id,
+                TEAMS_APPROVAL_DECISION_KEY: button.decision,
+            },
+        }
+        for button in plan.buttons
+    ]
+    return {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": body,
+        "actions": actions,
     }

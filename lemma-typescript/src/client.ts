@@ -1,7 +1,12 @@
-import { resolveConfig, type LemmaConfig } from "./config.js";
+import {
+  resolveConfig,
+  type LemmaAppConfig,
+  type LemmaConfig,
+} from "./config.js";
 import { AuthManager, type AuthState, type AuthListener } from "./auth.js";
 import { GeneratedClientAdapter } from "./generated.js";
 import { HttpClient } from "./http.js";
+import { AgentHostNamespace } from "./namespaces/agent-host.js";
 import { AgentRuntimeNamespace } from "./namespaces/agent-runtime.js";
 import { AgentsNamespace } from "./namespaces/agents.js";
 import { ConversationsNamespace } from "./namespaces/conversations.js";
@@ -17,6 +22,7 @@ import { PodJoinRequestsNamespace } from "./namespaces/pod-join-requests.js";
 import { PodsNamespace } from "./namespaces/pods.js";
 import { PodRolesNamespace } from "./namespaces/pod-roles.js";
 import { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
+import { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 import { RecordsNamespace } from "./namespaces/records.js";
 import { ResourceAccessNamespace } from "./namespaces/resource-access.js";
 import { SchedulesNamespace } from "./namespaces/schedules.js";
@@ -27,6 +33,7 @@ import { WidgetsNamespace } from "./namespaces/widgets.js";
 import { DatastoreNamespace } from "./namespaces/datastore.js";
 
 export type { LemmaConfig };
+export type { LemmaAppConfig };
 export { AuthManager };
 export type { AuthState, AuthListener };
 
@@ -52,6 +59,7 @@ export class LemmaClient {
   readonly functions: FunctionsNamespace;
   readonly agents: AgentsNamespace;
   readonly agentRuntime: AgentRuntimeNamespace;
+  readonly agentHost: AgentHostNamespace;
   readonly conversations: ConversationsNamespace;
   readonly workflows: WorkflowsNamespace;
   readonly apps: AppsNamespace;
@@ -72,6 +80,8 @@ export class LemmaClient {
   readonly podRoles: PodRolesNamespace;
   readonly organizations: OrganizationsNamespace;
   readonly podSurfaces: PodSurfacesNamespace;
+  /** The caller's own surfaces across all pods (grouped by platform). */
+  readonly userSurfaces: UserSurfacesNamespace;
 
   constructor(
     overrides: Partial<LemmaConfig> = {},
@@ -106,6 +116,7 @@ export class LemmaClient {
     this.functions = new FunctionsNamespace(this._generated, podIdFn);
     this.agents = new AgentsNamespace(this._generated, podIdFn, () => this.conversations);
     this.agentRuntime = new AgentRuntimeNamespace(this._generated);
+    this.agentHost = new AgentHostNamespace(this._generated);
     this.conversations = new ConversationsNamespace(this._http, podIdFn);
     this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
     this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
@@ -130,6 +141,7 @@ export class LemmaClient {
     this.podRoles = new PodRolesNamespace(this._generated, podIdFn);
     this.organizations = new OrganizationsNamespace(this._generated, this._http);
     this.podSurfaces = new PodSurfacesNamespace(this._generated);
+    this.userSurfaces = new UserSurfacesNamespace(this._generated);
   }
 
   /** Change the active pod ID for subsequent calls. */
@@ -152,6 +164,10 @@ export class LemmaClient {
 
   get authUrl(): string {
     return this._config.authUrl;
+  }
+
+  get app(): LemmaAppConfig | undefined {
+    return this._config.app;
   }
 
   /**

@@ -15,7 +15,7 @@ import httpx
 from pydantic_ai.tools import RunContext
 
 from app.core.log.log import get_logger
-from app.modules.agent.tools.context import ConversationContext
+from app.modules.agent.contracts import ConversationContext
 from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
 from app.modules.agent_surfaces.domain.models import (
     SurfaceDisplayRenderPlan,

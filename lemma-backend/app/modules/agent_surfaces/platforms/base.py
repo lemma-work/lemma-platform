@@ -13,6 +13,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceChannelInfo,
     SurfaceContextMessage,
     SurfaceDisplayRenderPlan,
@@ -74,6 +75,19 @@ class BaseSurfaceAdapter:
         del credentials, event, question_plan, metadata
         return False
 
+    async def send_approval(
+        self,
+        *,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as native Approve/Deny buttons.
+        Default: not supported → False so the caller falls back to a text prompt."""
+        del credentials, event, approval_plan, metadata
+        return False
+
     async def send_voice_note(
         self,
         *,
@@ -97,6 +111,17 @@ class BaseSurfaceAdapter:
         interactions → None."""
         del payload, headers
         return None
+
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        del credentials, interaction, text, show_alert, clear_actions
 
     async def fetch_thread_context(
         self,

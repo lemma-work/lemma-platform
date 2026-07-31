@@ -165,5 +165,6 @@ class UsageLimitCounter(UUIDAuditBase):
             "window_kind",
             "window_start",
             unique=True,
+            postgresql_nulls_not_distinct=True,
         ),
     )

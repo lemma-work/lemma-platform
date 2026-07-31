@@ -1,6 +1,7 @@
 'use client';
 
 import { use } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { ModelsSettings } from '@/components/agents/models-settings';
@@ -8,10 +9,8 @@ import { InlineLoader } from '@/components/brand/loader';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
 import { ProductIcon } from '@/components/pod/product-icon';
-import {
-    useAgentRuntimes,
-    useAvailableAgentRuntimeHarnesses,
-} from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
+import { normalizeInternalReturnPath } from '@/lib/navigation/settings-return';
 import { useOrganizationDetails } from '@/lib/hooks/use-organizations';
 
 export default function OrganizationAgentRuntimesPage({ params }: { params: Promise<{ id: string }> }) {
@@ -24,6 +23,8 @@ export default function OrganizationAgentRuntimesPage({ params }: { params: Prom
 
 function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id: string }> }) {
     const { id: organizationId } = use(params);
+    const searchParams = useSearchParams();
+    const returnPath = normalizeInternalReturnPath(searchParams.get('returnTo'));
     const { data: organization } = useOrganizationDetails(organizationId);
     const {
         data: runtimeCatalog,
@@ -31,18 +32,13 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
         isLoading: isLoadingRuntimeCatalog,
         refetch: refetchRuntimeCatalog,
     } = useAgentRuntimes(organizationId);
-    const {
-        data: availableHarnesses,
-        isFetching: isFetchingAvailableHarnesses,
-        refetch: refetchAvailableHarnesses,
-    } = useAvailableAgentRuntimeHarnesses();
 
     return (
         <PlainPageShell
             title="Models"
-            icon={<ProductIcon tone="settings" size="sm" />}
-            backHref="/"
-            backLabel="Home"
+            icon={<ProductIcon kind="settings" size="sm" />}
+            backHref={returnPath || '/home'}
+            backLabel={returnPath ? 'Back to pod' : 'Home'}
             meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={organizationId} />}
             contentWidthClassName="max-w-6xl"
@@ -57,11 +53,9 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
                 <ModelsSettings
                     organizationId={organizationId}
                     catalog={runtimeCatalog}
-                    availableHarnesses={availableHarnesses}
-                    isRefreshing={isFetchingRuntimeCatalog || isFetchingAvailableHarnesses}
+                    isRefreshing={isFetchingRuntimeCatalog}
                     onRefresh={() => {
                         void refetchRuntimeCatalog();
-                        void refetchAvailableHarnesses();
                     }}
                 />
             </section>

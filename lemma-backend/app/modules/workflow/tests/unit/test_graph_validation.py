@@ -3,7 +3,7 @@
 import pytest
 
 from app.modules.workflow.domain.errors import GraphValidationError
-from app.modules.workflow.domain.graph import FlowGraphValidator, WorkflowEdge
+from app.modules.workflow.domain.graph import WorkflowGraphValidator, WorkflowEdge
 from app.modules.workflow.domain.nodes import (
     DecisionNode,
     DecisionNodeConfig,
@@ -37,14 +37,14 @@ def _edge(edge_id: str, source: str, target: str) -> WorkflowEdge:
 
 def _issues(nodes, edges) -> list[str]:
     with pytest.raises(GraphValidationError) as exc_info:
-        FlowGraphValidator.validate(nodes, edges)
+        WorkflowGraphValidator.validate(nodes, edges)
     return exc_info.value.issues
 
 
 def test_valid_linear_graph_returns_entry_node():
     nodes = [_form(), _function("save"), EndNode(id="end")]
     edges = [_edge("e1", "intake", "save"), _edge("e2", "save", "end")]
-    assert FlowGraphValidator.validate(nodes, edges) == "intake"
+    assert WorkflowGraphValidator.validate(nodes, edges) == "intake"
 
 
 def test_empty_graph_is_rejected():
@@ -156,7 +156,7 @@ def test_loop_body_reachable_through_loop():
         _edge("e2", "each", "end"),
         _edge("e3", "body", "each"),
     ]
-    assert FlowGraphValidator.validate(nodes, edges) == "intake"
+    assert WorkflowGraphValidator.validate(nodes, edges) == "intake"
 
 
 def test_input_binding_expressions_validated():
@@ -215,4 +215,4 @@ def test_form_input_schema_valid_binding_passes():
             }
         ),
     )
-    assert FlowGraphValidator.validate([node], []) == "intake"
+    assert WorkflowGraphValidator.validate([node], []) == "intake"

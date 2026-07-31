@@ -1,0 +1,52 @@
+name: Backend protected E2E
+
+on:
+  schedule:
+    - cron: "41 2 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protected-runtime:
+    name: Real runtime, surface, and document processors
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: backend-protected-e2e
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Sync protected dependencies
+        run: uv sync --extra markitdown
+      - name: Sync AgentBox service dependencies
+        run: uv sync --directory ../agentbox --locked
+      - name: Run protected suite
+        run: >-
+          uv run pytest
+          -m "e2e and (slow or workspace or surface_live or indexing or local_cli or protected) and not provider and not mock_sandbox_only"
+          --junitxml=protected-e2e.xml
+          -o timeout=300
+        env:
+          E2E_REAL: "1"
+          # Keep the protected Docker/runtime axis real without requiring a
+          # paid model credential. Provider-only tests remain covered by the
+          # deterministic model unless a dedicated real-provider run opts in.
+          E2E_LLM_MODE: "mock"
+          LEMMA_RUN_SURFACE_LIVE_E2E: "1"
+          LEMMA_E2E_OAUTH_CREDENTIALS: ${{ secrets.LEMMA_E2E_OAUTH_CREDENTIALS }}
+          LEMMA_E2E_MODEL_MAX_COST_USD: "1.00"
+          LEMMA_E2E_MODEL_TIMEOUT_SECONDS: "120"
+      - name: Publish commit-linked evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-protected-e2e-${{ github.sha }}
+          path: lemma-backend/protected-e2e.xml
+          if-no-files-found: error
+          retention-days: 14

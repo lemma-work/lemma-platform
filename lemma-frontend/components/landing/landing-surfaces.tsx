@@ -1,16 +1,30 @@
 import Image from "next/image";
-import type { CSSProperties, MouseEvent, TouchEvent } from "react";
-import { useState } from "react";
 import type { SurfaceMode } from "./landing-data";
+import { AssistantSurface } from "./landing-assistants";
+import { PhoneSurface } from "./landing-phones";
 
 export function SurfacePreview({ surface }: { surface: SurfaceMode }) {
   const isMail = surface.key === "email" || surface.key === "outlook";
   const isPhone = surface.key === "telegram" || surface.key === "whatsapp";
   const isWorkspace = surface.key === "slack" || surface.key === "teams";
+  const isAssistant = surface.key === "chatgpt" || surface.key === "claude";
   const sidebarItems =
     surface.key === "teams"
       ? ["Activity", "Approvals", "Campaigns", "Files"]
       : ["# approvals", "# support-triage", "# customer-escalations", "Apps"];
+
+  if (isAssistant) {
+    return (
+      <aside
+        className={`lp-surface-preview is-${surface.key}`}
+        aria-label={`${surface.label} surface preview`}
+      >
+        <div className="lp-surface-window lp-assistant-window">
+          <AssistantSurface surface={surface} />
+        </div>
+      </aside>
+    );
+  }
 
   if (isPhone) {
     return (
@@ -19,9 +33,8 @@ export function SurfacePreview({ surface }: { surface: SurfaceMode }) {
         aria-label={`${surface.label} surface preview`}
       >
         <div className="lp-surface-window lp-phone-window">
-          <SurfacePhoneContent surface={surface} />
+          <PhoneSurface surface={surface} />
         </div>
-        <p className="lp-surface-footnote">{surface.footnote}</p>
       </aside>
     );
   }
@@ -56,7 +69,6 @@ export function SurfacePreview({ surface }: { surface: SurfaceMode }) {
             <SurfaceEmailContent surface={surface} />
           </div>
         </div>
-        <p className="lp-surface-footnote">{surface.footnote}</p>
       </aside>
     );
   }
@@ -95,7 +107,6 @@ export function SurfacePreview({ surface }: { surface: SurfaceMode }) {
             <SurfaceApiContent />
           </div>
         </div>
-        <p className="lp-surface-footnote">{surface.footnote}</p>
       </aside>
     );
   }
@@ -148,116 +159,7 @@ export function SurfacePreview({ surface }: { surface: SurfaceMode }) {
           </div>
         </div>
       </div>
-      <p className="lp-surface-footnote">{surface.footnote}</p>
     </aside>
-  );
-}
-
-export function StackComparison({
-  value,
-  onChange,
-}: {
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  const minSplit = 42;
-  const maxSplit = 96;
-  const [isMouseDown, setIsMouseDown] = useState(false);
-  const compareStyle = {
-    "--lp-stack-split": `${value}%`,
-  } as CSSProperties;
-
-  const onMouseMove = (
-    event: MouseEvent<HTMLDivElement> | TouchEvent<HTMLDivElement>,
-  ) => {
-    if (!isMouseDown) return;
-
-    const rect = event.currentTarget.getBoundingClientRect();
-    let x = 0;
-
-    if ("touches" in event && event.touches.length > 0) {
-      x = event.touches[0].clientX - rect.left;
-    } else if ("clientX" in event) {
-      x = event.clientX - rect.left;
-    }
-
-    onChange(Math.min(maxSplit, Math.max(minSplit, (x / rect.width) * 100)));
-  };
-
-  return (
-    <div
-      className="lp-stack-compare-shell"
-      aria-label="Compare stitched AI stack with Lemma"
-      /* eslint-disable-next-line no-restricted-syntax -- Runtime slider geometry is scoped to one CSS variable. */
-      style={compareStyle}
-      onMouseMove={onMouseMove}
-      onMouseUp={() => setIsMouseDown(false)}
-      onMouseLeave={() => setIsMouseDown(false)}
-      onTouchMove={onMouseMove}
-      onTouchEnd={() => setIsMouseDown(false)}
-    >
-      <div className="lp-stack-layer lp-stack-layer-stitched">
-        <div className="lp-stack-layer-copy">
-          <span className="lp-stack-pill">Workshop -&gt; Workspace</span>
-          <h2 id="stack-title">The Stack, Without the Stitching</h2>
-          <p>
-            Every serious AI work system needs agents, workflows, data,
-            connectors, UI, permissions, observability, and deployment. Lemma
-            gives you that system shape out of the box.
-          </p>
-        </div>
-
-        <div className="lp-stack-stage is-stitched">
-          <span>Messy stitching across 8+ tools</span>
-          <Image
-            className="lp-stack-stage-image"
-            src="/landing-page/stack-compare/stitched-stack.png"
-            alt="A stitched AI system made from separate tools and glue code"
-            width={1448}
-            height={1086}
-          />
-        </div>
-      </div>
-
-      <div className="lp-stack-layer lp-stack-layer-lemma">
-        <div className="lp-stack-layer-copy is-lemma-copy">
-          <span className="lp-stack-pill">Lemma stack</span>
-          <h2>Lemma is the stack.</h2>
-          <p>Same system shape, without rebuilding the rails every time.</p>
-        </div>
-
-        <div className="lp-stack-stage is-lemma">
-          <span>One coherent Lemma workspace</span>
-          <Image
-            className="lp-stack-stage-image"
-            src="/landing-page/stack-compare/lemma-stack.png"
-            alt="Lemma showing agents, workflows, data stores, connectors, UI, permissions, observability, and deployment in one stack"
-            width={1448}
-            height={1086}
-            priority={false}
-          />
-        </div>
-      </div>
-
-      <div className="lp-stack-divider">
-        <button
-          type="button"
-          aria-label="Drag to compare stitched stack and Lemma stack"
-          onMouseDown={() => {
-            setIsMouseDown(true);
-          }}
-          onMouseUp={() => setIsMouseDown(false)}
-          onTouchStart={() => {
-            setIsMouseDown(true);
-          }}
-          onTouchEnd={() => setIsMouseDown(false)}
-        >
-          <i />
-          <i />
-          <i />
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -286,7 +188,7 @@ export function SurfaceChatContent({ surface }: { surface: SurfaceMode }) {
           <strong>Lemma</strong>{" "}
           {isTeams
             ? "Checked spend, goals, and permissions. One pause needs approval."
-            : "One approval. Northwind crossed the ICP threshold - Quill scored it 87."}
+            : "One approval. Northwind crossed the ICP threshold — Quill scored it 87."}
         </p>
       </div>
       <article className="lp-surface-approval is-sequence-3">
@@ -330,7 +232,7 @@ export function SurfaceChatContent({ surface }: { surface: SurfaceMode }) {
           <strong>Lemma</strong>{" "}
           {isTeams
             ? "Done. Spend paused, finance notified, log updated."
-            : "Done. Northwind routed, owner assigned, record updated - same state everywhere."}
+            : "Done. Northwind routed, owner assigned, record updated — same state everywhere."}
         </p>
       </div>
     </div>
@@ -369,11 +271,6 @@ export function SurfaceEmailContent({ surface }: { surface: SurfaceMode }) {
             isOutlook ? "Vendor Mgmt" : "Customer Success",
             isOutlook ? "Payment policy note" : "Implementation follow-up",
             "Logged",
-          ],
-          [
-            isOutlook ? "Priya Shah" : "Maya Chen",
-            isOutlook ? "Approval queue review" : "Refund timeline attached",
-            "Open",
           ],
         ].map(([from, subject, status], index) => (
           <article className={index === 0 ? "is-selected" : ""} key={subject}>
@@ -431,131 +328,6 @@ export function SurfaceEmailContent({ surface }: { surface: SurfaceMode }) {
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-export function SurfacePhoneContent({ surface }: { surface: SurfaceMode }) {
-  const isWhatsApp = surface.key === "whatsapp";
-  const messages = isWhatsApp
-    ? [
-        {
-          from: "from-user",
-          copy: "New lead crossed ICP threshold. Assign to Maya?",
-        },
-        {
-          from: "from-pod",
-          copy: "Matched the account and found Maya is owner.",
-        },
-        { from: "from-user", copy: "Yes. Assign and draft intro." },
-        {
-          from: "from-pod",
-          copy: "Assigned. Draft saved for review.",
-          card: ["Lead routed", "Maya owns next step"],
-        },
-      ]
-    : [
-        {
-          from: "from-user",
-          copy: "Pause campaign spend above the anomaly threshold.",
-        },
-        {
-          from: "from-pod",
-          copy: "Found Meta and GA4 campaigns. Two are above threshold.",
-        },
-        {
-          from: "from-pod",
-          copy: "Hold budget until Monday and notify finance?",
-        },
-        { from: "from-user", copy: "Approve hold until Monday." },
-        {
-          from: "from-pod",
-          copy: "Done. Campaigns paused, Finance logged, dashboard updated.",
-        },
-      ];
-
-  return (
-    <div
-      className={
-        isWhatsApp ? "lp-phone-shell is-whatsapp" : "lp-phone-shell is-telegram"
-      }
-    >
-      <div className="lp-phone-status" aria-hidden="true">
-        <span>9:41</span>
-        <span>
-          <i />
-          <i />
-          <i />
-        </span>
-      </div>
-      <header className="lp-phone-header">
-        <span aria-hidden="true">{"<"}</span>
-        <span className="lp-phone-pod-avatar">
-          <Image
-            src={surface.logos[0].src}
-            alt={surface.logos[0].label}
-            width={28}
-            height={28}
-          />
-        </span>
-        <span className="lp-phone-title">
-          <strong>
-            {isWhatsApp ? "Sales Pod" : "Executive Assistant Pod"}
-          </strong>
-          <small>{isWhatsApp ? "Lemma app" : "online"}</small>
-        </span>
-        {isWhatsApp ? (
-          <>
-            <i aria-hidden="true" />
-            <i aria-hidden="true" />
-          </>
-        ) : null}
-        <span className="lp-phone-menu" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-      </header>
-      <main className="lp-phone-thread">
-        <span className="lp-chat-date">Today</span>
-        {messages.map((message, index) => (
-          <article
-            className={`lp-phone-message ${message.from} is-step-${index + 1}`}
-            key={message.copy}
-          >
-            {message.from === "from-pod" ? (
-              <span className="lp-phone-mini-avatar">Le</span>
-            ) : null}
-            <p>
-              {message.copy}
-              {message.card ? (
-                <span className="lp-phone-task-card">
-                  <strong>{message.card[0]}</strong>
-                  <small>{message.card[1]}</small>
-                </span>
-              ) : null}
-              <span className="lp-phone-time">
-                9:{String(15 + index).padStart(2, "0")} AM
-                {message.from === "from-user" ? (
-                  <i className="lp-phone-check" aria-hidden="true" />
-                ) : null}
-              </span>
-            </p>
-          </article>
-        ))}
-        <span className="lp-phone-typing" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-      </main>
-      <footer className="lp-phone-input" aria-hidden="true">
-        <span>
-          <i>{isWhatsApp ? "+" : "@"}</i>
-          Message
-        </span>
-        <strong>{isWhatsApp ? "m" : ">"}</strong>
-      </footer>
     </div>
   );
 }

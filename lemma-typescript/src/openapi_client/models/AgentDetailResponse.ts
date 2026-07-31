@@ -24,4 +24,3 @@ export type AgentDetailResponse = {
     user_id: string;
     visibility?: string;
 };
-

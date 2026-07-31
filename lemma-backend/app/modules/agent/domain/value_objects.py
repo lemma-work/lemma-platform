@@ -5,24 +5,39 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Generic, TypeVar
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.domain.runtime import AgentRuntimeConfig
+from app.modules.usage.contracts import AgentRunUsage as AgentRunUsage
 
 JsonPrimitive = str | int | float | bool | None
 JsonValue = object
 JsonObject = dict[str, object]
 
+ConversationAgentValue = TypeVar("ConversationAgentValue")
+ResolvedConversationAgentValue = TypeVar("ResolvedConversationAgentValue")
+
 
 class HarnessKind(str, Enum):
-    """Runtime framework used to execute an agent."""
+    """Runtime framework used to execute an agent.
+
+    Two kinds, not one per coding tool: ``LEMMA`` runs in-process, ``HARNESS``
+    dispatches through Agent Host. Which tool Agent Host runs is identified by
+    ``harness_id`` on the runtime profile, so the retired per-tool values
+    (``CODEX``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``, ``ANTIGRAVITY``) went
+    away with the local daemon that needed them.
+
+    No stored row is read back through this enum — a persisted runtime profile
+    names a ``RuntimeProfileProtocol``, and the kind is derived from that — so
+    dropping those values cannot fail a history read. Back-compat for retired
+    *protocols* is handled where it belongs, in the profile repository.
+    """
 
     LEMMA = "LEMMA"
-    CODEX = "CODEX"
-    CLAUDE_CODE = "CLAUDE_CODE"
-    OPENCODE = "OPENCODE"
-    CURSOR = "CURSOR"
-    ANTIGRAVITY = "ANTIGRAVITY"
+    HARNESS = "HARNESS"
 
     @classmethod
     def _missing_(cls, value: object) -> "HarnessKind | None":
@@ -33,13 +48,7 @@ class HarnessKind(str, Enum):
             "pydantic_ai": cls.LEMMA,
             "PYDANTIC_AI": cls.LEMMA,
             "lemma": cls.LEMMA,
-            "codex": cls.CODEX,
-            "claude_code": cls.CLAUDE_CODE,
-            "opencode": cls.OPENCODE,
-            "cursor": cls.CURSOR,
-            "cursor_agent": cls.CURSOR,
-            "antigravity": cls.ANTIGRAVITY,
-            "agy": cls.ANTIGRAVITY,
+            "harness": cls.HARNESS,
         }
         if normalized in aliases:
             return aliases[normalized]
@@ -274,8 +283,8 @@ class MessageKind(str, Enum):
 
     @classmethod
     def _missing_(cls, value: object) -> "MessageKind | None":
-        # Case-insensitive so a lowercase kind from an older daemon payload or
-        # a pre-migration row still resolves to the CAPS member.
+        # Case-insensitive so a lowercase kind from a harness payload or a
+        # pre-migration row still resolves to the CAPS member.
         if not isinstance(value, str):
             return None
         normalized = value.strip().upper()
@@ -382,8 +391,7 @@ class AgentEventType(str, Enum):
     """Event type emitted by a harness while running an agent.
 
     Internal only: the SSE wire ``type`` strings are hardcoded in
-    ``services/realtime.py`` and the daemon protocol is parsed case-insensitively
-    via ``_missing_`` below, so these values are never compared raw on the wire.
+    ``services/realtime.py``; these values are never compared raw on the wire.
     """
 
     TOKEN = "TOKEN"
@@ -396,24 +404,15 @@ class AgentEventType(str, Enum):
     # The run paused waiting for the user (ask_user / request_approval). Terminal
     # for this run; the user's submission starts a fresh run that resumes.
     WAITING = "WAITING"
-    # Internal only -- never sent by the daemon. Synthesized by
-    # AgentRuntimeDaemonHub when a daemon's websocket drops, so a
-    # DaemonHarness.run() consumer blocked on its run's queue wakes up
-    # immediately instead of waiting out the (much longer)
-    # DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS silence budget. Not terminal: the
-    # harness intercepts it, starts a bounded reconnect-grace window, and
-    # either resumes normally or fails the run once the grace window elapses.
-    RECONNECTING = "RECONNECTING"
-    # The daemon explicitly refused a run.start because it's already running
-    # max_concurrent_runs turns. Terminal, like ERROR, but kept as its own
-    # member (not folded into ERROR) so callers can distinguish "busy, retry"
-    # from "the provider crashed" and surface a more actionable message.
+    # A remote harness explicitly refused a command before dispatch. Terminal,
+    # like ERROR, but kept as its own member (not folded into ERROR) so callers
+    # can distinguish "busy, retry" from "the provider crashed" and surface a
+    # more actionable message.
     REJECTED = "REJECTED"
 
     @classmethod
     def _missing_(cls, value: object) -> "AgentEventType | None":
-        # The daemon hub builds events from wire payloads that historically used
-        # lowercase type strings ("completed", "message", ...); accept any case.
+        # Remote transports may use lowercase values; accept any case.
         if not isinstance(value, str):
             return None
         normalized = value.upper()
@@ -434,17 +433,59 @@ class ConversationType(str, Enum):
     PROJECT = "PROJECT"
 
 
-class AgentRunUsage(BaseModel):
-    """Normalized billable usage produced during an agent run."""
+class ConversationAgentScope(str, Enum):
+    """Agent boundary applied when listing conversations."""
 
-    model_name: str
-    usage_kind: str = "llm"
-    input_tokens: int = 0
-    output_tokens: int = 0
-    units: float = 0.0
-    request_count: int = 0
-    tool_call_count: int = 0
-    metadata: JsonObject | None = None
+    ALL = "ALL"
+    POD_DEFAULT = "POD_DEFAULT"
+    NAMED = "NAMED"
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationAgentSelection(Generic[ConversationAgentValue]):
+    """A validated conversation-list selection before or after name resolution."""
+
+    scope: ConversationAgentScope
+    value: ConversationAgentValue | None = None
+
+    def __post_init__(self) -> None:
+        has_value = self.value is not None
+        if self.scope is ConversationAgentScope.NAMED and not has_value:
+            raise ValueError("NAMED conversation selection requires a value")
+        if self.scope is not ConversationAgentScope.NAMED and has_value:
+            raise ValueError(f"{self.scope.value} conversation selection cannot have a value")
+
+    @property
+    def named_value(self) -> ConversationAgentValue:
+        if self.scope is not ConversationAgentScope.NAMED or self.value is None:
+            raise ValueError("Conversation selection is not NAMED")
+        return self.value
+
+    def resolve(
+        self,
+        value: ResolvedConversationAgentValue | None,
+    ) -> ConversationAgentSelection[ResolvedConversationAgentValue]:
+        if self.scope is ConversationAgentScope.NAMED:
+            if value is None:
+                raise ValueError("NAMED conversation selection requires a resolved value")
+            return ConversationAgentSelection.named(value)
+        if value is not None:
+            raise ValueError(f"{self.scope.value} conversation selection cannot resolve a value")
+        return ConversationAgentSelection(scope=self.scope)
+
+    @classmethod
+    def all(cls) -> ConversationAgentSelection[ConversationAgentValue]:
+        return cls(scope=ConversationAgentScope.ALL)
+
+    @classmethod
+    def pod_default(cls) -> ConversationAgentSelection[ConversationAgentValue]:
+        return cls(scope=ConversationAgentScope.POD_DEFAULT)
+
+    @classmethod
+    def named(
+        cls, value: ConversationAgentValue
+    ) -> ConversationAgentSelection[ConversationAgentValue]:
+        return cls(scope=ConversationAgentScope.NAMED, value=value)
 
 
 class AgentEvent(BaseModel):
@@ -466,7 +507,7 @@ class HarnessOptions:
     toolsets: list[object] = field(default_factory=list)
     # Pydantic AI capabilities (current-time, prompt-caching, tool-search, todo,
     # deferred extra-tools-over-MCP). Built only for the in-process LEMMA harness;
-    # ignored by daemon harnesses (Codex/Claude-Code), which use the MCP server.
+    # ignored by remote harnesses (Codex/Claude-Code), which use the MCP server.
     capabilities: list[object] = field(default_factory=list)
     usage_limits: object | None = None
     output_type: object | None = None
@@ -479,38 +520,6 @@ class HarnessOptions:
     )
     should_stop: Callable[[], Awaitable[bool]] | None = None
     extra: JsonObject = field(default_factory=dict)
-
-
-class AgentRuntimeConfig(BaseModel):
-    """Agent runtime selector using a profile plus optional catalog model."""
-
-    profile_id: str = Field(min_length=1)
-    model_name: str | None = Field(default=None, min_length=1)
-
-    @field_validator("profile_id")
-    @classmethod
-    def normalize_profile_id(cls, value: str) -> str:
-        profile_id = value.strip()
-        if not profile_id:
-            raise ValueError("profile_id cannot be empty")
-        return profile_id
-
-    @field_validator("model_name")
-    @classmethod
-    def normalize_model_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        model_name = value.strip()
-        if not model_name:
-            raise ValueError("model_name cannot be empty")
-        return model_name
-
-    @model_serializer(mode="wrap")
-    def serialize_without_unset_model_name(self, handler):
-        data = handler(self)
-        if data.get("model_name") is None:
-            data.pop("model_name", None)
-        return data
 
 
 class AgentRunStartResult(BaseModel):

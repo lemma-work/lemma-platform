@@ -2,17 +2,17 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.core.authorization.context import ResourceVisibility
-from app.modules.workflow.domain.flow import (
-    FlowEntity,
+from app.modules.workflow.domain.workflow import (
+    WorkflowEntity,
     WorkflowMode,
 )
 from app.modules.workflow.domain.graph import WorkflowEdge
 from app.modules.workflow.domain.run import (
-    FlowRunEntity,
-    FlowRunStatus,
+    WorkflowRunEntity,
+    WorkflowRunStatus,
     StepStatus,
 )
 from app.modules.workflow.domain.wait import (
@@ -21,11 +21,11 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitType,
 )
 from app.modules.workflow.domain.start import (
-    DataStoreFlowStart,
-    EventFlowStart,
-    FlowStart,
-    FlowStartType,
-    ScheduledFlowStart,
+    DataStoreWorkflowStartConfig,
+    EventWorkflowStartConfig,
+    WorkflowStart,
+    WorkflowStartType,
+    ScheduledWorkflowStartConfig,
 )
 from app.modules.workflow.domain.nodes import (
     AgentNode,
@@ -39,21 +39,21 @@ from app.modules.workflow.domain.nodes import (
 )
 
 
-class ScheduledFlowStartInput(ScheduledFlowStart):
-    model_config = ConfigDict(title="ScheduledFlowStartInput")
+class ScheduledWorkflowStartConfigInput(ScheduledWorkflowStartConfig):
+    model_config = ConfigDict(title="ScheduledWorkflowStartConfigInput")
 
 
-class EventFlowStartInput(EventFlowStart):
-    model_config = ConfigDict(title="EventFlowStartInput")
+class EventWorkflowStartConfigInput(EventWorkflowStartConfig):
+    model_config = ConfigDict(title="EventWorkflowStartConfigInput")
 
 
-class DataStoreFlowStartInput(DataStoreFlowStart):
-    model_config = ConfigDict(title="DataStoreFlowStartInput")
+class DataStoreWorkflowStartConfigInput(DataStoreWorkflowStartConfig):
+    model_config = ConfigDict(title="DataStoreWorkflowStartConfigInput")
 
 
 class ManualWorkflowStartInput(BaseModel):
-    type: Literal[FlowStartType.MANUAL] = Field(
-        default=FlowStartType.MANUAL,
+    type: Literal[WorkflowStartType.MANUAL] = Field(
+        default=WorkflowStartType.MANUAL,
         description="Manual workflow start with no configuration payload.",
     )
     config: None = Field(
@@ -65,11 +65,11 @@ class ManualWorkflowStartInput(BaseModel):
 
 
 class ScheduledWorkflowStartInput(BaseModel):
-    type: Literal[FlowStartType.SCHEDULED] = Field(
-        default=FlowStartType.SCHEDULED,
+    type: Literal[WorkflowStartType.SCHEDULED] = Field(
+        default=WorkflowStartType.SCHEDULED,
         description="Scheduled workflow start.",
     )
-    config: ScheduledFlowStartInput = Field(
+    config: ScheduledWorkflowStartConfigInput = Field(
         ...,
         description="Scheduled workflow definition payload.",
     )
@@ -78,11 +78,11 @@ class ScheduledWorkflowStartInput(BaseModel):
 
 
 class EventWorkflowStartInput(BaseModel):
-    type: Literal[FlowStartType.EVENT] = Field(
-        default=FlowStartType.EVENT,
+    type: Literal[WorkflowStartType.EVENT] = Field(
+        default=WorkflowStartType.EVENT,
         description="Event-triggered workflow start.",
     )
-    config: EventFlowStartInput = Field(
+    config: EventWorkflowStartConfigInput = Field(
         ...,
         description="Connector trigger configuration for this workflow.",
     )
@@ -91,11 +91,11 @@ class EventWorkflowStartInput(BaseModel):
 
 
 class DataStoreWorkflowStartInput(BaseModel):
-    type: Literal[FlowStartType.DATASTORE_EVENT] = Field(
-        default=FlowStartType.DATASTORE_EVENT,
+    type: Literal[WorkflowStartType.DATASTORE_EVENT] = Field(
+        default=WorkflowStartType.DATASTORE_EVENT,
         description="Datastore-event workflow start.",
     )
-    config: DataStoreFlowStartInput = Field(
+    config: DataStoreWorkflowStartConfigInput = Field(
         ...,
         description="Datastore trigger configuration for this workflow.",
     )
@@ -114,21 +114,21 @@ WorkflowStartInput = Annotated[
 ]
 
 
-class ScheduledFlowStartOutput(ScheduledFlowStart):
-    model_config = ConfigDict(from_attributes=True, title="ScheduledFlowStartOutput")
+class ScheduledWorkflowStartConfigOutput(ScheduledWorkflowStartConfig):
+    model_config = ConfigDict(from_attributes=True, title="ScheduledWorkflowStartConfigOutput")
 
 
-class EventFlowStartOutput(EventFlowStart):
-    model_config = ConfigDict(from_attributes=True, title="EventFlowStartOutput")
+class EventWorkflowStartConfigOutput(EventWorkflowStartConfig):
+    model_config = ConfigDict(from_attributes=True, title="EventWorkflowStartConfigOutput")
 
 
-class DataStoreFlowStartOutput(DataStoreFlowStart):
-    model_config = ConfigDict(from_attributes=True, title="DataStoreFlowStartOutput")
+class DataStoreWorkflowStartConfigOutput(DataStoreWorkflowStartConfig):
+    model_config = ConfigDict(from_attributes=True, title="DataStoreWorkflowStartConfigOutput")
 
 
 class ManualWorkflowStartOutput(BaseModel):
-    type: Literal[FlowStartType.MANUAL] = Field(
-        default=FlowStartType.MANUAL,
+    type: Literal[WorkflowStartType.MANUAL] = Field(
+        default=WorkflowStartType.MANUAL,
         description="Manual workflow start with no configuration payload.",
     )
     config: None = Field(
@@ -140,11 +140,11 @@ class ManualWorkflowStartOutput(BaseModel):
 
 
 class ScheduledWorkflowStartOutput(BaseModel):
-    type: Literal[FlowStartType.SCHEDULED] = Field(
-        default=FlowStartType.SCHEDULED,
+    type: Literal[WorkflowStartType.SCHEDULED] = Field(
+        default=WorkflowStartType.SCHEDULED,
         description="Scheduled workflow start.",
     )
-    config: ScheduledFlowStartOutput = Field(
+    config: ScheduledWorkflowStartConfigOutput = Field(
         ...,
         description="Scheduled workflow definition payload.",
     )
@@ -156,11 +156,11 @@ class ScheduledWorkflowStartOutput(BaseModel):
 
 
 class EventWorkflowStartOutput(BaseModel):
-    type: Literal[FlowStartType.EVENT] = Field(
-        default=FlowStartType.EVENT,
+    type: Literal[WorkflowStartType.EVENT] = Field(
+        default=WorkflowStartType.EVENT,
         description="Event-triggered workflow start.",
     )
-    config: EventFlowStartOutput = Field(
+    config: EventWorkflowStartConfigOutput = Field(
         ...,
         description="Connector trigger configuration for this workflow.",
     )
@@ -172,11 +172,11 @@ class EventWorkflowStartOutput(BaseModel):
 
 
 class DataStoreWorkflowStartOutput(BaseModel):
-    type: Literal[FlowStartType.DATASTORE_EVENT] = Field(
-        default=FlowStartType.DATASTORE_EVENT,
+    type: Literal[WorkflowStartType.DATASTORE_EVENT] = Field(
+        default=WorkflowStartType.DATASTORE_EVENT,
         description="Datastore-event workflow start.",
     )
-    config: DataStoreFlowStartOutput = Field(
+    config: DataStoreWorkflowStartConfigOutput = Field(
         ...,
         description="Datastore trigger configuration for this workflow.",
     )
@@ -200,52 +200,52 @@ WorkflowStartOutput = Annotated[
 
 def workflow_start_input_to_domain(
     start: WorkflowStartInput | None,
-) -> FlowStart | None:
+) -> WorkflowStart | None:
     if start is None:
         return None
 
     if isinstance(start, ManualWorkflowStartInput):
-        return FlowStart(type=FlowStartType.MANUAL, config=None)
+        return WorkflowStart(type=WorkflowStartType.MANUAL, config=None)
 
     if isinstance(start, ScheduledWorkflowStartInput):
-        return FlowStart(
-            type=FlowStartType.SCHEDULED,
-            config=ScheduledFlowStart.model_validate(start.config.model_dump()),
+        return WorkflowStart(
+            type=WorkflowStartType.SCHEDULED,
+            config=ScheduledWorkflowStartConfig.model_validate(start.config.model_dump()),
         )
 
     if isinstance(start, EventWorkflowStartInput):
-        return FlowStart(
-            type=FlowStartType.EVENT,
-            config=EventFlowStart.model_validate(start.config.model_dump()),
+        return WorkflowStart(
+            type=WorkflowStartType.EVENT,
+            config=EventWorkflowStartConfig.model_validate(start.config.model_dump()),
         )
 
-    return FlowStart(
-        type=FlowStartType.DATASTORE_EVENT,
-        config=DataStoreFlowStart.model_validate(start.config.model_dump()),
+    return WorkflowStart(
+        type=WorkflowStartType.DATASTORE_EVENT,
+        config=DataStoreWorkflowStartConfig.model_validate(start.config.model_dump()),
     )
 
 
 def workflow_start_output_from_domain(
-    start: FlowStart | None,
+    start: WorkflowStart | None,
 ) -> WorkflowStartOutput | None:
     if start is None:
         return None
 
-    if start.type == FlowStartType.MANUAL:
+    if start.type == WorkflowStartType.MANUAL:
         return ManualWorkflowStartOutput()
 
-    if start.type == FlowStartType.SCHEDULED:
+    if start.type == WorkflowStartType.SCHEDULED:
         return ScheduledWorkflowStartOutput(
-            config=ScheduledFlowStartOutput.model_validate(start.config),
+            config=ScheduledWorkflowStartConfigOutput.model_validate(start.config),
         )
 
-    if start.type == FlowStartType.EVENT:
+    if start.type == WorkflowStartType.EVENT:
         return EventWorkflowStartOutput(
-            config=EventFlowStartOutput.model_validate(start.config),
+            config=EventWorkflowStartConfigOutput.model_validate(start.config),
         )
 
     return DataStoreWorkflowStartOutput(
-        config=DataStoreFlowStartOutput.model_validate(start.config),
+        config=DataStoreWorkflowStartConfigOutput.model_validate(start.config),
     )
 
 
@@ -404,7 +404,7 @@ WorkflowNodeResponse = Annotated[
 ]
 
 
-class FlowResponse(BaseModel):
+class WorkflowResponse(BaseModel):
     id: UUID
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -419,16 +419,16 @@ class FlowResponse(BaseModel):
     mode: WorkflowMode = WorkflowMode.GLOBAL
     visibility: str = "POD"
 
-    model_config = ConfigDict(from_attributes=True, title="FlowResponse")
+    model_config = ConfigDict(from_attributes=True, title="WorkflowResponse")
 
 
-class FlowDetailResponse(FlowResponse):
+class WorkflowDetailResponse(WorkflowResponse):
     allowed_actions: list[str] = Field(default_factory=list)
 
-    model_config = ConfigDict(from_attributes=True, title="FlowDetailResponse")
+    model_config = ConfigDict(from_attributes=True, title="WorkflowDetailResponse")
 
 
-class FlowSummaryResponse(BaseModel):
+class WorkflowSummaryResponse(BaseModel):
     """Lean workflow shape for list responses.
 
     Omits the full graph (`nodes`/`edges`/`start`) — fetch those from
@@ -450,11 +450,11 @@ class FlowSummaryResponse(BaseModel):
     node_types: list[str] = Field(default_factory=list)
     allowed_actions: list[str] = Field(default_factory=list)
 
-    model_config = ConfigDict(from_attributes=True, title="FlowSummaryResponse")
+    model_config = ConfigDict(from_attributes=True, title="WorkflowSummaryResponse")
 
 
 class WorkflowListResponse(BaseModel):
-    items: list[FlowSummaryResponse]
+    items: list[WorkflowSummaryResponse]
     limit: int
     next_page_token: str | None = None
 
@@ -463,12 +463,14 @@ class WorkflowListResponse(BaseModel):
 
 class WorkflowRunSummaryResponse(BaseModel):
     id: UUID
-    flow_id: UUID
+    workflow_id: UUID = Field(
+        validation_alias=AliasChoices("workflow_id", "flow_id")
+    )
     pod_id: UUID
     user_id: UUID
     start_type: str = "MANUAL"
     schedule_event_id: str | None = None
-    status: FlowRunStatus = FlowRunStatus.PENDING
+    status: WorkflowRunStatus = WorkflowRunStatus.PENDING
     current_node_id: str | None = None
     error: str | None = None
     failed_node_id: str | None = None
@@ -495,7 +497,9 @@ class StepRecordResponse(BaseModel):
 class WorkflowRunWaitResponse(BaseModel):
     id: UUID
     run_id: UUID
-    flow_id: UUID
+    workflow_id: UUID = Field(
+        validation_alias=AliasChoices("workflow_id", "flow_id")
+    )
     pod_id: UUID
     node_id: str
     wait_type: WorkflowRunWaitType
@@ -555,19 +559,19 @@ class WorkflowRunWaitAssignmentListResponse(BaseModel):
     next_page_token: str | None = None
 
 
-def flow_response_from_domain(workflow: FlowEntity) -> FlowResponse:
+def workflow_response_from_domain(workflow: WorkflowEntity) -> WorkflowResponse:
     payload = workflow.model_dump(mode="python")
     payload["start"] = workflow_start_output_from_domain(workflow.start)
-    return FlowResponse.model_validate(payload)
+    return WorkflowResponse.model_validate(payload)
 
 
 def run_response_from_domain(
-    run: FlowRunEntity,
+    run: WorkflowRunEntity,
     active_wait: WorkflowRunWaitEntity | None = None,
 ) -> WorkflowRunResponse:
     return WorkflowRunResponse(
         id=run.id,
-        flow_id=run.flow_id,
+        workflow_id=run.flow_id,
         pod_id=run.pod_id,
         user_id=run.user_id,
         start_type=run.start_type,

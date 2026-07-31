@@ -40,11 +40,17 @@ async def redis_client(e2e_settings):
     import redis.asyncio as redis
 
     client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
-    await client.delete("schedule_events", "datastore.events")
+    # The production worker is session-scoped. Deleting either stream also
+    # deletes its consumer groups, and FastStream permanently stops subscribers
+    # that observe NOGROUP. Trim entries instead so every test starts without
+    # stale events while the live worker keeps its group topology.
+    for stream in ("schedule_events", "datastore.events"):
+        await client.xtrim(stream, maxlen=0)
     try:
         yield client
     finally:
-        await client.delete("schedule_events", "datastore.events")
+        for stream in ("schedule_events", "datastore.events"):
+            await client.xtrim(stream, maxlen=0)
         await client.aclose()
 
 

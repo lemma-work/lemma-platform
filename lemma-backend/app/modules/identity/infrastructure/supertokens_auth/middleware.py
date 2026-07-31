@@ -1,4 +1,3 @@
-import datetime
 from uuid import UUID
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -15,7 +14,7 @@ class CustomAuthenticationMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Skip auth for specific paths
         if request.url.path.startswith(
-            ("/st", "/docs", "/openapi.json", "/health", "/schema")
+            ("/st", "/docs", "/openapi.json", "/health", "/livez", "/schema")
         ):
             return await call_next(request)
 
@@ -30,10 +29,10 @@ class CustomAuthenticationMiddleware(BaseHTTPMiddleware):
         except TryRefreshTokenError:
             # Let the route handler decide or client handle refresh
             pass
-        except Exception as e:
+        except Exception:
             # Log but allow request to proceed (maybe public route)
             # Controllers enforcing auth will fail if user is missing
-            logger.debug(f"Auth middleware error: {e}")
+            logger.debug("identity.middleware.auth_middleware.observed")
 
         response = await call_next(request)
         return response

@@ -16,4 +16,3 @@ export type UpdateTableRequest = {
     enable_rls?: (boolean | null);
     visibility?: (string | null);
 };
-

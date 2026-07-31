@@ -10,16 +10,34 @@ import type { FileSignedUrlResponse } from "../openapi_client/models/FileSignedU
 import type { FileUrlResponse } from "../openapi_client/models/FileUrlResponse.js";
 import { SearchMethod } from "../openapi_client/models/SearchMethod.js";
 import type { update } from "../openapi_client/models/update.js";
+import type { attach } from "../openapi_client/models/attach.js";
+import type { FileDetailResponse } from "../openapi_client/models/FileDetailResponse.js";
 import { FilesService } from "../openapi_client/services/FilesService.js";
 
+function trimLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value[start] === "/") {
+    start += 1;
+  }
+  return value.slice(start);
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function joinDatastorePath(basePath: string | undefined, leaf: string): string {
-  const normalizedLeaf = leaf.replace(/^\/+/, "");
+  const normalizedLeaf = trimLeadingSlashes(leaf);
   const trimmedBase = (basePath ?? "/").trim();
   const normalizedBase = trimmedBase.length > 0 ? trimmedBase : "/";
   if (normalizedBase === "/") {
     return `/${normalizedLeaf}`;
   }
-  return `${normalizedBase.replace(/\/+$/, "")}/${normalizedLeaf}`;
+  return `${trimTrailingSlashes(normalizedBase)}/${normalizedLeaf}`;
 }
 
 function getDirectoryPath(path: string): string {
@@ -27,7 +45,7 @@ function getDirectoryPath(path: string): string {
   if (!normalized || normalized === "/") {
     return "/";
   }
-  const withoutTrailing = normalized.replace(/\/+$/, "");
+  const withoutTrailing = trimTrailingSlashes(normalized);
   const index = withoutTrailing.lastIndexOf("/");
   if (index <= 0) {
     return "/";
@@ -36,7 +54,7 @@ function getDirectoryPath(path: string): string {
 }
 
 function getBaseName(path: string): string {
-  const normalized = path.trim().replace(/\/+$/, "");
+  const normalized = trimTrailingSlashes(path.trim());
   const index = normalized.lastIndexOf("/");
   if (index === -1) {
     return normalized;
@@ -150,7 +168,7 @@ export class FilesNamespace {
     } = {},
   ) {
     const payload: DatastoreFileUploadRequest = {
-      data: file as unknown as string,
+      data: file,
       name: options.name ?? (file instanceof File ? file.name : undefined),
       description: options.description,
       directory_path: options.directoryPath ?? options.parentId ?? "/",
@@ -183,7 +201,7 @@ export class FilesNamespace {
 
     const payload: update = {
       path,
-      data: options.file as unknown as string | undefined,
+      data: options.file,
       description: options.description,
       new_path: resolvedNewPath,
       search_enabled: options.searchEnabled,
@@ -232,5 +250,30 @@ export class FilesNamespace {
       path: string,
       options: { pageStart?: number; pageEnd?: number } = {},
     ): Promise<Blob> => this.children.content(`${path}/document.md`, options),
+  };
+
+  // Bring-your-own markdown: replace a document's agent-facing `document.md`
+  // (and its referenced images) with a user-authored version, or drop it to
+  // revert to extraction. `attach` applies to non-markdown documents (PDF,
+  // Word, HTML, …); companion images are named to match the markdown's
+  // `![](fig.png)` references and served as sibling child artifacts.
+  readonly markdown = {
+    attach: (
+      path: string,
+      markdown: Blob,
+      options: { images?: Blob[] } = {},
+    ): Promise<FileDetailResponse> => {
+      const formData: attach = {
+        path,
+        data: markdown,
+        images: options.images,
+      };
+      return this.client.request(() =>
+        FilesService.fileMarkdownAttach(this.podId(), formData),
+      );
+    },
+
+    detach: (path: string): Promise<FileDetailResponse> =>
+      this.client.request(() => FilesService.fileMarkdownDetach(this.podId(), path)),
   };
 }

@@ -1038,17 +1038,31 @@ import { AuthGuard } from "lemma-sdk/react";
 
 function App() {
   return (
-    <AuthGuard client={client}>
+    <AuthGuard
+      client={client}
+      appName="Support Triage"
+      appDescription="Route and resolve incoming customer requests."
+    >
       <MyDesk />
     </AuthGuard>
   );
 }
 ```
 
-`AuthGuard` handles three states:
-1. **Loading** — shows `loadingFallback` (blank by default)
-2. **Unauthenticated** — redirects to the Lemma auth page
-3. **Authenticated but not a pod member** — shows the request-access flow
+Served apps and widgets receive their name from the host automatically. The props
+above are useful for local development or for overriding that identity.
+
+`AuthGuard` handles five states:
+1. **Loading** — shows the animated `AppLoader`
+2. **Unauthenticated** — shows an app-aware Lemma sign-in screen
+3. **Missing pod access** — shows the request-access flow and signed-in account
+4. **Request pending** — rechecks access automatically and offers a manual refresh
+5. **Access check error** — shows retry and account-switch actions
+
+Use `appearance` for accent, color, and radius overrides. The three fallbacks accept
+either a React node or a render function with the relevant actions and state. The
+default pieces are also exported as `AppLoader`, `AppSignIn`, and
+`AppAccess` for standalone composition.
 
 ### Multiple actions on one page
 

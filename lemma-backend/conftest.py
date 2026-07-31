@@ -4,6 +4,23 @@ import os
 
 import pytest
 
+# Tests are deterministic and self-contained: they set the config they need (via
+# fixtures / the defaults below / monkeypatch), NOT a developer's local ``.env``.
+# A leaked ``.env`` makes the suite non-deterministic — a value present locally
+# but absent in CI (e.g. ``API_URL``, ``ENABLE_TELEGRAM_POLLING_MODE``) silently
+# flips tests. So disable ``.env`` loading for the whole suite (matching CI, which
+# has no ``.env``). It is still honored in real-LLM / real-sandbox mode, where the
+# ``.env`` legitimately supplies real API keys. This MUST run before any
+# ``app.core.config`` import (env_file is resolved at Settings-class definition).
+_REAL_MODE = (
+    os.getenv("E2E_REAL", "").lower() in ("1", "true", "yes")
+    or os.getenv("E2E_LLM_MODE", "").lower() == "real"
+    or os.getenv("E2E_SANDBOX_MODE", "").lower() in {"docker", "e2b"}
+    or os.getenv("LEMMA_RUN_PROVIDER_E2E") == "1"
+)
+if not _REAL_MODE:
+    os.environ.setdefault("LEMMA_DISABLE_DOTENV", "1")
+
 # AgentBox config is required to construct workspace/function services. Default
 # to test-only values (set before app.core.config is imported) so suites run
 # without a configured local AgentBox manager; workspace-marked e2e tests
@@ -12,7 +29,6 @@ os.environ.setdefault("AGENTBOX_API_KEY", "test-agentbox-key")
 os.environ.setdefault("AGENTBOX_API_URL", "http://localhost:9999")
 
 WORKSPACE_FIXTURES = {
-    "backend_server",
     "configure_workspace_api_url",
     "workspace_image",
     "_configure_function_workspace_api_url",
@@ -43,22 +59,16 @@ def _e2e_real_llm() -> bool:
 
 
 def _e2e_real_sandbox() -> bool:
-    """True when e2e uses the real Docker AgentBox; default is the fake."""
+    """All supported E2E sandbox modes use a real AgentBox provider."""
     mode = os.getenv("E2E_SANDBOX_MODE", "").lower()
-    if mode == "docker":
-        return True
-    if mode == "fake":
-        return False
-    return os.getenv("E2E_REAL", "").lower() in ("1", "true", "yes")
+    return mode in {"", "docker", "e2b"}
 
 
 def pytest_collection_modifyitems(config, items):
     """Classify e2e tests and gate them by the active e2e mode.
 
-    Default mode is fast/mocked: the agent LLM is a deterministic FunctionModel
-    and workspace tools hit the in-process fake AgentBox — so provider/agent-run
-    tests RUN (no key, no Docker). Real mode (``E2E_REAL=1`` / ``E2E_LLM_MODE=real``
-    / ``E2E_SANDBOX_MODE=docker``) hits the real model + Docker AgentBox.
+    The LLM may be deterministic, but sandbox behavior always uses a real
+    Docker or credential-gated E2B AgentBox.
     """
     real_llm = _e2e_real_llm()
     real_sandbox = _e2e_real_sandbox()
@@ -131,11 +141,24 @@ def pytest_collection_modifyitems(config, items):
             )
 
 
-def pytest_sessionstart(session: pytest.Session) -> None:
-    del session
-    from app.modules.test_support import e2e_base
+@pytest.fixture(autouse=True)
+def _isolate_shared_redis_clients():
+    """Keep the process-wide Redis client registry from leaking across tests.
 
-    e2e_base._cleanup_e2e_workspace_containers()
+    The registry is deliberately process-wide in production. In tests that
+    makes it shared mutable state: a test that patches ``Redis.from_url`` (a
+    class attribute, so the patch is global) would otherwise have its fake
+    cached in the registry for the rest of the session, because monkeypatch
+    restores the constructor but knows nothing about the cache.
+
+    Clearing rather than closing is intentional - closing real pooled clients
+    between every test would dominate suite runtime for no benefit.
+    """
+    from app.core.infrastructure.redis import client as redis_client
+
+    redis_client._clients.clear()
+    yield
+    redis_client._clients.clear()
 
 
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
@@ -153,5 +176,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     del session, exitstatus
     from app.modules.test_support import e2e_base
 
-    e2e_base._cleanup_e2e_workspace_containers()
+    # Context managers remove only the containers owned by this pytest process.
+    # Never sweep every ``lemma.e2e=true`` container here: a separately invoked
+    # pytest session may be running concurrently and uses the same shared label.
     e2e_base._close_shared_contexts()

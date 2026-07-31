@@ -16,7 +16,10 @@ from app.core.domain.errors import DomainError
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
 from app.modules.agent_surfaces.config import surface_settings
-from app.modules.agent_surfaces.domain.entities import AgentSurfaceEntity, SurfacePlatform
+from app.modules.agent_surfaces.domain.entities import (
+    AgentSurfaceEntity,
+    SurfacePlatform,
+)
 
 if TYPE_CHECKING:
     from app.modules.agent_surfaces.services.credential_resolver import (
@@ -255,14 +258,17 @@ class SurfaceWebhookSecurityService:
                     surface.account_id
                 )
             except Exception:
-                logger.warning(
-                    "Could not resolve WhatsApp credentials for account %s",
-                    surface.account_id,
+                logger.debug(
+                    'agent_surfaces.webhook_security_service.could_not_resolve_whatsapp_credentials.diagnostic',
+                    account_id=surface.account_id,
                     exc_info=True,
                 )
                 return None, None
             return credentials.get("app_secret"), credentials.get("verify_token")
-        return surface_settings.whatsapp_app_secret, surface_settings.whatsapp_verify_token
+        return (
+            surface_settings.whatsapp_app_secret,
+            surface_settings.whatsapp_verify_token,
+        )
 
     async def resolve_whatsapp_verify_token(
         self, surface: AgentSurfaceEntity | None
@@ -296,7 +302,9 @@ class SurfaceWebhookSecurityService:
                 "Invalid Slack request timestamp"
             ) from exc
         if abs(int(time.time()) - timestamp_int) > _SLACK_MAX_TIMESTAMP_SKEW_SECONDS:
-            raise SurfaceWebhookAuthenticationError("Slack request timestamp is too old")
+            raise SurfaceWebhookAuthenticationError(
+                "Slack request timestamp is too old"
+            )
 
         basestring = (
             f"{_SLACK_SIGNATURE_VERSION}:{timestamp_int}:".encode("utf-8") + raw_body
@@ -325,11 +333,14 @@ class SurfaceWebhookSecurityService:
         )
         if not signature or not signature.startswith("sha256="):
             raise SurfaceWebhookAuthenticationError("Missing WhatsApp signature header")
-        expected = "sha256=" + hmac.new(
-            app_secret.encode("utf-8"),
-            raw_body,
-            hashlib.sha256,
-        ).hexdigest()
+        expected = (
+            "sha256="
+            + hmac.new(
+                app_secret.encode("utf-8"),
+                raw_body,
+                hashlib.sha256,
+            ).hexdigest()
+        )
         if not hmac.compare_digest(expected, signature):
             raise SurfaceWebhookAuthenticationError("Invalid WhatsApp signature")
 
@@ -373,7 +384,8 @@ class SurfaceWebhookSecurityService:
             raise SurfaceWebhookAuthenticationError("Missing Teams bearer token")
 
         openid_url = (
-            surface_settings.microsoft_bot_openid_config_url or _BOT_FRAMEWORK_OPENID_CONFIG_URL
+            surface_settings.microsoft_bot_openid_config_url
+            or _BOT_FRAMEWORK_OPENID_CONFIG_URL
         )
         openid_config = await self._get_json_cached(openid_url)
         jwks_uri = str(openid_config.get("jwks_uri") or "").strip()
@@ -434,11 +446,15 @@ class SurfaceWebhookSecurityService:
         try:
             header = jwt.get_unverified_header(token)
         except jwt.PyJWTError as exc:
-            raise SurfaceWebhookAuthenticationError("Malformed Teams bearer token") from exc
+            raise SurfaceWebhookAuthenticationError(
+                "Malformed Teams bearer token"
+            ) from exc
 
         key_id = header.get("kid") or header.get("x5t")
         if not key_id:
-            raise SurfaceWebhookAuthenticationError("Teams bearer token is missing key id")
+            raise SurfaceWebhookAuthenticationError(
+                "Teams bearer token is missing key id"
+            )
 
         for key in keys:
             if key.get("kid") == key_id or key.get("x5t") == key_id:

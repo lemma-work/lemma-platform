@@ -43,6 +43,28 @@ class BundleJobConflictError(PodBundleDomainError):
         super().__init__(message, code="POD_BUNDLE_CONFLICT", status_code=409)
 
 
+class BundleStateConflictError(BundleJobConflictError):
+    """A stale worker attempted to overwrite a newer durable job state."""
+
+    def __init__(self, message: str = "The pod bundle job changed concurrently."):
+        super().__init__(message)
+        self.code = "POD_BUNDLE_STATE_CONFLICT"
+
+
+class BundleRateLimitExceededError(PodBundleDomainError):
+    """The user hit their per-UTC-day cap on export or import jobs. Retriable
+    tomorrow (or once an operator raises the limit) — not a bug, so 429 with a
+    clear message rather than a generic 400."""
+
+    def __init__(self, message: str, details: object | None = None):
+        super().__init__(
+            message,
+            code="POD_BUNDLE_RATE_LIMITED",
+            status_code=429,
+            details=details,
+        )
+
+
 class BundleConfirmationRequiredError(PodBundleDomainError):
     """Destructive steps present without ``confirm_destructive``, or required
     variables missing."""
@@ -69,4 +91,61 @@ class AppBuildFailedError(PodBundleDomainError):
     def __init__(self, message: str, details: object | None = None):
         super().__init__(
             message, code="POD_BUNDLE_APP_BUILD_FAILED", status_code=422, details=details
+        )
+
+
+class GithubRepositoryExistsError(PodBundleDomainError):
+    def __init__(self, repo_name: str):
+        super().__init__(
+            f"GitHub repository '{repo_name}' already exists. Choose Update mode "
+            "to replace Lemma-managed files.",
+            code="POD_BUNDLE_REPOSITORY_EXISTS",
+            status_code=409,
+        )
+
+
+class GithubRepositoryNotFoundError(PodBundleDomainError):
+    def __init__(self, repo_name: str):
+        super().__init__(
+            f"GitHub repository '{repo_name}' does not exist. Choose Create mode first.",
+            code="POD_BUNDLE_REPOSITORY_NOT_FOUND",
+            status_code=404,
+        )
+
+
+class GithubPublishCapabilityUnavailableError(PodBundleDomainError):
+    def __init__(self, operation_name: str):
+        super().__init__(
+            "The connected GitHub provider cannot perform atomic repository "
+            "publishing right now.",
+            code="GITHUB_PUBLISH_CAPABILITY_UNAVAILABLE",
+            status_code=503,
+            details={"operation": operation_name},
+        )
+
+
+class GithubBranchRaceError(PodBundleDomainError):
+    def __init__(self):
+        super().__init__(
+            "The GitHub branch changed while Lemma was publishing. Review the "
+            "new commits, then retry Update mode.",
+            code="POD_BUNDLE_GITHUB_BRANCH_CHANGED",
+            status_code=409,
+        )
+
+
+class GithubImportError(PodBundleDomainError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        status_code: int,
+        details: object | None = None,
+    ):
+        super().__init__(
+            message,
+            code=code,
+            status_code=status_code,
+            details=details,
         )

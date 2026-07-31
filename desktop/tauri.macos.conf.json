@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/lemma-locald",
+      "binaries/lemma-agent-host",
+      "binaries/lemma-runtime"
+    ],
+    "resources": {
+      "binaries/lemma-vz-aarch64-apple-darwin": "lemma-vz"
+    }
+  }
+}

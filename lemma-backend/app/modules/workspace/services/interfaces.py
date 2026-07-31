@@ -6,7 +6,11 @@ from abc import ABC, abstractmethod
 from typing import Optional, Any
 from uuid import UUID
 
-from app.modules.agent.domain.workspace_entities import SandboxInfo, PythonExecutionResult, ShellCommandResult
+from app.modules.workspace.contracts import (
+    SandboxInfo,
+    PythonExecutionResult,
+    ShellCommandResult,
+)
 
 
 class ISandbox(ABC):
@@ -32,20 +36,19 @@ class ISandbox(ABC):
         """Delete a user's sandbox."""
         pass
 
+    async def suspend_sandbox(self, user_id: UUID) -> None:
+        """Release compute while retaining the user's logical sandbox identity.
+
+        Providers without a suspend primitive retain historical behavior by
+        deleting compute; the next ensure still uses the same logical user ID.
+        """
+
+        await self.delete_sandbox(user_id)
+
     @abstractmethod
     async def is_sandbox_running(self, user_id: UUID) -> bool:
         """Check if the user's sandbox is running."""
         pass
-
-    async def heartbeat(self, user_id: UUID) -> None:
-        """Reset the sandbox's idle clock so the manager's reaper keeps it alive.
-
-        Called when a sandbox is handed out for use so a reused-but-near-idle
-        sandbox is not reaped out from under a sessionless workload (e.g. a
-        function run, which holds no runtime session). Default no-op for
-        providers without an idle reaper.
-        """
-        return None
 
 
 class IWorkspaceSession(ABC):

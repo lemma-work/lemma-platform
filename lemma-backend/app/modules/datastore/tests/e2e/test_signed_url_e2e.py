@@ -169,6 +169,16 @@ class TestSignedUrlServing:
         served = await async_client.get(f"/s/{_code_of(body['signed_url'])}")
         assert served.status_code == status.HTTP_200_OK, served.text
         assert served.content == content
+        etag = f'"{uploaded["content_sha256"]}"'
+        assert served.headers["etag"] == etag
+        assert served.headers["cache-control"] == "private, no-cache"
+
+        not_modified = await async_client.get(
+            f"/s/{_code_of(body['signed_url'])}",
+            headers={"If-None-Match": etag},
+        )
+        assert not_modified.status_code == status.HTTP_304_NOT_MODIFIED
+        assert not not_modified.content
 
     @pytest.mark.asyncio
     async def test_hit_cap_enforced_then_gone_then_not_found(

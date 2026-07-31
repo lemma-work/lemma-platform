@@ -1,0 +1,103 @@
+# Datastore-ingestion override for docker-compose.load-test.yml.
+#
+# Adds the real Kreuzberg service, shares originals between the API and worker,
+# and persists the FastEmbed cache. Resource knobs are environment-overridable
+# so the same 20-file corpus can produce a 2c/4G vs 4c/8G concurrency matrix.
+
+services:
+  datastore-volume-init:
+    image: busybox:1.36
+    command: ["sh", "-c", "chown -R 999:999 /objects /files /fastembed"]
+    volumes:
+      - datastore_objects:/objects
+      - local_files:/files
+      - fastembed_cache:/fastembed
+    networks:
+      - load_test_net
+
+  api:
+    environment:
+      KREUZBERG_URL: http://kreuzberg:8000
+      DOCUMENT_PROCESSOR: kreuzberg
+      DOCUMENT_PROCESSING_OCR_ENABLED: "false"
+      LOCAL_EMBEDDING_CACHE_DIR: /home/appuser/.cache/lemma/fastembed
+      HF_HOME: /home/appuser/.cache/lemma/fastembed/huggingface
+      XDG_CACHE_HOME: /home/appuser/.cache/lemma/fastembed/xdg
+    volumes:
+      - datastore_objects:/home/appuser/.local/object-storage
+      - local_files:/home/appuser/.local/files
+      - fastembed_cache:/home/appuser/.cache/lemma/fastembed
+    depends_on:
+      datastore-volume-init:
+        condition: service_completed_successfully
+      kreuzberg:
+        condition: service_healthy
+
+  worker:
+    environment:
+      KREUZBERG_URL: http://kreuzberg:8000
+      DOCUMENT_PROCESSOR: kreuzberg
+      DOCUMENT_PROCESSING_OCR_ENABLED: "false"
+      DOCUMENT_PROCESSING_MAX_CONCURRENCY: "${DATASTORE_EXTRACTION_CONCURRENCY:-2}"
+      DOCUMENT_PROCESSING_MAX_INFLIGHT_BYTES: "${DATASTORE_MAX_INFLIGHT_BYTES:-536870912}"
+      KREUZBERG_REQUEST_TIMEOUT_SECONDS: "${DATASTORE_KREUZBERG_TIMEOUT_SECONDS:-600}"
+      LOCAL_EMBEDDING_CACHE_DIR: /home/appuser/.cache/lemma/fastembed
+      HF_HOME: /home/appuser/.cache/lemma/fastembed/huggingface
+      XDG_CACHE_HOME: /home/appuser/.cache/lemma/fastembed/xdg
+      LOCAL_EMBEDDING_PRELOAD_TIMEOUT_SECONDS: "900"
+      WORKER_CONCURRENCY: "${DATASTORE_WORKER_CONCURRENCY:-10}"
+    volumes:
+      - datastore_objects:/home/appuser/.local/object-storage
+      - local_files:/home/appuser/.local/files
+      - fastembed_cache:/home/appuser/.cache/lemma/fastembed
+    depends_on:
+      datastore-volume-init:
+        condition: service_completed_successfully
+      kreuzberg:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "${DATASTORE_WORKER_CPUS:-4.0}"
+          memory: "${DATASTORE_WORKER_MEMORY:-4G}"
+
+  kreuzberg:
+    image: ${DEV_KREUZBERG_IMAGE:-ghcr.io/xberg-io/kreuzberg:4.9.9-core}
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        kreuzberg extract /opt/lemma/prewarm.pdf --disable-ocr true
+        --layout true --layout-table-model tatr --extract-pages true
+        --content-format markdown --extract-images true --target-dpi 150
+        >/dev/null && exec kreuzberg serve --host 0.0.0.0 --port 8000
+    container_name: lemma-load-kreuzberg
+    restart: unless-stopped
+    environment:
+      KREUZBERG_MAX_UPLOAD_SIZE_MB: "25"
+      KREUZBERG_MAX_REQUEST_BODY_BYTES: "31457280"
+      KREUZBERG_CACHE_DIR: /app/.kreuzberg
+      HF_HOME: /app/.kreuzberg/huggingface
+      RUST_LOG: "${DEV_KREUZBERG_LOG_LEVEL:-info}"
+    volumes:
+      - kreuzberg_cache:/app/.kreuzberg
+      - ../app/modules/datastore/tests/fixtures/arxiv/seq2seq.pdf:/opt/lemma/prewarm.pdf:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 12
+      start_period: 15m
+    stop_grace_period: 30s
+    networks:
+      - load_test_net
+    deploy:
+      resources:
+        limits:
+          cpus: "${DATASTORE_KREUZBERG_CPUS:-4.0}"
+          memory: "${DATASTORE_KREUZBERG_MEMORY:-8G}"
+
+volumes:
+  datastore_objects:
+  local_files:
+  fastembed_cache:
+  kreuzberg_cache:

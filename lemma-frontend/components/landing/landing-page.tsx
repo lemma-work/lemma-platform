@@ -2,34 +2,70 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { FaGithub } from "react-icons/fa";
-import { useEffect, useRef, useState } from "react";
+import { GithubLogo } from "@/components/ui/icons";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Logo } from "@/components/brand/logo";
 import type { SurfaceMode } from "./landing-data";
+import { githubUrl, surfaceModes } from "./landing-data";
+import { WorkSurfaceStrip } from "./landing-animations";
+import { HeroBuildsCollage } from "./hero-builds-collage";
+import { JourneySection } from "./landing-journey";
 import {
-  githubUrl,
-  podBlocks,
-  showcaseCards,
-  surfaceModes,
-} from "./landing-data";
-import {
-  HeroTicker,
-  MachineAtWork,
-  PodBlockGlyph,
-  TypingTerminal,
-} from "./landing-animations";
-import { StackComparison, SurfacePreview } from "./landing-surfaces";
+  BuildSection,
+  ExamplesSection,
+  GapSection,
+} from "./landing-story";
+import { PodSystemSection } from "./landing-pod-system";
+import { SurfacePreview } from "./landing-surfaces";
+
+/**
+ * The closer reads against the visitor's own clock — "build it this morning"
+ * only lands if it is actually their morning. Buckets are ordered by the hour
+ * they end at.
+ */
+const DAY_PARTS = [
+  { endsAt: 5, build: "tonight", by: "by morning" },
+  { endsAt: 11, build: "this morning", by: "by lunch" },
+  { endsAt: 17, build: "this afternoon", by: "by evening" },
+  { endsAt: 22, build: "this evening", by: "by morning" },
+  { endsAt: 24, build: "tonight", by: "by morning" },
+] as const;
+
+type DayPart = (typeof DAY_PARTS)[number];
+
+/** Afternoon is the neutral render: the server has no idea what time it is
+ *  where the reader is, and guessing would mismatch on hydration. */
+const DEFAULT_DAY_PART: DayPart = DAY_PARTS[2];
+
+function dayPartFor(hour: number): DayPart {
+  return DAY_PARTS.find((part) => hour < part.endsAt) ?? DEFAULT_DAY_PART;
+}
+
+/* The whole point is that server and client disagree, which is what
+   useSyncExternalStore's third argument is for. Entries are module constants,
+   so the snapshot is reference-stable and never re-renders in a loop. */
+const NEVER_CHANGES = () => () => {};
+
+/** One source for the header nav and the mobile menu, so they can't drift. */
+type NavLink = { label: string; href: string; external?: boolean };
+
+const NAV_LINKS: NavLink[] = [
+  { label: "How it works", href: "#loop" },
+  { label: "Templates", href: "/templates" },
+  { label: "Docs", href: "/docs", external: true },
+];
 
 export default function LandingPage() {
   const [activeSurface, setActiveSurface] =
     useState<SurfaceMode["key"]>("slack");
-  const [flippedCards, setFlippedCards] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const [stackCompare, setStackCompare] = useState(50);
-  const [openPodBlock, setOpenPodBlock] = useState<string>("data");
-  const podIframeRef = useRef<HTMLIFrameElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  const dayPart = useSyncExternalStore(
+    NEVER_CHANGES,
+    () => dayPartFor(new Date().getHours()),
+    () => DEFAULT_DAY_PART,
+  );
 
   useEffect(() => {
     const root = rootRef.current;
@@ -51,14 +87,6 @@ export default function LandingPage() {
     return () => observer.disconnect();
   }, []);
 
-  const openPodSection = (key: string) => {
-    setOpenPodBlock(key);
-    podIframeRef.current?.contentWindow?.postMessage(
-      { type: "pod-drill", section: key },
-      "*",
-    );
-  };
-
   const currentSurface =
     surfaceModes.find((surface) => surface.key === activeSurface) ??
     surfaceModes[0];
@@ -66,68 +94,119 @@ export default function LandingPage() {
   return (
     <div className="lp-react" ref={rootRef}>
       <header className="lp-header" aria-label="Site header">
-        <Link className="lp-brand" href="/">
-          <Logo
-            className="lp-brand-logo"
-            size="sm"
-            variant="mark-wordmark"
-          />
+        <Link className="lp-brand" href="/" aria-label="Lemma home">
+          <Logo className="lp-brand-logo" size="sm" variant="mark-wordmark" />
         </Link>
         <nav className="lp-nav" aria-label="Primary navigation">
-          <a href="#inside">Product</a>
-          <a href="/docs" target="_blank" rel="noreferrer">
-            Docs
-          </a>
-          <a href="#showcase">Showcase</a>
+          {NAV_LINKS.map((link) =>
+            link.external ? (
+              <a href={link.href} key={link.label} rel="noreferrer" target="_blank">
+                {link.label}
+              </a>
+            ) : link.href.startsWith("#") ? (
+              <a href={link.href} key={link.label}>
+                {link.label}
+              </a>
+            ) : (
+              <Link href={link.href} key={link.label}>
+                {link.label}
+              </Link>
+            ),
+          )}
           <a
             className="lp-gh-link"
             href={githubUrl}
             target="_blank"
             rel="noreferrer"
           >
-            <FaGithub aria-hidden className="lp-gh-icon" />
+            <GithubLogo aria-hidden className="lp-gh-icon" />
             GitHub
           </a>
         </nav>
         <div className="lp-header-actions">
-          <Link href="/auth">Log in</Link>
-          <a
-            className="lp-button primary"
-            href={githubUrl}
-            target="_blank"
-            rel="noreferrer"
+          <Link className="lp-button primary" href="/auth">
+            Start building
+          </Link>
+          {/* Below the nav breakpoint this was the only control in the header,
+              leaving Templates, Docs and GitHub unreachable from a phone. */}
+          <button
+            aria-controls="lp-mobile-menu"
+            aria-expanded={menuOpen}
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            className="lp-menu-toggle"
+            onClick={() => setMenuOpen((open) => !open)}
+            type="button"
           >
-            <FaGithub aria-hidden className="lp-gh-icon" />
-            Star on GitHub
-          </a>
+            <span className={menuOpen ? "is-open" : ""} />
+          </button>
         </div>
       </header>
 
+      <div
+        className={`lp-mobile-menu${menuOpen ? " is-open" : ""}`}
+        hidden={!menuOpen}
+        id="lp-mobile-menu"
+      >
+        {NAV_LINKS.map((link) =>
+          link.external ? (
+            <a
+              href={link.href}
+              key={link.label}
+              onClick={() => setMenuOpen(false)}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {link.label}
+            </a>
+          ) : link.href.startsWith("#") ? (
+            <a
+              href={link.href}
+              key={link.label}
+              onClick={() => setMenuOpen(false)}
+            >
+              {link.label}
+            </a>
+          ) : (
+            <Link
+              href={link.href}
+              key={link.label}
+              onClick={() => setMenuOpen(false)}
+            >
+              {link.label}
+            </Link>
+          ),
+        )}
+        <a href={githubUrl} rel="noreferrer" target="_blank">
+          <GithubLogo aria-hidden className="lp-gh-icon" />
+          GitHub
+        </a>
+      </div>
+
       <main>
+        {/* §1 — thesis in three lines */}
         <section className="lp-hero" aria-labelledby="hero-title">
           <div className="lp-hero-copy">
             <p className="lp-eyebrow">
               <span className="lp-eyebrow-badge">
-                <FaGithub aria-hidden className="lp-gh-icon" />
+                <GithubLogo aria-hidden className="lp-gh-icon" />
                 Open source
               </span>
-              AI-native workspace
+              The runtime for agent-built software
             </p>
             <h1 className="lp-hero-headline" id="hero-title">
-              <span className="lp-hl-line">How humans and AI do</span>
+              The software you need
               <span className="lp-hl-line">
-                <span className="lp-hl-accent">real work</span>, together.
+                <span className="lp-hl-accent">doesn&apos;t exist yet.</span>
               </span>
             </h1>
             <p className="lp-subhead">
-              Teammates work from apps, Slack, WhatsApp, and email. Agents work
-              from the CLI. Lemma holds the shared state that keeps it all
-              moving.
+              Your coding agent can write it. Lemma turns it into something
+              your team can actually use — and run anywhere.
             </p>
 
             <div className="lp-actions">
               <Link className="lp-button primary" href="/auth">
-                Get started
+                Start building
               </Link>
               <a
                 className="lp-button secondary"
@@ -135,280 +214,197 @@ export default function LandingPage() {
                 target="_blank"
                 rel="noreferrer"
               >
-                <FaGithub aria-hidden className="lp-gh-icon" />
+                <GithubLogo aria-hidden className="lp-gh-icon" />
                 View on GitHub
               </a>
             </div>
 
-            <HeroTicker />
+            <WorkSurfaceStrip />
           </div>
 
-          <section className="lp-hero-theater" aria-label="Inside a Lemma pod">
-            <div className="lp-theater-stage">
-              <div className="lp-product-frame">
-                <iframe
-                  title="Inside a Lemma pod"
-                  src="/landing-page/pod-workspace.html?embed=1&section=agents"
-                />
-              </div>
-            </div>
+          <section
+            className="lp-hero-builds"
+            aria-label="What teams build with Lemma"
+          >
+            <HeroBuildsCollage />
           </section>
         </section>
 
-        <section className="lp-section lp-pod-section" id="inside">
-          <div className="lp-section-inner lp-reveal">
-            <p className="lp-section-kicker">Inside a pod</p>
-            <h2 className="lp-section-title">
-              A pod is where AI and humans <span>work together.</span>
-            </h2>
-            <p className="lp-section-subhead">
-              Tables, agents, workflows, and approval gates - six building
-              blocks, one coherent system.
-            </p>
+        {/* §2 — why generated code isn't team software */}
+        <GapSection />
 
-            <div className="lp-pod-explorer">
-              <div className="lp-pod-acc" aria-label="Pod building blocks">
-                {podBlocks.map((block) => {
-                  const isOpen = openPodBlock === block.key;
-                  return (
-                    <div
-                      className={`lp-pod-acc-item${isOpen ? " is-open" : ""}`}
-                      key={block.key}
-                    >
-                      <button
-                        type="button"
-                        className="lp-pod-acc-head"
-                        aria-expanded={isOpen}
-                        onClick={() => openPodSection(block.key)}
-                      >
-                        <span className="lp-pod-acc-glyph" aria-hidden="true">
-                          <PodBlockGlyph kind={block.key} />
-                        </span>
-                        <span className="lp-pod-acc-titles">
-                          <strong>{block.title}</strong>
-                          <span>{block.summary}</span>
-                        </span>
-                        <span className="lp-pod-acc-toggle" aria-hidden="true">
-                          {isOpen ? "−" : "+"}
-                        </span>
-                      </button>
-                      <div className="lp-pod-acc-detail">
-                        <div>
-                          <p>{block.detail}</p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+        {/* §3 — build, deploy, invite, scope, use */}
+        <JourneySection />
 
-              <aside className="lp-pod-visual" aria-label="Inside a pod interactive component">
-                <iframe
-                  ref={podIframeRef}
-                  title="Inside a pod"
-                  src="/landing-page/in-the-pod-component.html"
-                />
-              </aside>
-            </div>
-          </div>
-        </section>
+        {/* §4 — the pod as a working system */}
+        <PodSystemSection />
 
+        {/* §5 — every surface, one pod */}
         <section
           className="lp-section lp-surfaces-section"
           id="surfaces"
           aria-labelledby="surfaces-title"
         >
-          <div className="lp-section-inner lp-surfaces-grid lp-reveal">
-            <div className="lp-surfaces-copy">
-              <p className="lp-section-kicker">Where it surfaces</p>
+          <div className="lp-section-inner">
+            <div className="lp-surfaces-head lp-reveal">
+              <p className="lp-section-kicker">Surfaces</p>
               <h2 className="lp-section-title" id="surfaces-title">
-                {currentSurface.headline.split(" ").slice(0, 2).join(" ")}{" "}
-                <span>
-                  {currentSurface.headline.split(" ").slice(2).join(" ")}
-                </span>
-              </h2>
-              <p className="lp-section-subhead">{currentSurface.body}</p>
-
-              <div
-                className="lp-surface-picker"
-                role="tablist"
-                aria-label="Surface examples"
-              >
-                {surfaceModes.map((surface) => (
-                  <button
-                    aria-selected={activeSurface === surface.key}
-                    className={activeSurface === surface.key ? "is-active" : ""}
-                    key={surface.key}
-                    onClick={() => setActiveSurface(surface.key)}
-                    role="tab"
-                    type="button"
-                  >
-                    <span
-                      className="lp-surface-picker-icons"
-                      aria-hidden="true"
-                    >
-                      {surface.logos.map((logo) => (
-                        <Image
-                          key={logo.label}
-                          src={logo.src}
-                          alt=""
-                          width={20}
-                          height={20}
-                        />
-                      ))}
-                    </span>
-                    <span>
-                      <strong>{surface.label}</strong>
-                      <small>{surface.caption}</small>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <SurfacePreview surface={currentSurface} />
-          </div>
-        </section>
-
-        <section className="lp-section lp-showcase-section" id="showcase">
-          <div className="lp-section-inner lp-reveal">
-            <div className="lp-showcase-head">
-              <div>
-                <p className="lp-section-kicker">What people build</p>
-                <h2 className="lp-section-title">
-                  A pod for every workflow your team runs on spreadsheets.
-                </h2>
-                <p className="lp-section-subhead">
-                  These are the architectures. Fork one and ship.
-                </p>
-              </div>
-              <a
-                className="lp-button secondary"
-                href="/docs"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Browse starter kits
-              </a>
-            </div>
-
-            <div className="lp-showcase-grid">
-              {showcaseCards.map((card) => {
-                const isFlipped = flippedCards.has(card.tag);
-                return (
-                  <button
-                    className={isFlipped ? "is-flipped" : ""}
-                    key={card.tag}
-                    type="button"
-                    onClick={() => {
-                      setFlippedCards((current) => {
-                        const next = new Set(current);
-                        if (next.has(card.tag)) next.delete(card.tag);
-                        else next.add(card.tag);
-                        return next;
-                      });
-                    }}
-                  >
-                    <span className="lp-showcase-card-inner">
-                      <span className="lp-showcase-face">
-                        <span className="lp-tag">{card.tag}</span>
-                        <span className="lp-showcase-claim">{card.claim}</span>
-                        <span className="lp-flip-hint">Click for flow</span>
-                      </span>
-                      <span className="lp-showcase-face lp-showcase-back">
-                        <span className="lp-tag">Flow</span>
-                        <span className="lp-flow-list">{card.flow}</span>
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </section>
-
-        <section
-          className="lp-section lp-stack-section"
-          id="replace"
-          aria-labelledby="stack-title"
-        >
-          <div className="lp-section-inner lp-reveal">
-            <StackComparison value={stackCompare} onChange={setStackCompare} />
-          </div>
-        </section>
-
-        <MachineAtWork />
-
-        <section className="lp-section lp-quickstart-section" id="quickstart">
-          <div className="lp-section-inner lp-quickstart-grid lp-reveal">
-            <div>
-              <p className="lp-section-kicker">Try it</p>
-              <h2 className="lp-section-title">
-                Running in under <span>five minutes.</span>
+                However the work arrives, it lands in{" "}
+                <span>the same pod.</span>
               </h2>
               <p className="lp-section-subhead">
-                Install the CLI, create a pod, import a starter kit. You get
-                the whole system you just scrolled through - agents, data,
-                workflows, and an app - running locally.
+                Nine surfaces, including ChatGPT and Claude. Each one knows who
+                is asking, and writes to the same records.
               </p>
-              <div className="lp-quick-points">
-                <div>
-                  <strong>1</strong> Install the CLI
-                </div>
-                <div>
-                  <strong>2</strong> Create a pod from a starter kit
-                </div>
-                <div>
-                  <strong>3</strong> Run the app and inspect the workflow
-                </div>
-              </div>
             </div>
 
-            <div className="lp-terminal" aria-label="Quickstart commands">
-              <div>
-                <span>lemma quickstart</span>
+            <div
+              className="lp-surface-rail lp-reveal"
+              role="tablist"
+              aria-label="Surfaces"
+            >
+              {surfaceModes.map((surface) => (
                 <button
+                  aria-selected={activeSurface === surface.key}
+                  className={activeSurface === surface.key ? "is-active" : ""}
+                  key={surface.key}
+                  onClick={() => setActiveSurface(surface.key)}
+                  role="tab"
                   type="button"
-                  onClick={() => {
-                    void navigator.clipboard?.writeText(
-                      "uv tool install lemma-terminal\nlemma pods create support-ops\nlemma pods import ./support-inbox\nlemma apps deploy support-ops",
-                    );
-                  }}
                 >
-                  Copy
+                  {surface.logos.map((logo) => (
+                    <Image
+                      key={logo.label}
+                      src={logo.src}
+                      alt=""
+                      width={18}
+                      height={18}
+                    />
+                  ))}
+                  {surface.label}
                 </button>
-              </div>
-              <TypingTerminal />
+              ))}
+            </div>
+
+            <div className="lp-surfaces-stage lp-reveal">
+              {/* Remounting on key replays the scene for the chosen surface
+                  instead of looping it forever and emptying out. */}
+              <SurfacePreview key={currentSurface.key} surface={currentSurface} />
+
+              <aside className="lp-surface-effect">
+                <p className="lp-surface-effect-lead">
+                  {currentSurface.headlineLead} {currentSurface.headlineTail}
+                </p>
+                <p className="lp-surface-effect-body">{currentSurface.body}</p>
+
+                <p className="lp-surface-effect-label">
+                  What it did to the pod
+                </p>
+                <ul>
+                  {currentSurface.effect.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ul>
+
+                <p className="lp-surface-effect-foot">
+                  A surface, not a copy. The records, workflows, permissions,
+                  and audit trail stay in one place.
+                </p>
+              </aside>
             </div>
           </div>
         </section>
 
+        {/* §6 — the agent you already use builds it */}
+        <BuildSection />
+
+        {/* §7 — examples to install and remix */}
+        <ExamplesSection />
+
+        {/* §8 — close */}
         <section className="lp-section lp-footer-cta" id="github">
           <div className="lp-footer-box lp-reveal">
-            <h2>Start with a pod.</h2>
-            <p>Open-source. Self-host locally or run with Lemma.</p>
+            <h2>
+              Build it {dayPart.build}. Have everyone using it {dayPart.by}.
+            </h2>
+            <p>
+              Open source. Running on your laptop in five minutes, with the
+              coding agent you already have open.
+            </p>
             <div className="lp-actions">
+              <Link className="lp-button primary" href="/auth">
+                Start building
+              </Link>
               <a
-                className="lp-button primary"
+                className="lp-button secondary"
                 href={githubUrl}
                 target="_blank"
                 rel="noreferrer"
               >
-                <FaGithub aria-hidden className="lp-gh-icon" />
-                Star on GitHub
-              </a>
-              <a
-                className="lp-button secondary"
-                href="/docs"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Browse the docs
+                <GithubLogo aria-hidden className="lp-gh-icon" />
+                View on GitHub
               </a>
             </div>
           </div>
         </section>
       </main>
+
+      {/* The page used to stop dead at the CTA — no docs, no licence, no way
+          out except the two buttons. */}
+      <footer className="lp-site-footer">
+        <div className="lp-site-footer-inner">
+          <div className="lp-site-footer-brand">
+            <Logo className="lp-brand-logo" size="sm" variant="mark-wordmark" />
+            <p>The runtime for agent-built software.</p>
+          </div>
+
+          <nav aria-label="Product">
+            <p className="lp-site-footer-label">Product</p>
+            <a href="#loop">How it works</a>
+            <Link href="/templates">Templates</Link>
+            <Link href="/auth">Start building</Link>
+          </nav>
+
+          <nav aria-label="Developers">
+            <p className="lp-site-footer-label">Developers</p>
+            <a href="/docs" rel="noreferrer" target="_blank">
+              Docs
+            </a>
+            <a href={githubUrl} rel="noreferrer" target="_blank">
+              GitHub
+            </a>
+            <a
+              href={`${githubUrl}/releases`}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Changelog
+            </a>
+          </nav>
+
+          <nav aria-label="Licence">
+            <p className="lp-site-footer-label">Licence</p>
+            <a
+              href={`${githubUrl}/blob/main/LICENSE`}
+              rel="noreferrer"
+              target="_blank"
+            >
+              AGPLv3 core
+            </a>
+            <a
+              href={`${githubUrl}/blob/main/LICENSE-APACHE`}
+              rel="noreferrer"
+              target="_blank"
+            >
+              Apache-2.0 SDKs
+            </a>
+          </nav>
+        </div>
+
+        <p className="lp-site-footer-base">
+          <span>Open source. Run it anywhere.</span>
+        </p>
+      </footer>
     </div>
   );
 }

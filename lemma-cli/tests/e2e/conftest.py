@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -19,7 +20,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[3] / "lemma-backend"
 
 POSTGRES_IMAGE = "docker.io/pgvector/pgvector:0.8.3-pg15"
 REDIS_IMAGE = "redis/redis-stack:7.2.0-v19"
-SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.1.0"
+SUPERTOKENS_IMAGE = "docker.io/supertokens/supertokens-postgresql:11.4.5"
 
 POSTGRES_USER = "test"
 POSTGRES_PASSWORD = "test"
@@ -185,6 +186,9 @@ def backend_server(postgres_container, redis_container, supertokens_container):
         **os.environ,
         "PYTHONPATH": str(BACKEND_ROOT),
         "ENVIRONMENT": "testing",
+        "API_URL": f"http://127.0.0.1:{port}",
+        "FRONTEND_URL": f"http://127.0.0.1:{port}",
+        "AUTH_FRONTEND_URL": f"http://127.0.0.1:{port}",
         "DATABASE_URL": db_url,
         "DATASTORE_DATABASE_URL": db_url,
         "REDIS_URL": redis_url,
@@ -197,6 +201,11 @@ def backend_server(postgres_container, redis_container, supertokens_container):
         "LOCAL_OBJECT_STORAGE_ROOT": f"/tmp/lemma-cli-e2e-objects-{port}",
         "EMAIL_TRANSPORT": "filesystem",
         "EMAIL_OUTPUT_DIR": f"/tmp/lemma-cli-e2e-emails-{port}",
+        "AUTH_EMAIL_DELIVERABILITY_CHECKS_ENABLED": "false",
+        "AUTH_EMAIL_VERIFICATION_REQUIRED": "false",
+        "AUTH_DISPOSABLE_EMAIL_DOMAINS_ENABLED": "false",
+        "AUTH_ABUSE_PROTECTION_ENABLED": "false",
+        "AUTH_ALTCHA_ENABLED": "false",
         "AGENTBOX_API_KEY": "test-key",
         "AGENTBOX_API_URL": "http://localhost:9999",
     }
@@ -212,12 +221,13 @@ def backend_server(postgres_container, redis_container, supertokens_container):
     # subprocess (Redis-backed, no streaq worker needed for CRUD-only flows).
     sched_port = _free_port()
     env["SCHEDULER_API_URL"] = f"http://127.0.0.1:{sched_port}"
+    server_log = tempfile.TemporaryFile(mode="w+", encoding="utf-8")
     sched_proc = subprocess.Popen(
         [python_bin, "-m", "uvicorn", "app.scheduler:app",
          "--host", "127.0.0.1", "--port", str(sched_port), "--log-level", "warning"],
         cwd=str(BACKEND_ROOT),
         env=env,
-        stdout=subprocess.PIPE,
+        stdout=server_log,
         stderr=subprocess.STDOUT,
         text=True,
     )
@@ -231,7 +241,7 @@ def backend_server(postgres_container, redis_container, supertokens_container):
              "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning"],
             cwd=str(BACKEND_ROOT),
             env=env,
-            stdout=subprocess.PIPE,
+            stdout=server_log,
             stderr=subprocess.STDOUT,
             text=True,
         )
@@ -242,14 +252,17 @@ def backend_server(postgres_container, redis_container, supertokens_container):
     except RuntimeError:
         for p in procs:
             p.terminate()
-        # Surface whatever output we have to diagnose startup failures.
-        out = ""
         for p in procs:
             try:
-                o, _ = p.communicate(timeout=5)
-                out += o
+                p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
+                p.wait()
+        # Surface the complete shared log to diagnose startup failures without
+        # risking a PIPE backpressure deadlock while the servers are running.
+        server_log.seek(0)
+        out = server_log.read()
+        server_log.close()
         pytest.fail(
             f"Backend/scheduler server did not start in time.\n"
             f"Check that lemma-backend deps are installed (cd lemma-backend && uv sync).\n"
@@ -266,6 +279,7 @@ def backend_server(postgres_container, redis_container, supertokens_container):
         except subprocess.TimeoutExpired:
             p.kill()
             p.wait()
+    server_log.close()
 
 
 # --- Function-scoped: test user ---------------------------------------------

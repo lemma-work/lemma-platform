@@ -38,7 +38,6 @@ def _service(gateway):
         connector_repository=None,
         operation_repository=None,
         operation_gateway=None,
-        schema_compiler=None,
         account_resolution_service=None,
         pod_file_gateway=gateway,
     )

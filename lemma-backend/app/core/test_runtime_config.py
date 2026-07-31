@@ -22,6 +22,13 @@ def test_token_changes_with_pod():
     assert runtime_config_token(uuid4()) != runtime_config_token(uuid4())
 
 
+def test_token_changes_with_app_identity():
+    pod_id = uuid4()
+    assert runtime_config_token(pod_id, app={"name": "One"}) != runtime_config_token(
+        pod_id, app={"name": "Two"}
+    )
+
+
 def test_injects_after_head_and_is_idempotent():
     pod_id = uuid4()
     html = b"<html><head><meta></head><body>x</body></html>"
@@ -43,3 +50,17 @@ def test_config_values_are_escaped():
     out = inject_runtime_config(b"<head></head>", uuid4()).decode()
     assert "</script>" in out  # only our own closing tag
     assert out.count("<script data-lemma-runtime-config>") == 1
+
+
+def test_injects_sanitized_app_identity():
+    out = inject_runtime_config(
+        b"<head></head>",
+        uuid4(),
+        app={
+            "name": "Support Triage",
+            "description": "Route urgent work",
+            "private": "not-exposed",
+        },
+    ).decode()
+    assert '"app": {"name": "Support Triage", "description": "Route urgent work"}' in out
+    assert "not-exposed" not in out

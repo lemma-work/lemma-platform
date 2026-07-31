@@ -1,0 +1,9 @@
+[Unit]
+Description=Lemma private local runtime
+Requires=basic.target local-fs.target lemma-data.service containerd.service lemma-guestd.service
+Wants=network-online.target
+After=basic.target local-fs.target network-online.target
+AllowIsolate=yes
+
+[Install]
+Alias=default.target

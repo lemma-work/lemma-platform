@@ -1,0 +1,66 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+    forAgent,
+    getSurfaceDefinition,
+    SURFACE_PLATFORM_ORDER,
+} from '@/lib/surfaces/registry';
+
+describe('surface registry', () => {
+    it('resolves a definition regardless of casing', () => {
+        expect(getSurfaceDefinition('telegram')?.label).toBe('Telegram');
+        expect(getSurfaceDefinition('TELEGRAM')?.label).toBe('Telegram');
+        expect(getSurfaceDefinition('discord')).toBeNull();
+        expect(getSurfaceDefinition(null)).toBeNull();
+    });
+
+    it('offers every registered platform exactly once, in display order', () => {
+        expect(new Set(SURFACE_PLATFORM_ORDER).size).toBe(SURFACE_PLATFORM_ORDER.length);
+        // The one-tap platforms lead: they are the ones a person can finish now.
+        expect(SURFACE_PLATFORM_ORDER.slice(0, 2)).toEqual(['TELEGRAM', 'WHATSAPP']);
+    });
+
+    it('gives every platform the copy the modal renders', () => {
+        for (const platform of SURFACE_PLATFORM_ORDER) {
+            const definition = getSurfaceDefinition(platform);
+            expect(definition, platform).not.toBeNull();
+            expect(definition!.promise, platform).toContain('{agent}');
+            expect(definition!.connectHint.length, platform).toBeGreaterThan(0);
+        }
+    });
+
+    it('pairs every bring-your-own journey with a step that owns the input', () => {
+        // A journey with no `field` step would render instructions and no way to
+        // act on them.
+        for (const platform of SURFACE_PLATFORM_ORDER) {
+            const journey = getSurfaceDefinition(platform)!.journey;
+            if (!journey) continue;
+            expect(journey.steps.some((step) => step.field), platform).toBe(true);
+        }
+    });
+
+    it('only offers a journey where there is a fork to reach it from', () => {
+        for (const platform of SURFACE_PLATFORM_ORDER) {
+            const definition = getSurfaceDefinition(platform)!;
+            if (!definition.journey) continue;
+            expect(definition.identityOptions, platform).not.toBeNull();
+        }
+    });
+
+    it('offers no shared Telegram bot — every bot is the user’s own', () => {
+        const telegram = getSurfaceDefinition('TELEGRAM')!;
+        // Creating one leads; reusing a connected bot is the fallback. A SYSTEM
+        // option would promise a shared bot that no longer exists, and a journey
+        // would mean asking someone to make the bot by hand.
+        expect(telegram.identityOptions?.map((option) => option.mode)).toEqual([
+            'MANAGED',
+            'CUSTOM',
+        ]);
+        expect(telegram.journey).toBeUndefined();
+    });
+
+    it('names the agent in second-person copy, and the pod assistant otherwise', () => {
+        expect(forAgent('Make {agent} reachable', 'Ops')).toBe('Make Ops reachable');
+        expect(forAgent('Make {agent} reachable', null)).toBe('Make the pod assistant reachable');
+    });
+});

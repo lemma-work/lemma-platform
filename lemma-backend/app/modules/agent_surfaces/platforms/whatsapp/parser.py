@@ -10,6 +10,7 @@ from app.modules.agent_surfaces.domain.entities import (
     ParsedSurfaceInteraction,
 )
 from app.modules.agent_surfaces.platforms.whatsapp.service import (
+    WHATSAPP_APPROVAL_HEADER,
     WHATSAPP_INTERACTION_SEP,
 )
 
@@ -51,6 +52,19 @@ class WhatsAppMessageParser:
             if not callback_id or not header:
                 return None
             sender_wa_id = str(msg.get("from") or "")
+            # An approval button reply carries the decision in place of an answer;
+            # everything else is an ask_user answer keyed by question header.
+            if header == WHATSAPP_APPROVAL_HEADER:
+                return ParsedSurfaceInteraction(
+                    platform="WHATSAPP",
+                    external_user_id=sender_wa_id or None,
+                    external_thread_id=sender_wa_id or None,
+                    callback_id=callback_id,
+                    approval_decision=answer or None,
+                    reply_target={"sender_wa_id": sender_wa_id} if sender_wa_id else {},
+                    dedup_id=str(msg.get("id") or "") or None,
+                    raw_payload=payload,
+                )
             return ParsedSurfaceInteraction(
                 platform="WHATSAPP",
                 external_user_id=sender_wa_id or None,

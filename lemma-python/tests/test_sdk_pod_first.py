@@ -206,7 +206,7 @@ def test_connectors_trigger_get_uses_org_auth_config_and_trigger():
     )
 
 
-def test_pod_surfaces_upsert_and_setup_use_generated_models():
+def test_pod_surfaces_use_generated_models():
     transport = StubTransport()
     pod = Pod(
         "22222222-2222-4222-8222-222222222222",
@@ -217,10 +217,10 @@ def test_pod_surfaces_upsert_and_setup_use_generated_models():
     pod._transport = transport
     pod.surfaces._transport = transport
 
-    # The single upsert covers create, config, channels, and enable/disable.
-    pod.surfaces.upsert(
-        "SLACK",
+    # create provisions a surface (name defaults to the lowercased platform).
+    pod.surfaces.create(
         {
+            "platform": "SLACK",
             "default_agent_name": "triage",
             "credential_mode": "SYSTEM",
             "account_id": "33333333-3333-4333-8333-333333333333",
@@ -229,22 +229,55 @@ def test_pod_surfaces_upsert_and_setup_use_generated_models():
                     {"channel_id": "C123", "agent_name": "triage"}
                 ]
             },
-        },
+        }
     )
-
-    assert transport.calls[0]["endpoint"].endswith("agent_surface_upsert")
+    assert transport.calls[0]["endpoint"].endswith("agent_surface_create")
     assert transport.calls[0]["path_args"] == (
         UUID("22222222-2222-4222-8222-222222222222"),
-        "SLACK",
     )
-    assert transport.calls[0]["body_model"] == "SurfaceUpsertRequest"
+    assert transport.calls[0]["body_model"] == "SurfaceCreateRequest"
 
-    # setup merges status + admin-consent + checklist into one read.
-    pod.surfaces.setup("slack")
-    assert transport.calls[1]["endpoint"].endswith("agent_surface_setup")
+    # update patches an existing surface addressed by its pod-unique name.
+    pod.surfaces.update("slack", {"is_enabled": False})
+    assert transport.calls[1]["endpoint"].endswith("agent_surface_update")
     assert transport.calls[1]["path_args"] == (
         UUID("22222222-2222-4222-8222-222222222222"),
         "slack",
+    )
+    assert transport.calls[1]["body_model"] == "SurfaceUpdateRequest"
+
+    # setup merges status + admin-consent + checklist into one read.
+    pod.surfaces.setup("slack")
+    assert transport.calls[2]["endpoint"].endswith("agent_surface_setup")
+    assert transport.calls[2]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        "slack",
+    )
+
+    pod.surfaces.start_telegram_bot_setup(
+        {
+            "name": "telegram-support",
+            "default_agent_name": "triage",
+        }
+    )
+    assert transport.calls[3]["endpoint"].endswith(
+        "agent_surface_telegram_managed_start"
+    )
+    assert transport.calls[3]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+    )
+    assert (
+        transport.calls[3]["body_model"]
+        == "TelegramManagedBotSetupRequest"
+    )
+
+    pod.surfaces.get_telegram_bot_setup("setup-123")
+    assert transport.calls[4]["endpoint"].endswith(
+        "agent_surface_telegram_managed_get"
+    )
+    assert transport.calls[4]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        "setup-123",
     )
 
 

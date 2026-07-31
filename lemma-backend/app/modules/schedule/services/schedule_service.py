@@ -1,14 +1,15 @@
 from typing import List, Optional
 from uuid import UUID, uuid4
 
-from app.core.authorization.context import Context, ResourceRef, ResourceType, ResourceVisibility
+from app.core.authorization.context import (
+    Context,
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
 from app.core.authorization.permissions import Permissions
 from app.core.helpers.slug import normalize_resource_name
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.connectors.infrastructure.repositories.connector_trigger_repository import (
-    ConnectorTriggerRepository,
-)
-from app.modules.connectors.services.connector_service import ConnectorService
 from app.modules.schedule.domain.errors import (
     ScheduleInfrastructureError,
     ScheduleValidationError,
@@ -17,6 +18,8 @@ from app.modules.schedule.domain.interfaces import (
     ExternalScheduleWriter,
     ScheduleRepository,
     SchedulerService,
+    ScheduleTarget,
+    ScheduleTargetResolver,
 )
 from app.modules.schedule.domain.schedule import (
     ScheduleCreateEntity,
@@ -25,8 +28,9 @@ from app.modules.schedule.domain.schedule import (
     ScheduleUpdateEntity,
     normalize_datastore_schedule_config,
 )
-from app.modules.schedule.infrastructure.adapters.external_schedule_writer import (
-    ExternalScheduleWriterAdapter,
+from app.modules.schedule.domain.events.schedule import ScheduleFired
+from app.modules.schedule.repositories.schedule_run_repository import (
+    ScheduleRunRepository,
 )
 from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
@@ -46,22 +50,84 @@ class ScheduleService:
         schedule_repository: Optional[ScheduleRepository] = None,
         scheduler_service: Optional[SchedulerService] = None,
         external_schedule_writer: Optional[ExternalScheduleWriter] = None,
-        connector_service: Optional[ConnectorService] = None,
-        connector_trigger_repository: Optional[ConnectorTriggerRepository] = None,
+        target_resolver: ScheduleTargetResolver | None = None,
         authorization_service: object | None = None,
     ):
         self.uow = uow
-        self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(uow=uow)
-        self.scheduler_service = scheduler_service or SchedulerAPIClient()
-        self.external_schedule_writer = (
-            external_schedule_writer
-            or ExternalScheduleWriterAdapter(
-                uow=uow,
-                connector_service=connector_service,
-                connector_trigger_repository=connector_trigger_repository,
-            )
+        self.schedule_repository = schedule_repository or ScheduleRepositoryImpl(
+            uow=uow
         )
+        self.scheduler_service = scheduler_service or SchedulerAPIClient()
+        if external_schedule_writer is None:
+            from app.composition.schedule_connectors import (
+                ExternalScheduleWriterAdapter,
+            )
+
+            external_schedule_writer = ExternalScheduleWriterAdapter(uow=uow)
+        self.external_schedule_writer = external_schedule_writer
         self.authorization_service = authorization_service
+        self.run_repository = ScheduleRunRepository(uow)
+        if target_resolver is None:
+            from app.composition.schedule_targets import (
+                SqlAlchemyScheduleTargetResolver,
+            )
+
+            target_resolver = SqlAlchemyScheduleTargetResolver(uow)
+        self.target_resolver = target_resolver
+
+    async def list_schedule_runs(
+        self,
+        *,
+        pod_id: UUID,
+        schedule_id: UUID,
+        ctx: Context,
+        limit: int,
+    ):
+        schedule = await self.get_schedule(schedule_id, ctx=ctx)
+        if schedule is None or schedule.pod_id != pod_id:
+            return None
+        await ctx.require(
+            Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id)
+        )
+        return await self.run_repository.list_for_schedule(schedule_id, limit=limit)
+
+    async def retry_schedule_run(
+        self,
+        *,
+        pod_id: UUID,
+        schedule_id: UUID,
+        run_id: UUID,
+        ctx: Context,
+    ):
+        schedule = await self.get_schedule(schedule_id, ctx=ctx)
+        if schedule is None or schedule.pod_id != pod_id:
+            return None
+        await ctx.require(
+            Permissions.SCHEDULE_UPDATE, ResourceRef.schedule(pod_id, schedule_id)
+        )
+        schedule_run = await self.run_repository.reset_for_retry(
+            schedule_id=schedule_id, run_id=run_id
+        )
+        if schedule_run is None:
+            return None
+        self.uow.collect_events(
+            [
+                ScheduleFired(
+                    schedule_id=schedule.id,
+                    user_id=schedule.user_id,
+                    schedule_type=schedule.schedule_type,
+                    pod_id=schedule.pod_id,
+                    account_id=schedule.account_id,
+                    payload=schedule_run.payload,
+                    metadata=schedule_run.metadata,
+                    llm_output=schedule_run.llm_output,
+                    scheduled_at=schedule_run.source_occurred_at,
+                    source_event_id=schedule_run.source_event_id,
+                    causation_id=schedule_run.id,
+                )
+            ]
+        )
+        return schedule_run
 
     async def create_schedule(
         self,
@@ -77,7 +143,9 @@ class ScheduleService:
         )
         schedule_create = await self._resolve_create_target(schedule_create)
         schedule_create = schedule_create.model_copy(
-            update={"visibility": await self._resolve_create_visibility(schedule_create)}
+            update={
+                "visibility": await self._resolve_create_visibility(schedule_create)
+            }
         )
         await self._validate_name_available(schedule_create)
         await self._validate_target(schedule_create)
@@ -103,7 +171,10 @@ class ScheduleService:
                     if updated:
                         created = updated
             except Exception as exc:
-                logger.error("Failed to create external schedule: %s", exc)
+                logger.debug(
+                    'schedule.schedule_service.create_external_schedule_s.propagated',
+                exc_info=True,
+            )
                 await self.schedule_repository.delete(created.id)
                 raise ScheduleValidationError(
                     f"Failed to create external schedule: {exc}"
@@ -152,27 +223,15 @@ class ScheduleService:
 
     def _derive_webhook_schedule_from_workflow_start(
         self,
-        workflow,
+        workflow: ScheduleTarget,
         *,
         config: dict,
         requested_connector_trigger_id: str | None,
     ) -> dict:
-        from app.modules.workflow.domain.start import (
-            EventFlowStart,
-            FlowStartType,
-        )
-
-        start = getattr(workflow, "start", None)
-        if start is None or start.type != FlowStartType.EVENT:
+        if workflow.event_trigger_id is None:
             raise ScheduleValidationError(
                 "Webhook workflow schedules require an EVENT workflow start"
             )
-        if not isinstance(start.config, EventFlowStart):
-            raise ScheduleValidationError(
-                "Webhook workflow schedules require event start configuration"
-            )
-
-        event_config = start.config
         if requested_connector_trigger_id:
             raise ScheduleValidationError(
                 "connector_trigger_id is only valid for agent webhook schedules; "
@@ -180,7 +239,7 @@ class ScheduleService:
             )
 
         config = dict(config or {})
-        trigger_config = dict(event_config.trigger_config or {})
+        trigger_config = dict(workflow.event_trigger_config or {})
         conflicting_keys = sorted(
             key
             for key, value in trigger_config.items()
@@ -194,7 +253,7 @@ class ScheduleService:
         config.update(trigger_config)
 
         update_data: dict = {
-            "connector_trigger_id": event_config.connector_trigger_id,
+            "connector_trigger_id": workflow.event_trigger_id,
             "config": config,
         }
         return update_data
@@ -205,10 +264,7 @@ class ScheduleService:
         schedule_update: ScheduleUpdateEntity,
     ) -> dict:
         update_data = schedule_update.model_dump(exclude_none=True)
-        if (
-            existing.schedule_type == ScheduleType.DATASTORE
-            and "config" in update_data
-        ):
+        if existing.schedule_type == ScheduleType.DATASTORE and "config" in update_data:
             try:
                 update_data["config"] = normalize_datastore_schedule_config(
                     update_data["config"]
@@ -284,33 +340,22 @@ class ScheduleService:
     ) -> bool:
         if schedule_create.workflow_id is None:
             return False
-        from app.modules.workflow.domain.flow import WorkflowMode
-        from app.modules.workflow.infrastructure.repositories import (
-            SqlAlchemyFlowRepository,
-        )
-
-        flow = await SqlAlchemyFlowRepository(self.uow).get(schedule_create.workflow_id)
-        return flow is not None and flow.mode == WorkflowMode.GLOBAL
+        workflow = await self.target_resolver.get_workflow(schedule_create.workflow_id)
+        return workflow is not None and workflow.is_global_workflow
 
     async def _get_workflow_by_name(self, *, pod_id: UUID, workflow_name: str):
-        from app.modules.workflow.infrastructure.repositories import (
-            SqlAlchemyFlowRepository,
+        workflow = await self.target_resolver.get_workflow_by_name(
+            pod_id,
+            normalize_resource_name(workflow_name),
         )
-
-        flow_repo = SqlAlchemyFlowRepository(self.uow)
-        flow = await flow_repo.get_by_name(
-            pod_id, normalize_resource_name(workflow_name)
-        )
-        if flow is None:
+        if workflow is None:
             raise ScheduleValidationError("Workflow target not found in pod")
-        return flow
+        return workflow
 
     async def _get_agent_by_name(self, *, pod_id: UUID, agent_name: str):
-        from app.modules.agent.infrastructure.repositories import AgentRepository
-
-        agent = await AgentRepository(self.uow).get_by_pod_and_name(
-            pod_id=pod_id,
-            name=agent_name.strip(),
+        agent = await self.target_resolver.get_agent_by_name(
+            pod_id,
+            agent_name.strip(),
         )
         if agent is None:
             raise ScheduleValidationError("Agent target not found in pod")
@@ -331,17 +376,10 @@ class ScheduleService:
             raise ScheduleValidationError("pod_id is required for target schedules")
 
         if schedule_create.workflow_id is not None:
-            from app.modules.workflow.domain.flow import WorkflowMode
-            from app.modules.workflow.infrastructure.repositories import (
-                SqlAlchemyFlowRepository,
-            )
-
-            flow = await SqlAlchemyFlowRepository(self.uow).get(
-                schedule_create.workflow_id
-            )
+            flow = await self.target_resolver.get_workflow(schedule_create.workflow_id)
             if flow is None or flow.pod_id != schedule_create.pod_id:
                 raise ScheduleValidationError("Workflow target not found in pod")
-            if flow.mode == WorkflowMode.GLOBAL:
+            if flow.is_global_workflow:
                 existing = await self.schedule_repository.find_active_by_workflow(
                     pod_id=schedule_create.pod_id,
                     workflow_id=flow.id,
@@ -357,9 +395,7 @@ class ScheduleService:
                     )
 
         if schedule_create.agent_id is not None:
-            from app.modules.agent.infrastructure.repositories import AgentRepository
-
-            agent = await AgentRepository(self.uow).get(schedule_create.agent_id)
+            agent = await self.target_resolver.get_agent(schedule_create.agent_id)
             if agent is None or agent.pod_id != schedule_create.pod_id:
                 raise ScheduleValidationError("Agent target not found in pod")
 
@@ -379,7 +415,9 @@ class ScheduleService:
             or schedule_create.agent_name
             or schedule_create.schedule_type.value.lower()
         )
-        base = normalize_resource_name(f"{target_name}_{schedule_create.schedule_type.value.lower()}_schedule")
+        base = normalize_resource_name(
+            f"{target_name}_{schedule_create.schedule_type.value.lower()}_schedule"
+        )
         return f"{base}_{uuid4().hex[:8]}"
 
     async def _validate_name_available(
@@ -420,15 +458,10 @@ class ScheduleService:
             candidate = existing.model_copy(update=update_data)
             await self._require_target_execute(candidate, ctx=ctx)
         if "workflow_id" in update_data and update_data["workflow_id"] is not None:
-            from app.modules.workflow.domain.flow import WorkflowMode
-            from app.modules.workflow.infrastructure.repositories import (
-                SqlAlchemyFlowRepository,
-            )
-
-            workflow = await SqlAlchemyFlowRepository(self.uow).get(
+            workflow = await self.target_resolver.get_workflow(
                 update_data["workflow_id"]
             )
-            if workflow and workflow.mode == WorkflowMode.GLOBAL:
+            if workflow and workflow.is_global_workflow:
                 existing_for_workflow = (
                     await self.schedule_repository.find_active_by_workflow(
                         pod_id=existing.pod_id,
@@ -448,6 +481,12 @@ class ScheduleService:
                         "creating another."
                     )
         updated = await self.schedule_repository.update(schedule_id, **update_data)
+
+        if updated and update_data.get("is_active") is True:
+            # Reactivating a schedule clears its circuit-breaker failure streak so
+            # a re-enabled schedule starts fresh instead of tripping again on the
+            # next failure.
+            await self.schedule_repository.reset_consecutive_failures(schedule_id)
 
         if updated and updated.schedule_type == ScheduleType.TIME:
             if "config" in update_data or "is_active" in update_data:
@@ -478,8 +517,10 @@ class ScheduleService:
             except ScheduleInfrastructureError:
                 raise
             except Exception as exc:
-                logger.exception(
-                    "Failed to delete external schedule for %s", schedule_id
+                logger.debug(
+                    'schedule.schedule_service.delete_external_schedule_s.propagated',
+                    schedule_id=schedule_id,
+                    exc_info=True,
                 )
                 raise ScheduleInfrastructureError(
                     f"Failed to delete external schedule for {schedule_id}: {exc}"
@@ -502,17 +543,19 @@ class ScheduleService:
                 if await self.delete_schedule(schedule.id):
                     deleted += 1
             except Exception:
-                logger.exception(
-                    "Failed to delete schedule %s during pod %s cleanup",
-                    schedule.id,
-                    pod_id,
+                logger.debug(
+                    "schedule.cleanup.primary_failed",
+                    pod_id=pod_id,
+                    exc_info=True,
                 )
                 try:
                     if await self.schedule_repository.delete(schedule.id):
                         deleted += 1
                 except Exception:
-                    logger.exception(
-                        "Fallback delete failed for schedule %s", schedule.id
+                    logger.error(
+                        "schedule.cleanup.failed",
+                        pod_id=pod_id,
+                        exc_info=True,
                     )
         return deleted
 

@@ -10,9 +10,13 @@ from typing import Any
 import httpx
 from pydantic_ai.tools import RunContext
 
-from app.modules.agent.tools.context import ConversationContext
-from app.modules.agent_surfaces.domain.entities import ParsedInboundSurfaceEvent
+from app.modules.agent.contracts import ConversationContext
+from app.modules.agent_surfaces.domain.entities import (
+    ParsedInboundSurfaceEvent,
+    ParsedSurfaceInteraction,
+)
 from app.modules.agent_surfaces.domain.models import (
+    SurfaceApprovalRenderPlan,
     SurfaceDisplayRenderPlan,
     SurfaceQuestionRenderPlan,
     SurfaceSenderProfile,
@@ -25,13 +29,18 @@ from app.modules.agent_surfaces.domain.surface_event_metadata import (
 )
 from app.modules.agent_surfaces.platforms import common
 from app.modules.agent_surfaces.platforms.delivery import RetryPolicy, with_retry
-from app.modules.agent_surfaces.platforms.rendering import chunk_text, to_markdown_v2
+from app.modules.agent_surfaces.platforms.rendering import chunk_text
 from app.modules.agent_surfaces.platforms.telegram.client import (
     TELEGRAM_MESSAGE_LIMIT,
-    TelegramApiError,
     TelegramClient,
     classify_telegram_error,
     telegram_retry_after,
+)
+from app.modules.agent_surfaces.platforms.telegram.message_experience import (
+    acknowledge_interaction as acknowledge_telegram_interaction,
+    end_progress as end_telegram_progress,
+    send_chunk,
+    stream_progress as stream_telegram_progress,
 )
 from app.modules.agent_surfaces.platforms.telegram.models import (
     TelegramCurrentChatParams,
@@ -93,8 +102,10 @@ class TelegramPlatformService:
                 except Exception:
                     pass
                 return info
-        except Exception as exc:
-            logger.debug("getMe failed while resolving bot info: %s", exc)
+        except Exception:
+            logger.debug(
+                "agent_surfaces.service.getme_while_resolving_bot_info.observed"
+            )
         return None
 
     async def get_bot_username(self) -> str | None:
@@ -140,8 +151,22 @@ class TelegramPlatformService:
         thread_id = self._message_thread_id(event)
         reply_to = event.reply_target.get("message_id")
         reply_markup = (metadata or {}).get("reply_markup")
+        retry_action = (metadata or {}).get("retry_action") is True
+        if retry_action and not isinstance(reply_markup, dict):
+            retry_token = await put_callback_token(
+                {
+                    "action": "retry",
+                }
+            )
+            reply_markup = {
+                "inline_keyboard": [
+                    [{"text": "Try again", "callback_data": retry_token}]
+                ]
+            }
 
-        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [message or ""]
+        raw_chunks = chunk_text(message, limit=TELEGRAM_MESSAGE_LIMIT) or [
+            message or ""
+        ]
         for index, raw_chunk in enumerate(raw_chunks):
             payload: dict[str, Any] = {"chat_id": chat_id}
             if thread_id is not None:
@@ -206,32 +231,65 @@ class TelegramPlatformService:
             )
         return True
 
-    async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:
-        rendered = to_markdown_v2(raw_text)
-        use_markdown = len(rendered) <= TELEGRAM_MESSAGE_LIMIT
-        body = {**payload, "text": rendered if use_markdown else raw_text}
-        if use_markdown:
-            body["parse_mode"] = "MarkdownV2"
-        try:
-            await self._call_with_retry("sendMessage", body)
-        except TelegramApiError as exc:
-            if not (use_markdown and exc.is_parse_entities_error):
-                logger.warning(
-                    "Telegram sendMessage failed chat=%s: %s",
-                    payload.get("chat_id"),
-                    exc.description,
-                )
-                raise
-            logger.warning(
-                "Telegram MarkdownV2 parse failed chat=%s, retrying as plain text: %s",
-                payload.get("chat_id"),
-                exc.description,
-            )
-            plain_body = {k: v for k, v in payload.items()}
-            plain_body["text"] = raw_text
-            await self._call_with_retry("sendMessage", plain_body)
+    async def send_approval(
+        self,
+        event: ParsedInboundSurfaceEvent,
+        approval_plan: SurfaceApprovalRenderPlan,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Render a request_approval prompt as an inline keyboard.
 
-    async def _call_with_retry(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        One message with Approve/Deny (and optionally Approve-for-session)
+        buttons; each button's ``callback_data`` is a short token resolving to
+        ``{callback_id, decision}`` (Telegram caps callback_data at 64 bytes).
+        """
+        del metadata
+        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
+        if not chat_id:
+            return False
+        rows: list[list[dict[str, str]]] = []
+        for button in approval_plan.buttons:
+            token = await put_callback_token(
+                {
+                    "callback_id": approval_plan.callback_id,
+                    "decision": button.decision,
+                }
+            )
+            rows.append([{"text": button.label[:64], "callback_data": token}])
+        body_lines = [approval_plan.title]
+        if approval_plan.reason:
+            body_lines.append(approval_plan.reason)
+        if approval_plan.action_summary:
+            body_lines.append(f"Action: {approval_plan.action_summary}")
+        await self.send_message(
+            event,
+            "\n\n".join(body_lines),
+            metadata={"reply_markup": {"inline_keyboard": rows}},
+        )
+        return True
+
+    async def _send_chunk(self, payload: dict[str, Any], raw_text: str) -> None:
+        await send_chunk(self._call_with_retry, payload, raw_text)
+
+    async def acknowledge_interaction(
+        self,
+        interaction: ParsedSurfaceInteraction,
+        *,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        await acknowledge_telegram_interaction(
+            self._client,
+            interaction,
+            text=text,
+            show_alert=show_alert,
+            clear_actions=clear_actions,
+        )
+
+    async def _call_with_retry(
+        self, method: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
         return await with_retry(
             lambda: self._client.call(method, payload),
             policy=self._retry_policy,
@@ -248,7 +306,7 @@ class TelegramPlatformService:
             return None
         try:
             return int(raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     async def send_display_resource(
@@ -369,7 +427,9 @@ class TelegramPlatformService:
         try:
             await self._client.call("sendChatAction", payload)
         except Exception:
-            pass
+            logger.debug(
+                "agent_surfaces.service.telegram_typing_indicator_best_effort.observed"
+            )
 
     async def stream_progress(
         self,
@@ -377,48 +437,20 @@ class TelegramPlatformService:
         progress_text: str,
         progress_handle: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Send/edit a live progress message; return {"message_id": ...}."""
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        if not self._bot_token or not chat_id:
-            return progress_handle
-        text = f"⏳ {progress_text}"
-        message_id = (progress_handle or {}).get("message_id")
-        try:
-            if message_id:
-                await self._call_with_retry(
-                    "editMessageText",
-                    {"chat_id": chat_id, "message_id": message_id, "text": text},
-                )
-                return progress_handle
-            payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
-            thread_id = self._message_thread_id(event)
-            if thread_id is not None:
-                payload["message_thread_id"] = thread_id
-            result = await self._call_with_retry("sendMessage", payload)
-            new_id = ((result or {}).get("result") or {}).get("message_id")
-            return {"message_id": new_id} if new_id else progress_handle
-        except TelegramApiError as exc:
-            if exc.is_not_modified:
-                return progress_handle
-            raise
+        return await stream_telegram_progress(
+            self._call_with_retry,
+            event,
+            progress_text,
+            progress_handle,
+            bot_token=self._bot_token,
+        )
 
     async def end_progress(
         self,
         event: ParsedInboundSurfaceEvent,
         progress_handle: dict[str, Any] | None = None,
     ) -> None:
-        """Delete the streaming progress message (the final answer is sent
-        separately as its own message)."""
-        chat_id = event.reply_target.get("chat_id") or event.external_channel_id
-        message_id = (progress_handle or {}).get("message_id")
-        if not chat_id or not message_id:
-            return
-        try:
-            await self._client.call(
-                "deleteMessage", {"chat_id": chat_id, "message_id": message_id}
-            )
-        except Exception:
-            pass
+        await end_telegram_progress(self._client, event, progress_handle)
 
     async def download_attachment_bytes(
         self,
@@ -431,9 +463,7 @@ class TelegramPlatformService:
         the former ``download_file`` tool but takes a raw attachment dict.
         """
         del event
-        file_id = str(
-            attachment.get("file_id") or attachment.get("id") or ""
-        ).strip()
+        file_id = str(attachment.get("file_id") or attachment.get("id") or "").strip()
         if not self._bot_token or not file_id:
             return None
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -443,9 +473,7 @@ class TelegramPlatformService:
             )
             metadata_response.raise_for_status()
             file_path = str(
-                ((metadata_response.json() or {}).get("result") or {}).get(
-                    "file_path"
-                )
+                ((metadata_response.json() or {}).get("result") or {}).get("file_path")
                 or ""
             ).strip()
             if not file_path:

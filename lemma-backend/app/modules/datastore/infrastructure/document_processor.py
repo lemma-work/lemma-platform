@@ -49,12 +49,15 @@ class KreuzbergDocumentProcessor(PdfPageRenderingMixin):
 
     async def extract(
         self,
-        content: bytes,
+        content: bytes | None,
         filename: str,
         *,
         mime_type: str | None = None,
+        content_path: str | None = None,
     ) -> DocumentExtraction:
-        result = await self._client.process_file(content, filename, mime_type=mime_type)
+        result = await self._client.process_file(
+            content, filename, mime_type=mime_type, content_path=content_path
+        )
         images = self._build_images(result)
         pages = self._build_pages(result)
         markdown = self._build_markdown(result, images)

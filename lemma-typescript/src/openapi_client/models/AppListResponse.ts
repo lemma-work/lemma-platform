@@ -8,4 +8,3 @@ export type AppListResponse = {
     limit: number;
     next_page_token?: (string | null);
 };
-

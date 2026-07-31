@@ -38,7 +38,7 @@
         "Tables are where the pod keeps structured state. Columns are typed fields; rows are records that agents, flows, and people all read and update.",
         "Because access is controlled per row and per agent, an agent can work the Tickets table without ever seeing Payroll."
       ],
-      "example": "A Leads table with name, company, source, and status — agents append rows, your team works them from a app."
+      "example": "A Leads table with name, company, source, and status — agents append rows, your team works them from an app."
     },
     {
       "id": "surface",

@@ -1,0 +1,2 @@
+lemma-control /mnt/lemma-control virtiofs ro,nofail,x-systemd.device-timeout=2s 0 0
+tmpfs /tmp tmpfs rw,nosuid,nodev,noexec,mode=1777,size=512m 0 0

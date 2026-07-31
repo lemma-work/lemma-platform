@@ -69,3 +69,33 @@ class DocumentExtraction:
     @property
     def has_markdown(self) -> bool:
         return bool(self.markdown and self.markdown.strip())
+
+
+@dataclass(frozen=True, slots=True)
+class IndexingMetrics:
+    """Measured stages of one file's search-index update."""
+
+    chunk_count: int
+    schema_seconds: float
+    embedding_seconds: float
+    persistence_seconds: float
+
+    def as_metadata(self) -> dict[str, float]:
+        return {
+            "index_schema_seconds": round(self.schema_seconds, 6),
+            "embedding_seconds": round(self.embedding_seconds, 6),
+            "index_persistence_seconds": round(self.persistence_seconds, 6),
+        }
+
+
+def chunks_for_index(extraction: DocumentExtraction) -> list[dict]:
+    """Flatten processor chunks into the search adapter's input shape."""
+    chunks: list[dict] = []
+    for chunk in extraction.chunks:
+        metadata = dict(chunk.metadata or {})
+        if chunk.page_start is not None:
+            metadata["page_number"] = chunk.page_start
+        if chunk.page_end is not None:
+            metadata["page_end"] = chunk.page_end
+        chunks.append({"text": chunk.text, "metadata": metadata})
+    return chunks

@@ -16,4 +16,3 @@ export type PodRoleResponse = {
     permission_ids?: Array<string>;
     pod_id: string;
 };
-

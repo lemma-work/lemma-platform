@@ -9,4 +9,3 @@ export type WorkspaceMeSandbox = {
     status: string;
     updated_at?: (string | null);
 };
-

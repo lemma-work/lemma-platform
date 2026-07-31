@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 
 from app.modules.test_support.e2e import fixtures as e2e_fixtures
+from app.modules.test_support.e2e_base import verify_emailpassword_for_tests
 
 pytestmark = pytest.mark.e2e
 
@@ -45,6 +46,11 @@ async def signup_user(async_client: "AsyncClient"):
         }
 
         response = await async_client.post("/st/auth/signup", json=payload)
+        data = response.json()
+        assert response.status_code == 200 and data.get("status") == "OK", data
+
+        await verify_emailpassword_for_tests(data["user"]["id"], resolved_email)
+        response = await async_client.post("/st/auth/signin", json=payload)
         data = response.json()
         assert response.status_code == 200 and data.get("status") == "OK", data
 

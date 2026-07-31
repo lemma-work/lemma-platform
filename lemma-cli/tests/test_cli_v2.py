@@ -4,6 +4,7 @@ import json
 
 import pytest
 import typer
+from click import unstyle
 from types import SimpleNamespace
 
 from typer.testing import CliRunner
@@ -1845,6 +1846,95 @@ def test_connectors_account_create_forwards_credentials(monkeypatch):
     assert captured["credentials"] == {"bot_token": "token"}
 
 
+@pytest.mark.parametrize(
+    ("selector_args", "expected_selector"),
+    [
+        (["--auth-config", "telegram"], {"auth_config_name": "telegram"}),
+        (
+            ["--auth-config-id", "00000000-0000-0000-0000-000000000002"],
+            {"auth_config_id": "00000000-0000-0000-0000-000000000002"},
+        ),
+    ],
+)
+def test_connectors_account_create_modern_facade_preserves_selector(
+    monkeypatch, selector_args, expected_selector
+):
+    captured: dict[str, object] = {}
+
+    class FakeAccounts:
+        def create(self, auth_config, request):
+            captured["auth_config"] = auth_config
+            captured["request"] = request.to_dict()
+            return {"id": "account-1"}
+
+    fake_client = SimpleNamespace(
+        connectors=SimpleNamespace(accounts=FakeAccounts())
+    )
+
+    def fake_run_with_client(ctx, fn):
+        return fn(fake_client, SimpleNamespace(config={"_runtime": {"org": "org-1"}}))
+
+    monkeypatch.setattr(connectors, "run_with_client", fake_run_with_client)
+
+    result = runner.invoke(
+        app,
+        [
+            "--org",
+            "org-1",
+            "connectors",
+            "accounts",
+            "create",
+            *selector_args,
+            "--data",
+            json.dumps({"bot_token": "token"}),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    request = captured["request"]
+    assert isinstance(request, dict)
+    for key, value in expected_selector.items():
+        assert request[key] == value
+    other_key = (
+        "auth_config_id"
+        if "auth_config_name" in expected_selector
+        else "auth_config_name"
+    )
+    assert other_key not in request
+
+
+@pytest.mark.parametrize(
+    "selector_args",
+    [
+        [],
+        [
+            "--auth-config",
+            "telegram",
+            "--auth-config-id",
+            "00000000-0000-0000-0000-000000000002",
+        ],
+    ],
+)
+def test_connectors_account_create_requires_exactly_one_selector(selector_args):
+    result = runner.invoke(
+        app,
+        [
+            "--org",
+            "org-1",
+            "connectors",
+            "accounts",
+            "create",
+            *selector_args,
+            "--data",
+            json.dumps({"bot_token": "token"}),
+        ],
+        terminal_width=200,
+    )
+
+    assert result.exit_code != 0
+    assert "Use exactly one: --auth-config or --auth-config-id" in unstyle(result.output)
+
+
 def test_connectors_triggers_list_passes_auth_config(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -2639,7 +2729,7 @@ def test_confirm_destructive_yes_skips_prompt():
     confirm_destructive("Delete thing?", True)
 
 
-def test_runtime_profiles_list_and_harnesses(monkeypatch):
+def test_runtime_profiles_list_and_agent_host_create(monkeypatch):
     from lemma_cli.cli_core.commands import runtime as runtime_cmd
 
     captured: dict[str, object] = {}
@@ -2653,12 +2743,7 @@ def test_runtime_profiles_list_and_harnesses(monkeypatch):
             captured["create"] = payload
             return {"id": "profile-1", **payload}
 
-    class FakeRuntime:
-        def harnesses(self):
-            captured["harnesses"] = True
-            return {"items": [{"harness_kind": "CODEX", "available": True}]}
-
-    fake_client = SimpleNamespace(runtime=FakeRuntime(), org_runtime=FakeOrgRuntime())
+    fake_client = SimpleNamespace(org_runtime=FakeOrgRuntime())
 
     def fake_run_with_client(ctx, fn):
         return fn(fake_client, SimpleNamespace(config={}, output="json"))
@@ -2669,10 +2754,6 @@ def test_runtime_profiles_list_and_harnesses(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert captured.get("profiles") is True
 
-    result = runner.invoke(app, ["--json", "runtime", "harnesses"])
-    assert result.exit_code == 0, result.stdout
-    assert captured.get("harnesses") is True
-
     result = runner.invoke(
         app,
         [
@@ -2680,23 +2761,20 @@ def test_runtime_profiles_list_and_harnesses(monkeypatch):
             "runtime",
             "profiles",
             "create",
-            "user_daemon",
+            "agent_host",
             "--name",
             "Codex on laptop",
-            "--daemon-id",
-            "daemon-1",
-            "--harness",
-            "codex",
+            "--harness-id",
+            "0199aa11-2233-7444-8555-666677778888",
             "--default-model",
             "gpt-5.5",
         ],
     )
     assert result.exit_code == 0, result.stdout
     assert captured["create"] == {
-        "source": "USER_DAEMON",
+        "source": "AGENT_HOST",
         "name": "Codex on laptop",
-        "daemon_id": "daemon-1",
-        "harness_kind": "CODEX",
+        "harness_id": "0199aa11-2233-7444-8555-666677778888",
         "default_model_name": "gpt-5.5",
     }
 

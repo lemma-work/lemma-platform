@@ -14,8 +14,7 @@ from app.core.authorization.context import ResourceType
 from app.core.authorization.models import ResourcePermissionGrantModel
 from app.core.authorization.resource_names import resolve_resource_names_by_ids
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
-from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.pod.infrastructure.models.pod_models import Pod
+from app.composition.agent_context_models import Pod, User
 
 
 class AgentContextBriefRepository:

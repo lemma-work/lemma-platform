@@ -10,18 +10,21 @@ from app.core.authorization.dependencies import reject_delegated_workload
 from app.modules.connectors.api.dependencies import ConnectorServiceDep
 from app.modules.connectors.api.schemas import (
     AccountCreateSchema,
-    AccountCredentialsResponseSchema,
     AccountListResponseSchema,
     AccountResponseSchema,
-    CredentialTypes,
     MessageResponseSchema,
-    OauthCredentialsResponseSchema,
 )
 
 router = APIRouter(
     prefix="/organizations/{organization_id}/connectors/accounts",
     tags=["Connectors"],
 )
+
+
+async def _account_response(connector_service, account) -> AccountResponseSchema:
+    response = AccountResponseSchema.model_validate(account)
+    response.provider = await connector_service.get_account_provider(account)
+    return response
 
 
 @router.get(
@@ -50,7 +53,9 @@ async def list_accounts(
     )
 
     return AccountListResponseSchema(
-        items=[AccountResponseSchema.model_validate(account) for account in accounts],
+        items=[
+            await _account_response(connector_service, account) for account in accounts
+        ],
         limit=limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
@@ -82,7 +87,7 @@ async def create_account(
         preferences=payload.preferences,
         allowed_scopes=payload.allowed_scopes,
     )
-    return AccountResponseSchema.model_validate(account)
+    return await _account_response(connector_service, account)
 
 
 @router.get(
@@ -99,37 +104,7 @@ async def get_account(
     connector_service: ConnectorServiceDep,
 ) -> AccountResponseSchema:
     account = await connector_service.get_account(account_id, user.id, organization_id)
-    return AccountResponseSchema.model_validate(account)
-
-
-@router.get(
-    "/{account_id}/credentials",
-    response_model=AccountCredentialsResponseSchema,
-    operation_id="connector.account.credentials.get",
-    summary="Get Credentials",
-    description="Get the credentials for a specific account",
-)
-async def get_credentials(
-    user: CurrentUser,
-    organization_id: UUID,
-    account_id: UUID,
-    connector_service: ConnectorServiceDep,
-) -> AccountCredentialsResponseSchema:
-    credentials = await connector_service.get_account_credentials(
-        account_id, user.id, organization_id
-    )
-
-    return AccountCredentialsResponseSchema(
-        type=CredentialTypes.OAUTH2,
-        data=OauthCredentialsResponseSchema(
-            access_token=credentials.access_token,
-            expires_at=credentials.expires_at
-            if hasattr(credentials, "expires_at")
-            else None,
-            connection_id=getattr(credentials, "connection_id", None),
-        ),
-        user_data=credentials.user_data if hasattr(credentials, "user_data") else None,
-    )
+    return await _account_response(connector_service, account)
 
 
 @router.delete(

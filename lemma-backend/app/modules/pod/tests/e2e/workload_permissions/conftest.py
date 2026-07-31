@@ -33,9 +33,7 @@ def kreuzberg_url(tmp_path_factory, worker_id):
 async def index_datastore_file(db_manager, kreuzberg_url):
     from app.modules.datastore.config import datastore_settings
     from app.modules.datastore.infrastructure.models import DatastoreFile
-    from app.modules.datastore.services.file_processing_service import (
-        DatastoreFileProcessingService,
-    )
+    from app.modules.datastore.composition import get_datastore_composition
 
     datastore_settings.kreuzberg_url = kreuzberg_url
 
@@ -47,7 +45,7 @@ async def index_datastore_file(db_manager, kreuzberg_url):
             file_model = result.scalar_one()
             metadata = file_model.file_metadata or {}
 
-        service = DatastoreFileProcessingService(
+        service = get_datastore_composition().build_processing_service(
             pod_id,
             uow_factory=SessionUnitOfWorkFactory(db_manager.session_factory),
         )

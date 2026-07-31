@@ -93,8 +93,8 @@ class UsageSummary(BaseModel):
         self._add_bucket(self.total_by_model, record.model_name, record)
         usage_kind = (
             record.usage_kind.value
-            if hasattr(record.usage_kind, "value")
-            else str(record.usage_kind)
+            if isinstance(record.usage_kind, UsageKind)
+            else record.usage_kind
         )
         self._add_bucket(self.total_by_kind, usage_kind, record)
 
@@ -115,19 +115,45 @@ class UsageSummary(BaseModel):
                 "record_count": 0,
             },
         )
-        bucket["input_tokens"] = int(bucket["input_tokens"]) + record.input_tokens
-        bucket["output_tokens"] = int(bucket["output_tokens"]) + record.output_tokens
-        bucket["total_tokens"] = int(bucket["total_tokens"]) + record.total_tokens
-        bucket["units"] = float(bucket["units"]) + record.units
-        bucket["record_count"] = int(bucket["record_count"]) + 1
+        bucket["input_tokens"] = _as_int(bucket["input_tokens"]) + record.input_tokens
+        bucket["output_tokens"] = _as_int(bucket["output_tokens"]) + record.output_tokens
+        bucket["total_tokens"] = _as_int(bucket["total_tokens"]) + record.total_tokens
+        bucket["units"] = _as_float(bucket["units"]) + record.units
+        bucket["record_count"] = _as_int(bucket["record_count"]) + 1
         if record.cost_usd is not None:
-            bucket["system_cost_usd"] = float(bucket["system_cost_usd"]) + record.cost_usd
+            bucket["system_cost_usd"] = (
+                _as_float(bucket["system_cost_usd"]) + record.cost_usd
+            )
+
+
+def _as_int(value: object) -> int:
+    if isinstance(value, (int, float, str)):
+        return int(value)
+    raise TypeError("Usage summary bucket value is not numeric")
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    raise TypeError("Usage summary bucket value is not numeric")
 
 
 class UsageReservation(BaseModel):
-    """A reserved amount against one or more active limit windows."""
+    """A monetary reservation created by an injected limit policy."""
 
     organization_id: UUID | None = None
     user_id: UUID
     amount_usd: float
     counter_ids: list[UUID] = Field(default_factory=list)
+
+
+class UsageLimitCounterScope(BaseModel):
+    """One atomically locked limit window participating in admission."""
+
+    organization_id: UUID | None = None
+    user_id: UUID | None = None
+    window_kind: str
+    window_start: datetime
+    window_end: datetime
+    limit_usd: float = Field(ge=0)
+    initial_used_usd: float = Field(default=0.0, ge=0)

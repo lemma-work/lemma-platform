@@ -9,6 +9,7 @@ import time
 import pytest
 
 from app.core.config import settings
+from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.datastore.services.files import file_url as file_url_mod
 from app.modules.datastore.services.files.file_url import (
     InvalidFileUrlToken,
@@ -82,15 +83,16 @@ class _FakeStorage:
 
 
 @pytest.mark.asyncio
-async def test_build_object_url_uses_real_signed_url_on_gcs(monkeypatch):
-    """On the GCS backend the URL is the object store's own signed URL.
+@pytest.mark.parametrize("backend", ["gcs", "s3", "azure"])
+async def test_build_object_url_uses_native_cloud_signed_url(monkeypatch, backend):
+    """On cloud backends the URL is the object store's own signed URL.
 
     A live bucket isn't available in-sandbox, so we force the backend to ``gcs``
     and assert ``build_object_url`` delegates to ``storage.get_signed_url`` with
     the expiry converted to whole hours.
     """
     monkeypatch.setattr(file_url_mod, "_get_url_cache", lambda: None)
-    monkeypatch.setattr(settings, "storage_backend", "gcs")
+    monkeypatch.setattr(settings, "storage_backend", backend)
     storage = _FakeStorage()
 
     url, _expires_at = await build_object_url(storage, KEY, expires_seconds=7200)
@@ -111,3 +113,39 @@ async def test_build_object_url_local_serves_tokenized_backend_url(monkeypatch):
 
     assert "/public/datastore/files?token=" in url
     assert storage.calls == []  # local storage cannot sign; no delegation
+
+
+def test_file_url_cache_failure_is_logged_as_one_incident(monkeypatch):
+    class _Logger:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, str, dict]] = []
+
+        def warning(self, event: str, **fields) -> None:
+            self.records.append(("warning", event, fields))
+
+        def info(self, event: str, **fields) -> None:
+            self.records.append(("info", event, fields))
+
+    class _UnavailableCache:
+        def __init__(self, *args, **kwargs) -> None:
+            raise ConnectionError("redis unavailable")
+
+    logger = _Logger()
+    monkeypatch.setattr(file_url_mod, "_url_cache", None)
+    monkeypatch.setattr(file_url_mod, "RedisJsonCache", _UnavailableCache)
+    monkeypatch.setattr(
+        file_url_mod,
+        "_cache_incident",
+        DependencyIncident(
+            "datastore_file_url_cache",
+            logger=logger,  # type: ignore[arg-type]
+            degradation_threshold=1,
+        ),
+    )
+
+    assert file_url_mod._get_url_cache() is None
+    assert file_url_mod._get_url_cache() is None
+
+    assert [record[:2] for record in logger.records] == [
+        ("warning", "dependency.degraded")
+    ]

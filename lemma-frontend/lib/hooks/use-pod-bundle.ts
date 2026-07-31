@@ -27,11 +27,13 @@ export type ImportStatus =
     | 'APPLYING'
     | 'COMPLETED'
     | 'FAILED'
-    | 'CANCELLED';
+    | 'CANCELLED'
+    | 'PARTIALLY_CANCELLED';
 export type PublishStatus = 'QUEUED' | 'EXPORTING' | 'PUBLISHING' | 'COMPLETED' | 'FAILED';
 export type StepAction = 'CREATE' | 'UPDATE' | 'SKIP';
 export type StepStatus = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED' | 'SKIPPED';
 export type BundleSourceKind = 'URL' | 'GITHUB';
+export type PublishMode = 'CREATE' | 'UPDATE';
 
 export interface BundleProgress {
     done: number;
@@ -66,8 +68,12 @@ export interface VariableSpec {
     description: string | null;
     required: boolean;
     default: string | null;
-    /** For `account`-kind variables: the connector platform, e.g. "slack". */
-    platform?: string | null;
+    /** For `account`-kind variables: the connector, e.g. "slack". */
+    connector?: string | null;
+    /** For `account`-kind variables: the auth provider ("LEMMA" or "COMPOSIO")
+     * backing the connector, so the picker can select/create the right kind
+     * of account instead of any account for that connector. */
+    provider?: string | null;
 }
 
 export interface ImportPlan {
@@ -88,6 +94,9 @@ export interface ImportStatusResponse {
     progress: BundleProgress;
     events_url: string;
     error: string | null;
+    error_code: string | null;
+    retryable: boolean;
+    warnings: string[];
 }
 
 export interface UploadResponse {
@@ -100,14 +109,20 @@ export interface PublishStatusResponse {
     pod_id: string;
     status: PublishStatus;
     repo_name: string;
+    mode: PublishMode;
+    private: boolean;
+    account_id: string | null;
     repo_url: string | null;
     progress: BundleProgress;
     events_url: string;
     error: string | null;
+    error_code: string | null;
+    retryable: boolean;
+    warnings: string[];
 }
 
 const EXPORT_TERMINAL: ExportStatus[] = ['READY', 'FAILED'];
-const IMPORT_TERMINAL: ImportStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
+const IMPORT_TERMINAL: ImportStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED', 'PARTIALLY_CANCELLED'];
 const PUBLISH_TERMINAL: PublishStatus[] = ['COMPLETED', 'FAILED'];
 
 function client(podId: string) {
@@ -177,8 +192,9 @@ export async function cancelImport(podId: string, importId: string): Promise<voi
 
 export interface StartPublishBody {
     repo_name: string;
+    mode?: PublishMode;
     private?: boolean;
-    account_id?: string;
+    account_id: string;
     ai_readme?: boolean;
 }
 

@@ -8,4 +8,3 @@ export type PodRoleResourcePermissionRequest = {
     resource_name: string;
     resource_type: ResourceType;
 };
-

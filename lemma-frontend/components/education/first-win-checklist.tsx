@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { CheckCircle2, Circle, X } from 'lucide-react';
+import { CheckCircle2, Circle, X } from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
 import { getConcept } from '@/lib/education/concepts';

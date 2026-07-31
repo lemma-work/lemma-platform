@@ -25,7 +25,7 @@ from fastapi import status
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-pytestmark = [pytest.mark.e2e, pytest.mark.slow]
+pytestmark = pytest.mark.e2e
 
 
 def _pod_mcp_url(backend_server, pod_id: str) -> str:

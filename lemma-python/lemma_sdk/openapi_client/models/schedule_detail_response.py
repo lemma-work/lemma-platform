@@ -248,7 +248,7 @@ class ScheduleDetailResponse:
                 account_id_type_0 = UUID(data)
 
                 return account_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | UUID, data)
 
@@ -263,7 +263,7 @@ class ScheduleDetailResponse:
                 agent_id_type_0 = UUID(data)
 
                 return agent_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | UUID, data)
 
@@ -302,7 +302,7 @@ class ScheduleDetailResponse:
                 )
 
                 return filter_output_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | ScheduleDetailResponseFilterOutputSchemaType0, data)
 
@@ -332,7 +332,7 @@ class ScheduleDetailResponse:
                 pod_id_type_0 = UUID(data)
 
                 return pod_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | UUID, data)
 
@@ -355,7 +355,7 @@ class ScheduleDetailResponse:
                 workflow_id_type_0 = UUID(data)
 
                 return workflow_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | UUID, data)
 
@@ -392,7 +392,7 @@ class ScheduleDetailResponse:
                 last_fire_status_type_0 = ScheduleFireStatus(data)
 
                 return last_fire_status_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | ScheduleFireStatus | Unset, data)
 
@@ -409,7 +409,7 @@ class ScheduleDetailResponse:
                 last_fired_at_type_0 = isoparse(data)
 
                 return last_fired_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 

@@ -44,7 +44,8 @@ class RunResumeService:
         )
         if wait is None:
             logger.debug(
-                "No active workflow wait for agent conversation %s", conversation_id
+                "workflow.run_resume_service.no_active_workflow_wait_agent.observed",
+                conversation_id=conversation_id,
             )
             return False
 
@@ -73,7 +74,10 @@ class RunResumeService:
             WorkflowRunWaitType.FUNCTION, function_run_id
         )
         if wait is None:
-            logger.debug("No active workflow wait for function run %s", function_run_id)
+            logger.debug(
+                "workflow.run_resume_service.no_active_workflow_wait_function.observed",
+                function_run_id=function_run_id,
+            )
             return False
 
         if output is None:
@@ -107,16 +111,22 @@ class RunResumeService:
             reset_current_context(ctx_token)
 
     async def reconcile_stale_waits(self) -> int:
-        """Self-heal runs whose completion events were lost.
+        """Self-heal runs whose completion/wake events were lost.
 
         For ACTIVE AGENT/FUNCTION waits older than RECONCILE_AFTER, ask the
         source of truth: finished work resumes the run, failed/vanished work
-        fails it, in-progress work is left alone. Returns the number of
-        waits acted on.
+        fails it, in-progress work is left alone. TIME waits are also swept —
+        there is no external source to poll (a timer just needs to fire), so a
+        past-due TIME wait whose scheduler wake was lost is fired here. Returns
+        the number of waits acted on.
         """
         cutoff = datetime.now(timezone.utc) - RECONCILE_AFTER
         waits = await self._engine.wait_repo.list_active_older_than(
-            wait_types=[WorkflowRunWaitType.AGENT, WorkflowRunWaitType.FUNCTION],
+            wait_types=[
+                WorkflowRunWaitType.AGENT,
+                WorkflowRunWaitType.FUNCTION,
+                WorkflowRunWaitType.TIME,
+            ],
             created_before=cutoff,
             limit=RECONCILE_BATCH,
         )
@@ -132,6 +142,8 @@ class RunResumeService:
                     handled = await self._apply_agent_status(
                         wait, wait.external_ref, status, reconciled=True
                     )
+                elif wait.wait_type == WorkflowRunWaitType.TIME:
+                    handled = await self._fire_time_wait_if_due(wait)
                 else:
                     status = await self._engine.function_adapter.get_run_status(
                         UUID(wait.external_ref)
@@ -140,13 +152,14 @@ class RunResumeService:
                 if handled:
                     acted += 1
             except Exception:
-                logger.exception(
+                logger.error(
                     "workflow.reconcile.failed",
                     wait_id=str(wait.id),
                     run_id=str(wait.run_id),
+                    exc_info=True,
                 )
         if acted:
-            logger.info("workflow.reconcile.recovered", count=acted)
+            logger.debug("workflow.reconcile.recovered", count=acted)
         return acted
 
     # -- internals ---------------------------------------------------------------
@@ -209,6 +222,47 @@ class RunResumeService:
             return True
         finally:
             reset_current_context(ctx_token)
+
+    async def _fire_time_wait_if_due(self, wait: WorkflowRunWaitEntity) -> bool:
+        """Fire a TIME wait whose scheduler wake was lost, once it is past due.
+
+        Unlike AGENT/FUNCTION waits there is no external system to poll — a timer
+        just needs to elapse. We only fire once ``scheduled_at`` has passed so a
+        wait legitimately scheduled far in the future is left alone; resume is a
+        no-op if the wait already completed (a duplicate with the primary wake).
+        """
+        scheduled_at_raw = (wait.payload or {}).get("scheduled_at")
+        if not scheduled_at_raw:
+            return False
+        try:
+            scheduled_at = datetime.fromisoformat(scheduled_at_raw)
+        except TypeError, ValueError:
+            logger.warning(
+                "workflow.reconcile.time_wait_bad_scheduled_at", wait_id=str(wait.id)
+            )
+            return False
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+        if scheduled_at > datetime.now(timezone.utc):
+            return False  # not due yet
+
+        logger.warning(
+            "workflow.reconcile.firing_lost_timer",
+            run_id=str(wait.run_id),
+            wait_id=str(wait.id),
+        )
+        ctx = await self._run_context_for_wait(wait)
+        ctx_token = set_current_context(ctx)
+        try:
+            await self._engine.resume_internal(
+                WorkflowRunWaitType.TIME,
+                wait.external_ref,
+                {"payload": {}, "metadata": {}, "llm_output": {}},
+                ctx=ctx,
+            )
+        finally:
+            reset_current_context(ctx_token)
+        return True
 
     async def _apply_function_status(
         self, wait: WorkflowRunWaitEntity, status: dict

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -150,9 +151,7 @@ async def _reseed_google_calendar_catalog(db_session) -> None:
             ConnectorOperation.connector_id == "google_calendar"
         )
     )
-    await db_session.execute(
-        delete(Connector).where(Connector.id == "google_calendar")
-    )
+    await db_session.execute(delete(Connector).where(Connector.id == "google_calendar"))
     await db_session.commit()
 
     uow = SqlAlchemyUnitOfWork(db_session)
@@ -342,9 +341,7 @@ async def test_connector_operations_use_connected_user_account(
         assert detail_batch["returned_count"] == 1
         assert detail_batch["items"][0]["name"] == "test_op"
 
-        response = await authenticated_client.get(
-            f"{operations_url}/TEST_OP"
-        )
+        response = await authenticated_client.get(f"{operations_url}/TEST_OP")
         assert response.status_code == 200, response.text
         details = response.json()
         assert details["name"] == "test_op"
@@ -362,9 +359,7 @@ async def test_connector_operations_use_connected_user_account(
         assert result["result"] == "Processed bar"
 
         assert _mock_get_exec.called
-        assert _mock_get_exec.call_args.args[1] == {
-            "api_key": "secret"
-        }
+        assert _mock_get_exec.call_args.args[1] == {"api_key": "secret"}
 
 
 @pytest.mark.asyncio
@@ -398,9 +393,7 @@ async def test_connector_operation_discovery_uses_name_and_description_only(
     )
 
     await db_session.execute(
-        delete(ConnectorOperation).where(
-            ConnectorOperation.connector_id == app_id
-        )
+        delete(ConnectorOperation).where(ConnectorOperation.connector_id == app_id)
     )
     db_session.add_all(
         [
@@ -483,9 +476,7 @@ async def test_connector_operation_lookup_is_case_insensitive(
     )
 
     await db_session.execute(
-        delete(ConnectorOperation).where(
-            ConnectorOperation.connector_id == app_id
-        )
+        delete(ConnectorOperation).where(ConnectorOperation.connector_id == app_id)
     )
     db_session.add(
         ConnectorOperation(
@@ -502,9 +493,7 @@ async def test_connector_operation_lookup_is_case_insensitive(
     )
     await db_session.commit()
 
-    response = await authenticated_client.get(
-        f"{operations_url}/excel_create_workbook"
-    )
+    response = await authenticated_client.get(f"{operations_url}/excel_create_workbook")
     assert response.status_code == 200, response.text
     assert response.json()["name"] == "EXCEL_CREATE_WORKBOOK"
 
@@ -669,15 +658,18 @@ async def test_connector_operation_returns_upstream_execution_error_details(
         )
 
     assert response.status_code == 401, response.text
-    assert response.json() == {
-        "message": "API call failed with status code 200: {'ok': False, 'error': 'not_authed'}",
-        "code": "OPERATION_EXECUTION_UNAUTHORIZED",
-        "details": {
-            "ok": False,
-            "error": "not_authed",
-            "upstream_message": "API call failed with status code 200: {'ok': False, 'error': 'not_authed'}",
-        },
+    payload = response.json()
+    assert payload["message"] == "Connector account authorization failed."
+    assert payload["code"] == "OPERATION_EXECUTION_UNAUTHORIZED"
+    assert payload["request_id"]
+    assert payload["details"] == {
+        "error_type": "FakeProviderOperationError",
+        "upstream_status": 200,
+        "upstream_code": "not_authed",
     }
+    serialized = json.dumps(payload)
+    assert "API call failed" not in serialized
+    assert "{'ok': False" not in serialized
 
 
 @pytest.mark.asyncio
@@ -759,10 +751,10 @@ async def test_google_calendar_operation_uses_composio_account(
                 )
             ),
         ) as mock_get_credentials,
-        ):
-            response = await authenticated_client.post(
-                f"{operations_url}/LIST_EVENTS/execute",
-                json={
+    ):
+        response = await authenticated_client.post(
+            f"{operations_url}/LIST_EVENTS/execute",
+            json={
                 "payload": {"calendar_id": "primary"},
                 "account_id": str(account_id),
             },
@@ -771,9 +763,9 @@ async def test_google_calendar_operation_uses_composio_account(
     assert response.status_code == 200, response.text
     assert response.json()["result"] == {"items": []}
     mock_execute.assert_awaited_once()
-    assert mock_execute.call_args.kwargs["third_party_credentials"]["connection_id"] == (
-        "ca_nsKQ2C1X4Q4A"
-    )
+    assert mock_execute.call_args.kwargs["third_party_credentials"][
+        "connection_id"
+    ] == ("ca_nsKQ2C1X4Q4A")
     mock_get_credentials.assert_awaited_once()
 
 

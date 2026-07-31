@@ -8,4 +8,3 @@ export type FunctionPermissionsResponse = {
     function_name: string;
     grants?: Array<FunctionResourcePermissionResponse>;
 };
-

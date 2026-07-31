@@ -9,7 +9,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-from ..models.flow_run_status import FlowRunStatus
+from ..models.workflow_run_status import WorkflowRunStatus
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
@@ -31,10 +31,10 @@ class WorkflowRunResponse:
     WAITING form waits and RUNNING platform waits.
 
         Attributes:
-            flow_id (UUID):
             id (UUID):
             pod_id (UUID):
             user_id (UUID):
+            workflow_id (UUID):
             active_wait (None | Unset | WorkflowRunWaitResponse):
             completed_at (datetime.datetime | None | Unset):
             created_at (datetime.datetime | None | Unset):
@@ -45,7 +45,7 @@ class WorkflowRunResponse:
             schedule_event_id (None | str | Unset):
             start_type (str | Unset):  Default: 'MANUAL'.
             started_at (datetime.datetime | None | Unset):
-            status (FlowRunStatus | Unset): Status of a flow run.
+            status (WorkflowRunStatus | Unset): Status of a flow run.
 
                 PENDING exists only in memory before the first advance; persisted runs
                 are RUNNING, WAITING, or terminal. WAITING is reserved for human form
@@ -55,10 +55,10 @@ class WorkflowRunResponse:
             updated_at (datetime.datetime | None | Unset):
     """
 
-    flow_id: UUID
     id: UUID
     pod_id: UUID
     user_id: UUID
+    workflow_id: UUID
     active_wait: None | Unset | WorkflowRunWaitResponse = UNSET
     completed_at: datetime.datetime | None | Unset = UNSET
     created_at: datetime.datetime | None | Unset = UNSET
@@ -69,7 +69,7 @@ class WorkflowRunResponse:
     schedule_event_id: None | str | Unset = UNSET
     start_type: str | Unset = "MANUAL"
     started_at: datetime.datetime | None | Unset = UNSET
-    status: FlowRunStatus | Unset = UNSET
+    status: WorkflowRunStatus | Unset = UNSET
     step_history: list[StepRecordResponse] | Unset = UNSET
     updated_at: datetime.datetime | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -77,13 +77,13 @@ class WorkflowRunResponse:
     def to_dict(self) -> dict[str, Any]:
         from ..models.workflow_run_wait_response import WorkflowRunWaitResponse
 
-        flow_id = str(self.flow_id)
-
         id = str(self.id)
 
         pod_id = str(self.pod_id)
 
         user_id = str(self.user_id)
+
+        workflow_id = str(self.workflow_id)
 
         active_wait: dict[str, Any] | None | Unset
         if isinstance(self.active_wait, Unset):
@@ -170,10 +170,10 @@ class WorkflowRunResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "flow_id": flow_id,
                 "id": id,
                 "pod_id": pod_id,
                 "user_id": user_id,
+                "workflow_id": workflow_id,
             }
         )
         if active_wait is not UNSET:
@@ -214,13 +214,13 @@ class WorkflowRunResponse:
         from ..models.workflow_run_wait_response import WorkflowRunWaitResponse
 
         d = dict(src_dict)
-        flow_id = UUID(d.pop("flow_id"))
-
         id = UUID(d.pop("id"))
 
         pod_id = UUID(d.pop("pod_id"))
 
         user_id = UUID(d.pop("user_id"))
+
+        workflow_id = UUID(d.pop("workflow_id"))
 
         def _parse_active_wait(data: object) -> None | Unset | WorkflowRunWaitResponse:
             if data is None:
@@ -233,7 +233,7 @@ class WorkflowRunResponse:
                 active_wait_type_0 = WorkflowRunWaitResponse.from_dict(data)
 
                 return active_wait_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | WorkflowRunWaitResponse, data)
 
@@ -250,7 +250,7 @@ class WorkflowRunResponse:
                 completed_at_type_0 = isoparse(data)
 
                 return completed_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -267,7 +267,7 @@ class WorkflowRunResponse:
                 created_at_type_0 = isoparse(data)
 
                 return created_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -331,18 +331,18 @@ class WorkflowRunResponse:
                 started_at_type_0 = isoparse(data)
 
                 return started_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
         started_at = _parse_started_at(d.pop("started_at", UNSET))
 
         _status = d.pop("status", UNSET)
-        status: FlowRunStatus | Unset
+        status: WorkflowRunStatus | Unset
         if isinstance(_status, Unset):
             status = UNSET
         else:
-            status = FlowRunStatus(_status)
+            status = WorkflowRunStatus(_status)
 
         _step_history = d.pop("step_history", UNSET)
         step_history: list[StepRecordResponse] | Unset = UNSET
@@ -364,17 +364,17 @@ class WorkflowRunResponse:
                 updated_at_type_0 = isoparse(data)
 
                 return updated_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
         updated_at = _parse_updated_at(d.pop("updated_at", UNSET))
 
         workflow_run_response = cls(
-            flow_id=flow_id,
             id=id,
             pod_id=pod_id,
             user_id=user_id,
+            workflow_id=workflow_id,
             active_wait=active_wait,
             completed_at=completed_at,
             created_at=created_at,

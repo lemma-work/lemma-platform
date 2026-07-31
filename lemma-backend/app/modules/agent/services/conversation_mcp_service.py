@@ -137,14 +137,12 @@ class ConversationMCPService:
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):
                 raise
-            # Return the failure as an MCP tool error (isError) so the daemon's
+            # Return the failure as an MCP tool error (isError) so the harness's
             # model recovers and continues the turn, instead of the unknown-tool /
             # validation / execution exception surfacing as a protocol/HTTP error
             # that aborts the run.
-            logger.warning(
-                "Conversation MCP tool %r failed; returning isError result: %s",
-                tool_name,
-                exc,
+            logger.debug(
+                'agent.conversation_mcp_service.conversation_mcp_tool_r_returning.diagnostic',
                 exc_info=True,
             )
             return self._mcp_error_result(tool_name, exc)
@@ -205,9 +203,7 @@ class ConversationMCPService:
         payload = format_tool_error(name, exc)
         return CallToolResult(
             isError=True,
-            content=[
-                TextContent(type="text", text=json.dumps(payload, default=str))
-            ],
+            content=[TextContent(type="text", text=json.dumps(payload, default=str))],
             structuredContent=payload,
         )
 
@@ -228,14 +224,11 @@ def _surface_context_from_conversation(conversation: Conversation) -> JsonObject
     surface_metadata = None
     if isinstance(surface_metadata_payload, dict):
         try:
-            from app.modules.agent_surfaces.domain.surface_event_metadata import (
-                SurfaceEventMetadata,
+            from app.composition.agent_surface_runtime import (
+                parse_surface_event_metadata,
             )
-            from pydantic import TypeAdapter
 
-            surface_metadata = TypeAdapter(SurfaceEventMetadata).validate_python(
-                surface_metadata_payload
-            )
+            surface_metadata = parse_surface_event_metadata(surface_metadata_payload)
         except Exception:
             surface_metadata = surface_metadata_payload
     return {

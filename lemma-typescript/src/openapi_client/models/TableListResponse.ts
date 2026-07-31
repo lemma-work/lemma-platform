@@ -12,4 +12,3 @@ export type TableListResponse = {
     next_page_token?: (string | null);
     total?: (number | null);
 };
-

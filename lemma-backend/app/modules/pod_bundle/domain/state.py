@@ -1,16 +1,8 @@
-"""Ephemeral job-state documents for pod bundle operations.
+"""Job-state models for pod bundle operations.
 
-These pydantic models ARE the Redis JSON schema (see
-``docs/design/pod-bundle-share-import.md``). They are a UI/progress cache with
-a TTL, never a source of truth: losing one is always recoverable by
-re-uploading and re-planning, because the plan is a diff against the pod's
-current resources and apply steps are idempotent upserts.
-
-Write discipline: the API process writes the initial document (and a
-cancellation marker); after the job is enqueued the worker is the single
-writer — guaranteed by the streaq dedup job id — so read-modify-write needs no
-locking. Every write bumps ``seq`` (monotonic per document) so SSE consumers
-can order a replayed snapshot against live events.
+All import, export, and publish snapshots and checkpoints are authoritative in
+PostgreSQL and mirrored to Redis. Every accepted compare-and-swap write bumps
+``version`` and ``seq`` so workers and realtime clients can reject stale state.
 """
 
 from __future__ import annotations
@@ -33,9 +25,11 @@ class ImportStatus(str, Enum):
     PLANNING = "PLANNING"
     AWAITING_CONFIRMATION = "AWAITING_CONFIRMATION"
     APPLYING = "APPLYING"
+    CANCELLING = "CANCELLING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    PARTIALLY_CANCELLED = "PARTIALLY_CANCELLED"
 
 
 class ExportStatus(str, Enum):
@@ -53,8 +47,24 @@ class PublishStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class PublishMode(str, Enum):
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+
+
+class BundleJobKind(str, Enum):
+    IMPORT = "IMPORT"
+    EXPORT = "EXPORT"
+    PUBLISH = "PUBLISH"
+
+
 IMPORT_TERMINAL_STATUSES = frozenset(
-    {ImportStatus.COMPLETED, ImportStatus.FAILED, ImportStatus.CANCELLED}
+    {
+        ImportStatus.COMPLETED,
+        ImportStatus.FAILED,
+        ImportStatus.CANCELLED,
+        ImportStatus.PARTIALLY_CANCELLED,
+    }
 )
 
 
@@ -112,11 +122,15 @@ class VariableSpec(BaseModel):
     description: str | None = None
     required: bool = False
     default: str | None = None
-    # For ``kind="account"`` surfaced connectors: the connector platform the
-    # account must belong to (e.g. "slack", "telegram"), so the importer UI can
-    # prompt for — and connect — the right connector. None for accounts with no
-    # platform context (e.g. a schedule's account) or non-account variables.
-    platform: str | None = None
+    # For ``kind="account"`` variables: the connector the account must belong to
+    # (e.g. "slack", "jira") and the auth provider backing it ("LEMMA" or
+    # "COMPOSIO"), both resolved from the source account at export time — never
+    # inferred from a resource's own name — so the importer UI can prompt for
+    # and connect exactly the right connector/provider combination. Both are
+    # required for every ``kind="account"`` variable; None only for non-account
+    # variables.
+    connector: str | None = None
+    provider: str | None = None
 
 
 class ImportPlan(BaseModel):
@@ -171,10 +185,16 @@ class _BundleJobState(BaseModel):
     pod_id: UUID
     user_id: UUID
     error: str | None = None
+    error_type: str | None = None
+    error_code: str | None = None
+    retryable: bool = False
+    version: int = 0
+    attempt: int = 1
     seq: int = 0
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
     completed_at: datetime | None = None
+    heartbeat_at: datetime | None = None
 
     def touch(self) -> None:
         """Bump the write sequence and timestamp. Call exactly once per
@@ -186,12 +206,17 @@ class _BundleJobState(BaseModel):
 class ImportState(_BundleJobState):
     import_id: UUID
     source: BundleSource
+    account_id: UUID | None = None
     status: ImportStatus = ImportStatus.QUEUED
     staging_key: str | None = None
     plan: ImportPlan | None = None
     progress: Progress = Field(default_factory=Progress)
     variables_provided: dict[str, str] = Field(default_factory=dict)
     confirm_destructive: bool = False
+    cancel_requested_at: datetime | None = None
+    current_step: int | None = None
+    committed_steps: list[int] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:
@@ -234,14 +259,20 @@ class PublishState(_BundleJobState):
     publish_id: UUID
     status: PublishStatus = PublishStatus.QUEUED
     repo_name: str
+    mode: PublishMode = PublishMode.CREATE
     private: bool = False
     account_id: UUID | None = None
     ai_readme: bool = False
+    staging_key: str | None = None
     repo_url: str | None = None
     repo_created: bool = False
+    repo_owner: str | None = None
+    repo_slug: str | None = None
+    repo_branch: str | None = None
     readme: str | None = None
     files: list[PublishFileProgress] = Field(default_factory=list)
     progress: Progress = Field(default_factory=Progress)
+    warnings: list[str] = Field(default_factory=list)
 
     @property
     def is_terminal(self) -> bool:

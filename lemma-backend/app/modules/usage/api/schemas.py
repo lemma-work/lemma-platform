@@ -104,6 +104,7 @@ class UsageStatsResponse(BaseModel):
 
 class UsageLimitScopeResponse(BaseModel):
     limit_usd: float | None = None
+    scope: str
     used_usd: float
     reserved_usd: float
     remaining_usd: float | None = None
@@ -117,4 +118,5 @@ class UsageLimitsResponse(BaseModel):
     user_id: UUID
     org_monthly: UsageLimitScopeResponse
     user_weekly: UsageLimitScopeResponse
+    user_monthly: UsageLimitScopeResponse
     allowed: bool

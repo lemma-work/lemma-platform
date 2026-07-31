@@ -50,7 +50,7 @@ from app.modules.datastore.infrastructure.models.datastore_models import (
     DatastoreTable,
 )
 from app.modules.pod.infrastructure.models.pod_models import Pod
-from app.modules.workflow.infrastructure.models import FlowModel
+from app.modules.workflow.infrastructure.models import WorkflowModel
 
 # `slow`: this is a multi-volume latency *benchmark* (creates rows, runs EXPLAIN
 # ANALYZE, times list endpoints). It only asserts basic correctness (200s) and is
@@ -220,7 +220,7 @@ async def _seed(session: AsyncSession, rows: list[Any]) -> None:
 async def _seed_workflows(session, pod_id: UUID, user_id: UUID, n: int) -> None:
     nodes, edges, entry = _workflow_graph()
     rows = [
-        FlowModel(
+        WorkflowModel(
             id=uuid7(),
             pod_id=pod_id,
             user_id=user_id,
@@ -325,18 +325,18 @@ def _stmt_workflows(ctx, pod_id, limit):
     actions = allowed_actions_expr(
         ctx=ctx,
         resource_type=ResourceType.WORKFLOW,
-        resource_id_col=FlowModel.id,
-        pod_id_col=FlowModel.pod_id,
-        owner_user_id_col=FlowModel.user_id,
-        visibility_col=FlowModel.visibility,
+        resource_id_col=WorkflowModel.id,
+        pod_id_col=WorkflowModel.pod_id,
+        owner_user_id_col=WorkflowModel.user_id,
+        visibility_col=WorkflowModel.visibility,
     )
     return (
-        select(FlowModel, actions)
+        select(WorkflowModel, actions)
         .where(
-            FlowModel.pod_id == pod_id,
+            WorkflowModel.pod_id == pod_id,
             allowed_actions_contains(actions, Permissions.WORKFLOW_READ),
         )
-        .order_by(FlowModel.id.desc())
+        .order_by(WorkflowModel.id.desc())
         .limit(limit + 1)
     )
 

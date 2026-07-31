@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { AlertCircle, CheckCircle2, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, X } from '@/components/ui/icons';
 import { toast } from 'sonner';
 import { ApiError } from 'lemma-sdk';
 
@@ -201,7 +201,7 @@ export function ResourceArrivalNotice({
     );
 }
 
-function ConfettiBurst({ density = 'full' }: { density?: 'full' | 'small' }) {
+export function ConfettiBurst({ density = 'full' }: { density?: 'full' | 'small' }) {
     const count = density === 'small' ? 18 : 42;
 
     return (

@@ -76,6 +76,10 @@ class LemmaProviderCapability(BaseModel):
     supports_org_custom_oauth: bool = False
     system_default_available: bool = False
     package_name: str | None = None
+    # Catalog-curated operation names (tried in order) that fetch the
+    # connected account's own profile (email/name/workspace), so display_name
+    # resolution doesn't depend on the OAuth response alone.
+    profile_operation_names: list[str] | None = None
     # Execution model for package-free connectors (http/sql/mcp). None => vendored
     # package path or plain OAuth HTTP. Drives which executor + discoverer are used.
     kind: ConnectorKind | None = None
@@ -91,6 +95,7 @@ class ComposioProviderCapability(BaseModel):
     auth_config_schema: dict[str, Any] | None = None
     system_default_available: bool = True
     supports_org_custom_auth_config: bool = False
+    profile_operation_names: list[str] | None = None
 
 
 ProviderCapability = Annotated[

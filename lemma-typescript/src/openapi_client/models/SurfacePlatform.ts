@@ -9,4 +9,5 @@ export enum SurfacePlatform {
     TELEGRAM = 'TELEGRAM',
     GMAIL = 'GMAIL',
     OUTLOOK = 'OUTLOOK',
+    RESEND = 'RESEND',
 }

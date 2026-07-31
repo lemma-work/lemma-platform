@@ -112,6 +112,24 @@ class EnvelopeSecretCipher:
             raise ValueError("Encrypted JSON payload did not decode to an object")
         return decoded
 
+    # Async variants offload the crypto off the event loop — with a KMS-backed
+    # KeyProvider, encrypt/decrypt makes a blocking gRPC round-trip (wrap/unwrap
+    # DEK) that must not run on the loop. Callers on the worker loop (e.g. the
+    # connector credential repositories) use these instead of the sync methods.
+    async def encrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        from app.core.concurrency.offload import run_blocking
+
+        return await run_blocking(self.encrypt_json, value, limiter="crypto")
+
+    async def decrypt_json_async(
+        self, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        from app.core.concurrency.offload import run_blocking
+
+        return await run_blocking(self.decrypt_json, value, limiter="crypto")
+
     # ------------------------------------------------------------ string column
     def encrypt_str(self, value: str | None) -> str | None:
         if value is None or env.is_encrypted_str(value):

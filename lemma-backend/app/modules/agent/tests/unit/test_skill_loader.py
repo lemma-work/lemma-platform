@@ -174,6 +174,23 @@ async def test_pod_skill_loader_reads_skill_content_and_resources():
 
 
 @pytest.mark.asyncio
+async def test_system_widget_skill_exposes_versioned_starter_assets():
+    resources = await list_workspace_skill_resources("lemma-widget")
+
+    assert {item["path"] for item in resources} >= {
+        "assets/widget-starter-v1.html",
+        "assets/widget-list-v1.html",
+        "assets/widget-chart-v1.html",
+        "assets/widget-detail-v1.html",
+    }
+    starter = await read_workspace_skill_resource(
+        "lemma-widget", "assets/widget-starter-v1.html"
+    )
+    assert 'data-lemma-widget-version="1"' in starter
+    assert "window.__LEMMA_CONFIG__" in starter
+
+
+@pytest.mark.asyncio
 async def test_pod_skill_loader_passes_authz_context_for_datastore_service(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -243,3 +260,36 @@ async def test_load_skill_appends_local_workspace_override(
     assert "Run `lemma pods create demo`." in result.content
     assert "Local Lemma Workspace Override" in result.content
     assert "run CLI examples through `lemma_exec_command`" in result.content
+
+
+@pytest.mark.asyncio
+async def test_skill_download_releases_uow_before_storage_read():
+    order: list[str] = []
+
+    class _UoW:
+        async def commit(self):
+            order.append("commit")
+
+    class _TwoPhaseFileService:
+        file_repository = SimpleNamespace(uow=_UoW())
+
+        async def resolve_readable_file(self, pod_id, path, ctx):
+            del pod_id, path, ctx
+            order.append("resolve")
+            return object()
+
+        async def read_file_content(self, entity):
+            del entity
+            order.append("read")
+            return b"content"
+
+    content = await skill_loader._download_text_file(
+        _TwoPhaseFileService(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        path="/skills/example/SKILL.md",
+        ctx=object(),  # type: ignore[arg-type]
+    )
+
+    assert content == "content"
+    assert order == ["resolve", "commit", "read"]

@@ -75,17 +75,17 @@ def sync_detailed(
 
      Promote a conversation widget into a persisted app.
 
-    The widget and the app are the same artifact at two lifecycle stages: this
-    fetches the widget's stored HTML and deploys it as the app's bundle —
-    identical to what was shown.
+    The widget and the app share one source artifact at two lifecycle stages. This
+    fetches the stored fragment, preserves it, and deploys it in the standalone
+    document wrapper (without conversation-only padding or height messaging).
 
     Args:
         pod_id (UUID):
         body (CreateAppFromWidgetRequest): Promote a conversation widget into a persisted app.
 
-            The widget's stored HTML (addressed by conversation + tool call) is wrapped
-            into a standalone document and deployed as the app's bundle — the artifact
-            is identical to what the widget showed. See docs/app-widget-unification.md.
+            The widget's stored source fragment (addressed by conversation + tool call) is
+            preserved, wrapped into a standalone document without embed-only chrome, and
+            deployed as the app's bundle.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -117,17 +117,17 @@ def sync(
 
      Promote a conversation widget into a persisted app.
 
-    The widget and the app are the same artifact at two lifecycle stages: this
-    fetches the widget's stored HTML and deploys it as the app's bundle —
-    identical to what was shown.
+    The widget and the app share one source artifact at two lifecycle stages. This
+    fetches the stored fragment, preserves it, and deploys it in the standalone
+    document wrapper (without conversation-only padding or height messaging).
 
     Args:
         pod_id (UUID):
         body (CreateAppFromWidgetRequest): Promote a conversation widget into a persisted app.
 
-            The widget's stored HTML (addressed by conversation + tool call) is wrapped
-            into a standalone document and deployed as the app's bundle — the artifact
-            is identical to what the widget showed. See docs/app-widget-unification.md.
+            The widget's stored source fragment (addressed by conversation + tool call) is
+            preserved, wrapped into a standalone document without embed-only chrome, and
+            deployed as the app's bundle.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -154,17 +154,17 @@ async def asyncio_detailed(
 
      Promote a conversation widget into a persisted app.
 
-    The widget and the app are the same artifact at two lifecycle stages: this
-    fetches the widget's stored HTML and deploys it as the app's bundle —
-    identical to what was shown.
+    The widget and the app share one source artifact at two lifecycle stages. This
+    fetches the stored fragment, preserves it, and deploys it in the standalone
+    document wrapper (without conversation-only padding or height messaging).
 
     Args:
         pod_id (UUID):
         body (CreateAppFromWidgetRequest): Promote a conversation widget into a persisted app.
 
-            The widget's stored HTML (addressed by conversation + tool call) is wrapped
-            into a standalone document and deployed as the app's bundle — the artifact
-            is identical to what the widget showed. See docs/app-widget-unification.md.
+            The widget's stored source fragment (addressed by conversation + tool call) is
+            preserved, wrapped into a standalone document without embed-only chrome, and
+            deployed as the app's bundle.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -194,17 +194,17 @@ async def asyncio(
 
      Promote a conversation widget into a persisted app.
 
-    The widget and the app are the same artifact at two lifecycle stages: this
-    fetches the widget's stored HTML and deploys it as the app's bundle —
-    identical to what was shown.
+    The widget and the app share one source artifact at two lifecycle stages. This
+    fetches the stored fragment, preserves it, and deploys it in the standalone
+    document wrapper (without conversation-only padding or height messaging).
 
     Args:
         pod_id (UUID):
         body (CreateAppFromWidgetRequest): Promote a conversation widget into a persisted app.
 
-            The widget's stored HTML (addressed by conversation + tool call) is wrapped
-            into a standalone document and deployed as the app's bundle — the artifact
-            is identical to what the widget showed. See docs/app-widget-unification.md.
+            The widget's stored source fragment (addressed by conversation + tool call) is
+            preserved, wrapped into a standalone document without embed-only chrome, and
+            deployed as the app's bundle.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

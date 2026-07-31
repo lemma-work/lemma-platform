@@ -13,6 +13,7 @@ Skip Docker-based tests:
 
 from __future__ import annotations
 
+import functools
 import re
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # --- Version helpers ---------------------------------------------------------
+
 
 def _read_cli_version() -> str:
     init_file = REPO_ROOT / "lemma-cli" / "lemma_cli" / "__init__.py"
@@ -57,12 +59,21 @@ TS_VERSION = _read_ts_version()
 
 # --- Docker helpers ----------------------------------------------------------
 
+
+@functools.cache
 def docker_available() -> bool:
     if shutil.which("docker") is None:
         return False
-    result = subprocess.run(
-        ["docker", "info"], capture_output=True, text=True, check=False
-    )
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 
@@ -76,32 +87,35 @@ def run_in_container(
 ) -> subprocess.CompletedProcess:
     mount_mode = "" if writable else ":ro"
     cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{REPO_ROOT}:/repo{mount_mode}",
-        "-e", "DEBIAN_FRONTEND=noninteractive",
+        "docker",
+        "run",
+        "--rm",
+        "-v",
+        f"{REPO_ROOT}:/repo{mount_mode}",
+        "-e",
+        "DEBIAN_FRONTEND=noninteractive",
     ]
     if env:
         for key, val in env.items():
             cmd += ["-e", f"{key}={val}"]
     cmd += [image, "bash", "-c", script]
-    return subprocess.run(
-        cmd, capture_output=True, text=True, timeout=timeout, check=False
-    )
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
 
 
-# --- Linux CLI install (Docker: python:3.12-slim) ---------------------------
+# --- Linux CLI install (Docker: python:3.14-slim) ---------------------------
+
 
 @pytest.mark.install_experience
 @pytest.mark.skipif(not docker_available(), reason="Docker not available")
 def test_docker_linux_lemma_cli_install():
-    """Fresh install of lemma-cli in a python:3.12-slim container.
+    """Fresh install of lemma-cli in a python:3.14-slim container.
 
     Simulates a Python-savvy user who installs via ``uv tool install`` from a
     local checkout. Verifies ``lemma --version``, ``lemma --help``, and
     ``lemma doctor`` all work and report the correct version.
     """
     result = run_in_container(
-        "python:3.12-slim",
+        "python:3.14-slim",
         f"""
 set -e
 pip install --quiet uv
@@ -138,6 +152,7 @@ echo "ALL CHECKS PASSED"
 
 # --- Linux install.sh (Docker: ubuntu:24.04) --------------------------------
 
+
 @pytest.mark.install_experience
 @pytest.mark.skipif(not docker_available(), reason="Docker not available")
 def test_docker_linux_install_sh_lemma_stack():
@@ -150,7 +165,7 @@ def test_docker_linux_install_sh_lemma_stack():
     """
     result = run_in_container(
         "ubuntu:24.04",
-        f"""
+        """
 set -e
 apt-get update -qq && apt-get install -y -qq curl ca-certificates python3 2>&1 | tail -3
 
@@ -162,12 +177,12 @@ export PATH="$HOME/.local/bin:$PATH"
 # lemma-stack should be installed and responding
 STACK_VER=$(lemma-stack self version 2>&1)
 echo "$STACK_VER"
-echo "$STACK_VER" | grep -q "lemma-stack" || {{ echo "FAIL: lemma-stack not responding"; exit 1; }}
+echo "$STACK_VER" | grep -q "lemma-stack" || { echo "FAIL: lemma-stack not responding"; exit 1; }
 
 # lemma-stack doctor should run (expected: no runtime = fails, but no crash)
 # doctor exits 1 when checks fail; capture output without triggering set -e
 DOCTOR=$(lemma-stack doctor 2>&1 || true)
-echo "$DOCTOR" | grep -q "runtime:docker" || {{ echo "FAIL: doctor missing runtime check"; exit 1; }}
+echo "$DOCTOR" | grep -q "runtime:docker" || { echo "FAIL: doctor missing runtime check"; exit 1; }
 
 echo "ALL CHECKS PASSED"
 """,
@@ -181,17 +196,18 @@ echo "ALL CHECKS PASSED"
     assert "ALL CHECKS PASSED" in result.stdout
 
 
-# --- Linux lemma-stack direct install (Docker: python:3.12-slim) ------------
+# --- Linux lemma-stack direct install (Docker: python:3.14-slim) ------------
+
 
 @pytest.mark.install_experience
 @pytest.mark.skipif(not docker_available(), reason="Docker not available")
 def test_docker_linux_lemma_stack_install():
-    """Direct uv tool install of lemma-stack in python:3.12-slim.
+    """Direct uv tool install of lemma-stack in python:3.14-slim.
 
     Verifies lemma-stack installs cleanly and its CLI commands work.
     """
     result = run_in_container(
-        "python:3.12-slim",
+        "python:3.14-slim",
         """
 set -e
 pip install --quiet uv
@@ -222,6 +238,7 @@ echo "ALL CHECKS PASSED"
 
 # --- macOS native CLI smoke test --------------------------------------------
 
+
 @pytest.mark.install_experience
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS only")
 def test_macos_lemma_cli_smoke():
@@ -235,32 +252,27 @@ def test_macos_lemma_cli_smoke():
         pytest.skip("lemma CLI not installed on this host")
 
     # --version
-    result = subprocess.run(
-        [lemma_bin, "--version"], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run([lemma_bin, "--version"], capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"lemma --version failed:\n{result.stderr}"
     assert f"lemma {CLI_VERSION}" in result.stdout, (
         f"Expected 'lemma {CLI_VERSION}' in:\n{result.stdout}"
     )
 
     # --help
-    result = subprocess.run(
-        [lemma_bin, "--help"], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run([lemma_bin, "--help"], capture_output=True, text=True, check=False)
     assert result.returncode == 0, f"lemma --help failed:\n{result.stderr}"
     assert "Usage:" in result.stdout
     assert "auth" in result.stdout
 
     # doctor (may fail if no server, but shouldn't crash)
-    result = subprocess.run(
-        [lemma_bin, "doctor"], capture_output=True, text=True, check=False
-    )
+    result = subprocess.run([lemma_bin, "doctor"], capture_output=True, text=True, check=False)
     assert f"lemma {CLI_VERSION}" in result.stdout, (
         f"Doctor output missing version:\n{result.stdout}"
     )
 
 
 # --- Windows install.ps1 validation -----------------------------------------
+
 
 def test_install_ps1_structure():
     """Validate install.ps1 has the expected structure (no PowerShell needed).
@@ -277,6 +289,8 @@ def test_install_ps1_structure():
     assert "ErrorActionPreference" in content, "install.ps1 must set error handling"
     assert "Get-Command uv" in content, "install.ps1 must check for uv"
     assert "LEMMA_STACK_SOURCE" in content, "install.ps1 must support local checkout override"
+    assert "LEMMA_STACK_CLI_ONLY" in content, "install.ps1 must support managed CLI-only setup"
+    assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
 
 
 def test_install_sh_structure():
@@ -288,31 +302,35 @@ def test_install_sh_structure():
     assert "lemma-stack" in content, "install.sh must install lemma-stack"
     assert "lemma-stack install" in content, "install.sh must hand off to lemma-stack install"
     assert "LEMMA_STACK_SOURCE" in content, "install.sh must support local checkout override"
+    assert "--cli-only" in content, "install.sh must support managed CLI-only setup"
+    assert "self register-cli --use" in content, "CLI-only setup must register managed Desktop"
     assert "curl" in content, "install.sh must use curl to install uv"
+    assert "--retry-all-errors" in content, "uv download must retry transient failures"
+    assert "--output" in content, "uv installer must be downloaded before execution"
 
 
 # --- Version consistency ----------------------------------------------------
 
-def test_mono_version_consistency():
-    """Verify the mono-version is consistent across all packages."""
-    assert CLI_VERSION == SDK_VERSION, (
-        f"CLI version ({CLI_VERSION}) != SDK version ({SDK_VERSION})"
-    )
-    assert CLI_VERSION == TS_VERSION, (
-        f"CLI version ({CLI_VERSION}) != TS SDK version ({TS_VERSION})"
-    )
+
+def test_version_compatibility_line():
+    """Verify the CLI and SDKs share a major/minor compatibility line."""
+    versions = (CLI_VERSION, SDK_VERSION, TS_VERSION)
+    compatibility_lines = {tuple(version.split(".")[:2]) for version in versions}
+    assert len(compatibility_lines) == 1, versions
 
     # CLI pyproject dependency floor must be >= current version
     cli_pyproject = (REPO_ROOT / "lemma-cli" / "pyproject.toml").read_text()
-    match = re.search(r'lemma-sdk>=(\d+\.\d+\.\d+)', cli_pyproject)
+    match = re.search(r"lemma-sdk>=(\d+\.\d+\.\d+)", cli_pyproject)
     assert match, "lemma-cli pyproject must declare lemma-sdk dependency"
     floor = match.group(1)
     assert floor == CLI_VERSION, (
         f"lemma-sdk>={floor} in pyproject.toml != CLI version {CLI_VERSION}"
     )
+    assert tuple(map(int, floor.split("."))) <= tuple(map(int, SDK_VERSION.split(".")))
 
 
 # --- TS SDK version in browser bundle ---------------------------------------
+
 
 def test_ts_bundle_version_matches_source():
     """The committed browser bundle must embed the current SDK_VERSION."""
@@ -321,6 +339,6 @@ def test_ts_bundle_version_matches_source():
         pytest.skip("lemma-client.js bundle not found")
     content = bundle.read_text()
     assert f'SDK_VERSION = "{TS_VERSION}"' in content, (
-        f"Browser bundle does not contain SDK_VERSION = \"{TS_VERSION}\". "
+        f'Browser bundle does not contain SDK_VERSION = "{TS_VERSION}". '
         f"Run: cd lemma-typescript && npm run build:bundle"
     )

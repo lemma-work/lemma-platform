@@ -23,9 +23,6 @@ export class IconsService {
             url: '/icons/upload',
             formData: formData,
             mediaType: 'multipart/form-data',
-            errors: {
-                422: `Validation Error`,
-            },
         });
     }
     /**

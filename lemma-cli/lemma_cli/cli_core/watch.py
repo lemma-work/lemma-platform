@@ -26,7 +26,8 @@ _err = Console(stderr=True)
 
 _OP_STYLE = {"insert": "green", "update": "yellow", "delete": "red"}
 
-# Full-jitter exponential backoff, capped — mirrors the daemon reconnect policy.
+# Full-jitter exponential backoff, capped — mirrors the Agent Host reconnect
+# policy.
 _RECONNECT_BASE_DELAY_SECONDS = 0.5
 _RECONNECT_MAX_DELAY_SECONDS = 30.0
 

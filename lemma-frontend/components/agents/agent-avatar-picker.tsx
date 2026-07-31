@@ -1,6 +1,6 @@
 'use client';
 
-import { Bot } from 'lucide-react';
+import { Bot } from '@/components/ui/icons';
 import { AGENT_MASCOTS } from '@/lib/data/agent-mascots';
 import { ResourceIconUploader } from '@/components/shared/resource-icon-uploader';
 import { cn } from '@/lib/utils';

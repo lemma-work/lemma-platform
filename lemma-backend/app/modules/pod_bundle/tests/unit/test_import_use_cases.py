@@ -30,6 +30,9 @@ class FakeStore:
         state.touch()
         self.imports[state.import_id] = state
 
+    async def reopen_import(self, state: ImportState):
+        await self.save_import(state)
+
     async def get_import(self, import_id):
         return self.imports.get(import_id)
 
@@ -198,19 +201,22 @@ async def test_start_import_url_missing_url_rejected():
 
 async def test_start_import_github_enqueues():
     uc, store, _, queue = _use_cases()
-    pod_id, user_id = uuid4(), uuid4()
+    pod_id, user_id, account_id = uuid4(), uuid4(), uuid4()
     state = await uc.start_import(
         pod_id=pod_id,
         user_id=user_id,
         kind=BundleSourceKind.GITHUB,
         url="https://github.com/acme/crm",
         ref="main",
+        account_id=account_id,
     )
     assert state.status == ImportStatus.QUEUED
     assert state.source.kind == BundleSourceKind.GITHUB
     assert state.source.repo_url.endswith("acme/crm")
+    assert state.account_id == account_id
     call = next(c for c in queue.calls if c[0] == "import_pod_github")
     assert call[1]["owner"] == "acme" and call[1]["repo"] == "crm"
+    assert call[1]["account_id"] == str(account_id)
 
 
 async def test_start_import_github_bad_repo_rejected():
@@ -291,6 +297,27 @@ async def test_apply_enqueues_with_dedup_id():
     assert queue.calls[0][2] == import_apply_job_id(state.import_id)
 
 
+async def test_explicit_apply_reopens_failed_job_and_increments_attempt():
+    uc, store, _, _ = _use_cases()
+    pod_id, user_id = uuid4(), uuid4()
+    state = _awaiting_state(pod_id, user_id)
+    state.status = ImportStatus.FAILED
+    state.error = "Previous attempt failed."
+    state.completed_at = state.updated_at
+    await store.save_import(state)
+
+    result = await uc.apply_import(
+        pod_id=pod_id,
+        import_id=state.import_id,
+        user_id=user_id,
+    )
+
+    assert result.status is ImportStatus.APPLYING
+    assert result.attempt == 2
+    assert result.error is None
+    assert result.completed_at is None
+
+
 async def test_apply_wrong_status_conflicts():
     from app.modules.pod_bundle.domain.errors import BundleJobConflictError
 
@@ -346,26 +373,29 @@ async def test_apply_missing_required_variable():
         await uc.apply_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
 
 
-async def test_cancel_aborts_and_deletes():
-    uc, store, staging, queue = _use_cases()
+async def test_cancel_idle_import_persists_terminal_tombstone():
+    uc, store, staging, _ = _use_cases()
     pod_id, user_id = uuid4(), uuid4()
     state = _awaiting_state(pod_id, user_id)
     await store.save_import(state)
 
-    # FakeQueue has no abort; give it one that records calls.
-    aborted = []
-    queue.abort = lambda job_id, **kw: aborted.append(job_id) or True
+    deleted = []
 
-    async def _abort(job_id, **kw):
-        aborted.append(job_id)
-        return True
+    async def _delete(kind, import_id):
+        deleted.append((kind, import_id))
 
-    queue.abort = _abort
-    staging.delete_archive = _noop_delete = _make_async_noop()
+    staging.delete_archive = _delete
 
-    await uc.cancel_import(pod_id=pod_id, import_id=state.import_id, user_id=user_id)
-    assert await store.get_import(state.import_id) is None
-    assert len(aborted) == 2  # plan + apply dedup ids
+    result = await uc.cancel_import(
+        pod_id=pod_id, import_id=state.import_id, user_id=user_id
+    )
+    persisted = await store.get_import(state.import_id)
+    assert result.status == ImportStatus.CANCELLING
+    assert persisted is not None
+    assert persisted.status == ImportStatus.CANCELLED
+    assert persisted.cancel_requested_at is not None
+    assert persisted.completed_at is not None
+    assert deleted == [("pod-imports", state.import_id)]
 
 
 def _make_async_noop():
