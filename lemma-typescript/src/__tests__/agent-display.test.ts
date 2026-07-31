@@ -429,4 +429,23 @@ describe("normalizeAssistantMarkdown", () => {
   it("breaks a compact inline heading onto its own block", () => {
     expect(normalizeAssistantMarkdown("Done. ## Next steps")).toContain("\n\n");
   });
+
+  it("still turns a compact --- separator into a paragraph break", () => {
+    expect(normalizeAssistantMarkdown("Imported the pod. --- Then it ran.")).toBe("Imported the pod.\n\nThen it ran.");
+  });
+
+  it("leaves a spaced table delimiter row intact", () => {
+    const table = "## Next steps\n\n| Field | Type |\n| --- | --- |\n| id | int |";
+    expect(normalizeAssistantMarkdown(table)).toBe(table);
+  });
+
+  it("leaves an unspaced table delimiter row intact", () => {
+    const table = "## Next steps\n\n| Field | Type |\n|---|---|\n| id | int |";
+    expect(normalizeAssistantMarkdown(table)).toBe(table);
+  });
+
+  it("keeps aligned delimiter rows intact", () => {
+    const table = "| Field | Type |\n| :--- | ---: |\n| id | int |";
+    expect(normalizeAssistantMarkdown(table)).toBe(table);
+  });
 });
