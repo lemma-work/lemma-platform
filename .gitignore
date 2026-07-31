@@ -42,3 +42,8 @@ __pycache__/
 # Rust build outputs (desktop and local daemon)
 **/target/
 **/.build/
+
+# Local scratch output from screenshot/PDF tooling
+/out/
+/output/
+/tmp/
