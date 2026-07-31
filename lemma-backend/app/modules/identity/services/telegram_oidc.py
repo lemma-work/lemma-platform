@@ -13,7 +13,8 @@ from uuid import UUID
 import httpx
 import jwt
 from jwt.algorithms import RSAAlgorithm
-from redis.asyncio import Redis
+
+from app.core.infrastructure.redis.client import get_redis
 from redis.exceptions import RedisError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -84,10 +85,7 @@ def safe_return_to(value: str | None) -> str:
 
 class TelegramOIDCService:
     def __init__(self, redis_url: str | None = None):
-        self._redis = Redis.from_url(
-            redis_url or settings.redis_url,
-            decode_responses=True,
-        )
+        self._redis = get_redis(url=redis_url or settings.redis_url)
 
     @staticmethod
     def _transaction_key(state: str) -> str:
@@ -339,7 +337,10 @@ class TelegramOIDCService:
         await EventPublisher.publish(phone_changed.stream_name(), phone_changed)
 
     async def close(self) -> None:
-        await self._redis.aclose()
+        # The client is shared process-wide; closing it here would break
+        # every other component still using the same pool. Disposal is
+        # close_redis_clients()'s job at lifespan shutdown.
+        self._redis = None
 
 
 _service: TelegramOIDCService | None = None

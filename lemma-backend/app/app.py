@@ -29,6 +29,7 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     get_streaq_job_queue,
 )
 from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
+from app.core.infrastructure.redis.client import close_redis_clients
 from app.core.security import verify_auth
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
@@ -185,6 +186,7 @@ async def lifespan(app: FastAPI):
             await close_streaq_job_queue()
             await close_message_bus()
             await close_redis_json_caches()
+            await close_redis_clients()
             await close_engine()
             await channel_service.disconnect()
             from app.modules.datastore.infrastructure.session import (

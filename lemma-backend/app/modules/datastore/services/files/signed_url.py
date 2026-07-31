@@ -26,6 +26,8 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
+from app.core.infrastructure.redis.client import get_redis
+
 from app.core.config import settings
 from app.modules.datastore.config import datastore_settings
 from app.core.log.log import get_logger
@@ -82,7 +84,7 @@ class SignedUrlStore:
             return self._redis
         async with self._lock:
             if self._redis is None:
-                self._redis = Redis.from_url(self._redis_url, decode_responses=True)
+                self._redis = get_redis(url=self._redis_url)
         return self._redis
 
     @staticmethod

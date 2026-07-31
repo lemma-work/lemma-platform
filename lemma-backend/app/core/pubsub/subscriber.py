@@ -1,13 +1,10 @@
-import asyncio
 import json
-import logging
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
-from faststream.redis import RedisBroker
 from faststream.redis.parser import BinaryMessageFormatV1
 
-from app.core.config import settings
-from app.core.log.log import get_dependency_logger, get_logger
+from app.core.infrastructure.redis.client import get_redis
+from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
 
@@ -18,42 +15,40 @@ class RedisStreamReader:
     This is not a domain-event consumer and does not replace the centralized
     message bus/inbox subscriber policy. Datastore WebSocket clients use it only
     to replay and tail the already-published durable stream.
+
+    Reads go through the shared Redis pool. This used to construct a whole
+    ``RedisBroker`` per instance, so every WebSocket connection paid for a
+    broker plus its own connection pool purely to issue ``XREAD``.
+
+    Entries are published by the FastStream message bus, so they carry its
+    binary envelope: they must be read as raw bytes -- hence the
+    ``decode_responses=False`` pool -- and decoded with FastStream's parser.
     """
 
     def __init__(self, channel_or_stream: str):
-        """
-        Initialize subscriber.
-
-        Args:
-            channel_or_stream: Channel name for pub/sub or stream name for Redis streams
-        """
         self.channel_or_stream = channel_or_stream
-        self.broker = RedisBroker(
-            settings.redis_url,
-            logger=get_dependency_logger("faststream.redis"),
-            log_level=logging.INFO,
-        )
 
-    async def __aenter__(self):
-        await self.broker.start()
+    async def __aenter__(self) -> "RedisStreamReader":
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        await self.broker.stop()
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        # Nothing to tear down: the client is shared and outlives this reader.
+        return None
 
     async def current_last_id(self) -> str:
         """Return the stream's current last id (``"0-0"`` if it has no entries).
 
         Resolving this before tailing lets a caller anchor a resumable read at
-        "now" deterministically — every entry added afterwards is read — instead
-        of relying on ``"$"`` being evaluated at the first blocking ``xread``.
+        "now" deterministically -- every entry added afterwards is read --
+        instead of relying on ``"$"`` being evaluated at the first blocking
+        ``xread``.
         """
-        redis = self.broker._connection
+        redis = get_redis(decode_responses=False)
         try:
             info = await redis.xinfo_stream(self.channel_or_stream)
         except Exception:
-            # Stream does not exist yet: there is no history, so reading from the
-            # very beginning is equivalent to reading only new entries.
+            # Stream does not exist yet: there is no history, so reading from
+            # the beginning is equivalent to reading only new entries.
             return "0-0"
         last = info.get("last-generated-id") or info.get(b"last-generated-id")
         if last is None:
@@ -61,162 +56,62 @@ class RedisStreamReader:
         return last.decode() if isinstance(last, bytes) else str(last)
 
     async def subscribe(self, start_id: str = "$") -> AsyncIterator[dict]:
+        """Tail the stream, yielding each entry after ``start_id``.
+
+        Pass a concrete id (e.g. the last id a client saw) to resume and replay
+        missed entries.
         """
-        Subscribe to a Redis Stream and yield messages (for permanent events).
+        redis = get_redis(decode_responses=False)
+        last_id: Any = start_id
+        while True:
+            streams = await redis.xread(
+                {self.channel_or_stream: last_id}, count=64, block=1000
+            )
+            if not streams:
+                continue
+            for _stream_name, messages in streams:
+                for message_id, data in messages:
+                    last_id = message_id
+                    payload = _decode_entry(data)
+                    if payload is None:
+                        logger.warning("pubsub.message.dropped")
+                        continue
+                    payload["_stream_id"] = (
+                        message_id.decode()
+                        if isinstance(message_id, bytes)
+                        else str(message_id)
+                    )
+                    yield payload
 
-        Uses FastStream's broker's underlying Redis connection to read streams.
-        FastStream's stream subscriber is decorator-based, so we use the broker's
-        Redis connection directly for programmatic access.
 
-        Args:
-            start_id: Redis stream id to read after. Defaults to ``"$"`` (only
-                messages published after subscribing). Pass a concrete id (e.g.
-                the last id a client saw) to resume and replay missed entries.
-        """
-        last_id = start_id
-
+def _decode_entry(data: dict[Any, Any]) -> dict | None:
+    """Decode one stream entry, preferring FastStream's binary envelope."""
+    binary = data.get(b"__data__") or data.get("__data__")
+    if binary is not None:
         try:
-            # Access the broker's underlying Redis connection
-            redis = self.broker._connection
-            logger.debug("pubsub.subscriber.subscribed_stream.observed")
-
-            while True:
-                # Block for 1 second looking for new messages
-                streams = await redis.xread(
-                    {self.channel_or_stream: last_id}, count=1, block=1000
-                )
-
-                if not streams:
-                    continue
-
-                for stream_name, messages in streams:
-                    for message_id, data in messages:
-                        last_id = message_id
-                        stream_id = (
-                            message_id.decode()
-                            if isinstance(message_id, bytes)
-                            else str(message_id)
-                        )
-                        try:
-                            # FastStream stores messages in binary format with __data__ field
-                            if b"__data__" in data:
-                                # Parse FastStream's binary message format
-                                binary_data = data[b"__data__"]
-                                try:
-                                    # Use FastStream's parser to decode the binary format
-                                    decoded_message, headers = (
-                                        BinaryMessageFormatV1.parse(binary_data)
-                                    )
-
-                                    # decoded_message may be bytes/str (JSON) or
-                                    # already a dict. Decode bytes first so the
-                                    # JSON body is unpacked to top-level fields
-                                    # rather than wrapped under a "data" key.
-                                    if isinstance(decoded_message, (bytes, bytearray)):
-                                        decoded_message = decoded_message.decode(
-                                            "utf-8", errors="ignore"
-                                        )
-                                    if isinstance(decoded_message, str):
-                                        try:
-                                            decoded_message = json.loads(
-                                                decoded_message
-                                            )
-                                        except json.JSONDecodeError:
-                                            pass  # Keep as string if not JSON
-
-                                    payload = (
-                                        decoded_message
-                                        if isinstance(decoded_message, dict)
-                                        else {"data": decoded_message}
-                                    )
-                                    payload["_stream_id"] = stream_id
-                                    yield payload
-                                except Exception:
-                                    logger.debug(
-                                        "pubsub.message.binary_parse_failed",
-                                        exc_info=True,
-                                    )
-                                    # Fallback: try to decode as UTF-8 if possible
-                                    try:
-                                        fallback_data = {
-                                            k.decode("utf-8", errors="ignore"): (
-                                                v.decode("utf-8", errors="ignore")
-                                                if isinstance(v, bytes)
-                                                else v
-                                            )
-                                            for k, v in data.items()
-                                        }
-                                        fallback_data["_stream_id"] = stream_id
-                                        yield fallback_data
-                                    except Exception:
-                                        logger.warning(
-                                            "pubsub.message.dropped",
-                                        exc_info=True,
-                                    )
-                            else:
-                                # Fallback for non-FastStream format messages
-                                decoded_data = {
-                                    k.decode("utf-8", errors="ignore"): (
-                                        v.decode("utf-8", errors="ignore")
-                                        if isinstance(v, bytes)
-                                        else v
-                                    )
-                                    for k, v in data.items()
-                                }
-                                decoded_data["_stream_id"] = stream_id
-                                yield decoded_data
-                        except Exception:
-                            logger.warning(
-                                "pubsub.message.dropped",
-                                exc_info=True,
-                            )
-
-                await asyncio.sleep(0.1)
-
-        except asyncio.CancelledError:
-            logger.debug("pubsub.subscriber.stream_subscription_cancelled.observed")
+            decoded, _headers = BinaryMessageFormatV1.parse(binary)
         except Exception:
-            logger.debug('pubsub.subscriber.stream_subscription.propagated', exc_info=True)
-            raise
+            logger.debug("pubsub.message.binary_parse_failed", exc_info=True)
+            return _decode_plain(data)
+        if isinstance(decoded, (bytes, bytearray)):
+            decoded = decoded.decode("utf-8", errors="ignore")
+        if isinstance(decoded, str):
+            try:
+                decoded = json.loads(decoded)
+            except json.JSONDecodeError:
+                pass
+        return decoded if isinstance(decoded, dict) else {"data": decoded}
+    return _decode_plain(data)
 
-    async def subscribe_channel(self) -> AsyncIterator[dict]:
-        """
-        Subscribe to a Redis Pub/Sub channel and yield messages (for realtime updates).
 
-        Uses FastStream's broker to subscribe to Redis channels.
-        """
-        try:
-            async with self.broker.subscriber(self.channel_or_stream) as subscriber:
-                logger.debug("pubsub.subscriber.subscribed_channel.observed")
-                async for message in subscriber:
-                    try:
-                        # FastStream handles deserialization
-                        if isinstance(message, (str, bytes)):
-                            decoded_data = (
-                                json.loads(message)
-                                if isinstance(message, bytes)
-                                else json.loads(message)
-                            )
-                        elif hasattr(message, "model_dump"):
-                            # Pydantic model
-                            decoded_data = message.model_dump()
-                        elif isinstance(message, dict):
-                            decoded_data = message
-                        else:
-                            # Try to convert to dict
-                            decoded_data = (
-                                dict(message)
-                                if hasattr(message, "__dict__")
-                                else {"data": message}
-                            )
-
-                        yield decoded_data
-                    except Exception:
-                        logger.warning(
-                            "pubsub.message.dropped",
-                            exc_info=True,
-                        )
-
-        except Exception:
-            logger.debug('pubsub.subscriber.channel_subscription.propagated', exc_info=True)
-            raise
+def _decode_plain(data: dict[Any, Any]) -> dict | None:
+    """Fallback for entries not written through the message bus."""
+    try:
+        return {
+            (k.decode("utf-8", errors="ignore") if isinstance(k, bytes) else k): (
+                v.decode("utf-8", errors="ignore") if isinstance(v, bytes) else v
+            )
+            for k, v in data.items()
+        }
+    except Exception:
+        return None

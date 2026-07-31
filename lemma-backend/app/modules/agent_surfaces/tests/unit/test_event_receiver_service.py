@@ -135,7 +135,8 @@ async def test_coordinator_stop_signals_before_run_loop_releases_redis():
 
     await coordinator._shutdown()
     assert coordinator._redis is None
-    redis_client.aclose.assert_awaited_once()
+    # Shared client: the coordinator releases it rather than closing the pool.
+    redis_client.aclose.assert_not_awaited()
 
 
 @pytest.mark.asyncio

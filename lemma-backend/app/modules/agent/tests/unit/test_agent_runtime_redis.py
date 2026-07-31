@@ -100,8 +100,10 @@ async def test_capacity_round_trip_online_check_and_cleanup():
     await agent_runtime_redis.clear_daemon_capacity(daemon_id=daemon_id)
     assert fake.deleted == [f"agent-runtime:daemon:{daemon_id}:capacity"]
 
+    # The client is shared process-wide, so teardown here releases the
+    # reference without closing a pool other components still hold.
     await agent_runtime_redis.close_agent_runtime_redis()
-    assert fake.closed
+    assert not fake.closed
     assert agent_runtime_redis._redis_client is None
     await agent_runtime_redis.close_agent_runtime_redis()
 

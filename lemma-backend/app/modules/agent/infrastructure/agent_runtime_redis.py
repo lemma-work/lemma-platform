@@ -7,6 +7,8 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
+from app.core.infrastructure.redis.client import get_redis
+
 from app.core.config import settings
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.modules.agent.domain.value_objects import JsonObject
@@ -34,13 +36,7 @@ def _daemon_capacity_key(daemon_id: UUID) -> str:
 def get_agent_runtime_redis() -> Redis:
     global _redis_client  # noqa: PLW0603
     if _redis_client is None:
-        _redis_client = Redis.from_url(
-            settings.redis_url,
-            decode_responses=True,
-            health_check_interval=30,
-            socket_keepalive=True,
-            max_connections=settings.redis_max_connections,
-        )
+        _redis_client = get_redis(url=settings.redis_url)
     return _redis_client
 
 
@@ -84,8 +80,7 @@ async def is_daemon_online(*, daemon_id: UUID, user_id: UUID) -> bool:
 
 
 async def close_agent_runtime_redis() -> None:
+    # The client is shared process-wide; releasing the reference is enough,
+    # and close_redis_clients() disposes the pool at lifespan shutdown.
     global _redis_client  # noqa: PLW0603
-    redis_client = _redis_client
     _redis_client = None
-    if redis_client is not None:
-        await redis_client.aclose()
