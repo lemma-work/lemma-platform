@@ -352,7 +352,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     monkeypatch,
 ):
     """Provider profiles discover models and reject unsafe or unusable config."""
-    from app.modules.agent.services.runtime_profile_service import (
+    from app.modules.agent.services.runtime_provider_discovery import (
         DiscoveredModel,
         _validate_public_base_url,
     )
@@ -367,12 +367,12 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service."
+        "app.modules.agent.services.runtime_provider_discovery."
         "_discover_anthropic_compatible_models",
         discover_anthropic_models,
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service."
+        "app.modules.agent.services.runtime_provider_discovery."
         "_discover_openai_compatible_models",
         discover_openai_models,
     )

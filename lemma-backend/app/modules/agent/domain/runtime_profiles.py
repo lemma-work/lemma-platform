@@ -54,6 +54,42 @@ class RuntimeProfileStatus(str, Enum):
     REAUTH_REQUIRED = "REAUTH_REQUIRED"
 
 
+class RuntimeProfileAvailability(str, Enum):
+    """Whether a profile can take work right now.
+
+    Derived from the harness and its host at read time, never persisted: the
+    same profile is READY or OFFLINE depending only on whether someone's laptop
+    is awake. Model-provider profiles have no availability - they are reachable
+    whenever their endpoint is.
+    """
+
+    READY = "READY"
+    OFFLINE = "OFFLINE"
+    NOT_INSTALLED = "NOT_INSTALLED"
+    UNAVAILABLE_FOR_YOU = "UNAVAILABLE_FOR_YOU"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class _UnsetType:
+    """Distinguishes "the caller did not mention this field" from "null".
+
+    A PATCH that omits ``api_key`` must keep the stored one; a PATCH that sends
+    ``null`` must clear it. Both arrive as absent-or-None without a sentinel,
+    and defaulting either way silently destroys or ignores a credential.
+    """
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = _UnsetType()
+
+
 class RuntimeModelCapability(str, Enum):
     TEXT = "TEXT"
     TOOLS = "TOOLS"
@@ -241,6 +277,20 @@ class AgentRuntimeProfile(BaseModel):
             return HarnessKind.HARNESS
         raise ValueError(f"Unsupported runtime profile protocol: {self.protocol}")
 
+    def with_changes(self, **overrides: Any) -> AgentRuntimeProfile:
+        """A re-validated copy carrying ``overrides``.
+
+        ``model_copy`` skips validators, and the validators are exactly what an
+        edit must not be allowed to skip - they enforce the harness/kind pairing
+        and that a default model exists in the catalog.
+
+        The dump is deliberately in python mode: ``mode="json"`` would render a
+        ``SecretStr`` credential as its mask, and this copy is what gets
+        persisted, so a rename would quietly overwrite the stored API key with
+        asterisks.
+        """
+        return AgentRuntimeProfile.model_validate({**self.model_dump(), **overrides})
+
     def public_dict(self) -> dict[str, Any]:
         data = self.model_dump(mode="json", exclude={"credentials"})
         if self.scope is RuntimeProfileScope.SYSTEM:
@@ -248,6 +298,15 @@ class AgentRuntimeProfile(BaseModel):
             for model in data.get("model_catalog", []):
                 if isinstance(model, dict):
                     model["provider_model_name"] = model.get("name")
+        elif isinstance(self.config, HarnessRuntimeConfig):
+            # A harness config is a revision string, an enumerated-selections
+            # map, and a timeout - no Lemma-held secret. Redacting it would
+            # rewrite any selection whose key happened to contain "auth" or
+            # "token" as the literal mask, and an editor that prefills from this
+            # response and sends it back would then persist that mask as the
+            # selected value. Guarded on the parsed type, so a legacy row whose
+            # config stayed a raw dict is still redacted.
+            data["config"] = data.get("config", {})
         else:
             data["config"] = _redact_public_secrets(data.get("config", {}))
         data["has_credentials"] = self.has_credentials

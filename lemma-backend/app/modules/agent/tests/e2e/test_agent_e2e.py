@@ -2510,7 +2510,7 @@ class TestAgentRuntimeConfigApis:
         fixed_test_user,
         monkeypatch,
     ):
-        from app.modules.agent.services.runtime_profile_service import (
+        from app.modules.agent.services.runtime_provider_discovery import (
             DiscoveredModel,
         )
 
@@ -2523,7 +2523,7 @@ class TestAgentRuntimeConfigApis:
             return []
 
         monkeypatch.setattr(
-            "app.modules.agent.services.runtime_profile_service._discover_openai_compatible_models",
+            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
             fake_openai_discovery,
         )
 
