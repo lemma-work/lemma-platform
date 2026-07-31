@@ -366,6 +366,10 @@ async def resolve_approval(
     # Idempotent + self-healing: resolving an already-recorded approval reconciles
     # its half-finished resume instead of erroring (status "reconciled"). A truly
     # unknown approval raises UnknownApprovalError -> 404 via the domain handler.
+    #
+    # defer_reconciliation keeps the browser's timeout out of the equation: the
+    # decision commits here, and an approved tool (which may legitimately run for
+    # minutes) is handed to a worker job, answering with status "queued".
     resolution = await service.resolve_user_approval(
         conversation_id=conversation_id,
         approval_id=approval_id,
@@ -373,6 +377,7 @@ async def resolve_approval(
         pod_id=pod_id,
         decision=data.decision,
         response=data.response,
+        defer_reconciliation=True,
     )
     return ApprovalDecisionResponse(
         approval_id=approval_id,

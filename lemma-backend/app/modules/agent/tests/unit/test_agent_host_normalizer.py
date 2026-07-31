@@ -14,6 +14,7 @@ from app.modules.agent.domain.value_objects import AgentEventType
 from app.modules.agent.infrastructure.harnesses.agent_host_events import (
     AgentHostEventEnvelope,
     AgentHostEventNormalizer,
+    is_terminal_event,
 )
 
 
@@ -48,6 +49,11 @@ def _tokens(events) -> str:
 
 def _messages(events):
     return [e for e in events if e.type is AgentEventType.MESSAGE]
+
+
+def _text_messages(events):
+    """Assistant text/thinking messages only — never a synthesized tool call."""
+    return [e for e in _messages(events) if e.data.tool_call_id is None]
 
 
 def _run(normalizer, events) -> list:
@@ -132,10 +138,10 @@ class TestFinalAnswerFlag:
         )
 
         paused_flags = [
-            m.data.metadata.get("is_final_answer") for m in _messages(paused)
+            m.data.metadata.get("is_final_answer") for m in _text_messages(paused)
         ]
         final_flags = [
-            m.data.metadata.get("is_final_answer") for m in _messages(finished)
+            m.data.metadata.get("is_final_answer") for m in _text_messages(finished)
         ]
         assert paused_flags == [False]
         assert final_flags == [True]
@@ -238,21 +244,59 @@ class TestTerminalMapping:
 
 
 class TestPermissionRequest:
-    def test_permission_request_pauses_rather_than_denying(self) -> None:
-        """The host holds the agent's request open until a decision returns,
-        so this waits instead of terminating the run."""
+    def test_permission_request_becomes_a_request_approval_call(self) -> None:
+        """The pause is rendered as an ordinary Lemma approval, so every client
+        that already knows how to show one needs no Agent Host special case."""
         n = _normalizer()
         out = n.normalize(
             _event(
                 1,
                 AgentHostEventType.PERMISSION_REQUEST,
-                {"tool": "bash", "command": "rm -rf build"},
+                {
+                    "toolCall": {"toolCallId": "perm-1", "title": "Run rm -rf build"},
+                    "options": [{"optionId": "allow", "kind": "allow_once"}],
+                },
                 object_id="perm-1",
             )
         )
-        assert out[-1].type is AgentEventType.WAITING
+
+        calls = [m for m in _messages(out) if m.data.tool_call_id is not None]
+        assert [m.data.tool_name for m in calls] == ["request_approval"]
+        assert calls[0].data.tool_call_id == "agent-host-permission:perm-1"
+        assert calls[0].data.tool_args["title"] == "Run rm -rf build"
         assert not any(e.type is AgentEventType.ERROR for e in out)
-        statuses = [
-            e.data["status"] for e in out if e.type is AgentEventType.STATUS
-        ]
-        assert statuses == ["permission_request"]
+
+    def test_permission_request_does_not_end_the_run(self) -> None:
+        """WAITING terminates a run. The host holds this request open *inside* a
+        run that is still going, so emitting WAITING would strand everything the
+        agent does after the decision."""
+        n = _normalizer()
+        out = n.normalize(
+            _event(
+                1,
+                AgentHostEventType.PERMISSION_REQUEST,
+                {"toolCall": {"toolCallId": "perm-1"}},
+                object_id="perm-1",
+            )
+        )
+
+        assert not any(is_terminal_event(e) for e in out)
+        assert not any(e.type is AgentEventType.WAITING for e in out)
+
+    def test_permission_status_carries_what_a_surface_needs_to_render(self) -> None:
+        """The STATUS event is the only pause signal left, so it must carry the
+        approval's identity or Slack/Teams/Telegram render nothing."""
+        n = _normalizer()
+        out = n.normalize(
+            _event(
+                1,
+                AgentHostEventType.PERMISSION_REQUEST,
+                {"toolCall": {"toolCallId": "perm-1"}},
+                object_id="perm-1",
+            )
+        )
+
+        statuses = [e.data for e in out if e.type is AgentEventType.STATUS]
+        assert [s["status"] for s in statuses] == ["permission_request"]
+        assert statuses[0]["kind"] == "request_approval"
+        assert statuses[0]["tool_call_id"] == "agent-host-permission:perm-1"

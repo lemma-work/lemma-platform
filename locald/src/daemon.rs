@@ -10,6 +10,7 @@ use std::thread;
 use interprocess::local_socket::{prelude::*, ListenerOptions};
 use serde_json::{json, Value};
 
+use crate::agent_host::AgentHostSupervisor;
 use crate::host_process::HostProcessManager;
 use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
 use crate::native_host_pack;
@@ -42,6 +43,7 @@ pub struct Daemon {
     managed_runtime: Option<Arc<ManagedRuntimeController>>,
     operator_config: Arc<OperatorConfigStore>,
     host_operation_running: AtomicBool,
+    agent_host: Arc<AgentHostSupervisor>,
 }
 
 impl Daemon {
@@ -92,6 +94,7 @@ impl Daemon {
                     .controller(&paths, spec)
             })
             .transpose()?;
+        let agent_host = Arc::new(AgentHostSupervisor::discover(&paths.root));
         Ok(Arc::new(Self {
             paths,
             token,
@@ -106,6 +109,7 @@ impl Daemon {
             managed_runtime,
             operator_config,
             host_operation_running: AtomicBool::new(false),
+            agent_host,
         }))
     }
 
@@ -113,6 +117,7 @@ impl Daemon {
         let listener = create_listener(&self.paths)?;
         self.write_daemon_log("locald listening")?;
         self.start_host_status_monitor();
+        self.start_agent_host_monitor();
 
         for connection in listener.incoming() {
             match connection {
@@ -128,6 +133,19 @@ impl Daemon {
             }
         }
         Ok(())
+    }
+
+    fn start_agent_host_monitor(self: &Arc<Self>) {
+        if let Err(error) = self.agent_host.start() {
+            let _ = self.write_daemon_log(&format!("Agent Host unavailable: {error}"));
+        }
+        let daemon = Arc::clone(self);
+        thread::spawn(move || loop {
+            if let Err(error) = daemon.agent_host.reconcile() {
+                let _ = daemon.write_daemon_log(&format!("Agent Host recovery failed: {error}"));
+            }
+            thread::sleep(std::time::Duration::from_secs(1));
+        });
     }
 
     fn start_host_status_monitor(self: &Arc<Self>) {
@@ -360,6 +378,47 @@ impl Daemon {
                 self.apply_operator_config(request, client);
                 return true;
             }
+            "agent-host.status" => {
+                self.send_direct(
+                    client,
+                    json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "agent-host.status",
+                        "id": id.as_ref(),
+                        "agent_host": self.agent_host.status(),
+                    }),
+                );
+                return true;
+            }
+            "agent-host.start" | "agent-host.stop" | "agent-host.restart" => {
+                let result = match command.as_str() {
+                    "agent-host.start" => self.agent_host.start(),
+                    "agent-host.stop" => self.agent_host.stop(),
+                    _ => self.agent_host.restart(),
+                };
+                match result {
+                    Ok(()) => self.send_direct(
+                        client,
+                        json!({
+                            "v": PROTOCOL_VERSION,
+                            "event": "done",
+                            "cmd": command,
+                            "id": id.as_ref(),
+                            "ok": true,
+                            "agent_host": self.agent_host.status(),
+                        }),
+                    ),
+                    Err(error) => self.send_direct(
+                        client,
+                        error_event(
+                            "agent-host-operation-failed",
+                            error.to_string(),
+                            id.as_ref(),
+                        ),
+                    ),
+                }
+                return true;
+            }
             _ => {}
         }
         if let Some(manager) = self.host_processes.as_ref() {
@@ -373,6 +432,7 @@ impl Daemon {
                         event["managed_runtime"] =
                             serde_json::to_value(runtime.status()).unwrap_or(Value::Null);
                     }
+                    event["agent_host"] = self.agent_host.status();
                     self.send_direct(client, event);
                     return true;
                 }
@@ -389,11 +449,12 @@ impl Daemon {
                 json!({"v": PROTOCOL_VERSION, "event": "pong", "id": id.as_ref()}),
             ),
             "status" if !self.supervisor_running() => {
-                let event = self
+                let mut event = self
                     .state
                     .lock()
                     .expect("state lock poisoned")
                     .event(id.as_ref());
+                event["agent_host"] = self.agent_host.status();
                 self.send_direct(client, event);
             }
             "start" | "stop" | "restart" | "status" => {
@@ -441,6 +502,7 @@ impl Daemon {
             "capabilities": self.host_processes.as_ref().and_then(|manager| manager.capabilities()),
             "release": self.host_processes.as_ref().map(|manager| manager.release()),
             "managed_runtime": self.managed_runtime.as_ref().and_then(|runtime| runtime.status()),
+            "agent_host": self.agent_host.status(),
             "paths": {
                 "locald": &self.paths.root,
                 "logs": self.paths.root.join("logs"),
@@ -572,6 +634,9 @@ impl Daemon {
                 if let Err(error) = manager.stop_all() {
                     failure = Some(error.to_string());
                 }
+            }
+            if let Err(error) = daemon.agent_host.stop() {
+                failure.get_or_insert_with(|| error.to_string());
             }
             if let Some(runtime) = daemon.managed_runtime.as_ref() {
                 if let Err(error) = runtime.shutdown() {

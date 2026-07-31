@@ -814,13 +814,17 @@ impl HostProcessManager {
             .idle_port_reservations
             .lock()
             .expect("idle port reservation lock poisoned");
-        if !reservations.contains_key(&runtime.ports.backend) {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            reservations.entry(runtime.ports.backend)
+        {
             let listener = bind_idle_port(runtime.ports.backend)?;
-            reservations.insert(runtime.ports.backend, listener);
+            entry.insert(listener);
         }
-        if !reservations.contains_key(&runtime.ports.frontend) {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            reservations.entry(runtime.ports.frontend)
+        {
             let listener = bind_idle_port(runtime.ports.frontend)?;
-            reservations.insert(runtime.ports.frontend, listener);
+            entry.insert(listener);
         }
         Ok(())
     }
