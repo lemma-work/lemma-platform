@@ -8,7 +8,14 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
-import type { AgentRuntimeConfig, AvailableModelInfo, ConversationModel } from "lemma-sdk";
+import type {
+  AgentRuntimeConfig,
+  AvailableModelInfo,
+  ConversationModel,
+  PlanStatus,
+  PlanStepState,
+  PlanSummaryState,
+} from "lemma-sdk";
 // Message-display pipeline (deduping, clustering, trace grouping, plan summary)
 // now lives in the framework-agnostic core; the product consumes it from lemma-sdk.
 import {
@@ -96,21 +103,8 @@ export type ToolCardResult = Record<string, unknown> & {
   error?: string;
 };
 
-type PlanStatus = "pending" | "in_progress" | "completed";
 export type UserApprovalDecision = "APPROVE_ONCE" | "APPROVE_FOR_SESSION" | "DENY";
-
-export interface PlanStepState {
-  step: string;
-  status: PlanStatus;
-}
-
-export interface PlanSummaryState {
-  steps: PlanStepState[];
-  completedCount: number;
-  inProgressCount: number;
-  running: boolean;
-  activeStep?: string;
-}
+export type { PlanStatus, PlanStepState, PlanSummaryState };
 
 export interface DisplayMessageRow {
   id: string;
@@ -399,7 +393,16 @@ export function AssistantExperienceView({
     loadOlderWithScrollAnchor,
   ]);
 
-  const planSummary = useMemo(() => latestPlanSummary(controllerMessages), [controllerMessages]);
+  const detectedPlanSummary = useMemo(() => latestPlanSummary(controllerMessages), [controllerMessages]);
+  const planSummary = detectedPlanSummary?.isComplete ? null : detectedPlanSummary;
+  const latestUserMessageId = useMemo(
+    () => [...controllerMessages].reverse().find((message) => message.role === "user")?.id ?? null,
+    [controllerMessages],
+  );
+  const planIdentity = planSummary?.steps.map((step) => step.step).join("\u0000") ?? null;
+  useEffect(() => {
+    setIsPlanHidden(false);
+  }, [activeConversationId, latestUserMessageId, planIdentity]);
   const inferredFinalOutput = useMemo(
     () => showFinalOutput ? extractAgentFinalOutput(controllerMessages, { parseTextFallback: false }) : null,
     [controllerMessages, showFinalOutput],

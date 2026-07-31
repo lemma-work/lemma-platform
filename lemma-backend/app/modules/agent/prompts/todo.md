@@ -18,9 +18,10 @@ How to drive it:
   is treated as not-done.
 - Call it once at the start with your real tasks. As you finish each one, call it again with
   that task's line checked off: `["- [x] Fetch the Q3 report"]`. Lines are matched to
-  existing tasks by their text, so you can send just the one line you're flipping — the rest
-  of the list is preserved — or resend the whole list. Keep each task's text identical when
-  you check it off so it matches.
+  existing tasks by their text, so you can send just the one line you're flipping and the
+  rest of the list is preserved. Sending multiple lines replaces the current list with that
+  complete snapshot. Keep each task's text identical when you check it off so it matches.
 - Every task needs concrete text (an imperative like "Fetch the Q3 report"). Don't send
   empty or placeholder tasks. New lines that don't match an existing task are added.
+- Once every task is checked off, the next unchecked task starts a fresh plan.
 - The tool always returns the full, updated list.

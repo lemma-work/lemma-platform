@@ -228,6 +228,100 @@ async def test_write_todos_merges_lines_and_flips_status(monkeypatch):
     assert result["todos"][0] == "- [ ] ship it"
     assert store["is_sub_agent"] is True
 
+    # Once the current plan is fully complete, new unchecked work starts a
+    # fresh plan instead of retaining completed history forever.
+    result = await call("write_todos", {"todos": ["- [x] ship it"]})
+    assert all(line.startswith("- [x]") for line in result["todos"])
+    result = await call("write_todos", {"todos": ["- [ ] start the next plan"]})
+    assert result["todos"] == ["- [ ] start the next plan"]
+
+    # Multiple lines are an authoritative snapshot, so renamed/replanned tasks
+    # replace the old list rather than accumulating conversation-wide history.
+    result = await call(
+        "write_todos",
+        {"todos": ["- [x] New research", "- [ ] New report"]},
+    )
+    assert result["todos"] == ["- [x] New research", "- [ ] New report"]
+
+    # Some XML-oriented model/tool parsers flatten a string array into one value.
+    # Recover the individual items and their inner checkbox state before storing.
+    result = await call(
+        "write_todos",
+        {
+            "todos": [
+                "- [x] Research</td>\n"
+                "<item>- [x] Build deck</item></item>\n"
+                "<item>- [ ] Upload</item>\n</todos>"
+            ]
+        },
+    )
+    assert result["todos"] == [
+        "- [x] Research",
+        "- [x] Build deck",
+        "- [ ] Upload",
+    ]
+
+    # Status prose from the observed malformed payload is also normalized.
+    result = await call(
+        "write_todos",
+        {
+            "todos": [
+                "RESEARCH DONE</item>\n"
+                "<item>DECK DONE</item>\n"
+                "<item>WRITE HTML DONE</item>\n"
+                "<item>RENDER PDF DONE</item>\n"
+                "<item>UPLOAD DONE"
+            ]
+        },
+    )
+    assert result["todos"] == [
+        "- [x] RESEARCH",
+        "- [x] DECK",
+        "- [x] WRITE HTML",
+        "- [x] RENDER PDF",
+        "- [x] UPLOAD",
+    ]
+
+
+def test_normalize_stored_todos_recovers_observed_corrupt_history():
+    from app.modules.agent.capabilities.todo import _normalize_stored
+
+    stored = [
+        {
+            "done": False,
+            "content": (
+                "[ ] Research Hermes Agent</td>\n"
+                "<item>- [ ] Build deck</td>\n"
+                "<item>- [ ] Upload</td>"
+            ),
+        },
+        {
+            "done": False,
+            "content": (
+                "[x] Research Hermes Agent</item>\n"
+                "<item>- [x] Build deck</item>\n"
+                "<item>- [ ] Upload</item>"
+            ),
+        },
+        {"done": False, "content": "RESEARCH DONE"},
+        {"done": False, "content": "DECK DONE"},
+        {"done": False, "content": "UPLOAD"},
+        {
+            "done": False,
+            "content": (
+                "RESEARCH DONE</item>\n"
+                "<item>DECK DONE</item>\n"
+                "<item>UPLOAD DONE"
+            ),
+        },
+    ]
+
+    assert _normalize_stored(stored) == [
+        {"content": "RESEARCH", "done": True},
+        {"content": "DECK", "done": True},
+        {"content": "UPLOAD", "done": True},
+    ]
+
 
 @pytest.mark.anyio
 async def test_write_todos_guards_empty_and_blank_calls(monkeypatch):
