@@ -1,7 +1,7 @@
 'use client';
 
 import type { RefObject } from 'react';
-import { Folder, FolderPlus, Loader2, Plus, Upload } from 'lucide-react';
+import { Folder, FolderPlus, Loader2, Plus, Upload } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';

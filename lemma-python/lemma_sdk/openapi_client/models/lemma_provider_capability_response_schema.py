@@ -164,7 +164,7 @@ class LemmaProviderCapabilityResponseSchema:
                 )
 
                 return auth_config_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0
@@ -199,7 +199,7 @@ class LemmaProviderCapabilityResponseSchema:
                 )
 
                 return credential_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 LemmaProviderCapabilityResponseSchemaCredentialSchemaType0
@@ -223,7 +223,7 @@ class LemmaProviderCapabilityResponseSchema:
                 oauth2_defaults_type_0 = OAuth2DefaultsResponseSchema.from_dict(data)
 
                 return oauth2_defaults_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | OAuth2DefaultsResponseSchema | Unset, data)
 

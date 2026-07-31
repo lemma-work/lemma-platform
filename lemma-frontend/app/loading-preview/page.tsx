@@ -1,4 +1,4 @@
-import { CheckCircle2, Upload } from "lucide-react";
+import { CheckCircle2, Upload } from "@/components/ui/icons";
 
 import { InlineLoader, LoadingState, StepLoader, WordmarkLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";

@@ -2,6 +2,7 @@ import type { GeneratedClientAdapter } from "../generated.js";
 import type { SurfaceCreateRequest } from "../openapi_client/models/SurfaceCreateRequest.js";
 import type { SurfaceUpdateRequest } from "../openapi_client/models/SurfaceUpdateRequest.js";
 import type { SurfaceSendRequest } from "../openapi_client/models/SurfaceSendRequest.js";
+import type { TelegramManagedBotSetupRequest } from "../openapi_client/models/TelegramManagedBotSetupRequest.js";
 import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesService.js";
 
 /**
@@ -21,6 +22,18 @@ import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesSe
  */
 export class PodSurfacesNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
+
+  /**
+   * The connectable-surface catalog for a pod: every platform with its
+   * connector, supported credential modes, the schema to connect an account,
+   * and whether the org can still claim the platform's Lemma-managed
+   * bot/number. Platform-level — no surface need exist.
+   */
+  available(podId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceAvailable(podId),
+    );
+  }
 
   list(
     podId: string,
@@ -46,6 +59,21 @@ export class PodSurfacesNamespace {
   create(podId: string, payload: SurfaceCreateRequest) {
     return this.client.request(() =>
       AgentSurfacesService.agentSurfaceCreate(podId, payload),
+    );
+  }
+
+  startTelegramBotSetup(
+    podId: string,
+    payload: TelegramManagedBotSetupRequest,
+  ) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceTelegramManagedStart(podId, payload),
+    );
+  }
+
+  getTelegramBotSetup(podId: string, setupId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceTelegramManagedGet(podId, setupId),
     );
   }
 

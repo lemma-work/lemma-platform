@@ -182,7 +182,7 @@ class FileSummaryResponse:
                 indexed_at_type_0 = isoparse(data)
 
                 return indexed_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -208,7 +208,7 @@ class FileSummaryResponse:
                 owner_user_id_type_0 = UUID(data)
 
                 return owner_user_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

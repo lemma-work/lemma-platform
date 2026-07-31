@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+capability=/etc/lemma/guest.capability
+if [ -r /mnt/lemma-control/guest.capability ]; then
+  capability=/mnt/lemma-control/guest.capability
+fi
+
+export LEMMA_GUEST_CAPABILITY_FILE="$capability"
+export LEMMA_GUEST_STATE_ROOT=/var/lib/lemma
+export LEMMA_NERDCTL_BIN=/usr/local/bin/nerdctl
+export HOME=/var/lib/lemma/home
+export LEMMA_GUEST_TEMP_ROOT=/tmp/lemma-engine
+export TMPDIR="$LEMMA_GUEST_TEMP_ROOT"
+mkdir -p "$HOME" "$TMPDIR"
+chmod 0700 "$HOME" "$TMPDIR"
+exec /usr/local/bin/lemma-guestd serve-vsock

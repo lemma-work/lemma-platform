@@ -22,7 +22,6 @@ export interface UseConversationsOptions {
   organizationId?: string;
   enabled?: boolean;
   autoLoad?: boolean;
-  autoSelectFirst?: boolean;
   limit?: number;
   pageToken?: string;
   initialConversationId?: string | null;
@@ -73,7 +72,6 @@ export function useConversations({
   organizationId,
   enabled = true,
   autoLoad = true,
-  autoSelectFirst = true,
   limit = 20,
   pageToken,
   initialConversationId = null,
@@ -97,6 +95,7 @@ export function useConversations({
     error,
     listConversations,
     createConversation: sessionCreateConversation,
+    refreshConversation: sessionRefreshConversation,
   } = useAssistantSession({
     client,
     podId,
@@ -128,17 +127,11 @@ export function useConversations({
       setConversations(nextConversations);
       setTotal(response.total ?? nextConversations.length);
       setNextPageToken(response.next_page_token ?? null);
-      setSelectedConversationId((current) => {
-        if (current) return current;
-        if (initialConversationId) return initialConversationId;
-        if (!autoSelectFirst) return null;
-        return nextConversations[0]?.id ?? null;
-      });
       return nextConversations;
     } finally {
       setIsLoading(false);
     }
-  }, [autoSelectFirst, enabled, initialConversationId, limit, listConversations, pageToken]);
+  }, [enabled, limit, listConversations, pageToken]);
 
   const loadMore = useCallback(async (overrides: { limit?: number } = {}): Promise<Conversation[]> => {
     if (!enabled || !nextPageToken || isLoading || isLoadingMore) {
@@ -210,7 +203,7 @@ export function useConversations({
     const latestConversationId = conversations[0]?.id ?? null;
     setSelectedConversationId(latestConversationId);
     return latestConversationId;
-  }, []);
+  }, [conversations]);
 
   useEffect(() => {
     setSelectedConversationId(initialConversationId);
@@ -250,37 +243,37 @@ export function useConversations({
     };
   }, [autoLoad, enabled, initialConversationId, refresh, scopeKey]);
 
-  const effectiveSelectedConversationId = useMemo(() => {
-    if (selectedConversationId) return selectedConversationId;
-    if (!autoSelectFirst) return null;
-    return conversations[0]?.id ?? null;
-  }, [autoSelectFirst, conversations, selectedConversationId]);
-
   const selectedConversation = useMemo(
-    () => conversations.find((conversation) => conversation.id === effectiveSelectedConversationId) ?? null,
-    [conversations, effectiveSelectedConversationId],
+    () => conversations.find((conversation) => conversation.id === selectedConversationId) ?? null,
+    [conversations, selectedConversationId],
   );
 
   const ensureConversation = useCallback(async (
     input: Omit<CreateConversationInput, "setActive"> = {},
   ): Promise<Conversation> => {
-    const existingConversation = selectedConversation
-      ?? conversations.find((conversation) => conversation.id === effectiveSelectedConversationId)
-      ?? null;
+    const existingConversation = selectedConversation;
     if (existingConversation) {
-      if (selectedConversationId !== existingConversation.id) {
-        setSelectedConversationId(existingConversation.id);
-      }
       return existingConversation;
+    }
+
+    if (selectedConversationId) {
+      const fetchedConversation = await sessionRefreshConversation(selectedConversationId);
+      if (!fetchedConversation) {
+        throw new Error("Failed to resolve selected conversation.");
+      }
+      setConversations((previous) => sortConversationsByUpdatedAt([
+        fetchedConversation,
+        ...previous.filter((conversation) => conversation.id !== fetchedConversation.id),
+      ]));
+      return fetchedConversation;
     }
 
     return createAndSelectConversation(input);
   }, [
-    conversations,
     createAndSelectConversation,
-    effectiveSelectedConversationId,
     selectedConversation,
     selectedConversationId,
+    sessionRefreshConversation,
   ]);
 
   return useMemo(() => ({
@@ -290,7 +283,7 @@ export function useConversations({
     activeConversationId: selectedConversationId,
     activeConversation: selectedConversation,
     selectedConversationId,
-    effectiveSelectedConversationId,
+    effectiveSelectedConversationId: selectedConversationId,
     selectedConversation,
     isLoading,
     isLoadingMore,
@@ -308,7 +301,6 @@ export function useConversations({
     conversations,
     createAndSelectConversation,
     createConversation,
-    effectiveSelectedConversationId,
     error,
     isLoading,
     isLoadingMore,

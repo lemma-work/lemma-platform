@@ -9,7 +9,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   // Pinch zoom stays enabled: locking scale is a WCAG 1.4.4 violation.
-  themeColor: "rgb(245 244 240)",
+  themeColor: "rgb(244 243 239)",
   colorScheme: "light dark",
 };
 
@@ -68,13 +68,18 @@ const dmMono = DM_Mono({
 });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_SITE_URL?.startsWith("http")
+      ? process.env.NEXT_PUBLIC_SITE_URL
+      : "https://lemma.work",
+  ),
   title: {
     default: "Lemma",
     template: "%s | Lemma",
   },
   applicationName: "Lemma",
   description:
-    "Build AI pods for long-running agentic work. Design agents, records, workflows, and apps in one place.",
+    "Run your apps and agents. Bring your team.",
   keywords: [
     "Lemma",
     "AI agents",
@@ -104,6 +109,7 @@ export default function RootLayout({
     <html
       lang="en"
       suppressHydrationWarning
+      data-scroll-behavior="smooth"
       className={`${bricolageGrotesque.variable} ${dmMono.variable} ${ibmPlexSans.variable} ${sourceCodePro.variable} ${fraunces.variable} ${inter.variable} ${ibmPlexMono.variable} ${playwriteTz.variable} ${documentSans.variable}`}
     >
       <head>

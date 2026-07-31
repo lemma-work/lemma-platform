@@ -17,7 +17,7 @@ class RecordEventCoordinator:
     def __init__(
         self,
         *,
-        dispatcher: Callable[[], Awaitable[int]],
+        dispatcher: Callable[[], Awaitable[int]] | None,
     ) -> None:
         self.dispatcher = dispatcher
 
@@ -64,4 +64,12 @@ class RecordEventCoordinator:
         return event
 
     async def dispatch(self) -> None:
-        await self.dispatcher()
+        """Optionally notify an external dispatcher after the durable commit.
+
+        Production API requests deliberately have no dispatcher callback. The
+        worker-owned transactional outbox loop publishes staged events without
+        making record-write latency depend on Redis or per-event acknowledgement
+        writes.
+        """
+        if self.dispatcher is not None:
+            await self.dispatcher()

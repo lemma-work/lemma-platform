@@ -145,7 +145,7 @@ class SurfaceSetupResponse:
                 admin_consent_type_0 = SurfaceAdminConsentInfo.from_dict(data)
 
                 return admin_consent_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | SurfaceAdminConsentInfo | Unset, data)
 

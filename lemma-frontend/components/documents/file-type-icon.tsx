@@ -11,7 +11,7 @@ import {
     FileJson,
     FileArchive,
     Presentation,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { cn } from '@/lib/utils';
 
 interface FileTypeIconProps {

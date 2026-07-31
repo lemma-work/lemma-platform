@@ -133,7 +133,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         placeholders_sql = ", ".join(f":{key}" for key in ordered_keys)
         sql = (
             f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" '
-            f'({columns_sql}) VALUES ({placeholders_sql})'
+            f"({columns_sql}) VALUES ({placeholders_sql})"
         )
 
         if upsert:
@@ -146,7 +146,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             set_clauses.append('"updated_at" = CURRENT_TIMESTAMP')
             sql += (
                 f' ON CONFLICT ("{ctx.primary_key_column}") DO UPDATE SET '
-                f'{", ".join(set_clauses)}'
+                f"{', '.join(set_clauses)}"
             )
 
         statement = text(sql)
@@ -161,7 +161,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await session.commit()
                 return len(prepared_records)
         except DBAPIError as exc:
-            logger.error("DB Error while bulk writing records: %s", exc)
+            logger.debug("datastore.record.bulk_write.propagated", exc_info=True)
             raise_record_write_error(exc, operation="bulk write records", ctx=ctx)
 
     async def create_record(
@@ -186,7 +186,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
 
         sql = (
             f'INSERT INTO "{ctx.schema_name}"."{ctx.table_name}" '
-            f'({", ".join(columns)}) VALUES ({", ".join(placeholders)}) RETURNING *'
+            f"({', '.join(columns)}) VALUES ({', '.join(placeholders)}) RETURNING *"
         )
 
         try:
@@ -205,7 +205,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                 await session.commit()
                 return entity
         except DBAPIError as exc:
-            logger.error("DB Error while creating record: %s", exc)
+            logger.debug("datastore.record.create.propagated", exc_info=True)
             raise_record_write_error(exc, operation="create record", ctx=ctx)
 
     async def bulk_create_records(
@@ -252,7 +252,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         )
         sql = (
             f'SELECT * FROM "{ctx.schema_name}"."{ctx.table_name}" '
-            f'WHERE {" AND ".join(where_clauses)}'
+            f"WHERE {' AND '.join(where_clauses)}"
         )
 
         async with self.schema_manager.session_factory() as session:
@@ -328,7 +328,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                     rows = rows[:max_rows]
                 return rows, len(rows)
         except DBAPIError as exc:
-            logger.error("Query Error: %s", exc)
+            logger.debug("datastore.record.query.propagated", exc_info=True)
             raise_record_read_error(exc, operation="query execution")
 
     async def _reject_if_too_expensive(self, session, query: str) -> None:
@@ -342,7 +342,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
             explain = await session.execute(text(f"EXPLAIN (FORMAT JSON) {query}"))
             plan_json = explain.scalar_one()
         except DBAPIError as exc:
-            logger.error("Query plan error: %s", exc)
+            logger.debug("datastore.record.query_plan.propagated", exc_info=True)
             raise_record_read_error(exc, operation="query planning")
 
         if isinstance(plan_json, str):
@@ -411,9 +411,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
                         f"Unsupported filter operator '{op}'",
                         details={
                             "operator": op,
-                            "allowed_operators": [
-                                "eq", "ne", "gt", "gte", "lt", "lte", "like", "ilike",
-                            ],
+                            "allowed_operators": ["eq", "ne", "gt", "gte", "lt", "lte", "like", "ilike"],
                         },
                     )
 
@@ -469,7 +467,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
 
                 return [self._row_to_entity(dict(row._mapping), ctx) for row in rows], total
         except DBAPIError as exc:
-            logger.error("List records error: %s", exc)
+            logger.debug("datastore.record.list.propagated", exc_info=True)
             raise_record_read_error(
                 exc,
                 operation="list records",
@@ -533,7 +531,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
 
         sql = (
             f'UPDATE "{ctx.schema_name}"."{ctx.table_name}" SET {", ".join(set_clauses)} '
-            f'WHERE {" AND ".join(where_clauses)} RETURNING *'
+            f"WHERE {' AND '.join(where_clauses)} RETURNING *"
         )
 
         try:
@@ -581,7 +579,7 @@ class DatastoreRecordRepository(DatastoreRecordRepositoryPort):
         )
         sql = (
             f'DELETE FROM "{ctx.schema_name}"."{ctx.table_name}" '
-            f'WHERE {" AND ".join(where_clauses)} RETURNING *'
+            f"WHERE {' AND '.join(where_clauses)} RETURNING *"
         )
 
         async with self.schema_manager.session_factory() as session:

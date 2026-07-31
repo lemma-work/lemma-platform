@@ -8,6 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -25,13 +26,6 @@ from app.modules.agent.domain.entities import (
     AgentRun as AgentRunEntity,
     Conversation as ConversationEntity,
     Message as MessageEntity,
-)
-from app.modules.agent.domain.runtime_profiles import (
-    AgentRuntimeProfile,
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
-    RuntimeProfileScope,
-    RuntimeProfileStatus,
 )
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -52,6 +46,10 @@ class AgentModel(UUIDAuditBase):
 
     __tablename__ = "agents"
     __table_args__ = (
+        CheckConstraint(
+            "name NOT IN ('POD_DEFAULT', 'pod_default')",
+            name="ck_agents_name_not_pod_default_selector",
+        ),
         UniqueConstraint("pod_id", "name", name="uq_agent_pod_name"),
         Index("ix_agent_pod_name", "pod_id", "name"),
     )
@@ -103,140 +101,6 @@ class AgentModel(UUIDAuditBase):
         )
 
 
-class AgentRuntimeProfileModel(UUIDAuditBase):
-    """Organization-owned agent runtime profile."""
-
-    __tablename__ = "agent_runtime_profiles"
-    __table_args__ = (
-        Index(
-            "ix_agent_runtime_profile_org_scope_status",
-            "organization_id",
-            "scope",
-            "status",
-        ),
-        Index("ix_agent_runtime_profile_org_status", "organization_id", "status"),
-        Index(
-            "uq_agent_runtime_profile_org_name",
-            "organization_id",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'ORGANIZATION'"),
-        ),
-        Index(
-            "uq_agent_runtime_profile_personal_name",
-            "organization_id",
-            "user_id",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'PERSONAL'"),
-        ),
-    )
-
-    organization_id: Mapped[UUID] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    daemon_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runtime_daemons.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    scope: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    protocol: Mapped[str] = mapped_column(String(32), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    default_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    model_catalog: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    credentials: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default=RuntimeProfileStatus.ACTIVE.value,
-        index=True,
-    )
-    profile_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    organization: Mapped[Any] = relationship(
-        "Organization",
-        foreign_keys=[organization_id],
-    )
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-    daemon: Mapped["AgentRuntimeDaemonModel | None"] = relationship(
-        "AgentRuntimeDaemonModel",
-        foreign_keys=[daemon_id],
-    )
-
-    def to_entity(self) -> AgentRuntimeProfile:
-        return AgentRuntimeProfile(
-            id=str(self.id),
-            organization_id=self.organization_id,
-            user_id=self.user_id,
-            daemon_id=self.daemon_id,
-            scope=RuntimeProfileScope(self.scope),
-            kind=RuntimeProfileKind(self.kind),
-            protocol=RuntimeProfileProtocol(self.protocol),
-            name=self.name,
-            description=self.description,
-            default_model_name=self.default_model_name,
-            model_catalog=self.model_catalog or [],
-            config=self.config or {},
-            credentials=self.credentials,
-            status=RuntimeProfileStatus(self.status),
-            metadata=self.profile_metadata or {},
-        )
-
-
-class AgentRuntimeDaemonModel(UUIDAuditBase):
-    """User-owned host daemon connection/catalog state."""
-
-    __tablename__ = "agent_runtime_daemons"
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "device_key",
-            name="uq_agent_runtime_daemon_user_device",
-        ),
-        Index("ix_agent_runtime_daemons_user_status", "user_id", "status"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    device_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default="OFFLINE",
-        index=True,
-    )
-    device_info: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    harness_catalog: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    connected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    disconnected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-
 
 class ConversationModel(UUIDAuditBase):
     """Conversation shared by the pod assistant and pod agents."""
@@ -244,22 +108,23 @@ class ConversationModel(UUIDAuditBase):
     __tablename__ = "agent_conversations"
     __table_args__ = (
         Index(
-            "ix_agent_conv_pod_assistant_roots",
+            "ix_agent_conv_user_pod_roots",
             "user_id",
-            "agent_id",
             "pod_id",
-            "parent_id",
             "id",
+            postgresql_where=text("parent_id IS NULL"),
         ),
         Index(
-            "ix_agent_conv_pod_agent_roots",
-            "pod_id",
-            "agent_id",
+            "ix_agent_conv_user_pod_agent_roots",
             "user_id",
-            "parent_id",
+            "pod_id",
+            text(
+                "COALESCE(agent_id, "
+                "'00000000-0000-0000-0000-000000000001'::uuid)"
+            ),
             "id",
+            postgresql_where=text("parent_id IS NULL"),
         ),
-        Index("ix_agent_conv_parent", "parent_id"),
         Index(
             "ix_agent_conv_metadata",
             "conversation_metadata",

@@ -4,6 +4,9 @@ from uuid import UUID, uuid7
 from datetime import datetime, timezone
 from typing import Any
 
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.propagate import extract, inject
 from pydantic import BaseModel, Field, model_validator
 
 from app.core.request_context import (
@@ -22,6 +25,12 @@ class DomainEvent(BaseModel):
     correlation_id: UUID | None = None
     causation_id: UUID | None = None
     request_id: str | None = Field(default_factory=get_request_id)
+    traceparent: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    tracestate: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def populate_event_lineage(self) -> "DomainEvent":
@@ -30,6 +39,21 @@ class DomainEvent(BaseModel):
             self.correlation_id = get_correlation_id() or self.event_id
         if self.causation_id is None:
             self.causation_id = get_causation_id()
+        carrier: dict[str, str] = {}
+        if self.traceparent:
+            carrier["traceparent"] = self.traceparent
+            if self.tracestate:
+                carrier["tracestate"] = self.tracestate
+            extracted = trace.get_current_span(
+                extract(carrier, context=Context())
+            ).get_span_context()
+            if not extracted.is_valid:
+                self.traceparent = None
+                self.tracestate = None
+        else:
+            inject(carrier)
+            self.traceparent = carrier.get("traceparent")
+            self.tracestate = carrier.get("tracestate")
         return self
 
     @classmethod

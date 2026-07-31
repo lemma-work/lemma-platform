@@ -25,6 +25,13 @@ export function isLemmaDesktop(): boolean {
   return typeof window !== "undefined" && Boolean(window.__LEMMA_DESKTOP__);
 }
 
+export function shouldUseDesktopBrowserHandoff(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.__LEMMA_DESKTOP__?.mode === "hosted"
+  );
+}
+
 export function readDesktopRequestIdFromSearch(search: string): string | null {
   const value = new URLSearchParams(search).get("desktop_request")?.trim();
   return value && /^[A-Za-z0-9_-]{20,128}$/.test(value) ? value : null;

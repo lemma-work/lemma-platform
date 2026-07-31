@@ -24,6 +24,7 @@ from app.modules.test_support.fakes import PassthroughEventInbox
 from app.modules.test_support.e2e_authz import (
     create_role_visibility_context,
     item_names,
+    signup_user,
 )
 from app.modules.workflow.domain.context import TriggerContext
 from app.modules.workflow.domain.start import WorkflowStartType
@@ -49,24 +50,12 @@ async def _create_pod(client: AsyncClient, org_id: str, name: str) -> str:
 
 
 async def _signup_user(async_client: AsyncClient, index: int) -> dict:
-    email = f"test+{index}@example.com"
-    password = "TestPassword@123"
-    response = await async_client.post(
-        "/st/auth/signup",
-        json={
-            "formFields": [
-                {"id": "email", "value": email},
-                {"id": "password", "value": password},
-            ]
-        },
-    )
-    assert response.status_code == 200, response.text
-    data = response.json()
-    token = response.headers.get("st-access-token") or response.cookies.get(
-        "sAccessToken"
-    )
-    assert token
-    return {"email": email, "token": token, "user_id": data["user"]["id"]}
+    user = await signup_user(async_client, f"workflow-{index}")
+    return {
+        "email": user["email"],
+        "token": user["token"],
+        "user_id": user["id"],
+    }
 
 
 async def _add_reviewer_to_pod(
@@ -321,8 +310,11 @@ async def _set_function_run_terminal(
     error: str | None = None,
 ) -> None:
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        await FunctionRunRepository(uow).update_run(
-            UUID(function_run_id),
+        repository = FunctionRunRepository(uow)
+        run = await repository.get_run(UUID(function_run_id))
+        assert run is not None
+        await repository.update_run_and_collect(
+            run,
             status=status,
             output_data=output_data,
             error=error,
@@ -375,7 +367,9 @@ async def _drive_agent_event(conversation_id: str, *, status: AgentRunStatus) ->
     """Drive the REAL workflow agent event handler. The handler only enqueues a
     resume when an active AGENT wait exists, so a late/stale event is a no-op."""
     async with create_uow_from_session_maker(async_session_maker) as uow:
-        agent_run = await ConversationRepository(uow).get_latest_agent_run_for_conversation(
+        agent_run = await ConversationRepository(
+            uow
+        ).get_latest_agent_run_for_conversation(
             UUID(conversation_id),
         )
         assert agent_run is not None

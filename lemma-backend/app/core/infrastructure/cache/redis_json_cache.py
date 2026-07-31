@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Generic, TypeVar
+from collections.abc import Awaitable
+from typing import Any, Generic, TypeVar, cast
+from weakref import WeakSet
 
 from redis.asyncio import Redis
 
+from app.core.infrastructure.redis.client import get_redis
+
 
 T = TypeVar("T")
+_live_caches: WeakSet["RedisJsonCache[Any]"] = WeakSet()
+_DELETE_IF_VALUE_SCRIPT = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+  return redis.call('del', KEYS[1])
+end
+return 0
+"""
 
 
 class RedisJsonCache(Generic[T]):
@@ -17,6 +28,7 @@ class RedisJsonCache(Generic[T]):
         self._ttl_seconds = ttl_seconds
         self._redis: Redis | None = None
         self._lock = asyncio.Lock()
+        _live_caches.add(self)
 
     async def _get_redis(self) -> Redis:
         if self._redis is not None:
@@ -24,10 +36,7 @@ class RedisJsonCache(Generic[T]):
 
         async with self._lock:
             if self._redis is None:
-                self._redis = Redis.from_url(
-                    self._redis_url,
-                    decode_responses=True,
-                )
+                self._redis = get_redis(url=self._redis_url)
         return self._redis
 
     def build_key(self, suffix: str) -> str:
@@ -46,6 +55,37 @@ class RedisJsonCache(Generic[T]):
             payload,
             ex=ttl_seconds if ttl_seconds is not None else self._ttl_seconds,
         )
+
+    async def set_raw_if_absent(
+        self,
+        suffix: str,
+        payload: str,
+        *,
+        ttl_seconds: int | None = None,
+    ) -> bool:
+        """Atomically acquire a namespaced, expiring value."""
+        redis = await self._get_redis()
+        result = await redis.set(
+            self.build_key(suffix),
+            payload,
+            ex=ttl_seconds if ttl_seconds is not None else self._ttl_seconds,
+            nx=True,
+        )
+        return bool(result)
+
+    async def delete_if_value(self, suffix: str, expected: str) -> bool:
+        """Delete a namespaced value only when it is still owned by ``expected``."""
+        redis = await self._get_redis()
+        deleted = await cast(
+            Awaitable[Any],
+            redis.eval(
+                _DELETE_IF_VALUE_SCRIPT,
+                1,
+                self.build_key(suffix),
+                expected,
+            ),
+        )
+        return bool(deleted)
 
     async def get_json(self, suffix: str) -> Any | None:
         raw = await self.get_raw(suffix)
@@ -83,11 +123,22 @@ class RedisJsonCache(Generic[T]):
         await self.delete_prefix("")
 
     async def close(self) -> None:
-        if self._redis is None:
-            return
-        redis = self._redis
-        self._redis = None
-        if hasattr(redis, "aclose"):
-            await redis.aclose()
-        else:
-            await redis.close()
+        """Drop this cache's reference to the shared client.
+
+        The client is shared process-wide, so closing it here would break
+        every other component still using it; teardown belongs to
+        close_redis_clients().
+        """
+        async with self._lock:
+            self._redis = None
+
+async def close_redis_json_caches() -> None:
+    """Close every live process-local cache client during service teardown."""
+
+    results = await asyncio.gather(
+        *(cache.close() for cache in tuple(_live_caches)),
+        return_exceptions=True,
+    )
+    failures = [result for result in results if isinstance(result, BaseException)]
+    if failures:
+        raise failures[0]

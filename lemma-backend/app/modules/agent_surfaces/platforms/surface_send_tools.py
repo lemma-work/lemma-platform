@@ -48,8 +48,11 @@ def build_surface_send_toolset() -> FunctionToolset[ConversationContext]:
             sent = await deliver_surface_message_to_surface(
                 conversation_id=conversation_id, message=message
             )
-        except Exception as exc:  # pragma: no cover - defensive
-            logger.exception("surface_send_message failed: %s", exc)
+        except Exception:  # pragma: no cover - defensive
+            logger.debug(
+                "surface.message.send_failed",
+                exc_info=True,
+            )
             return SurfaceSendMessageResult(
                 success=False, message="Could not deliver the message."
             )

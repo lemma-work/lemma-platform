@@ -128,10 +128,7 @@ def _resolve_turn(
     if not info.allow_text_output and info.output_tools:
         # Structured-output agent: best-effort call the output tool so the run
         # completes; tests needing specific output should script it.
-        logger.warning(
-            "Mock LLM: structured output required but unscripted; "
-            f"calling '{info.output_tools[0].name}' with {{}}"
-        )
+        logger.debug('agent.mock_model.mock_llm_structured_output_required.diagnostic')
         return None, [
             {
                 "tool_name": info.output_tools[0].name,

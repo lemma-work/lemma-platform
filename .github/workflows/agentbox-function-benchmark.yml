@@ -1,0 +1,137 @@
+name: AgentBox function benchmark
+
+on:
+  schedule:
+    # Docker runs nightly. E2B runs weekly to retain live-provider signal while
+    # bounding provider spend.
+    - cron: "17 3 * * *"
+    - cron: "43 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: Provider lane to run
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - docker
+          - e2b
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentbox-function-benchmark-${{ github.event.schedule || inputs.provider || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  docker:
+    if: >-
+      github.event.schedule == '17 3 * * *' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.provider == 'docker' || inputs.provider == 'both'))
+    name: Docker API/JOB table benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install locked backend dependencies
+        run: uv sync --locked
+      - name: Install locked AgentBox dependencies
+        run: cd ../agentbox && uv sync --all-extras --locked
+      - name: Build Docker provider conformance images
+        run: cd ../agentbox && make build-test-images
+      - name: Run Docker workspace and function provider conformance
+        env:
+          AGENTBOX_RUN_DOCKER_TESTS: "1"
+        run: cd ../agentbox && .venv/bin/pytest -q tests/adapters/test_docker_real.py
+      - name: Run Docker benchmark at concurrency 5
+        env:
+          WORKSPACE_E2E_IMAGE: agentbox-workspace:dev
+          FUNCTION_E2E_IMAGE: agentbox-function:dev
+          FUNCTION_BENCH_CONCURRENCY: "5"
+        run: make benchmark-functions-docker
+      - name: Publish Docker benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentbox-function-docker-${{ github.sha }}
+          path: .benchmark-results/function-execution/docker/*.json
+          if-no-files-found: error
+          retention-days: 30
+
+  e2b:
+    if: >-
+      github.event.schedule == '43 3 * * 1' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.provider == 'e2b' || inputs.provider == 'both'))
+    name: E2B API/JOB table benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: backend-protected-e2e
+    defaults:
+      run:
+        working-directory: lemma-backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install locked backend dependencies
+        run: uv sync --locked
+      - name: Install locked AgentBox dependencies
+        run: cd ../agentbox && uv sync --all-extras --locked
+      - name: Install pinned Cloudflare tunnel client
+        run: |
+          curl --fail --silent --show-error --location \
+            --output /tmp/cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.7.2/cloudflared-linux-amd64.deb
+          echo "88195157a136199a86977c122a22084dae6907480bbe3640222b7b55834afc3a  /tmp/cloudflared.deb" \
+            | sha256sum --check
+          sudo dpkg --install /tmp/cloudflared.deb
+          cloudflared --version
+      - name: Require protected E2B credential
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+        run: test -n "$E2B_API_KEY"
+      - name: Run E2B workspace and function provider conformance
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          AGENTBOX_E2B_WORKSPACE_TEMPLATE: ${{ vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
+          AGENTBOX_E2B_WORKSPACE_BUILD_ID: ${{ vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
+          AGENTBOX_E2B_FUNCTION_TEMPLATE: ${{ vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
+          AGENTBOX_E2B_FUNCTION_BUILD_ID: ${{ vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
+        run: |
+          test -n "$AGENTBOX_E2B_WORKSPACE_TEMPLATE"
+          test -n "$AGENTBOX_E2B_WORKSPACE_BUILD_ID"
+          test -n "$AGENTBOX_E2B_FUNCTION_TEMPLATE"
+          test -n "$AGENTBOX_E2B_FUNCTION_BUILD_ID"
+          cd ../agentbox
+          AGENTBOX_RUN_E2B_TESTS=1 .venv/bin/pytest -q tests/adapters/test_e2b_real.py
+      - name: Run E2B benchmark at concurrency 5
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          AGENTBOX_E2B_WORKSPACE_TEMPLATE: ${{ vars.AGENTBOX_E2B_WORKSPACE_TEMPLATE }}
+          AGENTBOX_E2B_WORKSPACE_BUILD_ID: ${{ vars.AGENTBOX_E2B_WORKSPACE_BUILD_ID }}
+          AGENTBOX_E2B_FUNCTION_TEMPLATE: ${{ vars.AGENTBOX_E2B_FUNCTION_TEMPLATE }}
+          AGENTBOX_E2B_FUNCTION_BUILD_ID: ${{ vars.AGENTBOX_E2B_FUNCTION_BUILD_ID }}
+          FUNCTION_BENCH_CONCURRENCY: "5"
+          # The protected lane has no ngrok account dependency. Local acceptance
+          # may select ngrok to distinguish tunnel failures from executor failures.
+          FUNCTION_BENCH_TUNNEL: cloudflared
+        run: make benchmark-functions-e2b
+      - name: Publish E2B benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentbox-function-e2b-${{ github.sha }}
+          path: .benchmark-results/function-execution/e2b/*.json
+          if-no-files-found: error
+          retention-days: 30

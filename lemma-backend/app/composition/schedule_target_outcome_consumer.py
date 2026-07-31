@@ -75,9 +75,9 @@ async def on_workflow_run_terminal(
                 ),
             )
         if changed:
-            fs_logger.info(
-                "Recorded workflow %s outcome for schedule ledger",
-                parsed.run_id,
+            fs_logger.debug(
+                "schedule.workflow_outcome.recorded",
+                run_id=str(parsed.run_id),
             )
 
     await inbox.process("schedule.workflow-outcomes", event, record)
@@ -121,9 +121,9 @@ async def on_agent_run_completed(
                 ),
             )
         if changed:
-            fs_logger.info(
-                "Recorded conversation %s outcome for schedule ledger",
-                parsed.conversation_id,
+            fs_logger.debug(
+                "schedule.agent_outcome.recorded",
+                conversation_id=str(parsed.conversation_id),
             )
 
     await inbox.process("schedule.agent-outcomes", event, record)

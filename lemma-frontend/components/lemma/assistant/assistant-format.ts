@@ -8,12 +8,14 @@ import {
   findPendingUserApprovalInvocation,
   formatDurationCompact,
   isRunClosingMessage,
+  isPlanToolName,
   isToolInvocationActive,
   latestUserIndex,
   messageHasToolActivity,
   messageTextContent,
   messageTimeMs,
   normalizeAgentToolName,
+  planStepsFromToolInvocation,
   preferToolInvocation,
   prepareMessagesForDisplay,
   rowIsAfterIndex,
@@ -175,7 +177,6 @@ export function toolCallPrimaryLabel(toolName: string, args: ToolCardArgs): stri
 }
 
 export function formatActiveToolSummary(toolName: string, args: ToolCardArgs): string {
-  const lowerName = toolName.toLowerCase();
   const normalizedName = normalizeToolNameForDisplay(toolName);
   const comment = commentLabelFromArgs(args);
 
@@ -194,8 +195,8 @@ export function formatActiveToolSummary(toolName: string, args: ToolCardArgs): s
     return displayResource ? `Showing ${displayResourceLabel(displayResource.request)}` : "Showing resource";
   }
 
-  if (lowerName === "update_plan") {
-    const plan = asArray(toolArg(args, "plan"));
+  if (isPlanToolName(toolName)) {
+    const plan = planStepsFromToolInvocation({ toolName, args });
     return `Updating plan (${plan.length} step${plan.length === 1 ? "" : "s"})`;
   }
 
@@ -272,7 +273,7 @@ export function formatFriendlyToolStatus(toolName: string, args: ToolCardArgs): 
     return displayResource ? `Showing ${displayResourceLabel(displayResource.request)}` : "Showing resource";
   }
 
-  if (lowerName === "update_plan" || lowerName === "write_todos") return "Updating plan";
+  if (isPlanToolName(toolName)) return "Updating plan";
   if (lowerName === "say") return "Generating speech";
   if (lowerName === "listen") return "Transcribing audio";
   if (lowerName === "spawn_subagent") return "Spawning sub-agent";
@@ -730,35 +731,14 @@ export interface TodoItem { state: TodoItemState; text: string; }
 /** Normalize a `write_todos` / `update_plan` invocation into checklist items,
  * accepting either structured task objects or markdown checklist lines. */
 export function parseTodoItems(args: Record<string, unknown>, result: Record<string, unknown>): TodoItem[] {
-  const structured = firstArrayOfRecords(result, ["todos", "tasks", "items", "plan"]).length
-    ? firstArrayOfRecords(result, ["todos", "tasks", "items", "plan"])
-    : firstArrayOfRecords(args, ["todos", "tasks", "plan"]);
-
-  if (structured.length) {
-    const mapped = structured
-      .map<TodoItem>((entry) => {
-        const text = firstRecordString(entry, ["content", "text", "title", "task", "step", "label", "name"]) || "";
-        const statusRaw = (firstRecordString(entry, ["status", "state"]) || "").toLowerCase();
-        const done = statusRaw === "completed" || statusRaw === "done" || entry.done === true || entry.completed === true;
-        const active = statusRaw === "in_progress" || statusRaw === "active" || statusRaw === "running";
-        return { state: done ? "done" : active ? "active" : "todo", text };
-      })
-      .filter((item) => item.text);
-    if (mapped.length) return mapped;
-  }
-
-  // Markdown checklist lines: "- [ ] todo" / "- [x] done" / "- [~] in-progress".
-  return asArray(toolArg(args, "todos"))
-    .map((value) => String(value))
-    .map<TodoItem>((line) => {
-      const match = /^\s*[-*]?\s*\[([ xX~\-])\]\s*(.*)$/.exec(line);
-      if (match) {
-        const mark = match[1].toLowerCase();
-        return { state: mark === "x" ? "done" : mark === "~" || mark === "-" ? "active" : "todo", text: match[2].trim() };
-      }
-      return { state: "todo", text: line.replace(/^\s*[-*]\s*/, "").trim() };
-    })
-    .filter((item) => item.text);
+  return planStepsFromToolInvocation({
+    toolName: "write_todos",
+    args,
+    result,
+  }).map((step) => ({
+    state: step.status === "completed" ? "done" : step.status === "in_progress" ? "active" : "todo",
+    text: step.step,
+  }));
 }
 
 export function readableToolEntityName(normalizedName: string, prefix: "function_" | "agent_"): string {

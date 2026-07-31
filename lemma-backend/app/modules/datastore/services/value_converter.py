@@ -6,9 +6,9 @@ from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreDataType,
 )
-import logging
+from app.core.log.log import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ValueConverter:

@@ -142,7 +142,7 @@ class AppTriggerResponseSchema:
                 )
 
                 return config_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AppTriggerResponseSchemaConfigSchemaType0 | None, data)
 
@@ -179,7 +179,7 @@ class AppTriggerResponseSchema:
                 )
 
                 return payload_example_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AppTriggerResponseSchemaPayloadExampleType0 | None, data)
 
@@ -198,7 +198,7 @@ class AppTriggerResponseSchema:
                 )
 
                 return payload_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AppTriggerResponseSchemaPayloadSchemaType0 | None, data)
 

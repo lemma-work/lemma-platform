@@ -2729,7 +2729,7 @@ def test_confirm_destructive_yes_skips_prompt():
     confirm_destructive("Delete thing?", True)
 
 
-def test_runtime_profiles_list_and_harnesses(monkeypatch):
+def test_runtime_profiles_list_and_agent_host_create(monkeypatch):
     from lemma_cli.cli_core.commands import runtime as runtime_cmd
 
     captured: dict[str, object] = {}
@@ -2743,12 +2743,7 @@ def test_runtime_profiles_list_and_harnesses(monkeypatch):
             captured["create"] = payload
             return {"id": "profile-1", **payload}
 
-    class FakeRuntime:
-        def harnesses(self):
-            captured["harnesses"] = True
-            return {"items": [{"harness_kind": "CODEX", "available": True}]}
-
-    fake_client = SimpleNamespace(runtime=FakeRuntime(), org_runtime=FakeOrgRuntime())
+    fake_client = SimpleNamespace(org_runtime=FakeOrgRuntime())
 
     def fake_run_with_client(ctx, fn):
         return fn(fake_client, SimpleNamespace(config={}, output="json"))
@@ -2759,10 +2754,6 @@ def test_runtime_profiles_list_and_harnesses(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert captured.get("profiles") is True
 
-    result = runner.invoke(app, ["--json", "runtime", "harnesses"])
-    assert result.exit_code == 0, result.stdout
-    assert captured.get("harnesses") is True
-
     result = runner.invoke(
         app,
         [
@@ -2770,23 +2761,20 @@ def test_runtime_profiles_list_and_harnesses(monkeypatch):
             "runtime",
             "profiles",
             "create",
-            "user_daemon",
+            "agent_host",
             "--name",
             "Codex on laptop",
-            "--daemon-id",
-            "daemon-1",
-            "--harness",
-            "codex",
+            "--harness-id",
+            "0199aa11-2233-7444-8555-666677778888",
             "--default-model",
             "gpt-5.5",
         ],
     )
     assert result.exit_code == 0, result.stdout
     assert captured["create"] == {
-        "source": "USER_DAEMON",
+        "source": "AGENT_HOST",
         "name": "Codex on laptop",
-        "daemon_id": "daemon-1",
-        "harness_kind": "CODEX",
+        "harness_id": "0199aa11-2233-7444-8555-666677778888",
         "default_model_name": "gpt-5.5",
     }
 

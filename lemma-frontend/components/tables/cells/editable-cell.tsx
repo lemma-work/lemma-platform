@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Check, Loader2 } from 'lucide-react';
+import { Check, Loader2 } from '@/components/ui/icons';
 import { getEnumColor } from '@/lib/utils/enum-color-utils';
 
 interface EditableCellProps {

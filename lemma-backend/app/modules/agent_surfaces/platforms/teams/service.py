@@ -39,7 +39,9 @@ logger = get_logger(__name__)
 class TeamsPlatformService:
     def __init__(self, *, credentials: dict[str, Any]) -> None:
         self.credentials = credentials
-        self._graph_base = str(credentials.get("graph_api_base_url") or GRAPH_BASE).rstrip("/")
+        self._graph_base = str(
+            credentials.get("graph_api_base_url") or GRAPH_BASE
+        ).rstrip("/")
 
     async def download_attachment_bytes(
         self,
@@ -98,7 +100,7 @@ class TeamsPlatformService:
 
         tenant_id = _tenant_id_from_credentials(self.credentials)
         if not tenant_id:
-            logger.warning("Teams get_recent_channel_messages missing tenant_id")
+            logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic')
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Cannot determine Teams tenant_id from account credentials.",
@@ -106,10 +108,7 @@ class TeamsPlatformService:
 
         token = await client.get_graph_token(tenant_id)
         if not token:
-            logger.warning(
-                "Teams get_recent_channel_messages could not acquire Graph token tenant=%s",
-                tenant_id,
-            )
+            logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic', tenant_id=tenant_id)
             return TeamsGetRecentMessagesResult(
                 success=False,
                 error="Could not acquire Graph API token for channel history.",
@@ -117,7 +116,9 @@ class TeamsPlatformService:
 
         teams_meta = self._teams_metadata(ctx)
         team_id = teams_meta.team_id if teams_meta is not None else None
-        team_aad_group_id = teams_meta.team_aad_group_id if teams_meta is not None else None
+        team_aad_group_id = (
+            teams_meta.team_aad_group_id if teams_meta is not None else None
+        )
         service_url = teams_meta.service_url if teams_meta is not None else None
         channel_id = ctx.deps.external_channel_id
         current_thread = ctx.deps.external_thread_id
@@ -166,24 +167,22 @@ class TeamsPlatformService:
                         f"{quote(str(channel_id))}/messages?$top={request.limit}"
                     )
 
-                async with session.get(url, headers=client.auth_headers(token)) as response:
+                async with session.get(
+                    url, headers=client.auth_headers(token)
+                ) as response:
                     if response.status >= 400:
-                        body = await response.text()
-                        logger.warning(
-                            "Teams get_recent_channel_messages graph failure status=%s body=%s",
-                            response.status,
-                            body[:300],
-                        )
+                        await response.text()
+                        logger.debug('agent_surfaces.service.teams_get_recent_channel_messages.diagnostic', status=response.status)
                         return TeamsGetRecentMessagesResult(
                             success=False,
                             error=f"Graph API returned HTTP {response.status}.",
                         )
                     data = await response.json()
-        except Exception as exc:
-            logger.exception(
-                "Teams get_recent_channel_messages failed conversation=%s: %s",
-                ctx.deps.conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.teams_get_recent_channel_messages.propagated',
+                conversation_id=ctx.deps.conversation_id,
+                exc_info=True,
             )
             raise
 
@@ -265,9 +264,10 @@ class TeamsPlatformService:
                     if response.status >= 400:
                         return []
                     data = await response.json()
-        except Exception as exc:
-            logger.warning(
-                "Teams fetch_recent_context failed channel=%s: %s", channel_id, exc
+        except Exception:
+            logger.debug(
+                'agent_surfaces.service.teams_fetch_recent_context_channel.diagnostic',
+                channel_id=channel_id,
             )
             return []
 
@@ -321,9 +321,8 @@ class TeamsPlatformService:
         if _looks_like_bot_attachment_url(normalized_url):
             bot_token = await client.get_bot_token()
             if not bot_token:
-                logger.warning(
-                    "Teams download plan missing bot token for bot attachment url=%s",
-                    normalized_url,
+                logger.debug(
+                    'agent_surfaces.service.teams_download_plan_missing_bot.diagnostic'
                 )
                 return None
             return {
@@ -333,12 +332,17 @@ class TeamsPlatformService:
             }
 
         if not tenant_id:
-            logger.warning("Teams download plan missing tenant_id for url=%s", normalized_url)
+            logger.debug(
+                'agent_surfaces.service.teams_download_plan_missing_tenant.diagnostic'
+            )
             return None
 
         graph_token = await client.get_graph_token(tenant_id)
         if not graph_token:
-            logger.warning("Teams download plan missing graph token tenant=%s", tenant_id)
+            logger.debug(
+                'agent_surfaces.service.teams_download_plan_missing_graph.diagnostic',
+                tenant_id=tenant_id,
+            )
             return None
 
         if _is_sharepoint_url(normalized_url):
@@ -364,9 +368,8 @@ class TeamsPlatformService:
                         "headers": {"Authorization": f"Bearer {graph_token}"},
                     }
 
-            logger.warning(
-                "Teams download plan could not resolve SharePoint url=%s",
-                normalized_url,
+            logger.debug(
+                'agent_surfaces.service.teams_download_plan_could_not.diagnostic'
             )
             return None
 
@@ -379,9 +382,8 @@ class TeamsPlatformService:
             return shared_item
 
         if content_type.startswith("image/"):
-            logger.warning(
-                "Teams download plan could not resolve image attachment url=%s",
-                normalized_url,
+            logger.debug(
+                'agent_surfaces.service.teams_download_plan_could_not.diagnostic'
             )
         return None
 
@@ -395,13 +397,10 @@ class TeamsPlatformService:
     ) -> bytes | None:
         async with session.get(url, headers=headers, allow_redirects=True) as response:
             if response.status >= 400:
-                body = await response.text()
-                logger.warning(
-                    "Teams download_file %s fetch failed status=%s url=%s body=%s",
-                    mode,
-                    response.status,
-                    url[:120],
-                    body[:300],
+                await response.text()
+                logger.debug(
+                    'agent_surfaces.service.teams_download_file_s_fetch.diagnostic',
+                    status=response.status,
                 )
                 return None
             return await response.read()
@@ -463,12 +462,10 @@ async def _resolve_shared_item_content_request(
     headers["Prefer"] = "redeemSharingLinkIfNecessary"
     async with session.get(endpoint, headers=headers) as response:
         if response.status >= 400:
-            body = await response.text()
-            logger.warning(
-                "Teams download_file could not resolve shared item url=%s status=%s body=%s",
-                url[:120],
-                response.status,
-                body[:300],
+            await response.text()
+            logger.debug(
+                'agent_surfaces.service.teams_download_file_could_not.diagnostic',
+                status=response.status,
             )
             return None
         data = await response.json()
@@ -545,13 +542,10 @@ async def _resolve_sharepoint_site_id(
     )
     async with session.get(endpoint, headers=client.auth_headers(token)) as response:
         if response.status >= 400:
-            body = await response.text()
-            logger.warning(
-                "Teams download_file could not resolve SharePoint site hostname=%s path=%s status=%s body=%s",
-                hostname,
-                site_path,
-                response.status,
-                body[:300],
+            await response.text()
+            logger.debug(
+                'agent_surfaces.service.teams_download_file_could_not.diagnostic',
+                status=response.status,
             )
             return None
         data = await response.json()
@@ -559,7 +553,9 @@ async def _resolve_sharepoint_site_id(
     return str(site_id) if site_id else None
 
 
-def _extract_graph_message_attachments(item: dict[str, Any]) -> list[TeamsMessageAttachmentSnapshot]:
+def _extract_graph_message_attachments(
+    item: dict[str, Any],
+) -> list[TeamsMessageAttachmentSnapshot]:
     results: list[TeamsMessageAttachmentSnapshot] = []
     for raw in item.get("attachments") or []:
         if not isinstance(raw, dict):

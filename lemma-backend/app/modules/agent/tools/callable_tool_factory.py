@@ -65,7 +65,7 @@ def inline_tool_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     ``$ref`` -> ``#/$defs/...`` server-side and reject the request with
     ``Error resolving schema reference ... AttributeError("'NoneType' ... lookup")``.
     The pydantic-ai model path already inlines refs via a model profile, but tool
-    schemas served over MCP to daemon harnesses (Claude Code, Cursor, OpenCode,
+    schemas served over MCP to remote harnesses (Claude Code, Cursor, OpenCode,
     ...) were passed through raw. Inline them here too. Best-effort: a schema the
     transformer can't process falls back to the original.
     """
@@ -134,10 +134,8 @@ class AgentCallableToolFactory:
                         self._build_function_tool(function, parent_agent=agent)
                     )
                 except Exception:
-                    logger.warning(
-                        "Skipping function tool %s for agent %s: build failed",
-                        function.name,
-                        agent.name,
+                    logger.debug(
+                        'agent.callable_tool_factory.skipping_function_tool_s_agent.diagnostic'
                     )
 
             # agent_<name> tools spawn child conversations, so they only exist on

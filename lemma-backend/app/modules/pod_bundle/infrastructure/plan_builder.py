@@ -174,7 +174,9 @@ class PlanBuilder:
         # --- functions -------------------------------------------------------
         existing_functions = await self._existing.function_names()
         for d in _resource_subdirs(bundle_root, "functions"):
-            steps.append(self._simple_step(StepKind.FUNCTION, d.name, existing_functions))
+            steps.append(
+                self._simple_step(StepKind.FUNCTION, d.name, existing_functions)
+            )
 
         # --- agents (+ deferred grants) --------------------------------------
         existing_agents = await self._existing.agent_names()
@@ -185,26 +187,19 @@ class PlanBuilder:
             if _has_grants(payload):
                 grant_agents.append(d.name)
 
-        # --- agent grants (after all resources exist) ------------------------
-        for name in grant_agents:
-            steps.append(
-                PlanStep(
-                    index=0,
-                    kind=StepKind.AGENT_GRANTS,
-                    name=name,
-                    action=StepAction.UPDATE,
-                )
-            )
-
         # --- workflows -------------------------------------------------------
         existing_workflows = await self._existing.workflow_names()
         for d in _resource_subdirs(bundle_root, "workflows"):
-            steps.append(self._simple_step(StepKind.WORKFLOW, d.name, existing_workflows))
+            steps.append(
+                self._simple_step(StepKind.WORKFLOW, d.name, existing_workflows)
+            )
 
         # --- schedules -------------------------------------------------------
         existing_schedules = await self._existing.schedule_names()
         for d in _resource_subdirs(bundle_root, "schedules"):
-            steps.append(self._simple_step(StepKind.SCHEDULE, d.name, existing_schedules))
+            steps.append(
+                self._simple_step(StepKind.SCHEDULE, d.name, existing_schedules)
+            )
 
         # --- surfaces --------------------------------------------------------
         existing_surfaces = await self._existing.surface_platforms()
@@ -232,10 +227,26 @@ class PlanBuilder:
         # --- files (folders parent-first, then file bytes) -------------------
         steps.extend(_file_steps(bundle_root))
 
+        # --- agent grants (after every referenced resource exists) -----------
+        for name in grant_agents:
+            steps.append(
+                PlanStep(
+                    index=0,
+                    kind=StepKind.AGENT_GRANTS,
+                    name=name,
+                    action=StepAction.UPDATE,
+                )
+            )
+
         # --- table data (after tables exist) ---------------------------------
         for name, _ in data_steps:
             steps.append(
-                PlanStep(index=0, kind=StepKind.TABLE_DATA, name=name, action=StepAction.CREATE)
+                PlanStep(
+                    index=0,
+                    kind=StepKind.TABLE_DATA,
+                    name=name,
+                    action=StepAction.CREATE,
+                )
             )
 
         for i, step in enumerate(steps):
@@ -251,9 +262,7 @@ class PlanBuilder:
             warnings=warnings,
         )
 
-    def _simple_step(
-        self, kind: StepKind, name: str, existing: set[str]
-    ) -> PlanStep:
+    def _simple_step(self, kind: StepKind, name: str, existing: set[str]) -> PlanStep:
         return PlanStep(
             index=0,
             kind=kind,
@@ -312,7 +321,10 @@ class ServiceExistingResources:
 
         service = get_agent_service(self._uow)
         agents, _ = await service.list_agents(
-            pod_id=self._pod_id, limit=1000, requester_user_id=self._user_id, ctx=self._ctx
+            pod_id=self._pod_id,
+            limit=1000,
+            requester_user_id=self._user_id,
+            ctx=self._ctx,
         )
         return {str(a.name or "") for a in agents}
 
@@ -350,11 +362,16 @@ class ServiceExistingResources:
             service = get_surface_service(self._uow)
             surfaces, _ = await service.list_surfaces_by_pod(self._pod_id, limit=100)
             return {
-                str(getattr(s, "surface_type", getattr(s, "platform", "")) or "").upper()
+                str(
+                    getattr(s, "surface_type", getattr(s, "platform", "")) or ""
+                ).upper()
                 for s in surfaces
             }
-        except Exception as exc:  # noqa: BLE001 - surfaces are best-effort in the plan
-            logger.warning("Skipping surface snapshot for pod %s: %s", self._pod_id, exc)
+        except Exception:  # noqa: BLE001 - surfaces are best-effort in the plan
+            logger.debug(
+                'pod_bundle.plan_builder.skipping_surface_snapshot_pod_s.diagnostic',
+                pod_id=self._pod_id,
+            )
             return set()
 
 

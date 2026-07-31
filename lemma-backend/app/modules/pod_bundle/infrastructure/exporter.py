@@ -261,9 +261,7 @@ class BundleExporter:
 
             # Total = the pod.json step + every selected resource type; drives the
             # progress bar deterministically without a pre-count DB round-trip.
-            total = 1 + sum(
-                1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected
-            )
+            total = 1 + sum(1 for rtype in _EXPORT_RESOURCE_TYPES if rtype in selected)
             done = 1
             await on_progress(done, total)
 
@@ -341,9 +339,7 @@ class BundleExporter:
                         )
                         if grants:
                             payload = _attach_permissions_payload(payload, grants)
-                    payload = _extract_large_text(
-                        payload, field_name="code", file_name="code.py", resource_dir=dir_
-                    )
+                    payload = _extract_large_text(payload, field_name="code", file_name="code.py", resource_dir=dir_)
                     _write_json(dir_ / f"{function_name}.json", payload)
                 done += 1
                 await on_progress(done, total)
@@ -567,8 +563,8 @@ class BundleExporter:
         try:
             service = get_surface_service(uow)
             surfaces, _ = await service.list_surfaces_by_pod(pod_id, limit=100)
-        except Exception as exc:  # noqa: BLE001 - surfaces are best-effort
-            logger.warning("Skipping surface export for pod %s: %s", pod_id, exc)
+        except Exception:  # noqa: BLE001 - surfaces are best-effort
+            logger.debug('pod_bundle.exporter.skipping_surface_export_pod_s.diagnostic', pod_id=pod_id)
             return
 
         seen_names: set[str] = set()
@@ -597,13 +593,8 @@ class BundleExporter:
                 dir_ = root / "surfaces" / surface_name
                 dir_.mkdir(parents=True, exist_ok=True)
                 _write_json(dir_ / f"{surface_name}.json", payload)
-            except Exception as exc:  # noqa: BLE001 - one bad surface is not fatal
-                logger.warning(
-                    "Skipping surface %s in pod %s export: %s",
-                    getattr(surface, "id", "?"),
-                    pod_id,
-                    exc,
-                )
+            except Exception:  # noqa: BLE001 - one bad surface is not fatal
+                logger.debug('pod_bundle.exporter.skipping_surface_s_pod_s.diagnostic', pod_id=pod_id)
 
     async def _export_app_assets(
         self,
@@ -634,9 +625,14 @@ class BundleExporter:
             source_bytes = None
 
         if source_bytes:
-            if byte_budget.allow(name=f"apps/{app_name}/source", size=len(source_bytes)):
+            if byte_budget.allow(
+                name=f"apps/{app_name}/source", size=len(source_bytes)
+            ):
                 await run_blocking(
-                    _extract_zip_bytes, source_bytes, dest / "source", limiter="cpu_bound"
+                    _extract_zip_bytes,
+                    source_bytes,
+                    dest / "source",
+                    limiter="cpu_bound",
                 )
             return
 
@@ -679,12 +675,14 @@ class BundleExporter:
         try:
             service = build_file_service(uow)
             entities = await self._walk_pod_files(service, pod_id, ctx)
-        except Exception as exc:  # noqa: BLE001 - files are best-effort
-            logger.warning("Skipping file export for pod %s: %s", pod_id, exc)
+        except Exception:  # noqa: BLE001 - files are best-effort
+            logger.debug('pod_bundle.exporter.skipping_file_export_pod_s.diagnostic', pod_id=pod_id)
             return False
 
         pod_entities = [
-            e for e in entities if str(getattr(e, "visibility", "") or "").upper() == "POD"
+            e
+            for e in entities
+            if str(getattr(e, "visibility", "") or "").upper() == "POD"
         ]
         if not pod_entities:
             return False
@@ -729,7 +727,9 @@ class BundleExporter:
                 warnings.append(f"file '{path}' skipped: {exc}")
                 continue
             # When size wasn't known up front, budget the real bytes now.
-            if not declared and not data_budget.allow(name=f"files{path}", size=len(content)):
+            if not declared and not data_budget.allow(
+                name=f"files{path}", size=len(content)
+            ):
                 continue
             target = files_root.joinpath(*parts)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -805,10 +805,8 @@ async def _resource_grants_payload(
             grantee_type=grantee_type,
             grantee_id=grantee_id,
         )
-    except Exception as exc:  # noqa: BLE001 - grant export is best-effort
-        logger.warning(
-            "Skipping grant export for %s %s: %s", grantee_type, grantee_id, exc
-        )
+    except Exception:  # noqa: BLE001 - grant export is best-effort
+        logger.debug('pod_bundle.exporter.skipping_grant_export_s_s.diagnostic', grantee_type=grantee_type, grantee_id=grantee_id)
         return None
     if not grouped:
         return None
@@ -932,9 +930,7 @@ def _extract_zip_bytes(data: bytes, dest_dir: Path) -> None:
         archive.extractall(dest_dir)
 
 
-def _csv_within_bytes(
-    rows: list[dict[str, Any]], max_bytes: int
-) -> tuple[str, int]:
+def _csv_within_bytes(rows: list[dict[str, Any]], max_bytes: int) -> tuple[str, int]:
     """Render records to CSV (CLI ``record_io.write_export_rows`` cell semantics:
     complex cells -> JSON text, None -> empty), keeping only as many *leading*
     rows as fit within ``max_bytes`` (header always included). Returns

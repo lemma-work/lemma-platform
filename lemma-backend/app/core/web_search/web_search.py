@@ -7,6 +7,7 @@ from app.core.log.log import get_logger
 # For agentic search
 logger = get_logger(__name__)
 
+
 # Input/output models for web search functions
 class WebSearchRequest(BaseModel):
     """Request model for standard web search"""
@@ -25,7 +26,9 @@ class WebSearchResponse(BaseModel):
         default_factory=list, description="List of search results"
     )
     message: Optional[str] = Field(None, description="Status message")
-    error: Optional[str] = Field(None, description="Error message if the search was not successful")
+    error: Optional[str] = Field(
+        None, description="Error message if the search was not successful"
+    )
 
 
 async def search_web(request: WebSearchRequest) -> WebSearchResponse:
@@ -50,8 +53,8 @@ async def search_web(request: WebSearchRequest) -> WebSearchResponse:
             success=True, results=results, message="Web search completed successfully"
         )
 
-    except Exception as e:
-        logger.error(f"Error in web search: {str(e)}")
+    except Exception:
+        logger.debug("web_search.request.failed", exc_info=True)
         return WebSearchResponse(
-            success=False, message=f"Error performing web search: {str(e)}"
+            success=False, message="Web search failed"
         )

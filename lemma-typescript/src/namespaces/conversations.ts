@@ -1,9 +1,9 @@
 import type { HttpClient } from "../http.js";
-import type { AgentHarnessListResponse } from "../openapi_client/models/AgentHarnessListResponse.js";
 import type { ApprovalDecisionResponse } from "../openapi_client/models/ApprovalDecisionResponse.js";
 import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeConfig.js";
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
+import type { AgentRunStartResponse } from "../openapi_client/models/AgentRunStartResponse.js";
 import type { ConversationListResponse } from "../openapi_client/models/ConversationListResponse.js";
 import type { ConversationType } from "../openapi_client/models/ConversationType.js";
 import type { CreateConversationRequest } from "../openapi_client/models/CreateConversationRequest.js";
@@ -19,6 +19,8 @@ import type {
   ConversationModel,
   CursorPage,
 } from "../types.js";
+
+export const POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT" as const;
 
 type ConversationCreateInput = CreateConversationRequest & {
   agent_runtime?: AgentRuntimeConfig | null;
@@ -67,7 +69,6 @@ function normalizeMessage(message: ConversationMessage): ConversationMessage {
 }
 
 export class ConversationsNamespace {
-  private runtimeCatalogPromise: Promise<AgentHarnessListResponse> | undefined;
   private profileCatalogPromises = new Map<string, Promise<AgentRuntimeProfileListResponse>>();
 
   constructor(
@@ -93,14 +94,6 @@ export class ConversationsNamespace {
       throw new Error("pod_id is required for this conversation operation.");
     }
     return podId;
-  }
-
-  private listRuntimeCatalog(): Promise<AgentHarnessListResponse> {
-    this.runtimeCatalogPromise ??= this.http.request<AgentHarnessListResponse>(
-      "GET",
-      "/agent-runtime/harnesses",
-    );
-    return this.runtimeCatalogPromise;
   }
 
   private listProfileCatalog(orgId: string): Promise<AgentRuntimeProfileListResponse> {
@@ -184,7 +177,9 @@ export class ConversationsNamespace {
     const podId = this.requirePodId(options.pod_id);
     return this.http.request<ConversationListResponse>("GET", `/pods/${podId}/conversations`, {
       params: {
-        agent_name: options.agent_name,
+        agent_name: options.agent_name === null
+          ? POD_DEFAULT_AGENT_SELECTOR
+          : options.agent_name,
         parent_id: options.parent_id,
         type: options.type,
         limit: options.limit ?? 20,
@@ -204,6 +199,16 @@ export class ConversationsNamespace {
     return this.list({ ...options, agent_name: agentName });
   }
 
+  listDefault(
+    options: {
+      pod_id?: string | null;
+      limit?: number;
+      page_token?: string | null;
+    } = {},
+  ): Promise<ConversationListResponse> {
+    return this.list({ ...options, agent_name: POD_DEFAULT_AGENT_SELECTOR });
+  }
+
   async listModels(options: { orgId?: string | null } = {}): Promise<{ items: AvailableModelInfo[]; limit: number; next_page_token: null }> {
     const orgId = options.orgId?.trim();
     if (orgId) {
@@ -216,20 +221,9 @@ export class ConversationsNamespace {
       };
     }
 
-    const catalog = await this.listRuntimeCatalog();
-    const items = catalog.items.flatMap((harness) =>
-      (harness.models ?? []).map((model) => ({
-        id: model as ConversationModel,
-        name: model,
-        harness_kind: harness.harness_kind,
-        description: harness.daemon_display_name,
-      })),
-    );
-    return {
-      items,
-      limit: items.length,
-      next_page_token: null,
-    };
+    // Models are org-scoped: they come from runtime profiles, including the
+    // harness profiles that replaced the local daemon's global catalog.
+    return { items: [], limit: 0, next_page_token: null };
   }
 
   async create(payload: ConversationCreateInput = {}): Promise<Conversation> {
@@ -310,13 +304,32 @@ export class ConversationsNamespace {
     });
   }
 
-  resumeStream(
+  retryFailedRun(
     conversationId: string,
     options: { pod_id?: string | null; signal?: AbortSignal } = {},
+  ): Promise<AgentRunStartResponse> {
+    const podId = this.requirePodId(options.pod_id);
+    return this.http.request<AgentRunStartResponse>(
+      "POST",
+      `/pods/${podId}/conversations/${conversationId}/retry`,
+      {
+        signal: options.signal,
+      },
+    );
+  }
+
+  resumeStream(
+    conversationId: string,
+    options: {
+      pod_id?: string | null;
+      signal?: AbortSignal;
+      agent_run_id?: string | null;
+    } = {},
   ) {
     const podId = this.requirePodId(options.pod_id);
     return this.http.stream(`/pods/${podId}/conversations/${conversationId}/stream`, {
       signal: options.signal,
+      params: { agent_run_id: options.agent_run_id },
       headers: {
         Accept: "text/event-stream",
       },

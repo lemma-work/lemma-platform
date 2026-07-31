@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthManager } from "../auth.js";
+import { AuthManager as RealAuthManager, clearTestingToken, setTestingToken } from "../auth.js";
 import {
   HttpClient,
   NetworkError,
@@ -28,12 +29,47 @@ function jsonResponse(body: unknown, status = 200, headers: Record<string, strin
 }
 
 afterEach(() => {
+  clearTestingToken();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 describe("HttpClient.request retry loop", () => {
+  it("preserves empty query values", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { auth } = fakeAuth();
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 0 });
+    await client.request("GET", "/pods/pod-1/conversations", {
+      params: { agent_name: "" },
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api.test/pods/pod-1/conversations?agent_name=",
+    );
+  });
+
+  it("preserves bearer auth and the browser multipart boundary for FormData", async () => {
+    setTestingToken("TESTTOKEN");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    const auth = new RealAuthManager("https://api.test", "https://auth.test");
+    const client = new HttpClient("https://api.test", auth, { maxRetries: 0 });
+    const form = new FormData();
+    form.append("data", new Blob(["bundle"]), "bundle.zip");
+
+    await client.request("POST", "/upload", { body: form, isFormData: true });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(init.body).toBe(form);
+    expect(headers.get("authorization")).toBe("Bearer TESTTOKEN");
+    expect(headers.has("content-type")).toBe(false);
+    expect(headers.get("x-lemma-client")).toMatch(/^lemma-sdk-ts\//);
+  });
+
   it("retries a 503 then returns the success body", async () => {
     vi.useFakeTimers();
     const fetchMock = vi

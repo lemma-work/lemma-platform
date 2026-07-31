@@ -21,7 +21,7 @@ from app.core.infrastructure.channels.channel_service import (
     get_channel_service,
 )
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
-from app.composition.pod_bundle_pod import PodViewerDep
+from app.composition.pod_bundle_pod import PodEditorDep, PodViewerDep
 from app.modules.pod_bundle.api.dependencies import PublishUseCasesDep
 from app.modules.pod_bundle.api.schemas import (
     PublishStartRequest,
@@ -51,7 +51,7 @@ _TERMINAL_EVENT_TYPES = {"completed", "error", "expired"}
         "Publish the pod as a bundle to a new GitHub repository. Returns 202 with "
         "a publish_id; poll the status endpoint for the repo URL."
     ),
-    dependencies=[PodViewerDep],
+    dependencies=[PodEditorDep],
 )
 async def start_publish(
     pod_id: UUID,
@@ -63,6 +63,7 @@ async def start_publish(
         pod_id=pod_id,
         user_id=user.id,
         repo_name=data.repo_name,
+        mode=data.mode,
         private=data.private,
         account_id=data.account_id,
         ai_readme=data.ai_readme,

@@ -1,24 +1,23 @@
 'use client';
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Play, Save, Share2 } from 'lucide-react';
+import { Loader2, Save } from '@/components/ui/icons';
 
 import { FunctionEditor } from '@/components/functions/function-editor';
 import { FunctionTestPanel } from '@/components/functions/function-test-panel';
 import {
-    ResourceDetailHeader,
+    ResourceHeader,
     ResourceDetailShell,
-    ResourceHeaderTabs,
     ResourceWorkSplit,
 } from '@/components/pod/resource-layout';
 import { ResourceArrivalNotice } from '@/components/shared/resource-feedback';
-import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
+import { type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useFunction, useUpdateFunction } from '@/lib/hooks/use-functions';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { Function as FunctionType, UpdateFunctionData } from '@/lib/types';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 const SIDEBAR_WIDTH_CLASSES = [
     'w-[35%]', 'w-[36%]', 'w-[37%]', 'w-[38%]', 'w-[39%]', 'w-[40%]', 'w-[41%]', 'w-[42%]',
@@ -45,9 +44,8 @@ export default function FunctionDetailPage({
     const [localData, setLocalData] = useState<FunctionType | null>(null);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
     const [isTestPanelOpen, setIsTestPanelOpen] = useState(true);
-    const [panelTab, setPanelTab] = useState<'code' | 'config' | 'schemas' | 'runs'>('code');
-    const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-    const [openRunRequestKey, setOpenRunRequestKey] = useState(0);
+    const [selectedRunId] = useState<string | null>(null);
+    const [openRunRequestKey] = useState(0);
     const [sidebarWidthPct, setSidebarWidthPct] = useState(48);
     const [isResizingSidebar, setIsResizingSidebar] = useState(false);
     const [layoutWidth, setLayoutWidth] = useState(0);
@@ -134,6 +132,7 @@ export default function FunctionDetailPage({
             lastSavedHashRef.current = payloadHash;
             lastFailedHashRef.current = null;
             setHasUnsavedChanges(false);
+            playSoundFeedback('action-success');
         } catch (error) {
             lastFailedHashRef.current = payloadHash;
             console.error('Failed to save function:', error);
@@ -262,33 +261,15 @@ export default function FunctionDetailPage({
 
     return (
         <ResourceDetailShell>
-            <ResourceDetailHeader
+            <ResourceHeader
                 title={localData.name}
                 backHref={`/pod/${podId}/functions`}
                 backLabel="Functions"
-                meta={(
-                    <div className="flex flex-wrap items-center gap-2">
-                        <ResourceVisibilityBadge visibility={localData.visibility} resourceLabel="functions" />
-                        <span>Function</span>
-                        {canUpdateCurrentFunction
-                            ? (hasUnsavedChanges || updateFunction.isPending ? <span className="text-[var(--state-warning)]">Saving edits</span> : <span>Saved</span>)
-                            : <span>Read-only</span>}
-                    </div>
-                )}
-                tabs={(
-                    <ResourceHeaderTabs
-                        value={panelTab}
-                        onValueChange={setPanelTab}
-                        items={[
-                            { value: 'code', label: 'Code' },
-                            { value: 'config', label: 'Config' },
-                            { value: 'schemas', label: 'Schemas' },
-                            { value: 'runs', label: 'Runs' },
-                        ]}
-                    />
-                )}
+                // The identity card below owns the name and the visibility, so
+                // the bar carries neither — no badge, and no "Function · Saved"
+                // strip. Unsaved work already shows as the Save button.
+                titleOwner="page"
                 actions={(
-                    <TooltipProvider>
                     <>
                         {canUpdateCurrentFunction && (hasUnsavedChanges || updateFunction.isPending) ? (
                             <Button
@@ -302,55 +283,7 @@ export default function FunctionDetailPage({
                                 {updateFunction.isPending ? 'Saving...' : 'Save changes'}
                             </Button>
                         ) : null}
-                        {canExecuteCurrentFunction ? (
-                            <Tooltip>
-                                <TooltipTrigger asChild>
-                                    <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        onClick={() => setIsTestPanelOpen((prev) => !prev)}
-                                        className="h-8 w-8 rounded"
-                                        aria-label={isTestPanelOpen ? 'Hide test panel' : 'Show test panel'}
-                                    >
-                                        <Play className="h-4 w-4" />
-                                    </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>{isTestPanelOpen ? 'Hide test panel' : 'Show test panel'}</TooltipContent>
-                            </Tooltip>
-                        ) : null}
-                        {canUpdateCurrentFunction ? (
-                            <ResourceShareButton
-                                value={localData.visibility}
-                                podId={podId}
-                                resourceType="function"
-                                resourceId={localData.id}
-                                resourceLabel="functions"
-                                resourceName={localData.name}
-                                shareUrl={functionShareUrl}
-                                onChange={handleShareVisibilityChange}
-                                trigger={({ openShare, disabled }) => (
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                            <Button
-                                                type="button"
-                                                variant="ghost"
-                                                size="icon"
-                                                className="h-8 w-8 rounded"
-                                                onClick={openShare}
-                                                disabled={disabled}
-                                                aria-label="Share"
-                                            >
-                                                <Share2 className="h-4 w-4" />
-                                            </Button>
-                                        </TooltipTrigger>
-                                        <TooltipContent>Share</TooltipContent>
-                                    </Tooltip>
-                                )}
-                            />
-                        ) : null}
                     </>
-                    </TooltipProvider>
                 )}
             />
             <ResourceArrivalNotice
@@ -359,7 +292,7 @@ export default function FunctionDetailPage({
                 description="Ready to test. Try sample input here, then tighten schemas or use it in a workflow."
                 celebrate
                 actions={[
-                    ...(canUpdateCurrentFunction ? [{ label: 'Edit schemas', onClick: () => setPanelTab('schemas'), variant: 'primary' as const }] : []),
+                    ...(canUpdateCurrentFunction ? [{ label: 'Open function', onClick: () => setIsTestPanelOpen(true), variant: 'primary' as const }] : []),
                     ...(canCreateWorkflow ? [{ label: 'Create workflow', href: `/pod/${podId}/flows/new` }] : []),
                 ]}
                 className="mx-4 mt-3"
@@ -375,20 +308,7 @@ export default function FunctionDetailPage({
                         <FunctionEditor
                             podId={podId}
                             functionData={localData}
-                            panelTab={panelTab}
-                            onPanelTabChange={setPanelTab}
                             onUpdate={handleUpdate}
-                            onSave={() => void handleSave()}
-                            isUpdating={updateFunction.isPending}
-                            hasUnsavedChanges={hasUnsavedChanges}
-                            isTestPanelOpen={canShowTestPanel}
-                            onToggleTestPanel={() => setIsTestPanelOpen((prev) => !prev)}
-                            onSelectRun={(runId) => {
-                                setIsTestPanelOpen(true);
-                                setSelectedRunId(runId);
-                                setOpenRunRequestKey((prev) => prev + 1);
-                            }}
-                            hideHeader
                             isNameEditable={false}
                             shareUrl={functionShareUrl}
                             onShareVisibilityChange={handleShareVisibilityChange}
@@ -408,6 +328,9 @@ export default function FunctionDetailPage({
                         ) : null
                     )}
                     aside={canShowTestPanel ? (
+                        // The dock is a card on the canvas, like every other
+                        // resource page — not a slab bolted to the window edge.
+                        <div className="agent-dock">
                             <FunctionTestPanel
                                 podId={podId}
                                 functionId={functionId}
@@ -415,8 +338,11 @@ export default function FunctionDetailPage({
                                 openRunRequestKey={openRunRequestKey}
                                 onClose={() => setIsTestPanelOpen(false)}
                             />
+                        </div>
                     ) : undefined}
-                    asideClassName={!isStackedLayout ? `min-w-[520px] ${sidebarWidthClass}` : undefined}
+                    asideClassName={isStackedLayout
+                        ? 'agent-dock-shell agent-dock-shell-stacked w-full border-t-0'
+                        : `agent-dock-shell border-l-0 min-w-[420px] ${sidebarWidthClass}`}
                 />
             </div>
         </ResourceDetailShell>

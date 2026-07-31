@@ -9,7 +9,6 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import { ResourceMetric, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { cn } from '@/lib/utils';
 import {
     ArrowLeft,
@@ -18,7 +17,7 @@ import {
     Minimize2,
     Play,
     RefreshCw,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import { WorkflowNode, WorkflowRun } from '@/lib/types';
 import {
     formatRunIdShort,
@@ -51,23 +50,26 @@ import {
     UNREACHED_NODE_SELECTION_PREFIX,
     type RunCardRun,
     type StepSelectionMode,
-    type WorkflowEdgeLike,
 } from './run-format';
-import { EmptyRunState, RunListCard } from './run-cards';
+import { RunListCard } from './run-cards';
 import { RunPlayback, RunStepRail } from './run-detail';
 
 interface FlowExecutionPanelProps {
     podId: string;
     flowName: string;
+    /**
+     * The dock splits the same data in two: `run` is the verb and what happened
+     * last, `history` is the list.
+     */
+    view?: 'run' | 'history';
 }
 
-export function FlowExecutionPanel({ podId, flowName }: FlowExecutionPanelProps) {
+export function FlowExecutionPanel({ podId, flowName, view = 'run' }: FlowExecutionPanelProps) {
     const [isStartingRun, setIsStartingRun] = useState(false);
     const router = useRouter();
     const client = useMemo(() => getLemmaClient(podId), [podId]);
     const { data: flowData } = useFlow(podId, flowName);
     const nodes = flowData?.nodes || [];
-    const edges = (flowData?.edges || []) as WorkflowEdgeLike[];
 
     const flowSession = useFlowSession({
         client,
@@ -136,35 +138,58 @@ export function FlowExecutionPanel({ podId, flowName }: FlowExecutionPanelProps)
     };
 
     const runCount = runs?.length ?? 0;
+    const openRun = (runId: string) => {
+        router.push(`/pod/${podId}/flows/${encodeURIComponent(flowData?.name || flowName)}/runs/${encodeURIComponent(runId)}`);
+    };
+
+    // The dock's "Run" half: the verb, and the last thing that happened. The map
+    // and the step count live on the document beside it, so neither is repeated.
+    if (view === 'run') {
+        const latest = runs[0];
+        const latestId = typeof latest?.id === 'string' ? latest.id : '';
+
+        return (
+            <div className="flow-dock-run">
+                <Button
+                    type="button"
+                    className="w-full"
+                    onClick={() => void handleRun()}
+                    disabled={isStartingRun || nodes.length === 0}
+                >
+                    {isStartingRun ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    Run now
+                </Button>
+
+                {nodes.length === 0 ? (
+                    <p className="flow-dock-note">Add a step before there is anything to run.</p>
+                ) : latest ? (
+                    <div className="flow-dock-latest">
+                        <p className="flow-dock-note">Most recent</p>
+                        <RunListCard run={latest} nodes={nodes} compact onOpen={() => latestId && openRun(latestId)} />
+                    </div>
+                ) : (
+                    <p className="flow-dock-note">
+                        Start it once to inspect each step, output, wait, and agent handoff.
+                    </p>
+                )}
+            </div>
+        );
+    }
 
     return (
-        <div className="context-shell h-full overflow-y-auto bg-transparent" onScroll={handleRunsScroll}>
-            <div className="context-toolbar mb-4 flex-col items-stretch sm:flex-row sm:items-center">
-                <ResourceMetricStrip className="mb-0">
-                    <ResourceMetric label="Runs" value={runCount} active />
-                    {nodes.length > 0 ? <ResourceMetric label="Steps" value={nodes.length} /> : null}
-                </ResourceMetricStrip>
-                <div className="flex items-center justify-between gap-2 sm:justify-end">
-                    <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-tertiary)] sm:hidden">
-                        Newest first.
-                    </p>
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => void refreshRuns()}
-                            disabled={isLoadingRuns}
-                            aria-label="Refresh runs"
-                        >
-                            <RefreshCw className={cn('h-4 w-4', isLoadingRuns && 'animate-spin')} />
-                        </Button>
-                        <Button size="sm" className="h-8 gap-2 px-3 text-xs" onClick={() => void handleRun()} disabled={isStartingRun}>
-                            {isStartingRun ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-                            Run now
-                        </Button>
-                    </div>
-                </div>
+        <div className="h-full overflow-y-auto bg-transparent" onScroll={handleRunsScroll}>
+            <div className="flow-dock-history-bar">
+                <span>{runCount} run{runCount === 1 ? '' : 's'} · newest first</span>
+                <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7"
+                    onClick={() => void refreshRuns()}
+                    disabled={isLoadingRuns}
+                    aria-label="Refresh runs"
+                >
+                    <RefreshCw className={cn('h-3.5 w-3.5', isLoadingRuns && 'animate-spin')} />
+                </Button>
             </div>
 
             {isLoadingRuns ? (
@@ -172,15 +197,11 @@ export function FlowExecutionPanel({ podId, flowName }: FlowExecutionPanelProps)
                     <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
                 </div>
             ) : (runs || []).length === 0 ? (
-                <EmptyRunState
-                    nodes={nodes}
-                    edges={edges}
-                    onRun={handleRun}
-                    isStartingRun={isStartingRun}
-                    editHref={`/pod/${podId}/flows/${encodeURIComponent(flowName)}?mode=edit`}
-                />
+                // Just the fact. The verb lives on the Run tab and the steps are
+                // on the document, so neither belongs here as well.
+                <p className="flow-dock-note px-3">Nothing has run yet.</p>
             ) : (
-                <div className="lemma-index-list lemma-run-list">
+                <div className="flow-dock-history-list">
                     {(runs || []).map((run) => {
                         const runIdValue = typeof run.id === 'string' ? run.id : '';
 
@@ -189,10 +210,8 @@ export function FlowExecutionPanel({ podId, flowName }: FlowExecutionPanelProps)
                                 key={runIdValue || `${run.status}-${run.created_at || 'unknown'}`}
                                 run={run}
                                 nodes={nodes}
-                                onOpen={() => {
-                                    if (!runIdValue) return;
-                                    router.push(`/pod/${podId}/flows/${encodeURIComponent(flowData?.name || flowName)}/runs/${encodeURIComponent(runIdValue)}`);
-                                }}
+                                compact
+                                onOpen={() => runIdValue && openRun(runIdValue)}
                             />
                         );
                     })}
@@ -380,7 +399,7 @@ export function FlowRunPageSurface({
     const scopedLiveRun = liveRun?.id === runId ? liveRun : null;
     const run = useMemo(() => pickFreshestRun(scopedLiveRun, runData), [scopedLiveRun, runData]);
     const nodes = flowData?.nodes || [];
-    const edges = (flowData?.edges || []) as WorkflowEdgeLike[];
+    const edges = flowData?.edges || [];
     const runStatus = toRunStatus(run?.status);
     const currentNodeId = run ? getRunCurrentNodeId(run) : null;
     const currentNodePosition = getStepPositionLabel(currentNodeId, nodes);

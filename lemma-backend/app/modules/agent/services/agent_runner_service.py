@@ -68,6 +68,7 @@ from app.modules.agent.services.realtime import (
 )
 from app.modules.agent.services.agent_context_brief import AgentContextBriefBuilder
 from app.modules.agent.services.run_message_writer import RunMessageWriter
+from app.modules.agent.services.run_observer_delivery import notify_run_failed
 from app.modules.agent.services.run_usage_recorder import RunUsageRecorder
 from app.composition.agent_usage import (
     UsageReservation,
@@ -86,6 +87,7 @@ from app.modules.agent.tools.workspace_cli.pydantic_adapter import view_image_to
 from app.modules.agent.tools.tool_assembler import RunToolAssembler
 from app.core.crypto import get_secret_cipher
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_NAME
+
 logger = get_logger(__name__)
 FULL_HISTORY_AGENT_RUN_COUNT = 5
 
@@ -116,35 +118,18 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
     try:
         await coro
     except asyncio.CancelledError:
-        logger.warning(
-            "Agent run finalization cancelled run=%s", agent_run_id
-        )
-    except Exception as exc:
-        logger.error(
-            "Agent run finalization failed run=%s error_type=%s",
-            agent_run_id,
-            type(exc).__name__,
-            exc_info=True,
-        )
+        logger.debug('agent.agent_runner_service.agent_run_finalization_cancelled_run.diagnostic', agent_run_id=agent_run_id)
+    except Exception:
+        logger.error("agent.agent_runner_service.agent_run_finalization_run_s.failed", agent_run_id=agent_run_id, exc_info=True)
 
 
 def _rejected_run_error_message(data: object) -> str:
-    """Build a user-facing message for a daemon-capacity REJECTED event.
-
-    Falls back to a generic message if the structured shape the daemon sends
-    (``{"reason", "active_run_count", "max_concurrent_runs"}``) isn't present
-    -- keeps this robust against an older/newer daemon sending a different
-    payload shape.
-    """
-    if isinstance(data, dict) and data.get("reason") == "daemon_at_capacity":
-        active = data.get("active_run_count")
-        cap = data.get("max_concurrent_runs")
-        if isinstance(active, int) and isinstance(cap, int):
-            return (
-                f"Daemon busy: {active}/{cap} runs already active. "
-                "Try again in a moment."
-            )
-    return "Daemon rejected this run (at capacity). Try again in a moment."
+    """Build a user-facing message for a pre-dispatch harness rejection."""
+    if isinstance(data, dict):
+        detail = data.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    return "The Agent Host rejected this run before dispatch. Try again."
 
 
 def _profile_model_settings(
@@ -157,7 +142,9 @@ def _profile_model_settings(
     if not isinstance(config, dict):
         return None
     model_settings = config.get("model_settings")
-    return model_settings if isinstance(model_settings, dict) and model_settings else None
+    return (
+        model_settings if isinstance(model_settings, dict) and model_settings else None
+    )
 
 
 class AgentRunObserver(Protocol):
@@ -179,6 +166,13 @@ class AgentRunObserver(Protocol):
         conversation: Conversation,
         ctx: ConversationContext,
     ) -> None: ...
+
+    async def on_run_failed(
+        self,
+        conversation: Conversation,
+        error: Exception,
+    ) -> None:
+        raise NotImplementedError
 
 
 class AgentRunnerService:
@@ -264,7 +258,7 @@ class AgentRunnerService:
                 workspace_cwd=workspace_location.cwd,
                 pod_cwd=pod_cwd,
                 # Only the in-process pydantic (LEMMA) harness catches the
-                # ask_user/request_approval pause signal; daemon harnesses run the
+                # ask_user/request_approval pause signal; remote harnesses run the
                 # tools over MCP and own their own session, so they can't be paused
                 # mid tool-call and use the WAITING output contract instead.
                 supports_pause_signal=(
@@ -282,8 +276,8 @@ class AgentRunnerService:
                     user_id=user_id,
                     pod_id=conversation.pod_id,
                 )
-            except Exception as exc:
-                logger.warning("Failed to build agent context brief: %s", exc)
+            except Exception:
+                logger.debug('agent.agent_runner_service.build_agent_context_brief_s.diagnostic')
             full_toolsets = await self.tool_assembler.assemble(
                 agent=agent,
                 conversation=conversation,
@@ -297,7 +291,7 @@ class AgentRunnerService:
             )
             if supports_vision and view_image_toolset not in full_toolsets:
                 full_toolsets = [*full_toolsets, view_image_toolset]
-            # Daemon harnesses (Codex/Claude-Code) reach every tool through the MCP
+            # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
             # server, so they keep the full toolset list. The in-process LEMMA
             # harness instead shows core tools directly and defers the heavy "extra"
             # tools over MCP, layering current-time/caching/todo capabilities.
@@ -377,12 +371,8 @@ class AgentRunnerService:
                         try:
                             await observer.on_run_started(conversation, ctx)
                             observer_started = True
-                        except Exception as exc:
-                            logger.warning(
-                                "Agent run observer start failed run=%s: %s",
-                                agent_run_id,
-                                exc,
-                            )
+                        except Exception:
+                            logger.debug('agent.agent_runner_service.agent_run_observer_start_run.diagnostic', agent_run_id=agent_run_id)
                     try:
                         run_usage_context = usage_context_from_agent_context(
                             ctx,
@@ -402,14 +392,11 @@ class AgentRunnerService:
                                     continue
                                 if observer is not None:
                                     try:
-                                        await observer.on_event(event, conversation, ctx)
-                                    except Exception as exc:
-                                        logger.warning(
-                                            "Agent run observer failed run=%s event=%s: %s",
-                                            agent_run_id,
-                                            event.type,
-                                            exc,
+                                        await observer.on_event(
+                                            event, conversation, ctx
                                         )
+                                    except Exception:
+                                        logger.debug('agent.agent_runner_service.agent_run_observer_run_s.diagnostic', agent_run_id=agent_run_id)
                                 if event.type == AgentEventType.USAGE:
                                     if isinstance(event.data, AgentRunUsage):
                                         usage_data = event.data
@@ -436,12 +423,16 @@ class AgentRunnerService:
                                 )
                                 if event.type == AgentEventType.MESSAGE:
                                     saved_output = (
-                                        self.message_writer.output_data_from_event(event)
+                                        self.message_writer.output_data_from_event(
+                                            event
+                                        )
                                     )
                                     if saved_output is not None:
                                         output_data = saved_output
                                     event_final_status, event_final_error = (
-                                        self.message_writer.final_status_from_event(event)
+                                        self.message_writer.final_status_from_event(
+                                            event
+                                        )
                                     )
                                     if event_final_status is not None:
                                         final_status = event_final_status
@@ -453,18 +444,17 @@ class AgentRunnerService:
                         if observer is not None and observer_started:
                             try:
                                 await observer.on_run_finished(conversation, ctx)
-                            except Exception as exc:
-                                logger.warning(
-                                    "Agent run observer finish failed run=%s: %s",
-                                    agent_run_id,
-                                    exc,
-                                )
+                            except Exception:
+                                logger.debug('agent.agent_runner_service.agent_run_observer_finish_run.diagnostic', agent_run_id=agent_run_id)
         except BaseException as exc:
             if isinstance(exc, Exception):
-                logger.error("Agent run failed: %s", exc, exc_info=True)
+                logger.error(
+                    "agent.agent_runner_service.agent_run_s.failed", exc_info=True
+                )
             else:
                 logger.warning(
-                    "Agent run cancelled (timeout or shutdown): run=%s", agent_run_id
+                    "agent.agent_runner_service.agent_run_cancelled_timeout_or.timeout",
+                    agent_run_id=agent_run_id,
                 )
             # Finalize the run, shielding the DB write so it completes even when
             # we're inside a cancelled cancel scope (streaq task timeout / worker
@@ -504,6 +494,7 @@ class AgentRunnerService:
                     ),
                     agent_run_id=agent_run_id,
                 )
+                await notify_run_failed(observer, conversation, exc, agent_run_id)
 
     async def _resolve_agent_runtime(
         self,
@@ -537,11 +528,10 @@ class AgentRunnerService:
     async def _should_stop_run(self, agent_run_id: UUID) -> bool:
         async with self.uow_factory() as uow:
             agent_run = await ConversationRepository(uow).get_agent_run(agent_run_id)
-        return (
-            agent_run is not None
-            and agent_run.status
-            in {AgentRunStatus.STOP_REQUESTED, AgentRunStatus.STOPPED}
-        )
+        return agent_run is not None and agent_run.status in {
+            AgentRunStatus.STOP_REQUESTED,
+            AgentRunStatus.STOPPED,
+        }
 
     def _make_stop_checker(self, agent_run_id: UUID) -> Callable[[], Awaitable[bool]]:
         """Build a throttled, sticky stop checker for the harness.
@@ -646,16 +636,6 @@ class AgentRunnerService:
             return False
 
         if event.type == AgentEventType.STATUS:
-            await self._persist_status_event_metadata(
-                conversation_id=conversation_id,
-                data=event.data,
-            )
-            if (
-                isinstance(event.data, dict)
-                and event.data.get("status")
-                in {"daemon.session.started", "daemon.session.invalid"}
-            ):
-                return False
             await publish_conversation_event(
                 conversation_id,
                 status_payload(
@@ -685,9 +665,9 @@ class AgentRunnerService:
             return True
 
         if event.type == AgentEventType.REJECTED:
-            # The daemon explicitly refused this run (already at
-            # max_concurrent_runs) -- terminal, like ERROR, but with a more
-            # actionable message built from the event's structured data.
+            # The remote harness refused this run before dispatch -- terminal,
+            # like ERROR, but with a more actionable message built from the
+            # event's structured data.
             await self._finish_agent_run(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
@@ -752,63 +732,6 @@ class AgentRunnerService:
             return True
 
         return False
-
-    async def _persist_status_event_metadata(
-        self,
-        *,
-        conversation_id: UUID,
-        data: object,
-    ) -> None:
-        if not isinstance(data, dict):
-            return
-        status = data.get("status")
-        if status not in {"daemon.session.started", "daemon.session.invalid"}:
-            return
-        local_session = data.get("local_session")
-        if not isinstance(local_session, dict):
-            return
-        harness_kind = str(local_session.get("harness_kind") or "")
-        session_id = str(local_session.get("session_id") or "")
-        if not harness_kind or not session_id:
-            return
-        async with self.uow_factory() as uow:
-            repo = ConversationRepository(uow)
-            conversation = await repo.get_conversation(conversation_id)
-            if conversation is None:
-                return
-            metadata: JsonObject = (
-                dict(conversation.metadata)
-                if isinstance(conversation.metadata, dict)
-                else {}
-            )
-            if status == "daemon.session.invalid":
-                existing = metadata.get("daemon_session")
-                if (
-                    isinstance(existing, dict)
-                    and str(existing.get("harness_kind") or "") == harness_kind
-                    and str(existing.get("session_id") or "") == session_id
-                ):
-                    metadata.pop("daemon_session", None)
-                sessions = metadata.get("daemon_sessions")
-                if isinstance(sessions, dict):
-                    legacy = sessions.get(harness_kind)
-                    if (
-                        isinstance(legacy, dict)
-                        and str(legacy.get("session_id") or "") == session_id
-                    ):
-                        sessions.pop(harness_kind, None)
-                    if sessions:
-                        metadata["daemon_sessions"] = sessions
-                    else:
-                        metadata.pop("daemon_sessions", None)
-            else:
-                metadata["daemon_session"] = {
-                    "session_id": session_id,
-                    "harness_kind": harness_kind,
-                }
-                metadata.pop("daemon_sessions", None)
-            conversation.metadata = metadata
-            await repo.update_conversation(conversation)
 
     async def _finish_agent_run(
         self,
@@ -887,20 +810,18 @@ class AgentRunnerService:
                 runtime_profile=runtime_profile,
                 usage_reservation=usage_reservation,
             )
-        except Exception as exc:
-            logger.error(
-                "Failed to finalize agent run run=%s error_type=%s",
-                agent_run_id,
-                type(exc).__name__,
+        except Exception:
+            logger.debug(
+                'agent.agent_runner_service.finalize_agent_run_run_s.propagated',
+                agent_run_id=agent_run_id,
                 exc_info=True,
             )
             try:
                 await self.usage_recorder.release(usage_reservation)
-            except Exception as release_exc:
-                logger.warning(
-                    "Failed to release usage reservation run=%s error_type=%s",
-                    agent_run_id,
-                    type(release_exc).__name__,
+            except Exception:
+                logger.debug(
+                    'agent.agent_runner_service.release_usage_reservation_run_s.diagnostic',
+                    agent_run_id=agent_run_id,
                 )
             raise
 
@@ -1100,7 +1021,9 @@ class AgentRunnerService:
                     parse_surface_event_metadata,
                 )
 
-                surface_metadata = parse_surface_event_metadata(surface_metadata_payload)
+                surface_metadata = parse_surface_event_metadata(
+                    surface_metadata_payload
+                )
             except Exception:
                 surface_metadata = surface_metadata_payload
         return {

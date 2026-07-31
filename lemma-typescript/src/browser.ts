@@ -26,6 +26,14 @@ import {
   setTestingToken,
 } from "./auth.js";
 import { ApiError } from "./http.js";
+import { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
+import {
+  LEMMA_APP_THEME_MESSAGE_TYPE,
+  LEMMA_THEME_EVENT,
+  applyLemmaHostTheme,
+  getLemmaHostTheme,
+  subscribeLemmaHostTheme,
+} from "./browser-theme.js";
 
 export {
   LemmaClient,
@@ -37,6 +45,12 @@ export {
   resolveSafeRedirectUri,
   setTestingToken,
   ApiError,
+  POD_DEFAULT_AGENT_SELECTOR,
+  LEMMA_APP_THEME_MESSAGE_TYPE,
+  LEMMA_THEME_EVENT,
+  applyLemmaHostTheme,
+  getLemmaHostTheme,
+  subscribeLemmaHostTheme,
 };
 
 // Browser globals. We standardize on `window.LemmaClient` (the skills, the app
@@ -56,6 +70,12 @@ if (typeof globalThis !== "undefined") {
     resolveSafeRedirectUri,
     setTestingToken,
     ApiError,
+    POD_DEFAULT_AGENT_SELECTOR,
+    LEMMA_APP_THEME_MESSAGE_TYPE,
+    LEMMA_THEME_EVENT,
+    applyLemmaHostTheme,
+    getLemmaHostTheme,
+    subscribeLemmaHostTheme,
   };
   if (!scope.LemmaClient) {
     scope.LemmaClient = surface;

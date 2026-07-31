@@ -45,11 +45,18 @@ class EncryptedColumn:
 #: that column is widened and the repository encrypts/decrypts it.
 REGISTRY: list[EncryptedColumn] = [
     EncryptedColumn("accounts", "credentials", "json", "accounts.credentials"),
-    EncryptedColumn("auth_configs", "provider_config", "json", "auth_configs.provider_config"),
     EncryptedColumn(
-        "agent_runtime_profiles", "credentials", "json", "agent_runtime_profiles.credentials"
+        "auth_configs", "provider_config", "json", "auth_configs.provider_config"
     ),
-    EncryptedColumn("agent_surfaces", "webhook_secret", "str", "agent_surfaces.webhook_secret"),
+    EncryptedColumn(
+        "agent_runtime_profiles",
+        "credentials",
+        "json",
+        "agent_runtime_profiles.credentials",
+    ),
+    EncryptedColumn(
+        "agent_surfaces", "webhook_secret", "str", "agent_surfaces.webhook_secret"
+    ),
 ]
 
 
@@ -138,11 +145,5 @@ async def reencrypt_all(
             session, cipher, col, force=force, batch_size=batch_size, dry_run=dry_run
         )
         report[col.label] = result
-        logger.info(
-            "reencrypt %s: scanned=%d migrated=%d%s",
-            col.label,
-            result["scanned"],
-            result["migrated"],
-            " (dry-run)" if dry_run else "",
-        )
+        logger.debug("crypto.rotation.reencrypt_s_scanned_d_migrated.observed")
     return report

@@ -2,7 +2,7 @@
 
 import { use } from 'react';
 import { useRouter } from 'next/navigation';
-import { PanelLeftOpen, Plus } from 'lucide-react';
+import { PanelLeftOpen, Plus } from '@/components/ui/icons';
 import { PodConversationList } from '@/components/conversations/pod-conversation-list';
 import { usePodLayout } from '@/components/pod/pod-layout-context';
 import { Button } from '@/components/ui/button';

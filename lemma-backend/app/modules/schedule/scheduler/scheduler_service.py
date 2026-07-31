@@ -14,8 +14,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.events import EVENT_JOB_ERROR
 from pytz import utc
 from sqlalchemy import select
+from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
@@ -29,6 +31,26 @@ from app.modules.schedule.scheduler.executor import (
 )
 
 logger = get_logger(__name__)
+
+
+def build_sync_jobstore_url(database_url: str) -> str:
+    """Build the synchronous psycopg URL used by APScheduler.
+
+    The application uses asyncpg, whose TLS query parameter is ``ssl``. Psycopg
+    expects the libpq spelling, ``sslmode``. Keeping that parameter unchanged
+    makes Azure PostgreSQL reject the connection before the scheduler starts.
+    """
+    url = make_url(database_url)
+
+    if url.drivername in {"postgresql", "postgresql+asyncpg"}:
+        url = url.set(drivername="postgresql+psycopg")
+
+    query = dict(url.query)
+    if "ssl" in query and "sslmode" not in query:
+        query["sslmode"] = query.pop("ssl")
+        url = url.set(query=query)
+
+    return url.render_as_string(hide_password=False)
 
 
 @dataclass(frozen=True)
@@ -95,17 +117,7 @@ class SchedulerService:
     def __init__(self):
         # Convert async database URL to sync for APScheduler
         # APScheduler's SQLAlchemyJobStore requires a synchronous engine
-        sync_db_url = str(settings.database_url)
-        # Replace asyncpg with psycopg2 for synchronous connection
-        if "+asyncpg" in sync_db_url:
-            sync_db_url = sync_db_url.replace("+asyncpg", "+psycopg")
-        elif "postgresql+asyncpg" in sync_db_url:
-            sync_db_url = sync_db_url.replace(
-                "postgresql+asyncpg", "postgresql+psycopg"
-            )
-        # If it's already sync or doesn't have a driver, ensure it has psycopg2
-        elif sync_db_url.startswith("postgresql://") and "+" not in sync_db_url:
-            sync_db_url = sync_db_url.replace("postgresql://", "postgresql+psycopg://")
+        sync_db_url = build_sync_jobstore_url(str(settings.database_url))
 
         # Configure job stores - using PostgreSQL with synchronous engine
         jobstores = {"default": SQLAlchemyJobStore(url=sync_db_url)}
@@ -145,7 +157,22 @@ class SchedulerService:
                 await emitter.stop()
                 raise
             self._started = True
-            logger.info("APScheduler started with reconciled time jobs")
+            logger.info("schedule.scheduler.started")
+            # Stable terminal-failure event for dashboards/alerts. APScheduler
+            # does not expose job duration in its events, so only error_type is
+            # emitted. There is no scheduler-level "cycle error" event in this
+            # version, so per-job errors are the failure signal.
+            self.scheduler.add_listener(self._on_scheduler_event, EVENT_JOB_ERROR)
+
+    def _on_scheduler_event(self, event) -> None:
+        """Emit one stable failure event per APScheduler job error."""
+        exception = getattr(event, "exception", None)
+        error_type = type(exception).__name__ if exception else "UnknownError"
+        logger.error(
+            "scheduler.job.failed",
+            job_id=getattr(event, "job_id", None),
+            error_type=error_type,
+        )
 
     async def reconcile_time_schedule_jobs(self) -> None:
         """Replace logical TIME jobs from authoritative schedule rows.
@@ -214,7 +241,7 @@ class SchedulerService:
             emitter = get_event_emitter()
             await emitter.stop()
 
-            logger.info("APScheduler shutdown")
+            logger.debug("schedule.scheduler_service.apscheduler_shutdown.observed")
 
     def add_cron_job(
         self,
@@ -264,8 +291,10 @@ class SchedulerService:
             replace_existing=replace_existing,
         )
 
-        logger.info(
-            f"Added cron job {job_id} for schedule {schedule_id} with schedule: {cron_expression}"
+        logger.debug(
+            "schedule.scheduler_service.added_cron_job_schedule_schedule.observed",
+            job_id=job_id,
+            schedule_id=schedule_id,
         )
 
     def add_once_job(
@@ -308,33 +337,47 @@ class SchedulerService:
             replace_existing=replace_existing,
         )
 
-        logger.info(
-            f"Added one-time job {job_id} for schedule {schedule_id} scheduled for: {run_date}"
+        logger.debug(
+            "schedule.scheduler_service.added_one_time_job_schedule.observed",
+            job_id=job_id,
+            schedule_id=schedule_id,
         )
 
     def remove_job(self, job_id: str) -> None:
         """Remove a job by ID."""
         try:
             self.scheduler.remove_job(job_id)
-            logger.info(f"Removed job {job_id}")
-        except Exception as e:
-            logger.warning(f"Failed to remove job {job_id}: {e}")
+            logger.debug(
+                "schedule.scheduler_service.removed_job.observed", job_id=job_id
+            )
+        except Exception:
+            logger.debug(
+                'schedule.scheduler_service.remove_job.diagnostic', job_id=job_id
+            )
 
     def pause_job(self, job_id: str) -> None:
         """Pause a job."""
         try:
             self.scheduler.pause_job(job_id)
-            logger.info(f"Paused job {job_id}")
-        except Exception as e:
-            logger.warning(f"Failed to pause job {job_id}: {e}")
+            logger.debug(
+                "schedule.scheduler_service.paused_job.observed", job_id=job_id
+            )
+        except Exception:
+            logger.debug(
+                'schedule.scheduler_service.pause_job.diagnostic', job_id=job_id
+            )
 
     def resume_job(self, job_id: str) -> None:
         """Resume a job."""
         try:
             self.scheduler.resume_job(job_id)
-            logger.info(f"Resumed job {job_id}")
-        except Exception as e:
-            logger.warning(f"Failed to resume job {job_id}: {e}")
+            logger.debug(
+                "schedule.scheduler_service.resumed_job.observed", job_id=job_id
+            )
+        except Exception:
+            logger.debug(
+                'schedule.scheduler_service.resume_job.diagnostic', job_id=job_id
+            )
 
     def get_job(self, job_id: str):
         """Get job by ID."""

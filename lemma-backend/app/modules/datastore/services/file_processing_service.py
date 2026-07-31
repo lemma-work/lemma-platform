@@ -11,8 +11,8 @@ from pathlib import Path
 from uuid import UUID
 
 from app.core.api.uploads import upload_source_sha256
+from app.core.log.log import get_logger
 from app.core.concurrency.offload import run_blocking
-from app.core.redaction import redact_value
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.modules.datastore.config import datastore_settings
 from app.modules.datastore.domain.document_processing import (
@@ -57,9 +57,8 @@ from app.modules.datastore.services.files.projection import FileProjection
 from app.modules.datastore.services.search.postgres_search_service import (
     PostgresSearchService,
 )
-import logging
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class _StaleProcessingClaim(Exception):
@@ -161,15 +160,13 @@ class DatastoreFileProcessingService:
         async with self._file_repo() as files:
             file_entity = await files.get_model(file_id)
             if file_entity is None:
-                logger.warning("File %s not found for processing", file_id)
+                logger.debug(
+                    'datastore.file_processing_service.file_s_not_found_processing.diagnostic',
+                    file_id=file_id,
+                )
                 return
 
             if file_entity.status != FileStatus.PENDING.value:
-                logger.info(
-                    "Skipping processing for %s because status is %s",
-                    file_id,
-                    file_entity.status,
-                )
                 return
 
             if file_entity.kind != "FILE":
@@ -187,8 +184,10 @@ class DatastoreFileProcessingService:
             try:
                 await self.search_service.remove_file(file_id)
             except Exception:
-                logger.warning(
-                    "Failed removing search projection for %s", file_id, exc_info=True
+                logger.debug(
+                    'datastore.file_processing_service.removing_search_projection_s.diagnostic',
+                    file_id=file_id,
+                    exc_info=True,
                 )
             await self._file_projection.delete_child_artifacts(
                 self.pod_id, file_entity.path
@@ -200,12 +199,11 @@ class DatastoreFileProcessingService:
         max_file_bytes = datastore_settings.document_processing_max_file_bytes
         size_bytes = int(getattr(file_entity, "size_bytes", 0) or 0)
         if self._exceeds_size_limit(size_bytes, max_file_bytes):
-            logger.warning(
-                "File %s (%d bytes) exceeds document_processing_max_file_bytes "
-                "(%d); marking FAILED_PERMANENT without processing",
-                file_id,
-                size_bytes,
-                max_file_bytes,
+            logger.debug(
+                'datastore.file_processing_service.file_s_d_bytes_exceeds.diagnostic',
+                file_id=file_id,
+                size_bytes=size_bytes,
+                max_file_bytes=max_file_bytes,
             )
             async with self._file_repo() as files:
                 await files.mark_failed_permanent(
@@ -225,10 +223,6 @@ class DatastoreFileProcessingService:
                 file_id, content_sha256=content_sha256
             )
         if processing_attempt is None:
-            logger.info(
-                "Skipping processing for %s because another worker already claimed it",
-                file_id,
-            )
             return
 
         try:
@@ -294,33 +288,29 @@ class DatastoreFileProcessingService:
                 },
             }
             async with self._file_repo() as files:
-                completed = await files.mark_completed(
+                await files.mark_completed(
                     file_id,
                     content_sha256=content_sha256,
                     processing_attempt=processing_attempt,
                     file_metadata=merged_metadata,
                 )
-            logger.info(
-                "Datastore completion persisted=%s file=%s sha256=%s pages=%d "
-                "chunks=%d extract=%.3fs project=%.3fs index=%.3fs",
-                completed,
-                file_id,
-                content_sha256,
-                page_count,
-                len(chunks),
-                extraction_seconds,
-                projection_seconds,
-                indexing_seconds,
+            logger.debug(
+                "datastore.file_processing_service.datastore_completion_persisted_s_file.observed",
+                file_id=file_id,
+                page_count=page_count,
+                count=len(chunks),
+                extraction_seconds=extraction_seconds,
+                projection_seconds=projection_seconds,
+                indexing_seconds=indexing_seconds,
             )
         except _StaleProcessingClaim:
-            logger.info("Abandoning stale processing claim for %s", file_id)
             return
         except Exception as exc:
-            logger.error(
-                "Search processing failed for %s",
-                file_id,
-                extra={"error": redact_value(exc)},
-            )
+            logger.debug(
+                'datastore.file_processing_service.search_processing_s.propagated',
+                file_id=file_id,
+            exc_info=True,
+        )
             async with self._file_repo() as files:
                 missing_original = isinstance(
                     exc, (DatastoreObjectNotFoundError, DatastoreObjectIntegrityError)
@@ -330,13 +320,16 @@ class DatastoreFileProcessingService:
                     False: "mark_failed",
                 }[missing_original]
                 mark_failure = getattr(files, method_name)
-                failed = await mark_failure(
+                await mark_failure(
                     file_id,
                     content_sha256=content_sha256,
                     processing_attempt=processing_attempt,
                     error=self._sanitize_error(exc),
                 )
-            logger.info("Datastore failure persisted=%s file=%s", failed, file_id)
+            logger.debug(
+                "datastore.file_processing_service.datastore_persisted_s_file_s.observed",
+                file_id=file_id,
+            )
             raise
 
     async def _build_extraction(
@@ -370,10 +363,8 @@ class DatastoreFileProcessingService:
                         markdown, images
                     )
                     return extraction, raw
-            logger.warning(
-                "File %s is flagged markdown_source=user but its source.md is "
-                "missing/empty; falling back to document extraction",
-                file_entity.path,
+            logger.debug(
+                'datastore.file_processing_service.file_s_flagged_markdown_source.diagnostic'
             )
 
         # Stream the source to a temp file instead of buffering the whole file in
@@ -437,8 +428,8 @@ class DatastoreFileProcessingService:
                     )
                 )
             except DatastoreObjectNotFoundError:
-                logger.warning(
-                    "User markdown asset %s missing for %s", name, file_entity.path
+                logger.debug(
+                    'datastore.file_processing_service.user_markdown_asset_s_missing.diagnostic'
                 )
                 continue
             images.append(

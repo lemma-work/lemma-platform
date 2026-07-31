@@ -27,6 +27,8 @@ from datetime import datetime, timezone
 
 from redis.asyncio import Redis
 
+from app.core.infrastructure.redis.client import get_redis
+
 from app.core.config import settings
 from app.core.log.log import get_logger
 from app.modules.pod_bundle.domain.errors import BundleRateLimitExceededError
@@ -51,7 +53,7 @@ class BundleRateLimiter:
             return self._redis
         async with self._lock:
             if self._redis is None:
-                self._redis = Redis.from_url(self._redis_url, decode_responses=True)
+                self._redis = get_redis(url=self._redis_url)
         return self._redis
 
     @staticmethod
@@ -75,12 +77,11 @@ class BundleRateLimiter:
             count = await redis.incr(key)
             if count == 1:
                 await redis.expire(key, _COUNTER_TTL_SECONDS)
-        except Exception as exc:  # noqa: BLE001 — the cap is best-effort
+        except Exception:  # noqa: BLE001 — the cap is best-effort
             logger.warning(
-                "Bundle rate-limit counter unavailable for %s %s (%s); allowing",
-                operation,
-                user_id,
-                exc,
+                "pod_bundle.rate_limiter.bundle_rate_limit_counter_unavailable.degraded",
+                operation=operation,
+                user_id=user_id,
             )
             return
         if count > limit:

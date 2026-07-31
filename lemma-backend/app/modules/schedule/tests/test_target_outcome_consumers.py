@@ -23,11 +23,23 @@ from app.modules.workflow.domain.run import WorkflowRunStatus
 
 
 class _Logger:
+    def debug(self, *args, **kwargs) -> None:
+        pass
+
     def info(self, *args, **kwargs) -> None:
         pass
 
 
 class _UoW:
+    def __init__(self) -> None:
+        # The deactivation consumer reads the schedule through ScheduleRepository
+        # to build the review URL; no row is needed to assert the recipient.
+        self.session = SimpleNamespace(
+            execute=AsyncMock(
+                return_value=SimpleNamespace(scalar_one_or_none=lambda: None)
+            )
+        )
+
     async def __aenter__(self):
         return self
 

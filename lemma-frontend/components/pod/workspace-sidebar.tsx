@@ -2,28 +2,20 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useMemo, useState } from 'react';
-import type { ComponentType, ReactNode } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
-    Bot,
-    CalendarClock,
-    ChevronsUpDown,
-    Database,
-    FolderOpen,
+    Check,
+    ChevronDown,
     Home,
     LogOut,
-    MessageCircle,
     PanelLeftClose,
-    PanelsTopLeft,
     Plus,
-    Plug,
     Share2,
-    ShieldCheck,
-    Table2,
     Upload,
     User,
-    Workflow,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -31,8 +23,7 @@ import { Logo } from '@/components/brand/logo';
 import { FileTypeIcon } from '@/components/documents/file-type-icon';
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
-import { usePodLayoutOptional } from '@/components/pod/pod-layout-context';
-import { ProductIcon, type ProductIconTone } from '@/components/pod/product-icon';
+import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
 import { SidebarEmptyState } from '@/components/shared/empty-state';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
@@ -50,14 +41,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { useApp } from '@/components/app/app-context';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { cn } from '@/lib/utils';
-import { useAgents } from '@/lib/hooks/use-agents';
+import { agentsQueryOptions, useAgents } from '@/lib/hooks/use-agents';
 import {
+    tableQueryOptions,
+    tableRecordsQueryOptions,
+    tablesQueryOptions,
     useDatastoreFiles,
     useTables,
 } from '@/lib/hooks/use-datastores';
-import { useFlows } from '@/lib/hooks/use-flows';
+import { flowsQueryOptions, useFlows } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
+import { useScopedConversations } from '@/lib/hooks/use-assistants';
+import { mergeSidebarConversations } from '@/lib/assistant/sidebar-conversations';
 import { getAppRecipeExamples } from '@/lib/recipes/recipes';
 import type { DatastoreFile } from '@/lib/types';
 import { getConversationStatusView } from '@/lib/utils/conversations';
@@ -88,7 +84,7 @@ const ASSISTANT_CREATION_COPY: Record<AssistantCreationKind, {
     examples: string[];
     action: string;
     manualLabel?: string;
-    tone: ProductIconTone;
+    iconKind: ProductIconKind;
 }> = {
     agent: {
         title: 'New agent',
@@ -101,7 +97,7 @@ const ASSISTANT_CREATION_COPY: Record<AssistantCreationKind, {
         ],
         action: 'Create with assistant',
         manualLabel: 'Create manually',
-        tone: 'agents',
+        iconKind: 'agents',
     },
     app: {
         title: 'New app',
@@ -110,7 +106,7 @@ const ASSISTANT_CREATION_COPY: Record<AssistantCreationKind, {
         placeholder: 'Review renewals, see account risk, and approve the next customer action',
         examples: getAppRecipeExamples(3),
         action: 'Create app with assistant',
-        tone: 'apps',
+        iconKind: 'apps',
     },
     workflow: {
         title: 'New workflow',
@@ -123,7 +119,7 @@ const ASSISTANT_CREATION_COPY: Record<AssistantCreationKind, {
         ],
         action: 'Create with assistant',
         manualLabel: 'Create manually',
-        tone: 'workflows',
+        iconKind: 'workflows',
     },
     table: {
         title: 'New table',
@@ -136,7 +132,7 @@ const ASSISTANT_CREATION_COPY: Record<AssistantCreationKind, {
         ],
         action: 'Create with assistant',
         manualLabel: 'Create manually',
-        tone: 'tables',
+        iconKind: 'tables',
     },
 };
 
@@ -195,46 +191,69 @@ function getDocEntryLabel(file: DatastoreFile): string {
 export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: WorkspaceSidebarProps) {
     const pathname = usePathname();
     const router = useRouter();
+    const queryClient = useQueryClient();
     const searchParams = useSearchParams();
     const searchParamsString = searchParams.toString();
     const [assistantCreationKind, setAssistantCreationKind] = useState<AssistantCreationKind | null>(null);
     const [assistantCreationPrompt, setAssistantCreationPrompt] = useState('');
     const [bundleShareOpen, setBundleShareOpen] = useState(false);
     const [bundleImportOpen, setBundleImportOpen] = useState(false);
+    const [podSwitcherOpen, setPodSwitcherOpen] = useState(false);
     const { pages = [] } = useApp();
-    const { data: podsData } = useAccessiblePods();
+    const { data: podsData, isLoading: isLoadingPods } = useAccessiblePods({
+        enabled: podSwitcherOpen,
+    });
     const { data: profile } = useProfile();
     const podAccess = usePodAccess(podId);
     const canUseConversations = podAccess.canAccessRoute('conversations');
     const canWriteConversations = podAccess.can('conversation.write');
     const canUseAgents = podAccess.canAccessRoute('agents');
     const canUseWorkflows = podAccess.canAccessRoute('workflows');
-    const canUseSchedules = podAccess.canAccessRoute('schedules');
     const canUseConnectors = podAccess.canAccessRoute('connectors');
     const canUseData = podAccess.canAccessRoute('data');
     const canUseDocs = podAccess.canAccessRoute('files');
     const canUseApps = podAccess.canAccessRoute('apps');
-    const canUseSurfaces = podAccess.canAccessRoute('surfaces');
     const canUseSettings = podAccess.canAccessRoute('settings');
     const canCreateAgents = podAccess.can('agent.create');
     const canCreateApps = podAccess.can('app.create');
     const canCreateWorkflows = podAccess.can('workflow.create');
-    const canCreateSchedules = podAccess.can('schedule.create');
     const canCreateTables = podAccess.can('datastore.table.create');
-    const { data: agentsData } = useAgents(canUseAgents ? podId : undefined);
-    const { data: tablesData } = useTables(canUseData ? podId : undefined);
-    const { data: flowsData } = useFlows(canUseWorkflows ? podId : undefined);
+    const canUpdatePod = podAccess.can('pod.update');
+    const basePath = `/pod/${podId}`;
+    const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+    const isDocsRoute = isActive(`${basePath}/files`);
+    const isAgentsRoute = isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`);
+    const isWorkflowsRoute = isActive(`${basePath}/flows`);
+    const isDataRoute = isActive(`${basePath}/data`) || isActive(`${basePath}/datastores`);
+    const isAppsRoute = isActive(`${basePath}/app`);
+    const isConnectorsRoute = isActive(`${basePath}/connectors`);
+    const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
+    const isConversationRoute = isActive(`${basePath}/conversations`);
+    const isPodHome = pathname === basePath || pathname === `${basePath}/`;
+    const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute;
+    const { data: agentsData } = useAgents(canUseAgents && isAgentsRoute ? podId : undefined);
+    const { data: tablesData } = useTables(canUseData && isDataRoute ? podId : undefined);
+    const { data: flowsData } = useFlows(canUseWorkflows && isWorkflowsRoute ? podId : undefined);
     const {
-        conversations,
-        activeConversationId,
-        selectConversation,
-        openAssistant,
-        clearMessages,
+        conversations: controllerConversations,
+        openedConversationId,
         isLoadingConversations,
     } = useAIAssistant();
-    // On focus routes the assistant can't dock, so conversation actions open the
-    // full conversation page instead of silently toggling a panel that won't show.
-    const isFocusRoute = usePodLayoutOptional()?.isFocusRoute ?? false;
+    const shouldLoadSidebarHistory = canUseConversations && !isConversationRoute;
+    const {
+        data: sidebarConversationHistory,
+        isLoading: isLoadingSidebarConversationHistory,
+    } = useScopedConversations(
+        { podId },
+        { limit: 20, enabled: shouldLoadSidebarHistory },
+    );
+    const conversations = useMemo(
+        () => mergeSidebarConversations(
+            sidebarConversationHistory?.items || [],
+            controllerConversations,
+        ),
+        [controllerConversations, sidebarConversationHistory?.items],
+    );
 
     const pods = podsData?.items || [];
     const podGroups = podsData?.groups || [];
@@ -245,22 +264,18 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const initials = profile?.first_name && profile?.last_name
         ? `${profile.first_name[0]}${profile.last_name[0]}`
         : profile?.email?.[0].toUpperCase() || 'U';
+    const profileDisplayName = profile?.first_name
+        ? `${profile.first_name} ${profile.last_name || ''}`.trim()
+        : profile?.email?.split('@')[0] || 'User';
     const assistantCreationCopy = assistantCreationKind ? ASSISTANT_CREATION_COPY[assistantCreationKind] : null;
 
-    const basePath = `/pod/${podId}`;
-    const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
-    const isDocsRoute = isActive(`${basePath}/files`);
-    const isAgentsRoute = isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`);
-    const isWorkflowsRoute = isActive(`${basePath}/flows`);
-    const isDataRoute = isActive(`${basePath}/data`) || isActive(`${basePath}/datastores`);
-    const isAppsRoute = isActive(`${basePath}/app`);
-    const isConnectorsRoute = isActive(`${basePath}/connectors`);
-    const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
-    const isSchedulesRoute = isActive(`${basePath}/schedules`);
-    const isConversationRoute = pathname === `${basePath}/conversations` || pathname.startsWith(`${basePath}/conversations/`);
-    const isPodHome = pathname === basePath || pathname === `${basePath}/`;
-    const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute || isSchedulesRoute;
-    const canShowCreateMenu = canWriteConversations || canCreateAgents || canCreateApps || canCreateWorkflows || canCreateSchedules || canCreateTables;
+    const canShowCreateMenu =
+        canWriteConversations ||
+        canCreateAgents ||
+        canCreateApps ||
+        canCreateWorkflows ||
+        canCreateTables ||
+        canUpdatePod;
     const visibleConversations = canUseConversations ? conversations.slice(0, hasRouteWorktree ? 3 : 7) : [];
     const docsFolderPath = isDocsRoute ? searchParams.get('folder') : null;
     const docsDirectoryPath = isDocsRoute ? (docsFolderPath || '/') : '/';
@@ -296,80 +311,83 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         else router.push(nextUrl, { scroll: false });
     };
 
+    const prefetchAgents = useCallback(() => {
+        router.prefetch(`${basePath}/ai`);
+        void queryClient.prefetchQuery(agentsQueryOptions(podId));
+    }, [basePath, podId, queryClient, router]);
+
+    const prefetchWorkflows = useCallback(() => {
+        router.prefetch(`${basePath}/flows`);
+        void queryClient.prefetchQuery(flowsQueryOptions(podId));
+    }, [basePath, podId, queryClient, router]);
+
+    const prefetchData = useCallback(() => {
+        router.prefetch(`${basePath}/data`);
+        void queryClient.ensureQueryData(tablesQueryOptions(podId)).then((tablesPage) => {
+            const firstTableName = tablesPage.items[0]?.name;
+            if (!firstTableName) return;
+
+            void Promise.all([
+                queryClient.prefetchQuery(tableQueryOptions(podId, firstTableName)),
+                queryClient.prefetchQuery(tableRecordsQueryOptions(
+                    podId,
+                    DATASTORE_NAME,
+                    firstTableName
+                )),
+            ]);
+        });
+    }, [basePath, podId, queryClient, router]);
+
     const rails = [
         {
             href: `${basePath}/app/pages`,
             label: 'Apps',
-            icon: PanelsTopLeft,
-            tone: 'apps' as const,
-            count: pages.length,
+            kind: 'apps' as const,
             active: isActive(`${basePath}/app`),
             visible: canUseApps,
         },
         {
             href: `${basePath}/ai`,
             label: 'Agents',
-            icon: Bot,
-            tone: 'agents' as const,
-            count: agents.length,
+            kind: 'agents' as const,
             active: isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`),
             visible: canUseAgents,
+            onIntent: prefetchAgents,
         },
         {
             href: `${basePath}/flows`,
             label: 'Workflows',
-            icon: Workflow,
-            tone: 'workflows' as const,
-            count: flows.length,
+            kind: 'workflows' as const,
             active: isActive(`${basePath}/flows`),
             visible: canUseWorkflows,
+            onIntent: prefetchWorkflows,
         },
         {
             href: `${basePath}/data`,
             label: 'Data',
-            icon: Database,
-            tone: 'data' as const,
-            count: tables.length,
+            kind: 'data' as const,
             active: isActive(`${basePath}/data`) || isActive(`${basePath}/datastores`),
             visible: canUseData,
+            onIntent: prefetchData,
         },
         {
             href: `${basePath}/files`,
             label: 'Docs',
-            icon: FolderOpen,
-            tone: 'docs' as const,
+            kind: 'docs' as const,
             active: isActive(`${basePath}/files`),
             visible: canUseDocs,
         },
         {
-            href: `${basePath}/schedules`,
-            label: 'Schedules',
-            icon: CalendarClock,
-            tone: 'schedules' as const,
-            active: isActive(`${basePath}/schedules`),
-            visible: canUseSchedules,
-        },
-        {
             href: `${basePath}/connectors`,
             label: 'Connectors',
-            icon: Plug,
-            tone: 'connectors' as const,
+            kind: 'connectors' as const,
             active: isConnectorsRoute,
             visible: canUseConnectors,
         },
         {
-            href: `${basePath}/surfaces`,
-            label: 'Surfaces',
-            icon: MessageCircle,
-            tone: 'surfaces' as const,
-            active: isActive(`${basePath}/surfaces`) || isActive(`${basePath}/channels`),
-            visible: canUseSurfaces,
-        },
-        {
             href: `${basePath}/settings`,
             label: 'Settings',
-            icon: ShieldCheck,
-            tone: 'settings' as const,
+            kind: 'settings' as const,
             active: isActive(`${basePath}/settings`),
             visible: canUseSettings,
         },
@@ -382,22 +400,12 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     };
 
     const openConversation = (conversationId: string) => {
-        if (isConversationRoute || isPodHome || isFocusRoute) {
-            router.push(`${basePath}/conversations/${encodeURIComponent(conversationId)}`);
-            return;
-        }
-        selectConversation(conversationId);
-        openAssistant();
+        router.push(`${basePath}/conversations/${encodeURIComponent(conversationId)}`);
     };
 
     const startConversation = () => {
         if (!canWriteConversations) return;
-        if (isConversationRoute || isPodHome || isFocusRoute) {
-            router.push(`${basePath}/conversations/new`);
-            return;
-        }
-        clearMessages();
-        openAssistant();
+        router.push(`${basePath}/conversations/new`);
     };
 
     const startFullPageConversation = () => {
@@ -473,7 +481,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                 onClick={() => openDocsFolder(null)}
                                 className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring text-[var(--text-tertiary)]"
                             >
-                                <ProductIcon tone="folders" size="xs" />
+                                <ProductIcon kind="folders" size="xs" />
                                 Back to Files
                             </button>
                         ) : null}
@@ -497,7 +505,15 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         data-active={selectedDocPath === path ? 'true' : undefined}
                                         className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring"
                                     >
-                                        {folder ? <ProductIcon tone="folders" size="xs" /> : <FileTypeIcon filename={label} size="sm" />}
+                                        {folder ? (
+                                            <ProductIcon
+                                                kind="folders"
+                                                size="xs"
+                                                state={selectedDocPath === path ? 'selected' : 'default'}
+                                            />
+                                        ) : (
+                                            <FileTypeIcon filename={label} size="sm" />
+                                        )}
                                         <span className="min-w-0 flex-1 truncate">{label}</span>
                                     </button>
                                 );
@@ -516,8 +532,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             key={agent.name || agent.id}
                             href={`${basePath}/agents/${encodeURIComponent(agent.name || agent.id)}`}
                             label={toDisplayLabel(agent.name || agent.id)}
-                            icon={Bot}
-                            tone="agents"
+                            kind="agents"
                             active={pathname.endsWith(`/agents/${encodeURIComponent(agent.name || agent.id)}`)}
                         />
                     ))}
@@ -534,8 +549,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             key={flow.name || flow.id}
                             href={`${basePath}/flows/${encodeURIComponent(flow.name || flow.id)}`}
                             label={toDisplayLabel(flow.name || flow.id)}
-                            icon={Workflow}
-                            tone="workflows"
+                            kind="workflows"
                             active={pathname.endsWith(`/flows/${encodeURIComponent(flow.name || flow.id)}`)}
                         />
                     ))}
@@ -552,8 +566,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             key={table.name}
                             href={`${basePath}/data?tab=${encodeURIComponent(table.name)}`}
                             label={toDisplayLabel(table.name)}
-                            icon={Table2}
-                            tone="tables"
+                            kind="tables"
                             active={searchParams.get('tab') === table.name}
                         />
                     ))}
@@ -570,8 +583,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             key={page.slug}
                             href={`${basePath}/app/view?page=${encodeURIComponent(page.slug)}`}
                             label={toDisplayLabel(page.title || page.slug)}
-                            icon={PanelsTopLeft}
-                            tone="apps"
+                            kind="apps"
                             active={searchParams.get('page') === page.slug}
                         />
                     ))}
@@ -587,15 +599,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         if (isKitsRoute) {
             return (
                 <RouteWorktree>
-                    <WorktreeEmpty label="Preview a kit, then install or customize it." />
-                </RouteWorktree>
-            );
-        }
-
-        if (isSchedulesRoute && canUseSchedules) {
-            return (
-                <RouteWorktree>
-                    <WorktreeEmpty label="Schedule list is on the main page" />
+                    <WorktreeEmpty label="Choose a starting point, then add it to this pod." />
                 </RouteWorktree>
             );
         }
@@ -607,20 +611,20 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
 
     return (
         <aside className="flex h-full w-full shrink-0 flex-col overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-secondary)]">
-            <div className="flex h-14 shrink-0 items-center gap-1.5 border-b border-[color:color-mix(in_srgb,var(--border-subtle)_32%,transparent)] px-3">
-                <div className="min-w-0 flex-1 rounded-md border border-[color:color-mix(in_srgb,var(--border-subtle)_46%,transparent)] bg-transparent p-0.5">
-                    <DropdownMenu.Root>
+            <div className="flex h-12 shrink-0 items-center gap-1 border-b border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] px-2.5">
+                <div className="min-w-0 flex-1">
+                    <DropdownMenu.Root open={podSwitcherOpen} onOpenChange={setPodSwitcherOpen}>
                         <DropdownMenu.Trigger asChild>
                             <button
                                 type="button"
-                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[var(--text-primary)] transition-colors hover:bg-[color:color-mix(in_srgb,var(--surface-2)_48%,transparent)]"
-                                aria-label="Switch pod"
+                                className="workspace-sidebar-trigger-button custom-focus-ring flex w-full min-w-0 items-center gap-2 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-left text-[var(--text-primary)] transition-colors hover:border-[var(--border-subtle)] hover:bg-[var(--surface-2)] data-[state=open]:border-[var(--border-subtle)] data-[state=open]:bg-[var(--surface-2)]"
+                                aria-label={`Switch pod. Current pod: ${podName || 'Current pod'}`}
                             >
                                 <ResourceIcon
                                     iconUrl={podIconUrl}
                                     alt={`${podName || 'Current pod'} icon`}
                                     label={podName || 'Current pod'}
-                                    className="h-7 w-7 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
+                                    className="h-6 w-6 shrink-0 rounded-md border-[color:color-mix(in_srgb,var(--border-subtle)_58%,transparent)] bg-transparent text-[var(--text-tertiary)]"
                                     fallback={
                                         <span className="lemma-pod-badge">
                                             {(podName || 'Pod')
@@ -632,20 +636,21 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         </span>
                                     }
                                 />
-                                <span className="min-w-0 flex-1">
-                                    <span className="block truncate text-sm font-medium leading-5 text-[var(--text-primary)]">
+                                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                    <span className="whitespace-nowrap text-xs font-medium leading-none text-[var(--text-tertiary)]">
+                                        Switch pod
+                                    </span>
+                                    <span className="block truncate text-sm font-medium leading-4 text-[var(--text-primary)]">
                                         {podName || 'Current pod'}
                                     </span>
-                                    <span className="block truncate text-xs leading-4 text-[var(--text-tertiary)]">
-                                        Lemma Pod
-                                    </span>
                                 </span>
-                                <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                                <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
                             </button>
                         </DropdownMenu.Trigger>
                         <PodSwitcherMenu
                             pods={pods}
                             podGroups={podGroups}
+                            isLoading={isLoadingPods}
                             showOrganizationLabels={showPodOrganizationLabels}
                             podId={podId}
                             router={router}
@@ -656,7 +661,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 <button
                     type="button"
                     onClick={() => setBundleShareOpen(true)}
-                    className="lemma-shell-icon-button custom-focus-ring h-9 w-9 shrink-0 self-center text-[var(--text-tertiary)] hover:text-[var(--action-primary)]"
+                    className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0 self-center text-[var(--text-tertiary)] hover:text-[var(--action-primary)]"
                     aria-label="Share pod"
                     title="Share pod"
                 >
@@ -666,7 +671,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                     <button
                         type="button"
                         onClick={onCollapse}
-                        className="lemma-shell-icon-button custom-focus-ring h-9 w-9 shrink-0 self-center text-[var(--text-tertiary)]"
+                        className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0 self-center text-[var(--text-tertiary)]"
                         aria-label="Collapse sidebar"
                         title="Collapse sidebar"
                     >
@@ -681,7 +686,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                     aria-current={isPodHome ? 'page' : undefined}
                     className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring mb-0.5 font-medium text-[var(--text-secondary)]"
                 >
-                    <Home className="h-3.5 w-3.5 shrink-0" />
+                    <Home className="h-3.5 w-3.5 shrink-0" weight={isPodHome ? 'fill' : 'regular'} />
                     <span className="min-w-0 flex-1 truncate">Home</span>
                 </Link>
                 {canShowCreateMenu ? (
@@ -708,7 +713,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             onSelect={startFullPageConversation}
                                             className="lemma-menu-row px-2"
                                         >
-                                            <ProductIcon tone="conversation" size="xs" />
+                                            <ProductIcon kind="conversation" size="xs" />
                                             New conversation
                                         </DropdownMenu.Item>
                                     ) : null}
@@ -717,7 +722,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             onSelect={() => openAssistantCreation('agent')}
                                             className="lemma-menu-row px-2"
                                         >
-                                            <ProductIcon tone="agents" size="xs" />
+                                            <ProductIcon kind="agents" size="xs" />
                                             New agent
                                         </DropdownMenu.Item>
                                     ) : null}
@@ -726,7 +731,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             onSelect={() => openAssistantCreation('app')}
                                             className="lemma-menu-row px-2"
                                         >
-                                            <ProductIcon tone="apps" size="xs" />
+                                            <ProductIcon kind="apps" size="xs" />
                                             New app
                                         </DropdownMenu.Item>
                                     ) : null}
@@ -735,17 +740,8 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             onSelect={() => openAssistantCreation('workflow')}
                                             className="lemma-menu-row px-2"
                                         >
-                                            <ProductIcon tone="workflows" size="xs" />
+                                            <ProductIcon kind="workflows" size="xs" />
                                             New workflow
-                                        </DropdownMenu.Item>
-                                    ) : null}
-                                    {canCreateSchedules ? (
-                                        <DropdownMenu.Item
-                                            onSelect={() => router.push(`${basePath}/schedules/new`)}
-                                            className="lemma-menu-row px-2"
-                                        >
-                                            <ProductIcon tone="schedules" size="xs" />
-                                            New schedule
                                         </DropdownMenu.Item>
                                     ) : null}
                                     {canCreateTables ? (
@@ -753,7 +749,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             onSelect={() => openAssistantCreation('table')}
                                             className="lemma-menu-row px-2"
                                         >
-                                            <ProductIcon tone="tables" size="xs" />
+                                            <ProductIcon kind="tables" size="xs" />
                                             New table
                                         </DropdownMenu.Item>
                                     ) : null}
@@ -762,18 +758,22 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                             onSelect={() => router.push(`${basePath}/recipes`)}
                                             className="lemma-menu-row px-2"
                                         >
-                                            <ProductIcon tone="apps" size="xs" />
-                                            Browse recipes
+                                            <ProductIcon kind="apps" size="xs" />
+                                            Add from a starter
                                         </DropdownMenu.Item>
                                     ) : null}
-                                    <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
-                                    <DropdownMenu.Item
-                                        onSelect={() => setBundleImportOpen(true)}
-                                        className="lemma-menu-row px-2"
-                                    >
-                                        <Upload className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
-                                        Install a bundle
-                                    </DropdownMenu.Item>
+                                    {canUpdatePod ? (
+                                        <>
+                                            <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
+                                            <DropdownMenu.Item
+                                                onSelect={() => setBundleImportOpen(true)}
+                                                className="lemma-menu-row px-2"
+                                            >
+                                                <Upload className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                                                Install a bundle
+                                            </DropdownMenu.Item>
+                                        </>
+                                    ) : null}
                                 </DropdownMenu.Content>
                             </DropdownMenu.Portal>
                         </DropdownMenu.Root>
@@ -788,7 +788,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                     <DialogHeader className="px-5 pb-4 pt-5 pr-12">
                         <div className="flex items-start gap-3">
                             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)]">
-                                <ProductIcon tone={assistantCreationCopy?.tone || 'agents'} size="sm" />
+                                <ProductIcon kind={assistantCreationCopy?.iconKind || 'agents'} size="sm" />
                             </span>
                             <div className="min-w-0">
                                 <p className="text-xs font-medium leading-4 text-[var(--text-tertiary)]">
@@ -868,8 +868,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 podName={podName}
                 open={bundleShareOpen}
                 onOpenChange={setBundleShareOpen}
+                canPublish={canUpdatePod}
             />
-            {canShowCreateMenu ? (
+            {canUpdatePod ? (
                 <ImportDialog
                     podId={podId}
                     podName={podName}
@@ -882,7 +883,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 {routeWorktree}
 
                 <div className={cn('space-y-px pb-3', routeWorktree && 'mt-4 border-t border-[var(--border-subtle)] pt-3')}>
-                    {isLoadingConversations && visibleConversations.length === 0 ? (
+                    {(isLoadingConversations || isLoadingSidebarConversationHistory) && visibleConversations.length === 0 ? (
                         <div className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">Loading conversations</div>
                     ) : null}
                     {canWriteConversations ? (
@@ -903,7 +904,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                 key={conversation.id}
                                 type="button"
                                 onClick={() => openConversation(conversation.id)}
-                                data-active={activeConversationId === conversation.id ? 'true' : undefined}
+                                data-active={isConversationRoute && openedConversationId === conversation.id ? 'true' : undefined}
                                 className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring font-normal"
                             >
                                 <span className="min-w-0 flex-1 truncate">{conversation.title || 'Untitled conversation'}</span>
@@ -937,22 +938,25 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 <Link
                     href="/home"
                     aria-label="Go to Lemma home"
-                    className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 shrink-0 items-center rounded-lg px-2 text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-2)]"
+                    title="Lemma home"
+                    className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-2)]"
                 >
-                    <Logo size="xs" variant="mark-wordmark" />
+                    <Logo size="xs" variant="mark-only" />
                 </Link>
                 <DropdownMenu.Root>
                     <DropdownMenu.Trigger asChild>
-                        <button className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-[var(--surface-2)]">
+                        <button
+                            className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-[var(--surface-2)]"
+                            aria-label={`Open account menu for ${profileDisplayName}`}
+                            title={profileDisplayName}
+                        >
                             <Avatar className="h-7 w-7 border border-[var(--border-subtle)]">
                                 <AvatarFallback className="bg-[var(--surface-2)] text-xs text-[var(--text-secondary)]">
                                     {profile ? initials : <User className="h-4 w-4" />}
                                 </AvatarFallback>
                             </Avatar>
                             <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
-                                {profile?.first_name
-                                    ? `${profile.first_name} ${profile.last_name || ''}`.trim()
-                                    : profile?.email?.split('@')[0] || 'User'}
+                                {profileDisplayName}
                             </span>
                         </button>
                     </DropdownMenu.Trigger>
@@ -999,6 +1003,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
 function PodSwitcherMenu({
     pods,
     podGroups,
+    isLoading,
     showOrganizationLabels,
     podId,
     router,
@@ -1006,6 +1011,7 @@ function PodSwitcherMenu({
 }: {
     pods: Array<{ id: string; name: string }>;
     podGroups: AccessiblePodGroup[];
+    isLoading: boolean;
     showOrganizationLabels?: boolean;
     podId: string;
     router: ReturnType<typeof useRouter>;
@@ -1020,10 +1026,12 @@ function PodSwitcherMenu({
                 className="surface-panel z-50 flex w-72 flex-col p-1 shadow-[var(--shadow-lg)]"
             >
                 <div className="shrink-0 px-2 py-1.5 type-eyebrow">
-                    Pods
+                    Switch pod
                 </div>
                 <div className="min-h-0 max-h-96 overflow-y-auto">
-                    {pods.length === 0 ? (
+                    {isLoading ? (
+                        <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">Loading pods…</div>
+                    ) : pods.length === 0 ? (
                         <div className="px-2 py-2 text-sm text-[var(--text-tertiary)]">No pods yet.</div>
                     ) : null}
                     {showOrganizationLabels ? (
@@ -1044,6 +1052,15 @@ function PodSwitcherMenu({
                     )}
                 </div>
                 <DropdownMenu.Separator className="my-1 h-px shrink-0 bg-[var(--border-subtle)]" />
+                <DropdownMenu.Item asChild>
+                    <Link
+                        href="/home"
+                        className="lemma-menu-row shrink-0"
+                    >
+                        <Home className="h-3.5 w-3.5" />
+                        Manage pods
+                    </Link>
+                </DropdownMenu.Item>
                 <DropdownMenu.Item
                     onSelect={() => router.push('/create-pod')}
                     className="flex shrink-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-[var(--delight)] outline-none transition-colors hover:bg-[var(--delight-soft)]"
@@ -1071,7 +1088,10 @@ function PodSwitcherMenuItem({
             >
                 <span className="truncate">{toDisplayLabel(pod.name)}</span>
                 {pod.id === podId ? (
-                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--delight)]" />
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-tertiary)]">
+                        <Check className="h-3.5 w-3.5 text-[var(--delight)]" />
+                        Current
+                    </span>
                 ) : null}
             </Link>
         </DropdownMenu.Item>
@@ -1095,20 +1115,18 @@ function RouteWorktree({
 function WorktreeLink(props: {
     href: string;
     label: string;
-    icon: ComponentType<{ className?: string }>;
-    tone?: ProductIconTone;
+    kind?: ProductIconKind;
     active?: boolean;
 }) {
-    const { href, label, tone = 'docs', active } = props;
+    const { href, label, kind = 'docs', active } = props;
 
     return (
         <Link
             href={href}
-            data-tone={tone}
             data-active={active ? 'true' : undefined}
             className="lemma-product-nav-item lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring group"
         >
-            <ProductIcon tone={tone} size="xs" />
+            <ProductIcon kind={kind} size="xs" state={active ? 'selected' : 'default'} />
             <span className="min-w-0 flex-1 truncate">{label}</span>
         </Link>
     );
@@ -1123,22 +1141,23 @@ function WorktreeEmpty({ label }: { label: string }) {
 function RailLink(props: {
     href: string;
     label: string;
-    icon: ComponentType<{ className?: string }>;
-    tone: ProductIconTone;
-    count?: number;
+    kind: ProductIconKind;
     active?: boolean;
+    onIntent?: () => void;
 }) {
-    const { href, label, tone, active } = props;
+    const { href, label, kind, active, onIntent } = props;
 
     return (
         <Link
             href={href}
-            data-tone={tone}
+            onPointerEnter={onIntent}
+            onFocus={onIntent}
+            onTouchStart={onIntent}
             data-active={active ? 'true' : undefined}
             className="lemma-product-nav-item lemma-sidebar-row lemma-sidebar-row-base custom-focus-ring group font-normal"
         >
             <span className="flex min-w-0 items-center gap-3">
-                <ProductIcon tone={tone} size="xs" />
+                <ProductIcon kind={kind} size="xs" state={active ? 'selected' : 'default'} />
                 <span className="truncate">{label}</span>
             </span>
         </Link>

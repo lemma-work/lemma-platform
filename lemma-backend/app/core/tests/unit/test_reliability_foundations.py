@@ -10,6 +10,8 @@ from uuid import uuid4
 
 import pytest
 from fastapi import UploadFile
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 from pydantic import BaseModel, ValidationError
 
 from app.app import RequestBodyLimitMiddleware
@@ -37,7 +39,13 @@ from app.core.infrastructure.events.outbox import (
     outbox_dispatcher_lifespan,
     replay_outbox_event,
 )
-from app.core.redaction import REDACTED, _redact_url, redact_text, redact_value
+from app.core.redaction import (
+    REDACTED,
+    REDACTED_URL,
+    _redact_url,
+    redact_text,
+    redact_value,
+)
 
 
 class _TestEvent(DomainEvent):
@@ -196,6 +204,49 @@ async def test_inbox_propagates_event_lineage_to_resulting_events() -> None:
     unrelated = _TestEvent(value="unrelated")
     assert unrelated.correlation_id == unrelated.event_id
     assert unrelated.causation_id is None
+
+
+@pytest.mark.asyncio
+async def test_domain_event_propagates_w3c_trace_context_through_inbox() -> None:
+    trace_id = int("1234567890abcdef1234567890abcdef", 16)
+    span_id = int("1234567890abcdef", 16)
+    span_context = SpanContext(
+        trace_id=trace_id,
+        span_id=span_id,
+        is_remote=False,
+        trace_flags=TraceFlags.SAMPLED,
+        trace_state=TraceState(),
+    )
+
+    with trace.use_span(NonRecordingSpan(span_context)):
+        event = _TestEvent(value="trace-context")
+
+    assert event.traceparent == (
+        "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+    )
+    assert event.model_dump(mode="json")["traceparent"] == event.traceparent
+
+    observed_trace_id: int | None = None
+
+    async def observe_context() -> None:
+        nonlocal observed_trace_id
+        observed_trace_id = trace.get_current_span().get_span_context().trace_id
+
+    await _MemoryInbox().process("consumer", event, observe_context)
+
+    assert observed_trace_id == trace_id
+
+
+def test_domain_event_drops_invalid_or_absent_w3c_trace_context() -> None:
+    invalid = _TestEvent(value="invalid", traceparent="not-a-traceparent")
+    root = _TestEvent(value="root")
+
+    assert invalid.traceparent is None
+    assert invalid.tracestate is None
+    assert "traceparent" not in invalid.model_dump(mode="json")
+    assert "tracestate" not in invalid.model_dump(mode="json")
+    assert "traceparent" not in root.model_dump(mode="json")
+    assert "tracestate" not in root.model_dump(mode="json")
 
 
 class _ValidationProbe(BaseModel):
@@ -379,12 +430,42 @@ async def test_outbox_run_recovers_from_infrastructure_failure(monkeypatch) -> N
     dispatcher.dispatch_once = dispatch_once  # type: ignore[method-assign]
     sleep = AsyncMock()
     monkeypatch.setattr("app.core.infrastructure.events.outbox.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "app.core.infrastructure.events.outbox.random.uniform",
+        lambda _low, _high: 1.0,
+    )
 
     with pytest.raises(asyncio.CancelledError):
         await dispatcher.run()
 
     assert calls == 2
     sleep.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_outbox_idle_poll_backoff_resets_after_work(monkeypatch) -> None:
+    dispatcher = _OutboxUnderTest(AsyncMock())
+    dispatcher.max_idle_poll_seconds = 5.0
+    results = iter((0, 0, 1, 0))
+
+    async def dispatch_once() -> int:
+        try:
+            return next(results)
+        except StopIteration:
+            raise asyncio.CancelledError
+
+    dispatcher.dispatch_once = dispatch_once  # type: ignore[method-assign]
+    sleep = AsyncMock()
+    monkeypatch.setattr("app.core.infrastructure.events.outbox.asyncio.sleep", sleep)
+    monkeypatch.setattr(
+        "app.core.infrastructure.events.outbox.random.uniform",
+        lambda _low, _high: 1.0,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await dispatcher.run()
+
+    assert [call.args[0] for call in sleep.await_args_list] == [0.5, 1.0, 0.5]
 
 
 @pytest.mark.asyncio
@@ -614,6 +695,48 @@ def test_canary_secrets_are_redacted_recursively_and_in_text() -> None:
     assert canary not in redact_text(
         f"GET https://provider.test/cb?code={canary} failed"
     )
+    assert canary not in redact_text(f'provider response {{"token": "{canary}"}}')
+
+
+@pytest.mark.parametrize(
+    "credential_parts",
+    [
+        ("AKIA", "IOSFODNN7EXAMPLE"),
+        ("AIza", "SyD-example-credential-123456"),
+        ("ghp", "_1234567890abcdefghijklmnopqrst"),
+        ("sk-proj", "-1234567890abcdefghijklmnop"),
+        ("sk", "_live_1234567890abcdefghijklmnop"),
+        ("xoxb", "-1234567890-abcdefghijklmnop"),
+        ("123456789", ":AA1234567890abcdefghijklmnop"),
+    ],
+)
+def test_known_bare_credential_patterns_are_redacted(
+    credential_parts: tuple[str, str],
+) -> None:
+    # Assemble canaries at runtime so secret-scanning push protection never
+    # mistakes a test fixture for a committed live credential.
+    credential = "".join(credential_parts)
+    rendered = redact_text(f"provider returned credential {credential}")
+    assert credential not in rendered
+    assert REDACTED in rendered
+
+
+def test_private_keys_and_sensitive_url_fragments_are_redacted() -> None:
+    private_key = (
+        "-----BEGIN "
+        "PRIVATE KEY-----\n"
+        "CANARY-PRIVATE-MATERIAL\n"
+        "-----END "
+        "PRIVATE KEY-----"
+    )
+    assert "CANARY" not in redact_text(f"provider returned {private_key}")
+    assert (
+        _redact_url(
+            "https://provider.test/callback?ok=yes"
+            "#access_token=CANARY&token_type=bearer"
+        )
+        == "https://provider.test/callback?ok=yes#[REDACTED]"
+    )
 
 
 def test_redaction_handles_urls_exceptions_sequences_and_binary_values() -> None:
@@ -635,3 +758,18 @@ def test_redaction_handles_urls_exceptions_sequences_and_binary_values() -> None
     )
     assert _redact_url("not a url") == "not a url"
     assert redact_value(7) == 7
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com:bad/path?token=CANARY",
+        "https://[broken/path?token=CANARY",
+        "https://user:secret@example.com:999999/path?code=CANARY",
+    ],
+)
+def test_redaction_of_malformed_urls_is_bounded_and_non_throwing(value: str) -> None:
+    assert _redact_url(value) == REDACTED_URL
+    rendered = redact_text(f"dependency failed at {value}")
+    assert REDACTED_URL in rendered
+    assert "CANARY" not in rendered

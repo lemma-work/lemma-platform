@@ -22,6 +22,8 @@ import tempfile
 from pathlib import Path
 from uuid import UUID
 
+from streaq import StreaqRetry
+
 from app.core.authorization.scope import context_scope, uow_scope
 from app.core.authorization.service import AuthorizationDataService
 from app.core.domain.errors import DomainError
@@ -46,6 +48,9 @@ from app.modules.pod_bundle.domain.state import (
     PublishStatus,
 )
 from app.modules.pod_bundle.infrastructure.exporter import BundleExporter
+from app.modules.pod_bundle.infrastructure import github_fetcher
+from app.modules.pod_bundle.infrastructure import publish_lock
+from app.modules.pod_bundle.infrastructure import publish_manifest
 from app.modules.pod_bundle.infrastructure.realtime import (
     completed_payload,
     error_payload,
@@ -64,6 +69,21 @@ logger = get_logger(__name__)
 
 class _ImportCancellation(Exception):
     pass
+
+
+def _github_import_fetcher(worker_ctx: AppWorkerContext, state: ImportState):
+    runner = None
+    if state.account_id is not None:
+        runner = _github_import_operation_runner(worker_ctx=worker_ctx, state=state)
+    elif (
+        pod_bundle_settings.pod_bundle_github_token is None
+        and "GitHub import used anonymous API access and may be rate-limited."
+        not in state.warnings
+    ):
+        state.warnings.append(
+            "GitHub import used anonymous API access and may be rate-limited."
+        )
+    return github_fetcher.GithubBundleFetcher(operation_runner=runner)
 
 
 async def _cancellation_requested(store, import_id: UUID) -> ImportState | None:
@@ -137,8 +157,8 @@ async def _finalize_import_cancellation(store, staging, state: ImportState) -> N
     try:
         await staging.delete_archive("pod-imports", current.import_id)
     except Exception:  # cleanup is backstopped by the sweep job
-        logger.warning(
-            "Failed to clean staging for cancelled import",
+        logger.debug(
+            'pod_bundle.handlers.clean_staging_cancelled_import.diagnostic',
             import_id=str(current.import_id),
         )
 
@@ -170,10 +190,8 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
     if state is None:
         # State was swept before the job ran (or a duplicate enqueue). Nothing to
         # do — re-running requires a fresh request.
-        logger.info("Export state missing; skipping export job %s", export_id)
         return
     if state.status == ExportStatus.READY:
-        logger.info("Export %s already terminal (%s); skipping", export_id, state.status)
         return
 
     try:
@@ -226,7 +244,9 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
         from datetime import timedelta
 
         from app.modules.pod_bundle.config import pod_bundle_settings
-        from app.modules.pod_bundle.infrastructure.download_url import build_download_url
+        from app.modules.pod_bundle.infrastructure.download_url import (
+            build_download_url,
+        )
 
         ttl = state.ttl_seconds or pod_bundle_settings.pod_bundle_export_url_ttl_seconds
         state.status = ExportStatus.READY
@@ -254,12 +274,19 @@ async def export_pod_bundle(context: dict[str, str | None]) -> None:
         # Bundle/domain errors are terminal — mark FAILED and swallow (streaq
         # retrying would fail identically).
         await _fail(store, state, str(exc))
-        logger.warning("Pod bundle export %s failed (terminal): %s", export_id, exc)
-    except Exception as exc:
+        logger.warning(
+            "pod_bundle.handlers.pod_bundle_export_s_terminal.degraded",
+            export_id=export_id,
+        )
+    except Exception:
         # Infrastructure error (DB blip, object storage). Mark FAILED for the UI,
         # then re-raise so streaq retries with a fresh attempt.
         await _fail(store, state, "Export failed due to a transient error.")
-        logger.error("Pod bundle export %s failed (retryable): %s", export_id, exc)
+        logger.debug(
+            'pod_bundle.handlers.pod_bundle_export_s_retryable.propagated',
+            export_id=export_id,
+        exc_info=True,
+    )
         raise
 
 
@@ -269,12 +296,11 @@ async def _fail(store, state: ExportState, message: str) -> None:
     state.completed_at = _now()
     try:
         await store.save_export(state)
-        await publish_bundle_event(
-            state.export_id, error_payload(message, state.seq)
-        )
-    except Exception as exc:  # noqa: BLE001 - failure bookkeeping is best-effort
-        logger.warning(
-            "Failed to persist FAILED state for export %s: %s", state.export_id, exc
+        await publish_bundle_event(state.export_id, error_payload(message, state.seq))
+    except Exception:  # noqa: BLE001 - failure bookkeeping is best-effort
+        logger.debug(
+            'pod_bundle.handlers.persist_state_export_s_s.diagnostic',
+            export_id=state.export_id,
         )
 
 
@@ -294,10 +320,8 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
 
     state = await store.get_import(import_id)
     if state is None:
-        logger.info("Import state missing; skipping plan job %s", import_id)
         return
     if state.is_terminal or state.status == ImportStatus.AWAITING_CONFIRMATION:
-        logger.info("Import %s already at %s; skipping plan", import_id, state.status)
         return
 
     try:
@@ -309,11 +333,18 @@ async def plan_pod_import(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
-        logger.warning("Pod bundle plan %s failed (terminal): %s", import_id, exc)
-    except Exception as exc:
+        await _fail_import(store, state, exc)
+        logger.warning(
+            "pod_bundle.handlers.pod_bundle_plan_s_terminal.degraded",
+            import_id=import_id,
+        )
+    except Exception:
         await _fail_import(store, state, "Planning failed due to a transient error.")
-        logger.error("Pod bundle plan %s failed (retryable): %s", import_id, exc)
+        logger.debug(
+            'pod_bundle.handlers.pod_bundle_plan_s_retryable.propagated',
+            import_id=import_id,
+        exc_info=True,
+    )
         raise
 
 
@@ -343,6 +374,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
             )
         except ValueError as exc:
             raise BundleInvalidError(str(exc)) from exc
+        publish_manifest.prepare_published_bundle(bundle_root)
 
         async with uow_scope(worker_ctx.uow_factory) as uow:
             ctx = await AuthorizationDataService(uow.session).build_user_context(
@@ -373,9 +405,7 @@ async def _plan_from_staging(worker_ctx, store, staging, state: ImportState) -> 
 
 @streaq_task(name="import_pod_github")
 async def import_pod_github(context: dict[str, str | None]) -> None:
-    """Fetch a public repo's zipball, stage it, then plan — one job, so a single
-    ``import_id`` covers fetch + plan. Falls through to the same planning routine
-    as an uploaded bundle."""
+    """Fetch a GitHub zipball, using the selected connector account when set."""
     worker_ctx: AppWorkerContext = streaq_worker.context
     import_id = UUID(str(context["import_id"]))
 
@@ -384,32 +414,36 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
 
     state = await store.get_import(import_id)
     if state is None:
-        logger.info("Import state missing; skipping github job %s", import_id)
         return
     if state.is_terminal or state.status == ImportStatus.AWAITING_CONFIRMATION:
         return
 
     try:
+        if state.retryable or state.error is not None:
+            state.attempt += 1
+        state.error = None
+        state.error_type = None
+        state.error_code = None
+        state.retryable = False
         await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.FETCHING
         await store.save_import(state)
-        await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
-
-        from app.modules.pod_bundle.infrastructure.github_fetcher import (
-            GithubBundleFetcher,
-            parse_repo_ref,
+        await publish_bundle_event(
+            import_id, status_payload(state.status.value, state.seq)
         )
 
-        owner, repo = parse_repo_ref(
+        owner, repo = github_fetcher.parse_repo_ref(
             repo_url=state.source.repo_url,
             owner=(context.get("owner")),
             repo=(context.get("repo")),
         )
-        zip_bytes = await GithubBundleFetcher().fetch_zipball(
+        zip_bytes = await _github_import_fetcher(worker_ctx, state).fetch_zipball(
             owner=owner, repo=repo, ref=state.source.ref
         )
         await _raise_if_cancelled(store, import_id)
-        state.staging_key = await staging.put_archive("pod-imports", import_id, zip_bytes)
+        state.staging_key = await staging.put_archive(
+            "pod-imports", import_id, zip_bytes
+        )
         await store.save_import(state)
 
         await _plan_from_staging(worker_ctx, store, staging, state)
@@ -420,12 +454,29 @@ async def import_pod_github(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
-        logger.warning("GitHub import %s failed (terminal): %s", import_id, exc)
+        if _is_retryable_import_error(exc) and state.attempt < 3:
+            await _record_import_retry(store, state, exc)
+            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+        await _fail_import(store, state, exc)
+        logger.warning(
+            "pod_bundle.handlers.github_import_s_terminal_s.degraded",
+            import_id=import_id,
+        )
     except Exception as exc:
-        await _fail_import(store, state, "GitHub import failed due to a transient error.")
-        logger.error("GitHub import %s failed (retryable): %s", import_id, exc)
-        raise
+        if state.attempt < 3:
+            await _record_import_retry(store, state, exc)
+            raise StreaqRetry(delay=min(state.attempt**2, 9)) from exc
+        await _fail_import(
+            store,
+            state,
+            exc,
+            public_message="GitHub import failed after three transient attempts.",
+        )
+        logger.debug(
+            'pod_bundle.handlers.github_import_s_retryable_s.propagated',
+            import_id=import_id,
+        exc_info=True,
+    )
 
 
 @streaq_task(name="import_pod_url")
@@ -445,7 +496,6 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
 
     state = await store.get_import(import_id)
     if state is None:
-        logger.info("Import state missing; skipping url job %s", import_id)
         return
     if state.is_terminal or state.status == ImportStatus.AWAITING_CONFIRMATION:
         return
@@ -454,7 +504,9 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
         await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.FETCHING
         await store.save_import(state)
-        await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
+        await publish_bundle_event(
+            import_id, status_payload(state.status.value, state.seq)
+        )
 
         data = await staging.get_archive(source_kind, source_id)  # type: ignore[arg-type]
         if data is None:
@@ -473,11 +525,16 @@ async def import_pod_url(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
-        logger.warning("URL import %s failed (terminal): %s", import_id, exc)
-    except Exception as exc:
+        await _fail_import(store, state, exc)
+        logger.warning(
+            "pod_bundle.handlers.url_import_s_terminal_s.degraded", import_id=import_id
+        )
+    except Exception:
         await _fail_import(store, state, "URL import failed due to a transient error.")
-        logger.error("URL import %s failed (retryable): %s", import_id, exc)
+        logger.debug(
+            'pod_bundle.handlers.url_import_s_retryable_s.propagated', import_id=import_id,
+        exc_info=True,
+    )
         raise
 
 
@@ -497,7 +554,6 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
 
     state = await store.get_import(import_id)
     if state is None or state.plan is None:
-        logger.info("Import %s has no plan; skipping apply", import_id)
         return
     if state.status == ImportStatus.COMPLETED:
         return
@@ -506,6 +562,9 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         return
 
     from app.modules.pod_bundle.infrastructure.app_builder import AppStepRunner
+    from app.modules.pod_bundle.infrastructure.function_builder import (
+        FunctionStepRunner,
+    )
     from app.modules.pod_bundle.infrastructure.applier import (
         BundleApplier,
         StepNotApplicableError,
@@ -516,7 +575,9 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         await _raise_if_cancelled(store, import_id)
         state.status = ImportStatus.APPLYING
         await store.save_import(state)
-        await publish_bundle_event(import_id, status_payload(state.status.value, state.seq))
+        await publish_bundle_event(
+            import_id, status_payload(state.status.value, state.seq)
+        )
 
         archive = await staging.get_archive("pod-imports", import_id)
         if archive is None:
@@ -529,6 +590,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         # APP steps build in the agentbox and must not hold a pooled DB connection,
         # so they run through a self-scoped runner instead of the per-step uow_scope.
         app_runner = AppStepRunner(uow_factory=worker_ctx.uow_factory)
+        function_runner = None
 
         with tempfile.TemporaryDirectory(prefix="lemma-pod-apply-") as tmp:
             from lemma_pod_bundle import extract_bundle
@@ -541,6 +603,7 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 )
             except ValueError as exc:
                 raise BundleInvalidError(str(exc)) from exc
+            publish_manifest.prepare_published_bundle(bundle_root)
 
             while (step := state.plan.next_pending_step()) is not None:
                 await _raise_if_cancelled(store, import_id)
@@ -548,12 +611,20 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                 state.current_step = step.index
                 await store.save_import(state)
                 try:
-                    if step.kind is StepKind.APP:
+                    if step.kind in {StepKind.APP, StepKind.FUNCTION}:
                         # Self-scoped: creates the app, builds it in the agentbox
                         # (no connection held), then deploys — managing its own short
                         # UoWs. Idempotent-by-name + dist sha256 dedup, so a replay
                         # after a crash converges.
-                        await app_runner.run(
+                        if step.kind is StepKind.APP:
+                            runner = app_runner
+                        else:
+                            if function_runner is None:
+                                function_runner = FunctionStepRunner(
+                                    uow_factory=worker_ctx.uow_factory
+                                )
+                            runner = function_runner
+                        await runner.run(
                             step,
                             pod_id=pod_id,
                             user_id=user_id,
@@ -615,9 +686,15 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
                     step.error = str(exc)
                     await _checkpoint(store, state, step)
                     await _fail_import(
-                        store, state, f"Step '{step.name}' failed: {exc}"
+                        store,
+                        state,
+                        exc,
+                        public_message=f"Step '{step.name}' failed: {exc}",
                     )
-                    logger.warning("Import %s step %s failed: %s", import_id, step.name, exc)
+                    logger.debug(
+                        'pod_bundle.handlers.import_s_step_s_s.diagnostic',
+                        import_id=import_id,
+                    )
                     return
                 await _checkpoint(store, state, step)
 
@@ -633,8 +710,11 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
         # Best-effort cleanup; the sweep cron backstops.
         try:
             await staging.delete_archive("pod-imports", import_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to delete staged import %s: %s", import_id, exc)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                'pod_bundle.handlers.delete_staged_import_s_s.diagnostic',
+                import_id=import_id,
+            )
     except _ImportCancellation:
         await _finalize_import_cancellation(store, staging, state)
     except BundleStateConflictError:
@@ -642,15 +722,23 @@ async def apply_pod_import(context: dict[str, str | None]) -> None:
             return
         raise
     except DomainError as exc:
-        await _fail_import(store, state, str(exc))
-        logger.warning("Pod bundle apply %s failed (terminal): %s", import_id, exc)
-    except Exception as exc:
+        await _fail_import(store, state, exc)
+        logger.warning(
+            "pod_bundle.handlers.pod_bundle_apply_s_terminal.degraded",
+            import_id=import_id,
+        )
+    except Exception:
         await _fail_import(store, state, "Apply failed due to a transient error.")
-        logger.error("Pod bundle apply %s failed (retryable): %s", import_id, exc)
+        logger.debug(
+            'pod_bundle.handlers.pod_bundle_apply_s_retryable.propagated',
+            import_id=import_id,
+        exc_info=True,
+    )
         raise
 
 
 async def _checkpoint(store, state: ImportState, step) -> None:
+    assert state.plan is not None
     done = sum(1 for s in state.plan.steps if s.status.value in ("DONE", "SKIPPED"))
     state.progress.done = done
     state.progress.total = len(state.plan.steps)
@@ -695,13 +783,11 @@ async def _resolve_importer_pod_member_id(
                     pod_id, user_id, requester_user_id=user_id
                 )
                 return str(member.id)
-    except Exception as exc:  # noqa: BLE001 — assignee auto-resolution is best-effort
-        logger.warning(
-            "Could not resolve importer pod-member id for pod %s user %s (%s); "
-            "workflow assignees left unresolved",
-            pod_id,
-            user_id,
-            exc,
+    except Exception:  # noqa: BLE001 — assignee auto-resolution is best-effort
+        logger.debug(
+            'pod_bundle.handlers.could_not_resolve_importer_pod.diagnostic',
+            pod_id=pod_id,
+            user_id=user_id,
         )
         return None
 
@@ -735,6 +821,7 @@ async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> No
         async with context_scope(ctx):
             pod_service = get_pod_service(uow)
             pod = await pod_service.get_pod(state.pod_id, state.user_id)
+            assert pod is not None
             new_config = pod.config.model_copy(
                 update={"recipes": [*pod.config.recipes, recipe]}
             )
@@ -746,18 +833,83 @@ async def _record_recipe(worker_ctx: AppWorkerContext, state: ImportState) -> No
             )
 
 
-async def _fail_import(store, state: ImportState, message: str) -> None:
+def _is_retryable_import_error(exc: DomainError) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    return status_code in {408, 429} or (
+        isinstance(status_code, int) and status_code >= 500
+    )
+
+
+async def _record_import_retry(
+    store,
+    state: ImportState,
+    exc: Exception,
+) -> None:
+    state.error = "GitHub is temporarily unavailable; retrying import."
+    state.error_type = type(exc).__name__
+    state.error_code = str(
+        getattr(exc, "code", None) or "GITHUB_IMPORT_TRANSIENT"
+    )
+    state.retryable = True
+    await store.save_import(state)
+
+
+def _github_import_operation_runner(
+    *,
+    worker_ctx: AppWorkerContext,
+    state: ImportState,
+):
+    async def run(operation_name: str, payload: dict) -> dict:
+        async with uow_scope(worker_ctx.uow_factory) as uow:
+            actor = await AuthorizationDataService(uow.session).build_user_context(
+                user_id=state.user_id,
+                pod_id=state.pod_id,
+            )
+            from app.composition.pod_bundle_resources import (
+                build_connector_operation_service,
+            )
+
+            service = build_connector_operation_service(uow)
+            response = await service.execute_operation(
+                connector_id="github",
+                operation_name=operation_name,
+                payload=payload,
+                user_id=state.user_id,
+                actor=actor,
+                account_id=state.account_id,
+            )
+        if hasattr(response, "model_dump"):
+            return response.model_dump(mode="json")
+        return response if isinstance(response, dict) else {}
+
+    return run
+
+
+async def _fail_import(
+    store,
+    state: ImportState,
+    error: str | Exception,
+    *,
+    public_message: str | None = None,
+) -> None:
     state.status = ImportStatus.FAILED
-    state.error = message
+    state.error = public_message or str(error)
+    state.error_type = type(error).__name__ if isinstance(error, Exception) else None
+    state.error_code = str(
+        getattr(error, "code", None) or "POD_BUNDLE_IMPORT_FAILED"
+    )
+    state.retryable = False
     state.completed_at = _now()
     try:
         await store.save_import(state)
         await publish_bundle_event(
-            state.import_id, error_payload(message, state.seq)
+            state.import_id,
+            error_payload(state.error, state.seq),
         )
-    except Exception as exc:  # noqa: BLE001 - failure bookkeeping is best-effort
-        logger.warning(
-            "Failed to persist FAILED state for import %s: %s", state.import_id, exc
+    except Exception:  # noqa: BLE001 - failure bookkeeping is best-effort
+        logger.debug(
+            'pod_bundle.handlers.persist_state_import_s_s.diagnostic',
+            import_id=state.import_id,
         )
 
 
@@ -782,11 +934,7 @@ async def sweep_pod_bundle_staging() -> None:
         get_pod_bundle_state_store(), BundleStagingStorage()
     )
     if reclaimed or recovered:
-        logger.info(
-            "Pod bundle sweep: reclaimed %d orphaned archives, recovered %d stuck jobs",
-            reclaimed,
-            recovered,
-        )
+        logger.debug("pod_bundle.handlers.pod_bundle_sweep_reclaimed_d.observed")
 
 
 async def _sweep(store, staging) -> tuple[int, int]:
@@ -800,6 +948,7 @@ async def _sweep(store, staging) -> tuple[int, int]:
 
     reclaimed = 0
     recovered_states = await store.recover_stale_jobs(cutoff=cutoff)
+    await publish_lock.release_recovered_publish_locks(recovered_states)
     recovered = len(recovered_states)
     for state in recovered_states:
         job_id = getattr(
@@ -824,8 +973,8 @@ async def _sweep(store, staging) -> tuple[int, int]:
     ):
         try:
             archives = await staging.list_archives(kind)  # type: ignore[arg-type]
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Sweep: could not list %s: %s", kind, exc)
+        except Exception:  # noqa: BLE001
+            logger.debug('pod_bundle.handlers.sweep_could_not_list_s.diagnostic')
             continue
         for job_id, _ in archives:
             state = await get_state(job_id)
@@ -834,8 +983,10 @@ async def _sweep(store, staging) -> tuple[int, int]:
                 try:
                     await staging.delete_archive(kind, job_id)  # type: ignore[arg-type]
                     reclaimed += 1
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Sweep: delete %s/%s failed: %s", kind, job_id, exc)
+                except Exception:  # noqa: BLE001
+                    logger.debug(
+                        'pod_bundle.handlers.sweep_delete_s_s_s.diagnostic', job_id=job_id
+                    )
                 continue
             if not state.is_terminal and state.updated_at < cutoff:
                 state.status = failed_status

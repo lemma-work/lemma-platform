@@ -11,7 +11,10 @@ from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from opentelemetry import context as otel_context
 from opentelemetry import metrics, trace
+from opentelemetry.context import Context
+from opentelemetry.propagate import extract
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -106,64 +109,86 @@ class InboxConsumer:
         event: BaseModel | Mapping[str, Any],
         handler: Callable[[], Awaitable[None]],
     ) -> bool:
-        event_id = stable_event_id(event)
-        event_type = _event_type(event)
-        attempt = await self._claim(consumer, event_id, event_type)
-        if attempt is None:
-            return False
+        payload = normalized_event_payload(event)
+        carrier = {
+            key: str(payload[key])
+            for key in ("traceparent", "tracestate")
+            if payload.get(key)
+        }
+        context_token = otel_context.attach(extract(carrier, context=Context()))
+        try:
+            event_id = stable_event_id(event)
+            event_type = _event_type(event)
+            attempt = await self._claim(consumer, event_id, event_type)
+            if attempt is None:
+                return False
 
-        with tracer.start_as_current_span("lemma.inbox.consume") as span:
-            span.set_attribute("lemma.event_id", str(event_id))
-            span.set_attribute("lemma.event_type", event_type)
-            span.set_attribute("lemma.event_consumer", consumer)
-            span.set_attribute("lemma.event_attempt", attempt)
-            try:
-                payload = normalized_event_payload(event)
+            with tracer.start_as_current_span("lemma.inbox.consume") as span:
+                span.set_attribute("lemma.event_id", str(event_id))
+                span.set_attribute("lemma.event_type", event_type)
+                span.set_attribute("lemma.consumer", consumer)
+                span.set_attribute("lemma.attempt", attempt)
                 raw_correlation_id = payload.get("correlation_id")
                 try:
                     correlation_id = UUID(str(raw_correlation_id))
                 except TypeError, ValueError:
                     correlation_id = event_id
+                raw_causation_id = payload.get("causation_id")
+                try:
+                    causation_id = UUID(str(raw_causation_id))
+                except TypeError, ValueError:
+                    causation_id = None
                 with event_lineage(
                     correlation_id=correlation_id,
-                    causation_id=event_id,
-                ):
-                    await handler()
-            except asyncio.CancelledError:
-                raise
-            except ValidationError as exc:
-                await self._finish(
-                    consumer,
-                    event_id,
-                    InboxStatus.TERMINAL,
-                    error_type=type(exc).__name__,
-                )
-                logger.warning(
-                    "Terminal event validation failure",
-                    consumer=consumer,
-                    event_id=str(event_id),
+                    event_id=event_id,
+                    causation_id=causation_id,
+                    request_id=(
+                        str(payload["request_id"])
+                        if payload.get("request_id")
+                        else None
+                    ),
                     event_type=event_type,
-                )
-                return True
-            except DomainError as exc:
-                if exc.status_code == 503:
-                    return await self._retry_or_dead_letter(
-                        consumer, event_id, event_type, attempt, exc
-                    )
-                await self._finish(
-                    consumer,
-                    event_id,
-                    InboxStatus.TERMINAL,
-                    error_type=type(exc).__name__,
-                )
-                return True
-            except Exception as exc:
-                return await self._retry_or_dead_letter(
-                    consumer, event_id, event_type, attempt, exc
-                )
+                    consumer=consumer,
+                ):
+                    try:
+                        await handler()
+                    except asyncio.CancelledError:
+                        raise
+                    except ValidationError as exc:
+                        await self._finish(
+                            consumer,
+                            event_id,
+                            InboxStatus.TERMINAL,
+                            error_type=type(exc).__name__,
+                        )
+                        logger.warning(
+                            "infrastructure.inbox.terminal_event_validation.degraded",
+                            consumer=consumer,
+                            event_id=str(event_id),
+                            event_type=event_type,
+                        )
+                        return True
+                    except DomainError as exc:
+                        if exc.status_code == 503:
+                            return await self._retry_or_dead_letter(
+                                consumer, event_id, event_type, attempt, exc
+                            )
+                        await self._finish(
+                            consumer,
+                            event_id,
+                            InboxStatus.TERMINAL,
+                            error_type=type(exc).__name__,
+                        )
+                        return True
+                    except Exception as exc:
+                        return await self._retry_or_dead_letter(
+                            consumer, event_id, event_type, attempt, exc
+                        )
 
-        await self._finish(consumer, event_id, InboxStatus.COMPLETED)
-        return True
+            await self._finish(consumer, event_id, InboxStatus.COMPLETED)
+            return True
+        finally:
+            otel_context.detach(context_token)
 
     async def _claim(
         self, consumer: str, event_id: UUID, event_type: str
@@ -234,7 +259,7 @@ class InboxConsumer:
         if terminal:
             dead_letter_counter.add(1, {"consumer": consumer, "event_type": event_type})
             logger.error(
-                "Event delivery dead-lettered",
+                "infrastructure.inbox.event_delivery_dead_lettered.failed",
                 consumer=consumer,
                 event_id=str(event_id),
                 event_type=event_type,

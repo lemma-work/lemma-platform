@@ -65,8 +65,15 @@ from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.credential_uniqueness import (
+    ensure_unique_org_credential_binding,
+    ensure_unique_telegram_account,
+)
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
+)
+from app.modules.agent_surfaces.services.telegram_mini_app_mixin import (
+    TelegramMiniAppSyncMixin,
 )
 from app.core.log.log import get_logger
 
@@ -106,7 +113,7 @@ _EMAIL_TRIGGER_EVENT_TYPES: dict[str, tuple[str, ...]] = {
 _WEBHOOK_RETRY_POLICY = RetryPolicy(max_attempts=3, base_delay=0.5)
 
 
-class AgentSurfaceService:
+class AgentSurfaceService(TelegramMiniAppSyncMixin):
     def __init__(
         self,
         *,
@@ -197,10 +204,7 @@ class AgentSurfaceService:
         # per-pod inbound/outbound address that inbound routing matches on and
         # outbound uses as the From. (Other email surfaces get this from their
         # connected account.)
-        if (
-            platform is SurfacePlatform.RESEND
-            and not entity.surface_identity_email
-        ):
+        if platform is SurfacePlatform.RESEND and not entity.surface_identity_email:
             entity.surface_identity_email = self._provision_resend_address(pod_id)
         self._validate_runtime_supported(entity)
         await self._ensure_unique_org_credential_binding(entity)
@@ -326,8 +330,7 @@ class AgentSurfaceService:
             and telegram_requires_webhook_setup(previous_surface)
         )
         current_telegram_webhook_enabled = (
-            surface.is_active
-            and telegram_requires_webhook_setup(surface)
+            surface.is_active and telegram_requires_webhook_setup(surface)
         )
         telegram_binding_changed = (
             previous_surface.account_id != surface.account_id
@@ -398,6 +401,7 @@ class AgentSurfaceService:
         org-unique account binding is always released.
         """
         deleted = 0
+        failure_count = 0
         cursor: UUID | None = None
         while True:
             surfaces, cursor = await self.list_surfaces_by_pod(pod_id, cursor=cursor)
@@ -406,13 +410,11 @@ class AgentSurfaceService:
                     await self.delete_surface(surface.id)
                     deleted += 1
                 except Exception:
-                    logger.exception(
-                        "Failed to delete surface %s during pod %s cleanup",
-                        surface.id,
-                        pod_id,
-                    )
+                    failure_count += 1
             if cursor is None:
                 break
+        if failure_count:
+            logger.error("surface.cleanup.failed", pod_id=pod_id, failure_count=failure_count)
         return deleted
 
     def get_platform_setup_guide(self, platform: str) -> SurfacePlatformSetupGuide:
@@ -465,9 +467,7 @@ class AgentSurfaceService:
             "guide": guide,
         }
 
-    async def _surface_uses_org_custom_app(
-        self, surface: AgentSurfaceEntity
-    ) -> bool:
+    async def _surface_uses_org_custom_app(self, surface: AgentSurfaceEntity) -> bool:
         """True when the org must manually point a platform app's webhook at Lemma.
 
         For OAuth platforms this means the account was set up with the org's
@@ -515,11 +515,7 @@ class AgentSurfaceService:
                     surface.account_id
                 )
             except Exception:
-                logger.warning(
-                    "Could not resolve WhatsApp verify token for account %s",
-                    surface.account_id,
-                    exc_info=True,
-                )
+                logger.debug('agent_surfaces.surface_service.could_not_resolve_whatsapp_verify.diagnostic', account_id=surface.account_id, exc_info=True)
                 return None
             return credentials.get("verify_token")
         return surface_settings.whatsapp_verify_token
@@ -605,12 +601,15 @@ class AgentSurfaceService:
         token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                token_response = await client.post(token_url, data={
-                    "grant_type": "client_credentials",
-                    "client_id": app_id,
-                    "client_secret": app_password,
-                    "scope": _GRAPH_SCOPE,
-                })
+                token_response = await client.post(
+                    token_url,
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": app_id,
+                        "client_secret": app_password,
+                        "scope": _GRAPH_SCOPE,
+                    },
+                )
                 if token_response.status_code != 200:
                     try:
                         await cache.set_json(cache_key, False, ttl_seconds=10)
@@ -697,12 +696,14 @@ class AgentSurfaceService:
                 "platform": surface.surface_type.value.lower(),
             }
             if surface.surface_type is SurfacePlatform.GMAIL:
-                schedule_config.update({
-                    "userId": "me",
-                    "interval": 2,
-                    "labelIds": "INBOX",
-                    "query": f"label:inbox -from:{account.email}",
-                })
+                schedule_config.update(
+                    {
+                        "userId": "me",
+                        "interval": 2,
+                        "labelIds": "INBOX",
+                        "query": f"label:inbox -from:{account.email}",
+                    }
+                )
             created_schedule = await self.schedule_service.create_schedule(
                 ScheduleCreateEntity(
                     user_id=account.user_id,
@@ -770,10 +771,14 @@ class AgentSurfaceService:
             raise AgentSurfaceValidationError(
                 "Connector trigger repository is not configured"
             )
-        trigger_event_name = _EMAIL_TRIGGER_EVENT_TYPES.get(surface_type.value.upper(), ())
-        triggers = await self.connector_trigger_repository.get_by_app_name_and_event_type(
-            surface_type.value.lower(),
-            trigger_event_name,
+        trigger_event_name = _EMAIL_TRIGGER_EVENT_TYPES.get(
+            surface_type.value.upper(), ()
+        )
+        triggers = (
+            await self.connector_trigger_repository.get_by_app_name_and_event_type(
+                surface_type.value.lower(),
+                trigger_event_name,
+            )
         )
         if triggers:
             return triggers[0].id
@@ -818,49 +823,17 @@ class AgentSurfaceService:
         self,
         surface: AgentSurfaceEntity,
     ) -> None:
-        if surface.account_id is not None:
-            conflict = await self.surface_repository.get_account_conflict_in_org(
-                pod_id=surface.pod_id,
-                account_id=surface.account_id,
-                exclude_surface_id=surface.id,
-            )
-            if isinstance(conflict, AgentSurfaceEntity):
-                raise AgentSurfaceValidationError(
-                    "This connected account is already used by another surface in "
-                    "this organization. Delete that surface before reusing the account."
-                )
-            return
-
-        if surface.credential_mode is not SurfaceCredentialMode.SYSTEM:
-            return
-
-        conflict = await self.surface_repository.get_system_credential_conflict_in_org(
-            pod_id=surface.pod_id,
-            platform=surface.surface_type.value,
-            exclude_surface_id=surface.id,
+        await ensure_unique_org_credential_binding(
+            surface, surface_repository=self.surface_repository
         )
-        if isinstance(conflict, AgentSurfaceEntity):
-            raise AgentSurfaceValidationError(
-                f"System {surface.surface_type.value} credentials are already used "
-                "by another surface in this organization. Delete that surface before "
-                "enabling system credentials for another pod."
-            )
 
     async def _ensure_unique_telegram_account(
         self,
         surface: AgentSurfaceEntity,
     ) -> None:
-        if surface.account_id is None:
-            return
-        existing = await self.surface_repository.get_by_platform_and_account_id(
-            platform=SurfacePlatform.TELEGRAM.value,
-            account_id=surface.account_id,
-            exclude_surface_id=surface.id,
+        await ensure_unique_telegram_account(
+            surface, surface_repository=self.surface_repository
         )
-        if existing is not None:
-            raise AgentSurfaceValidationError(
-                "Telegram account is already connected to another surface"
-            )
 
     async def _prepare_telegram_webhook(
         self,
@@ -971,8 +944,10 @@ class AgentSurfaceService:
             await self._telegram_webhook_call(
                 client, "deleteWebhook", {"drop_pending_updates": False}
             )
-        except Exception as exc:
-            logger.warning("Could not disable Telegram webhook: %s", exc)
+        except Exception:
+            logger.debug(
+                'agent_surfaces.surface_service.could_not_disable_telegram_webhook.diagnostic'
+            )
 
     async def _telegram_webhook_call(
         self,

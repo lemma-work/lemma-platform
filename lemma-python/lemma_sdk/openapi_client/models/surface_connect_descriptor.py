@@ -127,7 +127,7 @@ class SurfaceConnectDescriptor:
                 )
 
                 return auth_config_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 None | SurfaceConnectDescriptorAuthConfigSchemaType0 | Unset, data
@@ -152,7 +152,7 @@ class SurfaceConnectDescriptor:
                 )
 
                 return credential_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(
                 None | SurfaceConnectDescriptorCredentialSchemaType0 | Unset, data

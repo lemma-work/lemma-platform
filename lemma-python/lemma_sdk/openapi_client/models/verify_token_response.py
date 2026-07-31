@@ -112,7 +112,7 @@ class VerifyTokenResponse:
                 function_id_type_0 = UUID(data)
 
                 return function_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -138,7 +138,7 @@ class VerifyTokenResponse:
                 organization_id_type_0 = UUID(data)
 
                 return organization_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -155,7 +155,7 @@ class VerifyTokenResponse:
                 pod_id_type_0 = UUID(data)
 
                 return pod_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowRight, Loader2, Plus, Sparkles } from 'lucide-react';
+import { ArrowRight, Loader2, Plus, Sparkles } from '@/components/ui/icons';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ResourceList, ResourceMetric, ResourceMetricStrip, ResourceRow } from '@/components/pod/resource-layout';
 import { InlineEmptyState } from '@/components/shared/empty-state';
@@ -16,8 +16,6 @@ interface PodConversationListProps {
     podName?: string;
     variant?: 'compact' | 'page';
     limit?: number;
-    openAssistantOnSelect?: boolean;
-    openMode?: 'assistant' | 'route';
     scopeType?: 'pod' | 'assistant';
     scopeName?: string;
     showHeader?: boolean;
@@ -28,18 +26,13 @@ export function PodConversationList({
     podName,
     variant = 'compact',
     limit = variant === 'compact' ? 6 : 100,
-    openAssistantOnSelect = true,
-    openMode = variant === 'page' ? 'route' : 'assistant',
     scopeType = 'pod',
     scopeName,
     showHeader = variant === 'page',
 }: PodConversationListProps) {
     const {
         conversations,
-        activeConversationId,
-        selectConversation,
-        openAssistant,
-        clearMessages,
+        openedConversationId,
         isLoadingConversations,
     } = useAIAssistant();
     const router = useRouter();
@@ -56,25 +49,11 @@ export function PodConversationList({
     }).length;
 
     const openConversation = (conversationId: string) => {
-        if (openMode === 'route') {
-            router.push(`/pod/${podId}/conversations/${encodeURIComponent(conversationId)}`);
-            return;
-        }
-        selectConversation(conversationId);
-        if (openAssistantOnSelect) {
-            openAssistant();
-        }
+        router.push(`/pod/${podId}/conversations/${encodeURIComponent(conversationId)}`);
     };
 
     const startNewConversation = () => {
-        clearMessages();
-        if (openMode === 'route') {
-            router.push(`/pod/${podId}/conversations/new`);
-            return;
-        }
-        if (openAssistantOnSelect) {
-            openAssistant();
-        }
+        router.push(`/pod/${podId}/conversations/new`);
     };
 
     const listBody = (
@@ -112,7 +91,7 @@ export function PodConversationList({
                         key={conversation.id}
                         className={cn(
                             'group px-1 py-1',
-                            activeConversationId === conversation.id && 'bg-[color:color-mix(in_srgb,var(--surface-2)_68%,transparent)]'
+                            openedConversationId === conversation.id && 'bg-[color:color-mix(in_srgb,var(--surface-2)_68%,transparent)]'
                         )}
                     >
                         <button

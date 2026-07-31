@@ -14,7 +14,12 @@ def _manifest(version: str):
             "min_admin_version": "0",
             "images": {
                 name: f"ghcr.io/lemma-work/lemma-{name}:v{version}"
-                for name in ("backend", "frontend", "agentbox", "agentbox_runtime")
+                for name in (
+                    "backend",
+                    "frontend",
+                    "agentbox_workspace",
+                    "agentbox_function",
+                )
             },
         }
     )

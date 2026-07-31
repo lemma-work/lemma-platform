@@ -23,7 +23,7 @@ describe('buildWidgetThemeMessage', () => {
             '--pod-main-bg': '#fff',
             '--surface-1': '#fafafa',
             '--text-primary': '#111',
-            '--brand-primary': '#6366f1',
+            '--interactive-primary': '#5f61d8',
             '--radius-lg': '10px',
         };
         const message = buildWidgetThemeMessage({
@@ -38,7 +38,7 @@ describe('buildWidgetThemeMessage', () => {
             '--lemma-widget-bg': '#fff',
             '--lemma-widget-surface': '#fafafa',
             '--lemma-widget-text': '#111',
-            '--lemma-widget-accent': '#6366f1',
+            '--lemma-widget-accent': '#5f61d8',
             '--lemma-widget-radius': '10px',
             '--lemma-widget-font': 'Inter, sans-serif',
             '--lemma-widget-color-scheme': 'light',

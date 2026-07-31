@@ -2,11 +2,15 @@
 
 import { use, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Check, Loader2 } from '@/components/ui/icons';
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { InlineWidget } from '@/components/lemma/assistant/inline-widget';
+import {
+    CONVERSATION_STAGE_EMBED_PARAM,
+    CONVERSATION_STAGE_EMBED_VALUE,
+} from '@/lib/assistant/conversation-presentation';
 
 function isHttpUrl(value: string | null): string | null {
     if (!value) return null;
@@ -28,6 +32,9 @@ export default function DisplayResourceWidgetPage({
     const conversationId = searchParams.get('assistantConversationId') || searchParams.get('conversationId');
     const toolCallId = searchParams.get('toolCallId');
     const externalSrc = isHttpUrl(searchParams.get('src'));
+    const isConversationStage =
+        searchParams.get(CONVERSATION_STAGE_EMBED_PARAM) === CONVERSATION_STAGE_EMBED_VALUE;
+    const isStandalone = searchParams.get('standalone') === '1';
     const loadingMessages = searchParams.getAll('loadingMessage')
         .map((message) => message.trim())
         .filter(Boolean)
@@ -41,20 +48,21 @@ export default function DisplayResourceWidgetPage({
     const title = 'Widget';
     const isContentWidget = !externalSrc;
 
-    const activeConversationId = assistant.activeConversationId;
+    const openedConversationId = assistant.openedConversationId;
     const openAssistant = assistant.openAssistant;
-    const selectConversation = assistant.selectConversation;
+    const openConversation = assistant.openConversation;
 
     useEffect(() => {
+        if (isConversationStage || isStandalone) return;
         if (!conversationId) return;
         if (initializedAssistantConversationRef.current !== conversationId) {
             initializedAssistantConversationRef.current = conversationId;
             openAssistant();
         }
-        if (activeConversationId !== conversationId) {
-            selectConversation(conversationId);
+        if (openedConversationId !== conversationId) {
+            openConversation(conversationId);
         }
-    }, [activeConversationId, conversationId, openAssistant, selectConversation]);
+    }, [conversationId, isConversationStage, isStandalone, openAssistant, openConversation, openedConversationId]);
 
     if (!conversationId || !toolCallId) {
         return (
@@ -90,7 +98,7 @@ export default function DisplayResourceWidgetPage({
     };
 
     return (
-        <main className="presented-resource-surface relative flex min-h-full flex-col">
+        <main className="presented-resource-surface relative flex h-full min-h-0 flex-col overflow-hidden">
             {canSaveAsApp ? (
                 <div className="absolute right-3 top-3 z-10 flex items-center gap-3">
                     {saveError ? (
@@ -103,7 +111,8 @@ export default function DisplayResourceWidgetPage({
                             rel="noreferrer"
                             className="rounded-full bg-[var(--bg-canvas)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] underline shadow-[var(--shadow-xs)]"
                         >
-                            Saved ✓ — open app
+                            <Check className="mr-1 inline size-3" aria-hidden="true" />
+                            Saved — open app
                         </a>
                     ) : (
                         <button
@@ -118,7 +127,7 @@ export default function DisplayResourceWidgetPage({
                     )}
                 </div>
             ) : null}
-            <div className="min-h-0 flex-1 overflow-hidden">
+            <div className="h-full min-h-0 flex-1 overflow-hidden">
                 <InlineWidget
                     podId={podId}
                     conversationId={conversationId}

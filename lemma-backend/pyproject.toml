@@ -3,7 +3,7 @@ name = "lemma-backend"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "pydantic>=2.11.9",
     "email-validator>=2.1.0",
@@ -36,7 +36,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.39.1",
     "opentelemetry-instrumentation-aiohttp-client>=0.60b1",
     "opentelemetry-instrumentation-fastapi>=0.60b1",
-    "opentelemetry-instrumentation-redis>=0.60b1",
+    "opentelemetry-instrumentation-httpx>=0.60b1",
     "opentelemetry-instrumentation-sqlalchemy>=0.60b1",
     "pydantic-deep>=0.2.20",
     "authlib>=1.6.6",
@@ -48,6 +48,7 @@ dependencies = [
     "greenlet>=3.3.2",
     "markdown>=3.8.2",
     "cryptography>=46.0.6",
+    "pyjwt[crypto]>=2.10.1",
     "fastembed>=0.7.4",
     "agentbox-client",
     "pypdfium2>=5.10.1",
@@ -56,6 +57,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Managed/local composition: embeds the AgentBox manager and document
+# conversion into the single backend process. Cloud/split deployments do not
+# need to install this extra.
+local = [
+    "agentbox[postgres]",
+    "markitdown[docx,pptx,xlsx,xls,pdf,outlook]>=0.1.0",
+]
 # Cloud key backends for app/core/crypto. Optional so OSS/local stays lean; the
 # imports are lazy (only loaded when secret_key_provider selects them).
 gcp-kms = [
@@ -76,6 +84,7 @@ markitdown = [
 
 [dependency-groups]
 dev = [
+    "agentbox",
     "basedpyright>=1.39.9",
     "diff-cover>=9.7.1",
     "kubernetes>=34.1.0",
@@ -100,6 +109,7 @@ packages = ["app"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "standalone_app.py" = "standalone_app.py"
+"local_app.py" = "local_app.py"
 
 [tool.hatch.metadata]
 allow-direct-references = true
@@ -107,6 +117,7 @@ allow-direct-references = true
 [tool.uv.sources]
 lemma-connectors = { path = "lemma-connectors", editable = true }
 agentbox-client = { path = "../agentbox-client", editable = true }
+agentbox = { path = "../agentbox", editable = true }
 lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 
 # Ruff config. The full default ruleset is not yet enforced repo-wide (generated
@@ -124,6 +135,7 @@ lemma-pod-bundle = { path = "../lemma-pod-bundle", editable = true }
 [tool.basedpyright]
 pythonVersion = "3.14"
 typeCheckingMode = "standard"
+extraPaths = ["../agentbox-client"]
 exclude = [
     "app/**/tests/**",
     "app/modules/test_support/**",

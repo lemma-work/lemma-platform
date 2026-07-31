@@ -30,11 +30,17 @@ from app.core.crypto import get_secret_signer
 from app.modules.datastore.config import datastore_settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 from app.modules.datastore.domain.file_entities import DatastoreFileEntity
 from app.modules.datastore.domain.ports import DatastoreStoragePort
 from app.modules.datastore.services.files.projection import datastore_storage_key
 
 logger = get_logger(__name__)
+_cache_incident = DependencyIncident(
+    "datastore_file_url_cache",
+    logger=logger,
+    degradation_threshold=1,
+)
 
 #: Signing purpose for the unified signer (HKDF subkey label).
 _PURPOSE = "datastore-file-url"
@@ -125,8 +131,9 @@ def _get_url_cache() -> RedisJsonCache | None:
                 ),
             )
         except Exception as exc:
-            logger.warning("File-URL cache unavailable: %s", exc)
+            _cache_incident.record_failure(error_type=type(exc).__name__)
             return None
+        _cache_incident.record_success()
     return _url_cache
 
 
@@ -150,8 +157,8 @@ async def build_object_url(
             if cached:
                 payload = json.loads(cached)
                 return payload["url"], datetime.fromisoformat(payload["expires_at"])
-        except Exception as exc:
-            logger.debug("File-URL cache read failed: %s", exc)
+        except Exception:
+            logger.debug("datastore.file_url.file_url_cache_read_s.observed")
 
     now = int(time.time())
     expires_at_epoch = now + expires_seconds
@@ -175,8 +182,8 @@ async def build_object_url(
                 cache_key,
                 json.dumps({"url": url, "expires_at": expires_at.isoformat()}),
             )
-        except Exception as exc:
-            logger.debug("File-URL cache write failed: %s", exc)
+        except Exception:
+            logger.debug("datastore.file_url.file_url_cache_write_s.observed")
 
     return url, expires_at
 

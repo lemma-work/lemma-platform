@@ -424,7 +424,7 @@ Representative production files are
 `agent/infrastructure/harnesses/pydantic_ai.py` (1,309),
 `agent/services/agent_runner_service.py` (1,072),
 `pod_bundle/infrastructure/exporter.py` (990), and
-`function/application/function_run_executor.py` (970).
+`pod_bundle/events/handlers.py` (1,001).
 
 Size alone is not a defect, but these classes contain policy, persistence
 coordination, provider branching, error classification, serialization, and

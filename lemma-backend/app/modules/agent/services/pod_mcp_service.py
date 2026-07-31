@@ -87,11 +87,8 @@ class PodMCPService:
         except Exception as exc:  # noqa: BLE001 - graceful tool-error boundary
             if is_control_flow_exception(exc):
                 raise
-            logger.warning(
-                "Pod MCP tool %r failed; returning isError result: %s",
-                tool_name,
-                exc,
-                exc_info=True,
+            logger.debug(
+                'agent.pod_mcp_service.pod_mcp_tool_r_returning.diagnostic', exc_info=True
             )
             return self._mcp_error_result(tool_name, exc)
         return self._mcp_result(result)
@@ -148,7 +145,9 @@ class PodMCPService:
         payload = to_json_value(result)
         if isinstance(payload, dict):
             return CallToolResult(
-                content=[TextContent(type="text", text=json.dumps(payload, default=str))],
+                content=[
+                    TextContent(type="text", text=json.dumps(payload, default=str))
+                ],
                 structuredContent=payload,
             )
         text = payload if isinstance(payload, str) else json.dumps(payload, default=str)
@@ -158,9 +157,7 @@ class PodMCPService:
         payload = format_tool_error(name, exc)
         return CallToolResult(
             isError=True,
-            content=[
-                TextContent(type="text", text=json.dumps(payload, default=str))
-            ],
+            content=[TextContent(type="text", text=json.dumps(payload, default=str))],
             structuredContent=payload,
         )
 

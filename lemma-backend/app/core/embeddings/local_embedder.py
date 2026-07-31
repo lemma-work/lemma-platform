@@ -109,10 +109,8 @@ class FastEmbedLocalEmbedder(Embedder):
         if not alternate_url:
             raise exc
 
-        logger.warning(
-            "FastEmbed's Hugging Face model is missing its ONNX artifact; "
-            "using FastEmbed's registered alternate cache/source for %s",
-            self.model_name,
+        logger.debug(
+            'embeddings.local_embedder.fastembed_s_hugging_face_model.diagnostic'
         )
         repaired_path = text_embedding_type.retrieve_model_gcs(
             self.model_name,

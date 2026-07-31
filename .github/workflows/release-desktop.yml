@@ -1,9 +1,8 @@
 name: Release Lemma Desktop
 
-# Builds the Tauri macOS app (arm64) and attaches the DMG to the GitHub
-# release. The DMG contains the thin Rust shell + the compiled lemma-stack
-# supervisor sidecar (PyInstaller). Public releases require Developer ID
-# signing and Apple notarization; missing credentials fail before the build.
+# Builds the signed online installer for macOS and Windows. The application
+# contains only the native control plane and a release manifest; first launch
+# downloads digest-pinned host and guest runtimes with visible progress.
 
 on:
   release:
@@ -99,9 +98,6 @@ jobs:
         with:
           node-version: 22
 
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v6
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -115,44 +111,363 @@ jobs:
           key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
           restore-keys: desktop-cargo-${{ runner.os }}-
 
+      - name: Download and verify native runtime artifacts
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: aarch64-apple-darwin
+          GUEST_TARGET: macos-aarch64
+        run: |
+          mkdir -p desktop/runtime/download
+          for attempt in {1..60}; do
+            if gh release download "v${VERSION}" \
+              --pattern lemma-local.json \
+              --pattern "lemma-host-pack-${TARGET}.zip" \
+              --pattern "lemma-guest-runtime-${GUEST_TARGET}.zip" \
+              --dir desktop/runtime/download \
+              --clobber; then
+              break
+            fi
+            if [[ "${attempt}" == 60 ]]; then
+              echo "Native host pack was not published within 30 minutes" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+          python3 - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          target = os.environ["TARGET"]
+          guest_target = os.environ["GUEST_TARGET"]
+          archive = root / f"lemma-host-pack-{target}.zip"
+          expected = manifest["host_packs"][target]
+          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+          if actual != expected["sha256"] or archive.stat().st_size != expected["size"]:
+              raise SystemExit("native host pack digest/size mismatch")
+          guest = root / f"lemma-guest-runtime-{guest_target}.zip"
+          expected_guest = manifest["guest_runtimes"][guest_target]
+          actual_guest = hashlib.sha256(guest.read_bytes()).hexdigest()
+          if actual_guest != expected_guest["sha256"] or guest.stat().st_size != expected_guest["size"]:
+              raise SystemExit("managed guest runtime digest/size mismatch")
+          PY
+          cp desktop/runtime/download/lemma-local.json desktop/runtime/lemma-local.json
+
       - name: Bake splash concepts
         run: node desktop/scripts/extract-concepts.mjs
 
       - name: Verify baked splash concepts are committed
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
-      - name: Build supervisor sidecar
+      - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
-      - name: Build DMG
-        working-directory: desktop
-        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+      - name: Sign virtualization helper with its entitlement
+        shell: bash
         env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
+        run: |
+          set -euo pipefail
+          helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          codesign --force --timestamp --options runtime \
+            --entitlements desktop/entitlements.plist \
+            --sign "${APPLE_SIGNING_IDENTITY}" \
+            "${helper}"
+          codesign --verify --strict --verbose=2 "${helper}"
+          codesign -d --entitlements :- "${helper}" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+
+      - name: Build online DMG
+        working-directory: desktop
+        run: |
+          set -euo pipefail
+          npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
+          mkdir -p target/release/release-artifacts
+          dmg=(target/release/bundle/dmg/Lemma_*_aarch64.dmg)
+          [[ "${#dmg[@]}" == 1 ]]
+          mv "${dmg[0]}" \
+            "target/release/release-artifacts/Lemma_${VERSION}_aarch64-online.dmg"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
           APPLE_SIGNING_IDENTITY: ${{ steps.apple-signing.outputs.signing-identity }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Verify Developer ID signature and notarization staple
+      - name: Verify Developer ID signatures and notarization staples
         shell: bash
         run: |
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
-          sidecar="${app}/Contents/MacOS/lemma-supervisor"
-          uv="${app}/Contents/MacOS/uv"
+          locald="${app}/Contents/MacOS/lemma-locald"
+          runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
+          vz="${app}/Contents/Resources/lemma-vz"
 
-          test -x "${uv}"
+          test -x "${locald}"
+          test -x "${runtime_bridge}"
+          test -x "${vz}"
+          test ! -e "${app}/Contents/MacOS/lemma-vz"
+          test ! -e "${app}/Contents/MacOS/lemma-supervisor"
+          test ! -e "${app}/Contents/MacOS/uv"
+          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
+          test "${app_bytes}" -le "$((25 * 1024 * 1024))"
           codesign --verify --deep --strict --verbose=2 "${app}"
-          codesign --verify --strict --verbose=2 "${sidecar}"
-          codesign --verify --strict --verbose=2 "${uv}"
+          codesign --verify --strict --verbose=2 "${locald}"
+          codesign --verify --strict --verbose=2 "${runtime_bridge}"
+          codesign --verify --strict --verbose=2 "${vz}"
           codesign -dvvv "${app}" 2>&1 | grep -F "Authority=Developer ID Application:"
+          codesign -d --entitlements :- "${vz}" 2>/dev/null | grep -F "com.apple.security.virtualization"
           xcrun stapler validate "${app}"
+          xcrun stapler validate \
+            "desktop/target/release/release-artifacts/Lemma_${VERSION}_aarch64-online.dmg"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
 
-      - name: Upload DMG to release
+      - name: Upload online DMG to release
         uses: softprops/action-gh-release@v2
         with:
-          files: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
+          files: desktop/target/release/release-artifacts/Lemma_*_aarch64-*.dmg
 
       - name: Remove temporary signing keychain
         if: always() && steps.apple-signing.outcome == 'success'
         run: security delete-keychain "${{ steps.apple-signing.outputs.keychain-path }}"
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require fresh backend protected E2E
+        uses: ./.github/actions/require-backend-protected-e2e
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          sha: ${{ github.sha }}
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          if [[ ! "${version}" =~ ^[0-9]+[.][0-9]+[.][0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid semver release tag: ${RELEASE_VERSION}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Set version in Tauri and Cargo manifests
+        shell: python
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          import json, os, pathlib, re
+          version = os.environ["VERSION"]
+          conf = pathlib.Path("desktop/tauri.conf.json")
+          data = json.loads(conf.read_text())
+          data["version"] = version
+          conf.write_text(json.dumps(data, indent=2) + "\n")
+          cargo = pathlib.Path("desktop/Cargo.toml")
+          text, count = re.subn(
+              r'(?m)^version = "[^"]+"', f'version = "{version}"', cargo.read_text(), count=1
+          )
+          if count != 1:
+              raise SystemExit("Could not set version in desktop/Cargo.toml")
+          cargo.write_text(text)
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Import Windows code-signing certificate
+        id: windows-signing
+        uses: ./.github/actions/setup-windows-signing
+        with:
+          certificate: ${{ secrets.WINDOWS_CERTIFICATE }}
+          certificate-password: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          timestamp-url: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+
+      - name: Configure Tauri Authenticode signing
+        shell: python
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          import json, os, pathlib
+
+          for name in ("tauri.online.conf.json", "tauri.dist.conf.json"):
+              path = pathlib.Path("desktop") / name
+              config = json.loads(path.read_text())
+              windows = config.setdefault("bundle", {}).setdefault("windows", {})
+              windows.update({
+                  "certificateThumbprint": os.environ["CERTIFICATE_THUMBPRINT"],
+                  "digestAlgorithm": "sha256",
+                  "timestampUrl": os.environ["WINDOWS_TIMESTAMP_URL"],
+                  "tsp": True,
+              })
+              path.write_text(json.dumps(config, indent=2) + "\n")
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-cargo-${{ runner.os }}-
+
+      - name: Download and verify native runtime artifacts
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARGET: x86_64-pc-windows-msvc
+          GUEST_TARGET: windows-x86_64
+        run: |
+          New-Item -ItemType Directory -Force desktop/runtime/download | Out-Null
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 60; $attempt++) {
+            gh release download "v$env:VERSION" `
+              --pattern lemma-local.json `
+              --pattern "lemma-host-pack-$env:TARGET.zip" `
+              --pattern "lemma-guest-runtime-$env:GUEST_TARGET.zip" `
+              --dir desktop/runtime/download `
+              --clobber
+            if ($LASTEXITCODE -eq 0) { $downloaded = $true; break }
+            Start-Sleep -Seconds 30
+          }
+          if (-not $downloaded) { throw "Native host pack was not published within 30 minutes" }
+          @'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          target = os.environ["TARGET"]
+          guest_target = os.environ["GUEST_TARGET"]
+          archive = root / f"lemma-host-pack-{target}.zip"
+          expected = manifest["host_packs"][target]
+          actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+          if actual != expected["sha256"] or archive.stat().st_size != expected["size"]:
+              raise SystemExit("native host pack digest/size mismatch")
+          guest = root / f"lemma-guest-runtime-{guest_target}.zip"
+          expected_guest = manifest["guest_runtimes"][guest_target]
+          actual_guest = hashlib.sha256(guest.read_bytes()).hexdigest()
+          if actual_guest != expected_guest["sha256"] or guest.stat().st_size != expected_guest["size"]:
+              raise SystemExit("managed guest runtime digest/size mismatch")
+          '@ | python -
+          Copy-Item desktop/runtime/download/lemma-local.json desktop/runtime/lemma-local.json -Force
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build Windows sidecars
+        shell: pwsh
+        run: desktop/scripts/build-sidecar.ps1
+
+      - name: Sign native runtime bridge
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $signTool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
+            -ErrorAction Stop |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) { throw "Windows SDK signtool.exe was not found" }
+          $runtimeExecutables = @("desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe")
+          foreach ($path in $runtimeExecutables) {
+            if (-not (Test-Path $path)) { throw "Native runtime executable is missing: $path" }
+            & $signTool.FullName sign `
+              /sha1 $env:CERTIFICATE_THUMBPRINT `
+              /fd SHA256 `
+              /tr $env:WINDOWS_TIMESTAMP_URL `
+              /td SHA256 `
+              $path
+            if ($LASTEXITCODE -ne 0) { throw "Could not sign native runtime executable: $path" }
+          }
+
+      - name: Build online NSIS installer
+        working-directory: desktop
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json --bundles nsis
+          if ($LASTEXITCODE -ne 0) { throw "Online NSIS build failed" }
+          New-Item -ItemType Directory -Force target/release/release-artifacts | Out-Null
+          $installers = @(Get-ChildItem target/release/bundle/nsis/Lemma_*_x64-setup.exe)
+          if ($installers.Count -ne 1) { throw "Expected one online NSIS installer" }
+          Move-Item $installers[0].FullName `
+            "target/release/release-artifacts/Lemma_${env:VERSION}_x64-online-setup.exe"
+
+      - name: Verify Authenticode signatures
+        shell: pwsh
+        run: |
+          $paths = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe"
+          )
+          $installers = Get-ChildItem `
+            "desktop/target/release/release-artifacts/Lemma_*_x64-*-setup.exe" `
+            -ErrorAction Stop
+          if (@($installers).Count -ne 1) { throw "Expected one online installer" }
+          $paths += $installers.FullName
+          foreach ($path in $paths) {
+            if (-not (Test-Path $path)) { throw "Signed release binary is missing: $path" }
+            $signature = Get-AuthenticodeSignature $path
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $path`: $($signature.StatusMessage)"
+            }
+          }
+
+      - name: Enforce small online application payload
+        shell: pwsh
+        run: |
+          $paths = @(
+            "desktop/target/release/lemma-desktop.exe",
+            "desktop/binaries/lemma-locald-x86_64-pc-windows-msvc.exe",
+            "desktop/binaries/lemma-runtime-x86_64-pc-windows-msvc.exe",
+            "desktop/runtime/lemma-local.json"
+          )
+          $bytes = ($paths | ForEach-Object {
+            if (-not (Test-Path $_)) { throw "Online payload is missing: $_" }
+            (Get-Item $_).Length
+          } | Measure-Object -Sum).Sum
+          if ($bytes -gt 25MB) {
+            throw "Expanded online application payload is $bytes bytes; limit is 25 MiB"
+          }
+
+      - name: Upload online Windows installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/target/release/release-artifacts/Lemma_*_x64-*-setup.exe
+
+      - name: Remove Windows code-signing certificate
+        if: always() && steps.windows-signing.outcome == 'success'
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_THUMBPRINT)) {
+            Remove-Item `
+              "Cert:\CurrentUser\My\$env:CERTIFICATE_THUMBPRINT" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }

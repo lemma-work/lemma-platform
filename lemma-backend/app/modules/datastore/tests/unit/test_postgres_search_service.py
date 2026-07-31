@@ -52,6 +52,44 @@ def _obj(file_id, chunk_index: int, score: float = 1.0) -> DatastoreFileSearchRe
     )
 
 
+class _Transaction:
+    def __init__(self, connection):
+        self.connection = connection
+
+    async def __aenter__(self):
+        return self.connection
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _Engine:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def begin(self):
+        return _Transaction(self.connection)
+
+
+@pytest.mark.asyncio
+async def test_ensure_schema_does_not_recreate_installed_vector_extension():
+    connection = AsyncMock()
+    connection.scalar.return_value = True
+    service = PostgresSearchService(
+        uuid4(),
+        engine=_Engine(connection),
+        session_factory=object(),
+        embedder=_FakeEmbedder(),
+        reranker=NoopReranker(),
+    )
+
+    await service.ensure_schema()
+
+    statements = [str(call.args[0]) for call in connection.execute.await_args_list]
+    assert not any(statement.startswith("CREATE EXTENSION") for statement in statements)
+    connection.scalar.assert_awaited_once()
+
+
 def test_merge_ranked_results_combines_text_and_vector_ranks():
     service = _search_service()
     file_id = uuid4()

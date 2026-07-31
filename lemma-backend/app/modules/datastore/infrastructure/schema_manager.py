@@ -85,9 +85,8 @@ class SchemaManager:
             async with self._engine.begin() as conn:
                 await self._grant_query_role_on_table(conn, schema_name, table_name)
         except Exception:  # noqa: BLE001
-            logger.warning(
-                f"Could not grant query role read on {schema_name}.{table_name}; "
-                "ad-hoc queries on it will fail until grants are repaired",
+            logger.debug(
+                'datastore.schema_manager.could_not_grant_query_role.diagnostic',
                 exc_info=True,
             )
 
@@ -228,7 +227,6 @@ class SchemaManager:
         async with self._engine.begin() as conn:
             await self._lock_schema_bootstrap(conn, schema_name)
             await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
-        logger.info(f"Created schema {schema_name} for pod {pod_id}")
 
     async def datastore_schema_exists(self, pod_id: UUID) -> bool:
         schema_name = self._get_schema_name(pod_id)
@@ -245,7 +243,9 @@ class SchemaManager:
         schema_name = self._get_schema_name(pod_id)
         async with self._engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE'))
-        logger.info(f"Dropped schema {schema_name} for pod {pod_id}")
+        logger.debug(
+            "datastore.schema_manager.dropped_schema_pod.observed", pod_id=pod_id
+        )
 
     async def create_table(
         self,

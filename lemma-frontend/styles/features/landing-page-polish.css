@@ -1,0 +1,1035 @@
+@layer components {
+  /* The final landing hierarchy stays editorial: useful copy, restrained scale. */
+  .lp-section-title {
+    font-size: clamp(1.85rem, 3vw, 2.55rem);
+    font-weight: 500;
+    line-height: 1.04;
+    letter-spacing: -0.045em;
+  }
+
+  .lp-hero {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    background: var(--lp-bg);
+  }
+
+  .lp-hero::before {
+    position: absolute;
+    z-index: 0;
+    top: 60px;
+    right: max(16px, calc((100vw - 1180px) / 2));
+    bottom: auto;
+    left: auto;
+    display: block;
+    width: min(48vw, 620px);
+    height: 520px;
+    background:
+      linear-gradient(var(--lp-rule) 1px, transparent 1px),
+      linear-gradient(90deg, var(--lp-rule) 1px, transparent 1px);
+    background-size: 24px 24px;
+    content: "";
+    mask-image:
+      linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0.7),
+        rgba(0, 0, 0, 0.38) 58%,
+        transparent 96%
+      );
+    opacity: 0.42;
+  }
+
+  .lp-hero-copy,
+  .lp-hero-theater {
+    position: relative;
+    z-index: 1;
+  }
+
+  .lp-capabilities-section {
+    padding-top: clamp(72px, 8vw, 108px);
+    padding-bottom: clamp(72px, 8vw, 108px);
+  }
+
+  .lp-capabilities-intro {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.42fr) minmax(0, 1.58fr);
+    gap: clamp(32px, 7vw, 96px);
+    align-items: end;
+    padding-bottom: 28px;
+  }
+
+  .lp-capabilities-intro h2 {
+    max-width: 720px;
+    margin: 0;
+    color: var(--lp-ink);
+    font-size: clamp(1.75rem, 2.7vw, 2.35rem);
+    font-weight: 500;
+    line-height: 1.06;
+    letter-spacing: -0.045em;
+  }
+
+  .lp-capability-stage {
+    --lp-capability-accent: #285bce;
+
+    display: grid;
+    min-height: 500px;
+    grid-template-columns: minmax(320px, 0.72fr) minmax(0, 1.28fr);
+    overflow: hidden;
+    border: 1px solid var(--lp-rule-strong);
+    border-radius: 16px;
+    background: var(--lp-paper);
+    box-shadow: 0 22px 60px color-mix(in srgb, var(--lp-ink) 6%, transparent);
+  }
+
+  .lp-capability-stage.is-agents {
+    --lp-capability-accent: #d47b35;
+  }
+
+  .lp-capability-stage.is-shared-state {
+    --lp-capability-accent: #518a68;
+  }
+
+  .lp-capability-controls {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    padding: 18px;
+    border-right: 1px solid var(--lp-rule);
+    background:
+      radial-gradient(
+        circle at 16% 100%,
+        color-mix(in srgb, var(--lp-capability-accent) 9%, transparent),
+        transparent 42%
+      ),
+      var(--lp-paper);
+  }
+
+  .lp-capability-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+    padding: 4px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 9px;
+    background: var(--lp-soft);
+  }
+
+  .lp-capability-tabs button {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 38px;
+    gap: 6px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--lp-faint);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.65rem;
+    font-weight: 550;
+    transition:
+      background 180ms ease,
+      color 180ms ease,
+      box-shadow 180ms ease,
+      transform 180ms ease;
+  }
+
+  .lp-capability-tabs button:hover {
+    color: var(--lp-ink);
+  }
+
+  .lp-capability-tabs button.is-active {
+    background: var(--lp-paper);
+    color: var(--lp-ink);
+    box-shadow: 0 1px 5px color-mix(in srgb, var(--lp-ink) 10%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .lp-capability-tabs button.is-active::after {
+    position: absolute;
+    right: 8px;
+    bottom: 3px;
+    left: 8px;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--lp-capability-accent);
+    content: "";
+    animation: lp-capability-progress 5s linear both;
+  }
+
+  .lp-capability-tabs button span {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.52rem;
+  }
+
+  .lp-capability-detail {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    padding: clamp(34px, 4vw, 54px) 20px;
+    animation: lp-capability-copy-in 460ms cubic-bezier(0.22, 1, 0.36, 1)
+      both;
+  }
+
+  .lp-capability-detail > span {
+    color: var(--lp-capability-accent);
+    font-family: var(--font-mono-family);
+    font-size: 0.62rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .lp-capability-detail h3 {
+    max-width: 390px;
+    margin: 17px 0 0;
+    color: var(--lp-ink);
+    font-size: clamp(1.75rem, 2.7vw, 2.45rem);
+    font-weight: 500;
+    line-height: 1.02;
+    letter-spacing: -0.045em;
+  }
+
+  .lp-capability-detail > p {
+    max-width: 430px;
+    margin: 20px 0 0;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.88rem;
+    line-height: 1.68;
+  }
+
+  .lp-capability-detail > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 28px;
+  }
+
+  .lp-capability-detail > div small {
+    padding: 6px 9px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--lp-paper) 84%, transparent);
+    color: var(--lp-muted);
+    font-size: 0.62rem;
+  }
+
+  .lp-capability-stage-visual {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    min-height: 500px;
+    margin: 0;
+    overflow: hidden;
+    grid-template-rows: 44px minmax(0, 1fr);
+    background:
+      radial-gradient(
+        circle at 68% 46%,
+        color-mix(in srgb, var(--lp-capability-accent) 9%, transparent),
+        transparent 42%
+      ),
+      #fbf4e8;
+    animation: lp-capability-visual-in 620ms cubic-bezier(0.22, 1, 0.36, 1)
+      both;
+  }
+
+  .lp-capability-stage-visual::after {
+    position: absolute;
+    z-index: 2;
+    top: 44px;
+    bottom: 0;
+    left: -34%;
+    width: 24%;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--lp-capability-accent) 13%, transparent),
+      transparent
+    );
+    content: "";
+    pointer-events: none;
+    transform: skewX(-12deg);
+    animation: lp-capability-sweep 900ms 120ms ease-out both;
+  }
+
+  .lp-capability-stage-visual > div:first-child {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    border-bottom: 1px solid color-mix(in srgb, var(--lp-rule) 76%, transparent);
+    background: color-mix(in srgb, var(--lp-paper) 62%, transparent);
+  }
+
+  .lp-capability-stage-visual > div:first-child span,
+  .lp-capability-stage-visual > div:first-child small {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.58rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .lp-capability-image {
+    display: grid;
+    min-height: 0;
+    overflow: hidden;
+    place-items: center;
+  }
+
+  .lp-capability-image img {
+    display: block;
+    width: 122%;
+    max-width: none;
+    height: auto;
+    filter: saturate(1.08) contrast(1.03);
+    mix-blend-mode: multiply;
+    mask-image:
+      radial-gradient(
+        ellipse 68% 72% at center,
+        #000 62%,
+        rgba(0, 0, 0, 0.9) 76%,
+        transparent 100%
+      );
+    -webkit-mask-image:
+      radial-gradient(
+        ellipse 68% 72% at center,
+        #000 62%,
+        rgba(0, 0, 0, 0.9) 76%,
+        transparent 100%
+      );
+  }
+
+  @keyframes lp-capability-copy-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes lp-capability-visual-in {
+    from {
+      opacity: 0.72;
+      transform: scale(0.985);
+    }
+
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  @keyframes lp-capability-sweep {
+    from {
+      left: -34%;
+      opacity: 0;
+    }
+
+    20% {
+      opacity: 1;
+    }
+
+    to {
+      left: 112%;
+      opacity: 0;
+    }
+  }
+
+  @keyframes lp-capability-progress {
+    from {
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+
+    to {
+      transform: scaleX(1);
+      transform-origin: left;
+    }
+  }
+
+  .lp-pod-section {
+    padding-top: clamp(72px, 8vw, 108px);
+    padding-bottom: clamp(72px, 8vw, 108px);
+  }
+
+  .lp-pod-intro {
+    display: grid;
+    grid-template-columns: minmax(0, 0.9fr) minmax(340px, 1.1fr);
+    gap: clamp(36px, 8vw, 110px);
+    align-items: end;
+    margin-bottom: 34px;
+  }
+
+  .lp-pod-intro h2 {
+    max-width: 460px;
+    margin: 8px 0 0;
+    color: var(--lp-ink);
+    font-size: clamp(1.75rem, 2.55vw, 2.25rem);
+    font-weight: 500;
+    line-height: 1.02;
+    letter-spacing: -0.045em;
+  }
+
+  .lp-pod-intro > p {
+    max-width: 590px;
+    margin: 0;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.92rem;
+    line-height: 1.65;
+  }
+
+  .lp-pod-system {
+    display: grid;
+    grid-template-columns: 160px 36px minmax(0, 1fr) 36px 160px;
+    align-items: center;
+    padding: 18px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 14px;
+    background:
+      linear-gradient(
+        90deg,
+        color-mix(in srgb, var(--lp-paper) 80%, transparent),
+        transparent 26%,
+        transparent 74%,
+        color-mix(in srgb, var(--lp-paper) 80%, transparent)
+      ),
+      var(--lp-soft);
+  }
+
+  .lp-pod-signal,
+  .lp-pod-outcome {
+    display: flex;
+    min-height: 134px;
+    flex-direction: column;
+    justify-content: center;
+    padding: 18px;
+    border: 1px solid var(--lp-rule);
+    border-radius: 10px;
+    background: var(--lp-paper);
+  }
+
+  .lp-pod-signal > span,
+  .lp-pod-outcome > span,
+  .lp-pod-flow article > small {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.59rem;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+  }
+
+  .lp-pod-signal strong,
+  .lp-pod-outcome strong {
+    margin-top: 15px;
+    color: var(--lp-ink);
+    font-size: 0.92rem;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+
+  .lp-pod-signal small,
+  .lp-pod-outcome small {
+    margin-top: 5px;
+    color: var(--lp-muted);
+    font-size: 0.7rem;
+  }
+
+  .lp-pod-outcome em {
+    align-self: flex-start;
+    margin-top: 16px;
+    padding: 4px 7px;
+    border-radius: 999px;
+    background: #e5f2e7;
+    color: #397548;
+    font-size: 0.58rem;
+    font-style: normal;
+  }
+
+  .lp-pod-system-arrow {
+    display: grid;
+    color: var(--lp-faint);
+    place-items: center;
+  }
+
+  .lp-pod-system-arrow svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .lp-pod-core {
+    overflow: hidden;
+    border: 1px solid var(--lp-rule-strong);
+    border-radius: 12px;
+    background: var(--lp-paper);
+    box-shadow: 0 18px 48px color-mix(in srgb, var(--lp-ink) 7%, transparent);
+  }
+
+  .lp-pod-core > header {
+    display: flex;
+    min-height: 43px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--lp-rule);
+    background: color-mix(in srgb, var(--lp-soft) 54%, var(--lp-paper));
+  }
+
+  .lp-pod-core > header span {
+    color: var(--lp-ink);
+    font-size: 0.74rem;
+    font-weight: 600;
+  }
+
+  .lp-pod-core > header small {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.58rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .lp-pod-flow {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .lp-pod-flow article {
+    position: relative;
+    min-height: 174px;
+    padding: 16px;
+    border-right: 1px solid var(--lp-rule);
+  }
+
+  .lp-pod-flow article:last-child {
+    border-right: 0;
+  }
+
+  .lp-pod-flow article > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .lp-pod-flow article > div > span {
+    color: var(--lp-faint);
+    font-family: var(--font-mono-family);
+    font-size: 0.58rem;
+  }
+
+  .lp-pod-flow article > strong {
+    display: block;
+    margin-top: 8px;
+    color: var(--lp-ink);
+    font-size: 0.84rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .lp-pod-flow article > p {
+    margin: 7px 0 0;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.68rem;
+    line-height: 1.5;
+  }
+
+  .lp-pod-context {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border-top: 1px solid var(--lp-rule);
+    background: color-mix(in srgb, var(--lp-soft) 52%, var(--lp-paper));
+  }
+
+  .lp-pod-context > div {
+    display: flex;
+    min-width: 0;
+    min-height: 58px;
+    gap: 9px;
+    align-items: center;
+    padding: 10px 14px;
+    border-right: 1px solid var(--lp-rule);
+  }
+
+  .lp-pod-context > div:last-child {
+    border-right: 0;
+  }
+
+  .lp-pod-context > div > span {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+
+  .lp-pod-context strong {
+    color: var(--lp-ink);
+    font-size: 0.66rem;
+    font-weight: 600;
+  }
+
+  .lp-pod-context small {
+    overflow: hidden;
+    margin-top: 2px;
+    color: var(--lp-faint);
+    font-size: 0.58rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lp-showcase-head {
+    align-items: center;
+    margin-bottom: 22px;
+  }
+
+  .lp-showcase-head .lp-section-kicker {
+    margin-bottom: 7px;
+  }
+
+  .lp-showcase-head .lp-section-subhead {
+    margin-top: 0;
+    font-size: 0.9rem;
+  }
+
+  .lp-template-card {
+    border-radius: 12px;
+  }
+
+  .lp-template-card-copy {
+    min-height: 220px;
+    padding: 16px;
+  }
+
+  .lp-template-card-copy > strong {
+    margin-top: 22px;
+    font-size: 1.15rem;
+    font-weight: 600;
+  }
+
+  .lp-template-open {
+    padding-top: 20px;
+    font-size: 0.72rem;
+  }
+
+  .lp-footer-cta {
+    padding-top: clamp(28px, 4vw, 52px);
+    padding-bottom: clamp(72px, 8vw, 116px);
+    background: var(--lp-bg);
+  }
+
+  .lp-footer-box {
+    min-height: 144px;
+    gap: 8px 28px;
+    padding: clamp(24px, 3vw, 34px);
+    border: 1px solid var(--lp-rule);
+    border-radius: 14px;
+    background:
+      linear-gradient(
+        90deg,
+        var(--lp-paper) 0%,
+        var(--lp-paper) 42%,
+        color-mix(in srgb, var(--lp-paper) 72%, transparent) 62%,
+        color-mix(in srgb, var(--lp-paper) 24%, transparent) 100%
+      ),
+      url("/landing-page/cta-texture.webp"),
+      var(--lp-paper);
+    background-repeat: no-repeat;
+    background-position:
+      center,
+      right center,
+      center;
+    background-size:
+      100% 100%,
+      cover,
+      auto;
+    color: var(--lp-ink);
+  }
+
+  .lp-footer-box h2 {
+    color: var(--lp-ink);
+    font-size: clamp(1.45rem, 2.1vw, 1.9rem);
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: -0.035em;
+  }
+
+  .lp-footer-box p {
+    margin: 7px 0 0;
+    color: var(--lp-muted);
+    font-family: var(--font-document-sans);
+    font-size: 0.8rem;
+  }
+
+  /* The CTAs sit at the right edge of the tile. They used to be held 250px off
+     it to clear the artwork, which parked them mid-box looking unanchored. */
+  .lp-footer-box .lp-actions {
+    justify-content: flex-end;
+    margin-right: 0;
+  }
+
+  .lp-footer-box .lp-button.primary {
+    border-color: var(--lp-ink);
+    background: var(--lp-ink);
+    color: var(--lp-paper);
+  }
+
+  /* Opaque, not a 90% wash: it now sits over the artwork rather than beside it. */
+  .lp-footer-box .lp-button.secondary {
+    border-color: var(--lp-rule-strong);
+    background: var(--lp-paper);
+    color: var(--lp-ink);
+  }
+
+  @media (max-width: 980px) {
+    .lp-header {
+      top: 0;
+      width: 100%;
+    }
+
+    .lp-footer-box {
+      background-position:
+        center,
+        right center,
+        center;
+      background-size:
+        100% 100%,
+        cover,
+        auto;
+    }
+
+    .lp-footer-box .lp-actions {
+      margin-right: 0;
+    }
+
+    .lp-pod-system {
+      grid-template-columns: 130px 28px minmax(0, 1fr);
+    }
+
+    .lp-pod-system > .lp-pod-system-arrow:nth-child(4),
+    .lp-pod-outcome {
+      display: none;
+    }
+
+    .lp-capability-stage {
+      grid-template-columns: minmax(280px, 0.86fr) minmax(0, 1.14fr);
+    }
+
+    .lp-capability-stage-visual {
+      min-height: 500px;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .lp-hero {
+      background: var(--lp-bg);
+    }
+
+    .lp-hero::before {
+      display: none;
+    }
+
+    .lp-hero h1.lp-hero-headline {
+      max-width: 340px;
+      font-size: 2.55rem;
+    }
+
+    .lp-capabilities-section {
+      padding-top: 58px;
+      padding-bottom: 58px;
+    }
+
+    .lp-capabilities-intro {
+      grid-template-columns: 1fr;
+      gap: 10px;
+      padding-bottom: 24px;
+    }
+
+    .lp-capabilities-intro h2 {
+      font-size: 1.8rem;
+    }
+
+    .lp-capability-stage {
+      min-height: 0;
+      grid-template-columns: 1fr;
+      border-radius: 12px;
+    }
+
+    .lp-capability-controls {
+      padding: 12px;
+      border-right: 0;
+      border-bottom: 1px solid var(--lp-rule);
+    }
+
+    .lp-capability-tabs button {
+      min-height: 42px;
+      flex-direction: column;
+      gap: 2px;
+      padding: 5px 3px;
+      font-size: 0.6rem;
+    }
+
+    .lp-capability-detail {
+      min-height: 330px;
+      padding: 38px 8px 34px;
+    }
+
+    .lp-capability-detail h3 {
+      font-size: 1.9rem;
+    }
+
+    .lp-capability-detail > p {
+      font-size: 0.86rem;
+    }
+
+    .lp-capability-stage-visual {
+      min-height: 300px;
+      grid-template-rows: 40px minmax(0, 1fr);
+    }
+
+    .lp-capability-image img {
+      width: 148%;
+    }
+
+    .lp-pod-section {
+      padding-top: 58px;
+      padding-bottom: 58px;
+    }
+
+    .lp-pod-intro {
+      grid-template-columns: 1fr;
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+
+    .lp-pod-intro h2 {
+      font-size: 1.8rem;
+    }
+
+    .lp-pod-system {
+      display: block;
+      padding: 10px;
+    }
+
+    .lp-pod-signal {
+      min-height: 0;
+      margin-bottom: 10px;
+      padding: 14px;
+    }
+
+    .lp-pod-outcome {
+      display: flex;
+      min-height: 0;
+      margin-top: 10px;
+      padding: 14px;
+    }
+
+    .lp-pod-signal strong {
+      margin-top: 8px;
+    }
+
+    .lp-pod-system-arrow {
+      display: none;
+    }
+
+    .lp-pod-flow,
+    .lp-pod-context {
+      grid-template-columns: 1fr;
+    }
+
+    .lp-pod-flow article {
+      min-height: 0;
+      border-right: 0;
+      border-bottom: 1px solid var(--lp-rule);
+    }
+
+    .lp-pod-flow article > div {
+      margin-bottom: 14px;
+    }
+
+    .lp-pod-context > div {
+      min-height: 52px;
+      border-right: 0;
+      border-bottom: 1px solid var(--lp-rule);
+    }
+
+    .lp-pod-context > div:last-child {
+      border-bottom: 0;
+    }
+
+    .lp-footer-box {
+      display: block;
+      min-height: 0;
+      background:
+        linear-gradient(
+          90deg,
+          color-mix(in srgb, var(--lp-paper) 95%, transparent),
+          color-mix(in srgb, var(--lp-paper) 88%, transparent)
+        ),
+        url("/landing-page/cta-texture.webp"),
+        var(--lp-paper);
+      background-repeat: no-repeat;
+      background-position:
+        center,
+        right center,
+        center;
+      background-size:
+        100% 100%,
+        cover,
+        auto;
+    }
+
+    .lp-footer-box .lp-actions {
+      justify-content: flex-start;
+      margin-top: 20px;
+      margin-right: 0;
+    }
+  }
+}
+
+/* ==========================================================================
+   Section color echo
+   One quiet accent per section, borrowed from the hero collage palette,
+   applied to labels, container edges and a couple of UI anchors. The
+   parchment frame stays; nothing here should compete with the hero.
+   ========================================================================== */
+@layer components {
+  /* Surfaces: brand indigo. */
+  .lp-surfaces-section .lp-section-kicker {
+    color: #4f46e5;
+  }
+
+  .lp-surfaces-grid {
+    border-color: color-mix(in srgb, #4f46e5 16%, var(--lp-rule));
+  }
+
+  .lp-surface-picker button.is-active {
+    border-color: #4338ca;
+    background: #4f46e5;
+    color: #ffffff;
+  }
+
+  .lp-surface-picker button.is-active .lp-surface-picker-icons img {
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+
+  /* Quickstart: running green. */
+  .lp-quickstart-section .lp-section-kicker {
+    color: #39775a;
+  }
+
+  .lp-quickstart-grid {
+    border-color: color-mix(in srgb, #39775a 18%, var(--lp-rule));
+  }
+
+  .lp-quick-points strong {
+    background: color-mix(in srgb, #39775a 13%, #ffffff);
+    color: #2f6449;
+  }
+
+  /* Footer CTA: a quiet cream tile in the hero's language. The artwork keeps
+     its full strength on the right — the CTAs sit over it and both buttons are
+     opaque, so they need no scrim of their own. */
+  .lp-footer-box {
+    position: relative;
+    overflow: hidden;
+    border-color: #e3d5b5;
+    background:
+      linear-gradient(
+        90deg,
+        #f7f1e2 0%,
+        #f7f1e2 56%,
+        color-mix(in srgb, #f7f1e2 84%, transparent) 72%,
+        transparent 100%
+      ),
+      url("/landing-page/cta-texture.webp"),
+      #f7f1e2;
+    background-repeat: no-repeat;
+    background-position:
+      center,
+      right center,
+      center;
+    background-size:
+      100% 100%,
+      cover,
+      auto;
+  }
+
+  .lp-footer-box h2::before {
+    display: inline-block;
+    width: 0.55em;
+    height: 0.55em;
+    margin-right: 0.3em;
+    background: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%20100%20100'%3E%3Cpath%20d='M50%200%20L58%2030%20L84%208%20L68%2038%20L100%2034%20L72%2050%20L100%2066%20L68%2062%20L84%2092%20L58%2070%20L50%20100%20L42%2070%20L16%2092%20L32%2062%20L0%2066%20L28%2050%20L0%2034%20L32%2038%20L16%208%20L42%2030%20Z'%20fill='%23d99a32'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    content: "";
+  }
+
+  .lp-footer-box::after {
+    position: absolute;
+    bottom: 14px;
+    left: 18px;
+    width: 168px;
+    height: 60px;
+    background-image: radial-gradient(
+      circle at 1.5px 1.5px,
+      rgba(174, 103, 31, 0.2) 1.4px,
+      transparent 1.8px
+    );
+    background-size: 9px 9px;
+    content: "";
+    mask-image: radial-gradient(closest-side, #000000 0%, transparent 76%);
+    pointer-events: none;
+  }
+
+  @media (max-width: 980px) {
+    .lp-footer-box {
+      background-position:
+        center,
+        right center,
+        center;
+      background-size:
+        100% 100%,
+        cover,
+        auto;
+    }
+  }
+
+  @media (max-width: 700px) {
+    .lp-footer-box {
+      background:
+        linear-gradient(
+          90deg,
+          color-mix(in srgb, #f7f1e2 95%, transparent),
+          color-mix(in srgb, #f7f1e2 88%, transparent)
+        ),
+        url("/landing-page/cta-texture.webp"),
+        #f7f1e2;
+      background-repeat: no-repeat;
+      background-position:
+        center,
+        right center,
+        center;
+      background-size:
+        100% 100%,
+        cover,
+        auto;
+    }
+
+    .lp-footer-box::after {
+      display: none;
+    }
+  }
+}

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, Search, X } from 'lucide-react';
+import { ArrowRight, Search, X } from '@/components/ui/icons';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import { docsGroups, docsPages, getDocsHref, type DocsBlock } from '@/lib/data/docs';
 

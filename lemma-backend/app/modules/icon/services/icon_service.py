@@ -118,7 +118,9 @@ class IconService:
         try:
             return self._normalize_storage_path(candidate)
         except ValueError:
-            logger.warning("Ignoring malformed managed icon URL")
+            logger.debug(
+                'icon.icon_service.ignoring_malformed_managed_icon_url.diagnostic'
+            )
             return None
 
     async def upload_icon(
@@ -178,10 +180,8 @@ class IconService:
             await self.store.delete_async(normalized)
         except FileNotFoundError:
             return
-        except Exception as exc:
-            logger.warning(
-                f"Failed to delete icon asset {normalized}: {type(exc).__name__}"
-            )
+        except Exception:
+            logger.debug('icon.icon_service.delete_icon_asset.diagnostic')
 
     async def delete_by_url(self, icon_url: str | None) -> None:
         storage_path = self.get_managed_storage_path(icon_url)

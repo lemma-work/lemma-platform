@@ -10,7 +10,7 @@ import {
   FileText,
   Plus,
   Square,
-} from "lucide-react";
+} from "@/components/ui/icons";
 import type {
   AssistantControllerView,
   AssistantPendingFileRenderArgs,

@@ -1,0 +1,17 @@
+{
+  "name": "@lemma/agentbox-workspace-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@llamaindex/liteparse": "2.8.0",
+    "@mozilla/readability": "0.6.0",
+    "agent-browser": "0.32.3",
+    "jsdom": "29.1.1",
+    "pnpm": "11.15.1",
+    "turndown": "7.2.4"
+  }
+}

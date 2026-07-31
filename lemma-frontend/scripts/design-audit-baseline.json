@@ -1,6 +1,6 @@
 {
   "informational": {
-    "rawButtonElements": 30,
+    "rawButtonElements": 24,
     "rawSwitchButtonElements": 0,
     "rawFieldElements": 2,
     "inlineEditableFieldElements": 1,
@@ -9,7 +9,11 @@
     "badgePresentationOverrides": 3,
     "viewportHeightWithoutDvhFallback": 0,
     "hoverOnlyDisplayReveal": 0,
-    "fixedWidthsWiderThanPhones": 0
+    "fixedWidthsWiderThanPhones": 0,
+    "pageBodyRepeatsResourceName": 0,
+    "rawFontSizeDeclaration": 0,
+    "rawRadiusDeclaration": 0,
+    "rawSpacingDeclaration": 0
   },
   "protectedAssistant": {
     "rawButtonElements": 1

@@ -8,11 +8,13 @@ from ..openapi_client.api.agent_conversations import (
     agent_conversation_list,
     agent_conversation_message_list,
     agent_conversation_message_send,
+    agent_conversation_retry,
     agent_conversation_stream,
     agent_conversation_stop,
     agent_conversation_update,
 )
 from ..openapi_client.models.approval_decision_response import ApprovalDecisionResponse
+from ..openapi_client.models.agent_run_start_response import AgentRunStartResponse
 from ..openapi_client.models.conversation_list_response import ConversationListResponse
 from ..openapi_client.models.conversation_response import ConversationResponse
 from ..openapi_client.models.conversation_status import ConversationStatus
@@ -28,6 +30,8 @@ from ..openapi_client.models.user_approval_list_response import UserApprovalList
 from ..openapi_client.types import UNSET
 from ..types import Metadata
 from .base import BoundResource, as_uuid, compact
+
+POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT"
 
 
 class PodConversations(BoundResource):
@@ -51,6 +55,22 @@ class PodConversations(BoundResource):
             parent_id=as_uuid(parent_id) if parent_id is not None else UNSET,
             type_=type if type is not None else UNSET,
             status=status if status is not None else UNSET,
+            limit=limit,
+        )
+
+    def list_default(
+        self,
+        *,
+        parent_id: str | None = None,
+        type: ConversationType | str | None = None,
+        status: ConversationStatus | str | None = None,
+        limit: int = 20,
+    ) -> ConversationListResponse:
+        return self.list(
+            agent_name=POD_DEFAULT_AGENT_SELECTOR,
+            parent_id=parent_id,
+            type=type,
+            status=status,
             limit=limit,
         )
 
@@ -147,6 +167,17 @@ class PodConversations(BoundResource):
             response.close()
             raise self._transport._error_from_response(response.status_code, None, content_bytes)
         return response
+
+    def retry(self, conversation_id: str) -> AgentRunStartResponse:
+        return self._call(
+            agent_conversation_retry,
+            self._pod_uuid(),
+            as_uuid(conversation_id),
+        )
+
+    def retry_stream(self, conversation_id: str):
+        result = self.retry(conversation_id)
+        return self.stream(conversation_id, agent_run_id=str(result.agent_run_id))
 
     def stop(self, conversation_id: str) -> ConversationResponse:
         return self._call(agent_conversation_stop, self._pod_uuid(), as_uuid(conversation_id))

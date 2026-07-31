@@ -66,6 +66,7 @@ export interface AssistantPendingFileUpload {
 export interface UseAssistantControllerOptions extends AssistantConversationScope {
   client: LemmaClient;
   enabled?: boolean;
+  autoLoad?: boolean;
   instructions?: string | null;
   autoLoadMessages?: boolean;
 }
@@ -82,10 +83,12 @@ export type AssistantUserApprovalDecision = "APPROVE_ONCE" | "APPROVE_FOR_SESSIO
 export interface UseAssistantControllerResult {
   messages: AssistantRenderableMessage[];
   conversations: Conversation[];
+  openedConversationId: string | null;
   activeConversationId: string | null;
   availableModels: AvailableModelInfo[];
   conversationModel: ConversationModel | null;
   conversationRuntime: AgentRuntimeConfig | null;
+  isOpenedConversationRunning: boolean;
   isActiveConversationRunning: boolean;
   isLoading: boolean;
   isLoadingConversations: boolean;
@@ -98,12 +101,16 @@ export interface UseAssistantControllerResult {
   pendingFiles: File[];
   pendingFileUploads: AssistantPendingFileUpload[];
   error: string | null;
+  canRetryFailedMessage: boolean;
   pendingActions: AssistantAction[];
   completedActions: AssistantAction[];
   streamingTool: AssistantStreamingTool | null;
+  openConversation: (conversationId: string) => void;
+  closeConversation: () => void;
   selectConversation: (conversationId: string | null) => void;
   setConversationModel: (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => Promise<void>;
   sendMessage: (content: string, options?: SendAssistantControllerMessageOptions) => Promise<void>;
+  retryFailedMessage: () => Promise<void>;
   uploadFiles: (files: File[], options?: { deferUntilSend?: boolean }) => Promise<void>;
   removePendingFile: (fileKey: string) => void;
   clearPendingFiles: () => void;
@@ -140,12 +147,7 @@ type AssistantApiConversationMessage = ConversationMessage & {
 
 const CONVERSATIONS_PAGE_SIZE = 30;
 
-const EMPTY_SCOPE_KEY = JSON.stringify({
-  podId: null,
-  assistantName: null,
-  assistantId: null,
-  organizationId: null,
-});
+const EMPTY_HISTORY_SCOPE_KEY = JSON.stringify({ podId: null });
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -354,7 +356,6 @@ function mapToolInvocations(msg: AssistantApiConversationMessage): AssistantTool
 
 function mapConversationMessage(
   msg: AssistantApiConversationMessage,
-  options?: { thinkingDurationMs?: number },
 ): AssistantRenderableMessage {
   const toolInvocations = mapToolInvocations(msg);
   const createdAtMs = parseTimestampMs(msg.created_at) ?? undefined;
@@ -371,7 +372,7 @@ function mapConversationMessage(
       type: "reasoning",
       text: thinkingPart.text,
       state: thinkingPart.state,
-      durationMs: thinkingPart.durationMs ?? options?.thinkingDurationMs,
+      durationMs: thinkingPart.durationMs,
       startedAtMs: createdAtMs,
     });
   } else if (msg.kind === "TEXT" || msg.kind === "NOTIFICATION") {
@@ -417,31 +418,8 @@ function mapConversationMessages(messages: AssistantApiConversationMessage[]): A
   const mappedMessages: AssistantRenderableMessage[] = [];
   const pendingToolCalls = new Map<string, AssistantToolInvocation>();
 
-  const estimateThinkingDurationMs = (index: number): number | undefined => {
-    const message = messages[index];
-    if (!message || !extractThinkingPart(message)) return undefined;
-
-    const startedAtMs = parseTimestampMs(message.created_at);
-    if (!startedAtMs) return undefined;
-
-    for (let i = index + 1; i < messages.length; i += 1) {
-      const nextCreatedAtMs = parseTimestampMs(messages[i]?.created_at);
-      if (!nextCreatedAtMs || nextCreatedAtMs <= startedAtMs) continue;
-
-      const durationMs = nextCreatedAtMs - startedAtMs;
-      if (durationMs > 0 && durationMs <= 30 * 60 * 1000) {
-        return durationMs;
-      }
-      break;
-    }
-
-    return undefined;
-  };
-
-  messages.forEach((rawMessage, index) => {
-    const mappedMessage = mapConversationMessage(rawMessage, {
-      thinkingDurationMs: estimateThinkingDurationMs(index),
-    });
+  messages.forEach((rawMessage) => {
+    const mappedMessage = mapConversationMessage(rawMessage);
 
     mappedMessage.toolInvocations?.forEach((invocation) => {
       if (invocation.state === "call") {
@@ -627,6 +605,7 @@ export function useAssistantController({
   assistantId,
   organizationId,
   enabled = true,
+  autoLoad = true,
   instructions,
   autoLoadMessages = true,
 }: UseAssistantControllerOptions): UseAssistantControllerResult {
@@ -650,7 +629,6 @@ export function useAssistantController({
   const conversationsRef = useRef<Conversation[]>([]);
   const isStreamingRef = useRef(false);
   const sessionIsStreamingRef = useRef(false);
-  const suppressAutoSelectRef = useRef(false);
   const lastAutoLoadedConversationIdRef = useRef<string | null>(null);
   const loadingConversationIdRef = useRef<string | null>(null);
   const skipInitialLoadConversationIdsRef = useRef<Set<string>>(new Set());
@@ -676,6 +654,11 @@ export function useAssistantController({
     }),
     [scope.agentName, scope.assistantId, scope.assistantName, scope.organizationId, scope.podId],
   );
+  const historyScopeKey = useMemo(
+    () => JSON.stringify({ podId: scope.podId ?? client.podId ?? null }),
+    [client.podId, scope.podId],
+  );
+  const previousHistoryScopeKeyRef = useRef(historyScopeKey);
 
   const handleAssistantSessionError = useCallback((sessionError: unknown) => {
     setLocalError((prev) => prev || (sessionError instanceof Error ? sessionError.message : "Agent session failed"));
@@ -695,10 +678,11 @@ export function useAssistantController({
   });
 
   const {
+    conversation: sessionConversation,
     conversationId: sessionConversationId,
-    listConversations: sessionListConversations,
     loadMessages: sessionLoadMessages,
     sendMessage: sessionSendMessage,
+    retryFailedRun: sessionRetryFailedRun,
     createConversation: sessionCreateConversation,
     resumeIfRunning: sessionResumeIfRunning,
     stop: sessionStop,
@@ -722,7 +706,21 @@ export function useAssistantController({
     sessionMessages,
   });
 
-  const error = localError;
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId),
+    [activeConversationId, conversations],
+  );
+  const persistedRunError = (
+    activeConversation?.last_run_status?.toUpperCase() === "FAILED"
+    && typeof activeConversation.last_run_error === "string"
+  )
+    ? activeConversation.last_run_error
+    : null;
+  const error = localError ?? persistedRunError;
+  const canRetryFailedMessage = (
+    activeConversation?.last_run_status?.toUpperCase() === "FAILED"
+    && activeConversation.last_run_retryable === true
+  );
   const isLoading = isStreaming || sessionIsStreaming;
 
   const touchConversation = useCallback((conversationId: string, updates?: Partial<Conversation>) => {
@@ -743,6 +741,22 @@ export function useAssistantController({
       return found ? sortConversationsByUpdatedAt(next) : next;
     });
   }, []);
+
+  const refreshConversationDetail = useCallback(async (
+    conversationId: string,
+  ): Promise<Conversation> => {
+    const knownConversation = conversationsRef.current.find(
+      (conversation) => conversation.id === conversationId,
+    );
+    const detail = await client.conversations.get(conversationId, {
+      pod_id: knownConversation?.pod_id ?? scope.podId ?? undefined,
+    });
+    setConversations((previous) => sortConversationsByUpdatedAt([
+      detail,
+      ...previous.filter((conversation) => conversation.id !== detail.id),
+    ]));
+    return detail;
+  }, [client, scope.podId]);
 
   const setConversationModel = useCallback(async (model: ConversationModel | null, runtime?: AgentRuntimeConfig | null) => {
     const nextRuntime = typeof runtime === "undefined"
@@ -789,29 +803,42 @@ export function useAssistantController({
     }
   }, [availableModels, client, scope.podId, touchConversation]);
 
+  const listConversationHistory = useCallback(async (input: {
+    limit?: number;
+    pageToken?: string;
+  } = {}) => {
+    const scopedClient = scope.podId && scope.podId !== client.podId
+      ? client.withPod(scope.podId)
+      : client;
+    return scopedClient.conversations.list({
+      pod_id: scope.podId ?? scopedClient.podId ?? undefined,
+      limit: input.limit,
+      page_token: input.pageToken,
+    });
+  }, [client, scope.podId]);
+
   const loadConversations = useCallback(async () => {
     setIsLoadingConversations(true);
     try {
-      const response = await sessionListConversations({ scope, limit: CONVERSATIONS_PAGE_SIZE });
+      const response = await listConversationHistory({ limit: CONVERSATIONS_PAGE_SIZE });
       const nextConversations = sortConversationsByUpdatedAt(response.items || []);
-      setConversations(nextConversations);
-      setConversationsCursor(response.next_page_token ?? null);
-
-      setActiveConversationId((current) => {
-        if (current && nextConversations.some((conversation) => conversation.id === current)) {
-          return current;
+      setConversations((currentConversations) => {
+        const openedConversationId = activeConversationIdRef.current;
+        if (!openedConversationId || nextConversations.some((conversation) => conversation.id === openedConversationId)) {
+          return nextConversations;
         }
-        if (suppressAutoSelectRef.current) {
-          return null;
-        }
-        return nextConversations[0]?.id ?? null;
+        const openedConversation = currentConversations.find((conversation) => conversation.id === openedConversationId);
+        return openedConversation
+          ? sortConversationsByUpdatedAt([...nextConversations, openedConversation])
+          : nextConversations;
       });
+      setConversationsCursor(response.next_page_token ?? null);
     } catch (err) {
       setLocalError((prev) => prev || (err instanceof Error ? err.message : "Failed to load conversations"));
     } finally {
       setIsLoadingConversations(false);
     }
-  }, [scope, sessionListConversations]);
+  }, [listConversationHistory]);
 
   const loadMoreConversations = useCallback(async (): Promise<Conversation[]> => {
     if (!conversationsCursor || isLoadingConversations || isLoadingMoreConversations) {
@@ -820,8 +847,7 @@ export function useAssistantController({
 
     setIsLoadingMoreConversations(true);
     try {
-      const response = await sessionListConversations({
-        scope,
+      const response = await listConversationHistory({
         limit: CONVERSATIONS_PAGE_SIZE,
         pageToken: conversationsCursor,
       });
@@ -841,7 +867,7 @@ export function useAssistantController({
     } finally {
       setIsLoadingMoreConversations(false);
     }
-  }, [conversationsCursor, isLoadingConversations, isLoadingMoreConversations, scope, sessionListConversations]);
+  }, [conversationsCursor, isLoadingConversations, isLoadingMoreConversations, listConversationHistory]);
 
   const loadAvailableModels = useCallback(async (): Promise<AvailableModelInfo[]> => {
     try {
@@ -940,6 +966,7 @@ export function useAssistantController({
       setAvailableModels([]);
       return;
     }
+    if (!autoLoad) return;
 
     let cancelled = false;
     void loadAvailableModels()
@@ -952,7 +979,7 @@ export function useAssistantController({
     return () => {
       cancelled = true;
     };
-  }, [enabled, loadAvailableModels]);
+  }, [autoLoad, enabled, loadAvailableModels]);
 
   const messages = useMemo(() => {
     if (!activeConversationId) return [];
@@ -978,11 +1005,26 @@ export function useAssistantController({
   }, [activeConversationId, runtimeMessages, sessionStreamingText]);
 
   useEffect(() => {
+    if (!sessionConversation || sessionConversation.id !== activeConversationId) return;
+    setConversations((previous) => sortConversationsByUpdatedAt([
+      sessionConversation,
+      ...previous.filter((conversation) => conversation.id !== sessionConversation.id),
+    ]));
+  }, [activeConversationId, sessionConversation]);
+
+  useEffect(() => {
     if (!activeConversationId) return;
     if (!sessionStatus) return;
 
     touchConversation(activeConversationId, {
       status: sessionStatus as Conversation["status"],
+      ...(isConversationRunning(sessionStatus)
+        ? {
+            last_run_status: "RUNNING" as Conversation["last_run_status"],
+            last_run_error: null,
+            last_run_retryable: false,
+          }
+        : {}),
     });
   }, [activeConversationId, sessionStatus, touchConversation]);
 
@@ -995,10 +1037,12 @@ export function useAssistantController({
   }, [activeConversationId, conversations]);
 
   useEffect(() => {
+    const historyScopeChanged = previousHistoryScopeKeyRef.current !== historyScopeKey;
+    previousHistoryScopeKeyRef.current = historyScopeKey;
+
     if (!enabled) {
       sessionCancel();
       clearRuntimeMessages();
-      suppressAutoSelectRef.current = false;
       activeConversationIdRef.current = null;
       lastAutoLoadedConversationIdRef.current = null;
       loadingConversationIdRef.current = null;
@@ -1018,7 +1062,6 @@ export function useAssistantController({
       return;
     }
 
-    suppressAutoSelectRef.current = false;
     activeConversationIdRef.current = null;
     lastAutoLoadedConversationIdRef.current = null;
     loadingConversationIdRef.current = null;
@@ -1026,15 +1069,19 @@ export function useAssistantController({
     setActiveConversationId(null);
     setConversationModelState(null);
     setConversationRuntimeState(null);
-    setConversations([]);
-    setConversationsCursor(null);
+    if (historyScopeChanged) {
+      setConversations([]);
+      setConversationsCursor(null);
+    }
     setLocalError(null);
     clearRuntimeMessages();
     setOlderMessagesCursor(null);
-    if (scopeKey !== EMPTY_SCOPE_KEY) {
-      void loadConversations();
-    }
-  }, [clearRuntimeMessages, enabled, loadConversations, scopeKey, sessionCancel]);
+  }, [clearRuntimeMessages, enabled, historyScopeKey, scopeKey, sessionCancel]);
+
+  useEffect(() => {
+    if (!enabled || !autoLoad || historyScopeKey === EMPTY_HISTORY_SCOPE_KEY) return;
+    void loadConversations();
+  }, [autoLoad, enabled, historyScopeKey, loadConversations]);
 
   useEffect(() => {
     if (!enabled || !activeConversationId) {
@@ -1117,6 +1164,22 @@ export function useAssistantController({
     }
 
     const currentConversationId = activeConversationIdRef.current;
+    if (conversationId) {
+      void refreshConversationDetail(conversationId)
+        .then((openedConversation) => {
+          if (activeConversationIdRef.current !== conversationId) return;
+          setConversationModelState(openedConversation.model ?? null);
+          setConversationRuntimeState(openedConversation.agent_runtime ?? null);
+        })
+        .catch((detailError) => {
+          if (activeConversationIdRef.current !== conversationId) return;
+          setLocalError((previous) => previous || (
+            detailError instanceof Error
+              ? detailError.message
+              : "Failed to load conversation"
+          ));
+        });
+    }
     if (conversationId && conversationId === currentConversationId) {
       if (!autoLoadMessages) {
         setLocalError(null);
@@ -1150,7 +1213,6 @@ export function useAssistantController({
       return;
     }
 
-    suppressAutoSelectRef.current = conversationId === null;
     setLocalError(null);
     activeConversationIdRef.current = conversationId;
     lastAutoLoadedConversationIdRef.current = null;
@@ -1159,12 +1221,19 @@ export function useAssistantController({
     clearRuntimeMessages();
     setIsLoadingMessages(Boolean(conversationId && autoLoadMessages));
     setActiveConversationId(conversationId);
-  }, [autoLoadMessages, clearRuntimeMessages, sessionCancel]);
+  }, [autoLoadMessages, clearRuntimeMessages, refreshConversationDetail, sessionCancel]);
+
+  const openConversation = useCallback((conversationId: string) => {
+    selectConversation(conversationId);
+  }, [selectConversation]);
+
+  const closeConversation = useCallback(() => {
+    selectConversation(null);
+  }, [selectConversation]);
 
   const resetConversationState = useCallback((keepPendingFiles = false) => {
     stop();
     clearRuntimeMessages();
-    suppressAutoSelectRef.current = true;
     activeConversationIdRef.current = null;
     lastAutoLoadedConversationIdRef.current = null;
     loadingConversationIdRef.current = null;
@@ -1200,7 +1269,6 @@ export function useAssistantController({
       ...scope,
     });
 
-    suppressAutoSelectRef.current = false;
     setConversations((prev) => sortConversationsByUpdatedAt([
       createdConversation,
       ...prev.filter((conversation) => conversation.id !== createdConversation.id),
@@ -1295,7 +1363,12 @@ export function useAssistantController({
       });
 
       setIsStreaming(true);
-      touchConversation(finalConversationId, { status: "running" as Conversation["status"] });
+      touchConversation(finalConversationId, {
+        status: "running" as Conversation["status"],
+        last_run_status: "RUNNING" as Conversation["last_run_status"],
+        last_run_error: null,
+        last_run_retryable: false,
+      });
       await sessionSendMessage(messageContent, {
         conversationId: finalConversationId,
         metadata: uploadedFiles.length > 0
@@ -1316,6 +1389,9 @@ export function useAssistantController({
       if (err instanceof DOMException && err.name === "AbortError") {
         return;
       }
+      if (conversationId) {
+        await refreshConversationDetail(conversationId).catch(() => undefined);
+      }
       setLocalError(err instanceof Error ? err.message : "Failed to send message");
     } finally {
       setIsStreaming(false);
@@ -1327,6 +1403,7 @@ export function useAssistantController({
     ensureConversation,
     isStreaming,
     pendingFileUploads,
+    refreshConversationDetail,
     resetConversationState,
     scope.podId,
     sessionIsStreaming,
@@ -1334,6 +1411,32 @@ export function useAssistantController({
     touchConversation,
     updatePendingFileUpload,
   ]);
+
+  const retryFailedMessage = useCallback(async () => {
+    const conversationId = activeConversationIdRef.current;
+    if (!enabled || !conversationId || isStreaming || sessionIsStreaming) return;
+
+    setLocalError(null);
+    setIsStreaming(true);
+    touchConversation(conversationId, {
+      status: "RUNNING" as Conversation["status"],
+      last_run_status: "RUNNING" as Conversation["last_run_status"],
+      last_run_error: null,
+      last_run_retryable: false,
+    });
+    try {
+      await sessionRetryFailedRun(conversationId);
+      touchConversation(conversationId, { updated_at: new Date().toISOString() });
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        return;
+      }
+      await refreshConversationDetail(conversationId).catch(() => undefined);
+      setLocalError(err instanceof Error ? err.message : "Failed to retry message");
+    } finally {
+      setIsStreaming(false);
+    }
+  }, [enabled, isStreaming, refreshConversationDetail, sessionIsStreaming, sessionRetryFailedRun, touchConversation]);
 
   const uploadFiles = useCallback(async (
     files: File[],
@@ -1433,10 +1536,12 @@ export function useAssistantController({
   return useMemo(() => ({
     messages,
     conversations,
+    openedConversationId: activeConversationId,
     activeConversationId,
     availableModels,
     conversationModel,
     conversationRuntime,
+    isOpenedConversationRunning: isActiveConversationRunning,
     isActiveConversationRunning,
     isLoading,
     isLoadingConversations,
@@ -1449,12 +1554,16 @@ export function useAssistantController({
     pendingFiles,
     pendingFileUploads,
     error,
+    canRetryFailedMessage,
     pendingActions,
     completedActions,
     streamingTool: sessionStreamingTool,
+    openConversation,
+    closeConversation,
     selectConversation,
     setConversationModel,
     sendMessage,
+    retryFailedMessage,
     uploadFiles,
     removePendingFile,
     clearPendingFiles,
@@ -1466,6 +1575,8 @@ export function useAssistantController({
   }), [
     activeConversationId,
     availableModels,
+    canRetryFailedMessage,
+    closeConversation,
     clearMessages,
     clearPendingFiles,
     completedActions,
@@ -1488,8 +1599,10 @@ export function useAssistantController({
     pendingActions,
     pendingFileUploads,
     pendingFiles,
+    openConversation,
     removePendingFile,
     resolveUserApproval,
+    retryFailedMessage,
     selectConversation,
     sendMessage,
     sessionStreamingTool,

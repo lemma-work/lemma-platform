@@ -6,18 +6,21 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
     AlertTriangle,
     ArrowRight,
+    Bot,
     CheckCircle2,
+    Database,
     FileArchive,
+    Files,
     Github,
     Loader2,
-    MessageCircle,
     PanelsTopLeft,
+    Plug,
     Share2,
     Sparkles,
     Upload,
-    Wrench,
+    Workflow,
     X,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 
 import { Button } from '@/components/ui/button';
@@ -59,12 +62,14 @@ interface ImportDialogProps {
     createNew?: { organizationId: string };
     /** Preset a GitHub source and skip the source step (e.g. from an import link). */
     presetGithub?: { owner: string; repo: string; ref?: string };
+    /** Continue into the target pod after a successful import. */
+    openPodOnComplete?: boolean;
     onCompleted?: (podId: string) => void;
 }
 
 type ImportSource =
     | { mode: 'upload'; file: File }
-    | { mode: 'github'; owner: string; repo: string; ref?: string };
+    | { mode: 'github'; owner: string; repo: string; ref?: string; accountId?: string };
 
 const ACTION_STYLES: Record<StepAction, { label: string; className: string }> = {
     CREATE: { label: 'New', className: 'state-surface-success' },
@@ -74,6 +79,212 @@ const ACTION_STYLES: Record<StepAction, { label: string; className: string }> = 
 
 function fileBaseName(name: string): string {
     return name.replace(/\.zip$/i, '').replace(/[_-]+/g, ' ').trim();
+}
+
+type ResourceGroupId = 'experience' | 'agents' | 'automation' | 'data' | 'connections' | 'other';
+
+const RESOURCE_GROUPS: Array<{
+    id: ResourceGroupId;
+    title: string;
+    kinds: string[];
+    icon: typeof PanelsTopLeft;
+}> = [
+    {
+        id: 'experience',
+        title: 'Apps & surfaces',
+        kinds: ['app', 'surface', 'agent_surface', 'desk', 'page'],
+        icon: PanelsTopLeft,
+    },
+    {
+        id: 'agents',
+        title: 'Agents',
+        kinds: ['agent', 'agent_grants', 'agent_grant'],
+        icon: Bot,
+    },
+    {
+        id: 'automation',
+        title: 'Automations',
+        kinds: ['function', 'workflow', 'schedule', 'trigger'],
+        icon: Workflow,
+    },
+    {
+        id: 'data',
+        title: 'Data & knowledge',
+        kinds: ['table', 'datastore', 'file', 'document'],
+        icon: Database,
+    },
+    {
+        id: 'connections',
+        title: 'Connections',
+        kinds: ['integration', 'connector', 'account', 'secret'],
+        icon: Plug,
+    },
+];
+
+function displayResourceName(value: string): string {
+    return value.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function naturalList(values: string[], limit = 3): string {
+    const selected = values.slice(0, limit).map(displayResourceName);
+    if (selected.length === 0) return '';
+    if (selected.length === 1) return selected[0];
+    if (selected.length === 2) return `${selected[0]} and ${selected[1]}`;
+    return `${selected.slice(0, -1).join(', ')}, and ${selected.at(-1)}`;
+}
+
+function uniqueNames(steps: PlanStep[], kinds: string[]): string[] {
+    return Array.from(
+        new Set(
+            steps
+                .filter((item) => kinds.includes(item.kind.toLowerCase()))
+                .map((item) => item.name),
+        ),
+    );
+}
+
+function describeResourceGroup(id: ResourceGroupId, steps: PlanStep[]): string {
+    const namesFor = (...kinds: string[]) => uniqueNames(steps, kinds);
+    if (id === 'experience') {
+        const apps = namesFor('app', 'desk', 'page');
+        const surfaces = namesFor('surface', 'agent_surface');
+        return [
+            apps.length ? `${naturalList(apps)} becomes the interface your team opens.` : '',
+            surfaces.length ? `${naturalList(surfaces)} connects the pod to where people already work.` : '',
+        ]
+            .filter(Boolean)
+            .join(' ');
+    }
+    if (id === 'agents') {
+        const agents = namesFor('agent');
+        const grants = namesFor('agent_grants', 'agent_grant');
+        return [
+            agents.length ? `${naturalList(agents)} can take work inside the pod.` : '',
+            grants.length ? 'Their resource permissions are included in this installation.' : '',
+        ]
+            .filter(Boolean)
+            .join(' ');
+    }
+    if (id === 'automation') {
+        const workflows = namesFor('workflow');
+        const schedules = namesFor('schedule');
+        const functions = namesFor('function');
+        return [
+            workflows.length ? `${naturalList(workflows, 2)} coordinate multi-step work.` : '',
+            schedules.length ? `${naturalList(schedules, 2)} keep recurring work moving.` : '',
+            functions.length
+                ? `${functions.length} callable action${functions.length === 1 ? '' : 's'} support the pod.`
+                : '',
+        ]
+            .filter(Boolean)
+            .join(' ');
+    }
+    if (id === 'data') {
+        const tables = namesFor('table', 'datastore');
+        const files = namesFor('file', 'document');
+        return [
+            tables.length ? `${naturalList(tables)} hold the pod’s working data.` : '',
+            files.length ? `${naturalList(files)} add shared context and playbooks.` : '',
+        ]
+            .filter(Boolean)
+            .join(' ');
+    }
+    if (id === 'connections') {
+        const connections = namesFor('integration', 'connector', 'account');
+        return connections.length
+            ? `${naturalList(connections)} connects the pod to external services.`
+            : 'Connection configuration is included in the installation.';
+    }
+    return 'Additional supporting resources are included in the installation.';
+}
+
+function ResourceGroupCard({
+    id,
+    title,
+    icon: Icon,
+    steps,
+}: {
+    id: ResourceGroupId;
+    title: string;
+    icon: typeof PanelsTopLeft;
+    steps: PlanStep[];
+}) {
+    const names = Array.from(new Set(steps.map((item) => item.name)));
+    const created = steps.filter((item) => item.action === 'CREATE').length;
+    const updated = steps.filter((item) => item.action === 'UPDATE').length;
+
+    return (
+        <section className="bundle-import-resource-group" data-group={id}>
+            <div className="bundle-import-resource-group-header">
+                <span className="bundle-import-resource-group-icon">
+                    <Icon className="h-4 w-4" />
+                </span>
+                <div>
+                    <h3>{title}</h3>
+                    <span>
+                        {created ? `${created} new` : ''}
+                        {created && updated ? ' · ' : ''}
+                        {updated ? `${updated} update${updated === 1 ? '' : 's'}` : ''}
+                    </span>
+                </div>
+            </div>
+            <p>{describeResourceGroup(id, steps)}</p>
+            <div className="bundle-import-resource-names">
+                {names.slice(0, 4).map((name) => (
+                    <span key={name}>{displayResourceName(name)}</span>
+                ))}
+                {names.length > 4 ? <span>+{names.length - 4} more</span> : null}
+            </div>
+        </section>
+    );
+}
+
+function InstallGroupRow({
+    id,
+    title,
+    icon: Icon,
+    steps,
+}: {
+    id: ResourceGroupId;
+    title: string;
+    icon: typeof PanelsTopLeft;
+    steps: PlanStep[];
+}) {
+    const failed = steps.some((item) => item.status === 'FAILED');
+    const complete = steps.every((item) => item.status === 'DONE');
+    const active = !failed && !complete && steps.some((item) => item.status === 'RUNNING' || item.status === 'DONE');
+    const state = failed ? 'failed' : complete ? 'complete' : active ? 'active' : 'pending';
+    const descriptions: Record<ResourceGroupId, string> = {
+        experience: 'Preparing the app and its surfaces',
+        agents: 'Adding agents and their permissions',
+        automation: 'Connecting functions, workflows and schedules',
+        data: 'Creating shared data and knowledge',
+        connections: 'Connecting external services',
+        other: 'Adding supporting resources',
+    };
+
+    return (
+        <div className="bundle-import-install-group" data-group={id} data-state={state}>
+            <span className="bundle-import-install-group-icon">
+                <Icon className="h-4 w-4" />
+            </span>
+            <span>
+                <strong>{title}</strong>
+                <small>{descriptions[id]}</small>
+            </span>
+            <span className="bundle-import-install-group-state">
+                {failed ? (
+                    <AlertTriangle className="h-4 w-4" />
+                ) : complete ? (
+                    <CheckCircle2 className="h-4 w-4" />
+                ) : active ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                    <span />
+                )}
+            </span>
+        </div>
+    );
 }
 
 function StepRow({ step }: { step: PlanStep }) {
@@ -115,6 +326,7 @@ export function ImportDialog({
     podName,
     createNew,
     presetGithub,
+    openPodOnComplete = false,
     onCompleted,
 }: ImportDialogProps) {
     const router = useRouter();
@@ -125,6 +337,7 @@ export function ImportDialog({
     const [sourceMode, setSourceMode] = useState<SourceMode>('upload');
     const [file, setFile] = useState<File | null>(null);
     const [githubUrl, setGithubUrl] = useState('');
+    const [githubAccountId, setGithubAccountId] = useState('');
     const [newPodName, setNewPodName] = useState('');
     const [plan, setPlan] = useState<ImportPlan | null>(null);
     const [variables, setVariables] = useState<Record<string, string>>({});
@@ -153,6 +366,7 @@ export function ImportDialog({
         setSourceMode('upload');
         setFile(null);
         setGithubUrl('');
+        setGithubAccountId('');
         setNewPodName('');
         setPlan(null);
         setVariables({});
@@ -208,6 +422,7 @@ export function ImportDialog({
     );
 
     async function resolveTargetPod(source: ImportSource): Promise<string> {
+        if (targetPodRef.current) return targetPodRef.current;
         if (podId) {
             targetPodRef.current = podId;
             return podId;
@@ -249,6 +464,7 @@ export function ImportDialog({
                     owner: source.owner,
                     repo: source.repo,
                     ref: source.ref,
+                    account_id: source.accountId || undefined,
                 });
             }
             importIdRef.current = started.import_id;
@@ -259,12 +475,24 @@ export function ImportDialog({
                 podId: target,
                 eventsUrl: started.events_url,
                 fetchStatus: () => getImport(target, started.import_id),
-                stopStatuses: ['AWAITING_CONFIRMATION', 'FAILED', 'CANCELLED'],
+                stopStatuses: ['AWAITING_CONFIRMATION', 'FAILED', 'CANCELLED', 'PARTIALLY_CANCELLED'],
                 onProgress: (v) =>
                     setProgressLabel(v.status === 'FETCHING' ? 'Fetching bundle…' : 'Planning changes…'),
                 signal: abort.signal,
             });
 
+            if (
+                source.mode === 'github' &&
+                !source.accountId &&
+                (planned.error_code === 'GITHUB_REPOSITORY_NOT_FOUND' ||
+                    planned.error_code === 'GITHUB_IMPORT_UNAUTHORIZED')
+            ) {
+                setSourceMode('github');
+                setGithubUrl(`github.com/${source.owner}/${source.repo}`);
+                setErrorMessage('Select a GitHub account and retry. This may be a private repository.');
+                setStep('source');
+                return;
+            }
             if (planned.status !== 'AWAITING_CONFIRMATION' || !planned.plan) {
                 throw new Error(planned.error || 'Could not plan the import.');
             }
@@ -303,7 +531,12 @@ export function ImportDialog({
             setErrorMessage('Enter a GitHub repo, e.g. github.com/owner/repo.');
             return;
         }
-        void beginImport({ mode: 'github', owner: repo.owner, repo: repo.repo });
+        void beginImport({
+            mode: 'github',
+            owner: repo.owner,
+            repo: repo.repo,
+            accountId: githubAccountId || undefined,
+        });
     }
 
     // Preset source (import link) → skip the picker and plan immediately on open.
@@ -359,7 +592,7 @@ export function ImportDialog({
                 podId: target,
                 eventsUrl,
                 fetchStatus: () => getImport(target, importId),
-                stopStatuses: ['COMPLETED', 'FAILED', 'CANCELLED'],
+                stopStatuses: ['COMPLETED', 'FAILED', 'CANCELLED', 'PARTIALLY_CANCELLED'],
                 onProgress: setApplyView,
                 onFrame: (frame) => {
                     if (frame.type === 'step' && typeof frame.step.index === 'number') {
@@ -403,20 +636,8 @@ export function ImportDialog({
         setTimeout(resetState, 200);
         if (target) {
             onCompleted?.(target);
-            if (isCreateNew) router.push(`/pod/${target}`);
+            if (isCreateNew || openPodOnComplete) router.push(`/pod/${target}`);
             else router.refresh();
-        }
-    }
-
-    // Navigate somewhere inside the freshly-imported pod, closing the wizard.
-    function navigateTo(path: string) {
-        const target = targetPodRef.current;
-        completedRef.current = true;
-        onOpenChange(false);
-        setTimeout(resetState, 200);
-        if (target) {
-            onCompleted?.(target);
-            router.push(path);
         }
     }
 
@@ -434,22 +655,69 @@ export function ImportDialog({
         },
         {} as Record<string, number>,
     );
+    const changingSteps = planSteps.filter((item) => item.action !== 'SKIP');
+    const resourceCount = changingSteps.length;
+    const groupedKinds = new Set(RESOURCE_GROUPS.flatMap((group) => group.kinds));
+    const contextualGroups = RESOURCE_GROUPS.map((group) => ({
+        ...group,
+        steps: changingSteps.filter((item) => group.kinds.includes(item.kind.toLowerCase())),
+    })).filter((group) => group.steps.length > 0);
+    const otherSteps = changingSteps.filter((item) => !groupedKinds.has(item.kind.toLowerCase()));
+    if (otherSteps.length > 0) {
+        contextualGroups.push({
+            id: 'other',
+            title: 'Supporting resources',
+            kinds: [],
+            icon: Files,
+            steps: otherSteps,
+        });
+    }
+    const targetLabel = isCreateNew
+        ? newPodName.trim() || plan?.bundle_name || presetGithub?.repo || 'a new pod'
+        : podName || 'this pod';
+    const isFetchingBundle = /fetching|uploading/i.test(progressLabel ?? '');
+    const phase =
+        step === 'source' || step === 'planning'
+            ? 0
+            : step === 'review'
+              ? 1
+              : step === 'applying'
+                ? 2
+                : step === 'done'
+                  ? 3
+                  : 1;
+    const dialogTitle =
+        step === 'review'
+            ? 'Review installation'
+            : step === 'applying'
+              ? 'Installing pod'
+              : step === 'done'
+                ? 'Installation complete'
+                : step === 'error'
+                  ? 'Installation stopped'
+                  : presetGithub
+                    ? 'Preparing installation'
+                    : isCreateNew
+                      ? 'Import a pod'
+                      : `Install into ${targetLabel}`;
 
     return (
         <>
         <DialogPrimitive.Root open={open} onOpenChange={handleOpenChange}>
             <DialogPrimitive.Portal>
                 <DialogPrimitive.Overlay className="scrim-overlay fixed inset-0 z-50 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-                <DialogPrimitive.Content className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-1)] text-[var(--text-primary)] outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0">
-                    <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b border-[var(--border-subtle)] px-4 sm:px-6">
+                <DialogPrimitive.Content className="bundle-import-dialog text-[var(--text-primary)] outline-none">
+                    <header className="bundle-import-dialog-header">
                         <div className="min-w-0">
-                            <DialogPrimitive.Title className="truncate text-sm font-medium text-[var(--text-primary)]">
-                                {isCreateNew ? 'Import a pod' : `Install into ${podName || 'this pod'}`}
+                            <DialogPrimitive.Title className="truncate text-base font-semibold text-[var(--text-primary)]">
+                                {dialogTitle}
                             </DialogPrimitive.Title>
-                            <DialogPrimitive.Description className="truncate text-xs text-[var(--text-tertiary)]">
-                                {isCreateNew
-                                    ? 'Create a new pod from a bundle — a .zip or a GitHub repo.'
-                                    : 'Add resources from a bundle into this pod. Existing resources update in place.'}
+                            <DialogPrimitive.Description className="mt-0.5 truncate text-xs text-[var(--text-tertiary)]">
+                                {presetGithub
+                                    ? `${presetGithub.owner}/${presetGithub.repo} → ${targetLabel}`
+                                    : isCreateNew
+                                      ? 'Create a new pod from a .zip bundle or GitHub repository.'
+                                      : `Add resources to ${targetLabel}. Existing resources update in place.`}
                             </DialogPrimitive.Description>
                         </div>
                         <DialogPrimitive.Close
@@ -460,8 +728,25 @@ export function ImportDialog({
                         </DialogPrimitive.Close>
                     </header>
 
-                    <div className="flex-1 overflow-y-auto">
-                        <div className="mx-auto w-full max-w-2xl px-4 py-8 sm:px-6">
+                    <div className="bundle-import-progress" aria-label="Installation progress">
+                        {['Source', 'Review', 'Install'].map((label, index) => (
+                            <div
+                                key={label}
+                                className={cn(
+                                    'bundle-import-progress-step',
+                                    index < phase && 'is-complete',
+                                    index === phase && step !== 'done' && 'is-active',
+                                    step === 'done' && 'is-complete',
+                                )}
+                            >
+                                <span>{index < phase || step === 'done' ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}</span>
+                                <strong>{label}</strong>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="bundle-import-dialog-body">
+                        <div className="bundle-import-stage">
                     {/* --- SOURCE --- */}
                     {step === 'source' ? (
                         <div className="space-y-4">
@@ -512,19 +797,31 @@ export function ImportDialog({
                                     />
                                 </label>
                             ) : (
-                                <div className="space-y-1.5">
-                                    <Label htmlFor="import-github-url" className="text-xs">
-                                        Public GitHub repository
-                                    </Label>
-                                    <Input
-                                        id="import-github-url"
-                                        value={githubUrl}
-                                        onChange={(e) => {
-                                            setGithubUrl(e.target.value);
-                                            const repo = parseGithubRepo(e.target.value);
-                                            if (repo && !newPodName) setNewPodName(repo.repo);
-                                        }}
-                                        placeholder="github.com/owner/repo"
+                                <div className="space-y-3">
+                                    <div className="space-y-1.5">
+                                        <Label htmlFor="import-github-url" className="text-xs">
+                                            GitHub repository
+                                        </Label>
+                                        <Input
+                                            id="import-github-url"
+                                            value={githubUrl}
+                                            onChange={(e) => {
+                                                setGithubUrl(e.target.value);
+                                                const repo = parseGithubRepo(e.target.value);
+                                                if (repo && !newPodName) setNewPodName(repo.repo);
+                                            }}
+                                            placeholder="github.com/owner/repo"
+                                        />
+                                    </div>
+                                    <AccountVariableField
+                                        organizationId={organizationId}
+                                        podId={targetPodId}
+                                        connectorId="github"
+                                        provider="COMPOSIO"
+                                        label="GitHub account"
+                                        description="Optional for public repositories; required for private repositories and higher rate limits."
+                                        value={githubAccountId}
+                                        onChange={setGithubAccountId}
                                     />
                                 </div>
                             )}
@@ -556,219 +853,326 @@ export function ImportDialog({
 
                     {/* --- PLANNING --- */}
                     {step === 'planning' ? (
-                        <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
-                            <Loader2 className="h-6 w-6 animate-spin text-[var(--action-primary)]" />
-                            <p className="text-sm text-[var(--text-secondary)]">{progressLabel ?? 'Planning…'}</p>
+                        <div className="bundle-import-planning">
+                            <div className="bundle-import-planning-sheet">
+                                <span className="bundle-import-tape" aria-hidden="true" />
+                                <div className="bundle-import-planning-sticker">
+                                    <Sparkles className="h-5 w-5" />
+                                </div>
+                                <div>
+                                    <p className="bundle-import-section-label">Preparing your review</p>
+                                    <h2>Making sense of the bundle</h2>
+                                    <p>
+                                        Comparing what’s in the repository with <strong>{targetLabel}</strong>.
+                                    </p>
+                                </div>
+                                <ol className="bundle-import-planning-list">
+                                    <li data-state={isFetchingBundle ? 'active' : 'complete'}>
+                                        <span>
+                                            {isFetchingBundle ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <CheckCircle2 className="h-4 w-4" />
+                                            )}
+                                        </span>
+                                        <div>
+                                            <strong>Read the bundle</strong>
+                                            <small>{progressLabel ?? 'Repository ready'}</small>
+                                        </div>
+                                    </li>
+                                    <li data-state={isFetchingBundle ? 'pending' : 'active'}>
+                                        <span>
+                                            {!isFetchingBundle ? (
+                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : null}
+                                        </span>
+                                        <div>
+                                            <strong>Compare with {targetLabel}</strong>
+                                            <small>Find what will be created or updated</small>
+                                        </div>
+                                    </li>
+                                    <li data-state="pending">
+                                        <span />
+                                        <div>
+                                            <strong>Prepare a clear review</strong>
+                                            <small>Group the app, agents, automations and data</small>
+                                        </div>
+                                    </li>
+                                </ol>
+                            </div>
                         </div>
                     ) : null}
 
                     {/* --- REVIEW --- */}
                     {step === 'review' && plan ? (
-                        <div className="space-y-4">
-                            <div className="flex flex-wrap gap-2 text-xs">
-                                {(['CREATE', 'UPDATE', 'SKIP'] as StepAction[]).map((a) =>
-                                    counts[a] ? (
-                                        <span
-                                            key={a}
-                                            className={cn('rounded px-2 py-0.5 font-medium', ACTION_STYLES[a].className)}
-                                        >
-                                            {counts[a]} {ACTION_STYLES[a].label.toLowerCase()}
-                                        </span>
-                                    ) : null,
-                                )}
-                            </div>
+                        <div className="bundle-import-review-layout">
+                            <div className="bundle-import-review-main">
+                                <div className="bundle-import-review-summary">
+                                    <p className="bundle-import-section-label">What this pod adds</p>
+                                    <h2>Review the working parts, not just the files</h2>
+                                    <p>
+                                        This is how <strong>{plan.bundle_name || presetGithub?.repo || 'the pod'}</strong>{' '}
+                                        will show up inside <strong>{targetLabel}</strong>.
+                                    </p>
+                                </div>
 
-                            <div className="max-h-52 divide-y divide-[var(--border-subtle)] overflow-y-auto rounded-lg border border-[var(--border-subtle)] px-3">
-                                {planSteps.map((s) => (
-                                    <StepRow key={`${s.kind}-${s.index}`} step={s} />
-                                ))}
-                            </div>
-
-                            {plan.warnings.length > 0 ? (
-                                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3 text-xs text-[var(--text-secondary)]">
-                                    {plan.warnings.map((w, i) => (
-                                        <p key={i}>{w}</p>
+                                <div className="bundle-import-resource-groups">
+                                    {contextualGroups.map((group) => (
+                                        <ResourceGroupCard
+                                            key={group.id}
+                                            id={group.id}
+                                            title={group.title}
+                                            icon={group.icon}
+                                            steps={group.steps}
+                                        />
                                     ))}
                                 </div>
-                            ) : null}
 
-                            {plan.variables.length > 0 ? (
-                                <div className="space-y-3">
-                                    <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-tertiary)]">
-                                        Configuration
-                                    </p>
-                                    {plan.variables.map((v) => {
-                                        const setValue = (val: string) =>
-                                            setVariables((prev) => ({ ...prev, [v.name]: val }));
+                                <details className="bundle-import-plan-details">
+                                    <summary>
+                                        <span>View all technical changes</span>
+                                        <span>{planSteps.length}</span>
+                                    </summary>
+                                    <div className="bundle-import-step-list">
+                                        {planSteps.map((resourceStep) => (
+                                            <StepRow
+                                                key={`${resourceStep.kind}-${resourceStep.index}`}
+                                                step={resourceStep}
+                                            />
+                                        ))}
+                                    </div>
+                                </details>
 
-                                        if (v.kind === 'account' && v.connector) {
+                                {plan.warnings.length > 0 ? (
+                                    <div className="bundle-import-warnings">
+                                        <AlertTriangle className="h-4 w-4 shrink-0" />
+                                        <div>
+                                            {plan.warnings.map((warning, index) => (
+                                                <p key={index}>{warning}</p>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ) : null}
+
+                                {plan.variables.length > 0 ? (
+                                    <div className="bundle-import-configuration">
+                                        <div>
+                                            <p className="bundle-import-section-label">Configuration</p>
+                                            <p className="text-xs text-[var(--text-tertiary)]">
+                                                Complete the values this pod needs before installation.
+                                            </p>
+                                        </div>
+                                        {plan.variables.map((variable) => {
+                                            const setValue = (value: string) =>
+                                                setVariables((previous) => ({
+                                                    ...previous,
+                                                    [variable.name]: value,
+                                                }));
+
+                                            if (variable.kind === 'account' && variable.connector) {
+                                                return (
+                                                    <AccountVariableField
+                                                        key={variable.name}
+                                                        organizationId={organizationId}
+                                                        podId={targetPodId}
+                                                        connectorId={variable.connector}
+                                                        provider={variable.provider}
+                                                        label={variable.name}
+                                                        description={variable.description}
+                                                        required={variable.required}
+                                                        value={variables[variable.name] ?? ''}
+                                                        onChange={setValue}
+                                                    />
+                                                );
+                                            }
+
+                                            const secret = /secret|password|token|key/i.test(variable.kind);
                                             return (
-                                                <AccountVariableField
-                                                    key={v.name}
-                                                    organizationId={organizationId}
-                                                    podId={targetPodId}
-                                                    connectorId={v.connector}
-                                                    provider={v.provider}
-                                                    label={v.name}
-                                                    description={v.description}
-                                                    required={v.required}
-                                                    value={variables[v.name] ?? ''}
-                                                    onChange={setValue}
-                                                />
+                                                <div key={variable.name} className="space-y-1">
+                                                    <Label htmlFor={`var-${variable.name}`} className="text-xs">
+                                                        {variable.name}
+                                                        {variable.required ? (
+                                                            <span className="text-[var(--state-error)]"> *</span>
+                                                        ) : null}
+                                                    </Label>
+                                                    {variable.description ? (
+                                                        <p className="text-xs text-[var(--text-tertiary)]">
+                                                            {variable.description}
+                                                        </p>
+                                                    ) : null}
+                                                    <Input
+                                                        id={`var-${variable.name}`}
+                                                        type={secret ? 'password' : 'text'}
+                                                        value={variables[variable.name] ?? ''}
+                                                        onChange={(event) => setValue(event.target.value)}
+                                                        placeholder={variable.default ?? ''}
+                                                    />
+                                                </div>
                                             );
-                                        }
+                                        })}
+                                    </div>
+                                ) : null}
 
-                                        const secret = /secret|password|token|key/i.test(v.kind);
-                                        return (
-                                            <div key={v.name} className="space-y-1">
-                                                <Label htmlFor={`var-${v.name}`} className="text-xs">
-                                                    {v.name}
-                                                    {v.required ? <span className="text-[var(--state-error)]"> *</span> : null}
-                                                </Label>
-                                                {v.description ? (
-                                                    <p className="text-xs text-[var(--text-tertiary)]">{v.description}</p>
-                                                ) : null}
-                                                <Input
-                                                    id={`var-${v.name}`}
-                                                    type={secret ? 'password' : 'text'}
-                                                    value={variables[v.name] ?? ''}
-                                                    onChange={(e) => setValue(e.target.value)}
-                                                    placeholder={v.default ?? ''}
-                                                />
-                                            </div>
-                                        );
-                                    })}
+                                {plan.has_destructive_steps ? (
+                                    <label className="bundle-import-destructive">
+                                        <Checkbox
+                                            checked={confirmDestructive}
+                                            onCheckedChange={(value) => setConfirmDestructive(value === true)}
+                                            className="mt-0.5"
+                                        />
+                                        <span className="text-xs text-[var(--text-secondary)]">
+                                            Some steps remove columns or data that exist today. I understand and want
+                                            to proceed.
+                                        </span>
+                                    </label>
+                                ) : null}
+
+                                {errorMessage ? (
+                                    <p className="text-sm text-[var(--state-error)]">{errorMessage}</p>
+                                ) : null}
+                            </div>
+
+                            <aside className="bundle-import-review-aside">
+                                <div>
+                                    <p className="bundle-import-section-label">Install into</p>
+                                    <h3>{targetLabel}</h3>
                                 </div>
-                            ) : null}
 
-                            {plan.has_destructive_steps ? (
-                                <label className="state-surface-error flex items-start gap-2 rounded-md p-3">
-                                    <Checkbox
-                                        checked={confirmDestructive}
-                                        onCheckedChange={(v) => setConfirmDestructive(v === true)}
-                                        className="mt-0.5"
-                                    />
-                                    <span className="text-xs text-[var(--text-secondary)]">
-                                        Some steps remove columns or data that exist today. I understand and want to
-                                        proceed.
+                                <div className="bundle-import-review-route">
+                                    <span>
+                                        <Github className="h-4 w-4" />
+                                        {plan.bundle_name || presetGithub?.repo || 'Bundle'}
                                     </span>
-                                </label>
-                            ) : null}
+                                    <ArrowRight className="h-4 w-4" />
+                                    <span>
+                                        <Database className="h-4 w-4" />
+                                        {targetLabel}
+                                    </span>
+                                </div>
 
-                            {errorMessage ? (
-                                <p className="text-sm text-[var(--state-error)]">{errorMessage}</p>
-                            ) : null}
+                                <div className="bundle-import-review-impact" aria-label="Resource change summary">
+                                    <span>
+                                        <strong>{resourceCount}</strong>
+                                        resources changing
+                                    </span>
+                                    {counts.CREATE ? (
+                                        <span>
+                                            <strong>{counts.CREATE}</strong>
+                                            created
+                                        </span>
+                                    ) : null}
+                                    {counts.UPDATE ? (
+                                        <span>
+                                            <strong>{counts.UPDATE}</strong>
+                                            updated in place
+                                        </span>
+                                    ) : null}
+                                </div>
 
-                            <div className="flex gap-2">
-                                <Button variant="secondary" className="flex-1" onClick={() => handleOpenChange(false)}>
-                                    Cancel
-                                </Button>
                                 <Button
-                                    className="flex-1"
+                                    className="w-full"
                                     onClick={handleApply}
                                     loading={busy}
-                                    loadingLabel="Applying…"
+                                    loadingLabel="Installing…"
                                     disabled={plan.has_destructive_steps && !confirmDestructive}
                                 >
-                                    {isCreateNew ? 'Create pod' : 'Apply'}
+                                    {isCreateNew ? 'Create and install' : `Install ${resourceCount} resources`}
+                                    <ArrowRight className="ml-2 h-4 w-4" />
                                 </Button>
-                            </div>
+                                <Button
+                                    variant="secondary"
+                                    className="w-full"
+                                    onClick={() => handleOpenChange(false)}
+                                >
+                                    Cancel
+                                </Button>
+                                <p className="bundle-import-review-assurance">
+                                    Nothing changes until you confirm. Updates modify matching resources in place.
+                                </p>
+                            </aside>
                         </div>
                     ) : null}
 
                     {/* --- APPLYING --- */}
                     {step === 'applying' ? (
-                        <div className="space-y-4">
+                        <div className="bundle-import-applying">
+                            <div className="bundle-import-applying-header">
+                                <div>
+                                    <p className="bundle-import-section-label">Installation in progress</p>
+                                    <h2>Setting up {plan?.bundle_name || presetGithub?.repo || 'your pod'}</h2>
+                                    <p>The working parts are being added to {targetLabel}.</p>
+                                </div>
+                                <span className="bundle-import-applying-stamp">
+                                    <Sparkles className="h-4 w-4" />
+                                    In progress
+                                </span>
+                            </div>
                             <BundleProgressBar
                                 done={applyView?.done ?? 0}
                                 total={applyView?.total ?? planSteps.length}
-                                label="Applying resources…"
+                                label="Installing resources…"
                             />
-                            <div className="max-h-64 divide-y divide-[var(--border-subtle)] overflow-y-auto rounded-lg border border-[var(--border-subtle)] px-3">
-                                {planSteps.map((s) => (
-                                    <StepRow key={`${s.kind}-${s.index}`} step={s} />
-                                ))}
+                            <div className="bundle-import-install-layout">
+                                <div className="bundle-import-install-groups">
+                                    {contextualGroups.map((group) => (
+                                        <InstallGroupRow
+                                            key={group.id}
+                                            id={group.id}
+                                            title={group.title}
+                                            icon={group.icon}
+                                            steps={group.steps}
+                                        />
+                                    ))}
+                                </div>
+                                <details className="bundle-import-plan-details bundle-import-install-details">
+                                    <summary>
+                                        <span>View technical progress</span>
+                                        <span>{planSteps.length}</span>
+                                    </summary>
+                                    <div className="bundle-import-step-list">
+                                        {planSteps.map((resourceStep) => (
+                                            <StepRow
+                                                key={`${resourceStep.kind}-${resourceStep.index}`}
+                                                step={resourceStep}
+                                            />
+                                        ))}
+                                    </div>
+                                </details>
                             </div>
                         </div>
                     ) : null}
 
-                    {/* --- DONE (the "it's yours" takeover) --- */}
+                    {/* --- DONE --- */}
                     {step === 'done' ? (
-                        <div className="flex flex-col items-center gap-6 py-6 text-center">
-                            <div className="flex flex-col items-center gap-3">
-                                <div className="state-surface-success flex h-14 w-14 items-center justify-center rounded-full">
-                                    <Sparkles className="h-7 w-7 text-[var(--state-success)]" />
+                        <div className="bundle-import-done">
+                            <div className="bundle-import-done-paper">
+                                <span className="bundle-import-tape" aria-hidden="true" />
+                                <div className="bundle-import-done-icon">
+                                    <CheckCircle2 className="h-7 w-7" />
                                 </div>
                                 <div>
-                                    <p className="text-xl font-medium text-[var(--text-primary)]">
-                                        {isCreateNew
-                                            ? `${plan?.bundle_name || podName || 'Your pod'} is yours`
-                                            : 'Installed'}
-                                    </p>
-                                    <p className="mt-1 text-sm text-[var(--text-tertiary)]">
-                                        {isCreateNew
-                                            ? 'Open it, make it your own, then pass it on.'
-                                            : 'The bundle was applied to this pod.'}
+                                    <p className="bundle-import-section-label">Ready to use</p>
+                                    <h2>{plan?.bundle_name || presetGithub?.repo || 'Pod'} is ready</h2>
+                                    <p>
+                                        Installed {resourceCount} resource{resourceCount === 1 ? '' : 's'} in{' '}
+                                        <strong>{targetLabel}</strong>.
                                     </p>
                                 </div>
-                            </div>
-
-                            {isCreateNew ? (
-                                <div className="grid w-full grid-cols-2 gap-3">
-                                    {[
-                                        {
-                                            icon: PanelsTopLeft,
-                                            title: 'Open the app',
-                                            hint: 'See what it does',
-                                            onClick: () => navigateTo(`/pod/${targetPodId}/app/pages`),
-                                        },
-                                        {
-                                            icon: MessageCircle,
-                                            title: 'Activate a surface',
-                                            hint: 'Slack, Telegram, more',
-                                            onClick: () => navigateTo(`/pod/${targetPodId}/surfaces`),
-                                        },
-                                        {
-                                            icon: Share2,
-                                            title: 'Share with a friend',
-                                            hint: 'Pass the pod on',
-                                            onClick: () => setShareOpen(true),
-                                        },
-                                        {
-                                            icon: Wrench,
-                                            title: 'Customize',
-                                            hint: 'Tweak it in chat',
-                                            onClick: () => navigateTo(`/pod/${targetPodId}`),
-                                        },
-                                    ].map((action) => (
-                                        <button
-                                            key={action.title}
-                                            type="button"
-                                            onClick={action.onClick}
-                                            className="flex flex-col items-start gap-2 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4 text-left transition-colors hover:border-[var(--action-primary)] hover:bg-[var(--surface-2)]"
-                                        >
-                                            <action.icon className="h-5 w-5 text-[var(--action-primary)]" />
-                                            <div>
-                                                <div className="text-sm font-medium text-[var(--text-primary)]">
-                                                    {action.title}
-                                                </div>
-                                                <div className="text-xs text-[var(--text-tertiary)]">{action.hint}</div>
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="flex w-full gap-2">
-                                    <Button variant="secondary" className="flex-1" onClick={() => setShareOpen(true)}>
-                                        <Share2 className="mr-2 h-4 w-4" />
-                                        Share
-                                    </Button>
-                                    <Button className="flex-1" onClick={handleFinish}>
-                                        Done
+                                <div className="bundle-import-next-step">
+                                    <div>
+                                        <strong>Next</strong>
+                                        <span>Open the pod, confirm the app works, then invite someone into it.</span>
+                                    </div>
+                                    <Button onClick={handleFinish}>
+                                        {isCreateNew || openPodOnComplete ? 'Open pod' : 'Done'}
                                         <ArrowRight className="ml-2 h-4 w-4" />
                                     </Button>
                                 </div>
-                            )}
+                                <Button variant="secondary" onClick={() => setShareOpen(true)}>
+                                    <Share2 className="mr-2 h-4 w-4" />
+                                    Share this pod
+                                </Button>
+                            </div>
                         </div>
                     ) : null}
 

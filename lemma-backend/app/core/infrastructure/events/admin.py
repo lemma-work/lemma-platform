@@ -52,7 +52,10 @@ async def _run() -> None:
             replayed = await replay_outbox_event(get_session_maker(), args.event_id)
             if not replayed:
                 raise SystemExit(f"Event {args.event_id} not found")
-            logger.info("Outbox event replay requested", event_id=str(args.event_id), audit=True)
+            logger.debug(
+                "infrastructure.admin.outbox_event_replay_requested.observed",
+                event_id=str(args.event_id),
+            )
     finally:
         await close_engine()
 

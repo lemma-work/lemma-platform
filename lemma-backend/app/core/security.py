@@ -3,7 +3,10 @@ from fastapi import HTTPException
 from fastapi.security import HTTPBearer
 from starlette.requests import HTTPConnection
 from supertokens_python.recipe.session.asyncio import get_session
-from supertokens_python.recipe.session.exceptions import TryRefreshTokenError
+from supertokens_python.recipe.session.exceptions import (
+    InvalidClaimsError,
+    TryRefreshTokenError,
+)
 from app.core.authorization.current import set_current_context
 from app.core.config import settings
 from app.core.authorization.delegation import (
@@ -14,8 +17,23 @@ from app.core.authorization.delegation import (
 from app.core.authorization.delegation_revocation import is_delegation_revoked
 from app.core.log.log import get_logger
 from app.modules.identity.domain.user_entities import AuthUserEntity
+from app.core.infrastructure.db.session import async_session_maker
+from app.modules.identity.infrastructure.models.user_models import User
+from sqlalchemy import select
 
 logger = get_logger(__name__)
+
+
+async def _get_local_auth_state(user_id: UUID):
+    async with async_session_maker() as db_session:
+        return (
+            await db_session.execute(
+                select(User.is_active, User.is_verified, User.is_deleted).where(
+                    User.id == user_id
+                )
+            )
+        ).first()
+
 
 # Define the security scheme for OpenAPI
 # auto_error=False allows us to handle the error manually and support exclusions
@@ -91,6 +109,24 @@ def _is_public_desktop_auth_path(path: str, method: str) -> bool:
     }
 
 
+def _is_public_identity_auth_path(path: str, method: str) -> bool:
+    normalized_method = method.upper()
+    return (
+        normalized_method == "GET"
+        and path
+        in {
+            "/auth/altcha/config",
+            "/auth/altcha/challenge",
+            "/auth/telegram/config",
+            "/auth/telegram/start",
+            "/auth/telegram/callback",
+        }
+    ) or (
+        normalized_method == "POST"
+        and path in {"/auth/email/bounces", "/auth/email/bounces/resend"}
+    )
+
+
 async def verify_auth(connection: HTTPConnection):
     """
     Global dependency to enforce authentication on all routes except excluded ones.
@@ -105,12 +141,15 @@ async def verify_auth(connection: HTTPConnection):
             connection.url.path,
             str(connection.scope.get("method", "GET")),
         )
+        or _is_public_identity_auth_path(
+            connection.url.path,
+            str(connection.scope.get("method", "GET")),
+        )
     ):
         return
 
     if connection.scope["type"] != "http" and (
         connection.url.path.startswith("/workspace/browser")
-        or connection.url.path == "/me/agent-runtime/daemon/ws"
         or _is_datastore_changes_ws_path(connection.url.path)
     ):
         return
@@ -128,6 +167,31 @@ async def verify_auth(connection: HTTPConnection):
             user_id = session.get_user_id()
             parsed_user_id = UUID(user_id)
             payload = session.get_access_token_payload() or {}
+
+            local_state = await _get_local_auth_state(parsed_user_id)
+            if (
+                local_state is None
+                or not local_state.is_active
+                or local_state.is_deleted
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "ACCOUNT_INACTIVE",
+                        "message": "This account is inactive.",
+                    },
+                )
+            if (
+                settings.auth_email_verification_required
+                and not local_state.is_verified
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "code": "EMAIL_VERIFICATION_REQUIRED",
+                        "message": "Verify your email before continuing.",
+                    },
+                )
 
             connection.state.user = AuthUserEntity(id=parsed_user_id)
             connection.state.session = session
@@ -174,6 +238,12 @@ async def verify_auth(connection: HTTPConnection):
                     },
                 )
 
+    except InvalidClaimsError:
+        # Keep SuperTokens' invalid-claim contract intact. Its middleware turns
+        # this into a 403 response with ``claimValidationErrors``. Rewriting it
+        # to 401 makes the frontend treat an intentionally unverified session as
+        # expired and repeatedly refresh/retry the same protected request.
+        raise
     except TryRefreshTokenError:
         # This exception is raised when the access token has expired.
         # SuperTokens frontend SDKs handle the refresh flow, but for an API client,
@@ -193,7 +263,7 @@ async def verify_auth(connection: HTTPConnection):
         if isinstance(e, HTTPException):
             raise e
 
-        logger.debug(f"Auth dependency error: {e}")
+        logger.debug("security.security.auth_dependency.observed")
         # If we reached here, and authentication failed but didn't raise, we force 401.
         # However, get_session(session_required=True) *should* send a response or raise.
         # SuperTokens often sends a response directly which stops execution?

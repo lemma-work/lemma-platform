@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { AlertCircle, BarChart3, Loader2, ReceiptText } from 'lucide-react';
+import { AlertCircle, BarChart3, Loader2, ReceiptText } from '@/components/ui/icons';
 
 import { Badge } from '@/components/ui/badge';
 import { ResourceMetric, ResourceMetricStrip } from '@/components/pod/resource-layout';

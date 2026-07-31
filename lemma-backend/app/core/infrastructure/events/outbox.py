@@ -6,7 +6,7 @@ import asyncio
 import os
 import random
 import socket
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -21,6 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.infrastructure.events.models import DomainEventOutbox
 from app.core.infrastructure.events.config import event_transport_settings
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
+from app.core.observability.telemetry import record_exception_on_current_span
+from app.core.request_context import create_background_task, event_lineage
 
 
 logger = get_logger(__name__)
@@ -40,6 +43,9 @@ class ClaimedEvent:
     payload: dict[str, Any]
     attempts: int
     occurred_at: datetime
+    correlation_id: UUID | None = None
+    causation_id: UUID | None = None
+    request_id: str | None = None
 
 
 class OutboxDispatcher:
@@ -52,6 +58,7 @@ class OutboxDispatcher:
         max_attempts: int = 10,
         lease_seconds: int = 60,
         poll_seconds: float = 0.5,
+        max_idle_poll_seconds: float | None = None,
         owner: str | None = None,
     ) -> None:
         self._session_maker = session_maker
@@ -60,17 +67,42 @@ class OutboxDispatcher:
         self.max_attempts = max_attempts
         self.lease_seconds = lease_seconds
         self.poll_seconds = poll_seconds
+        self.max_idle_poll_seconds = max(
+            poll_seconds,
+            max_idle_poll_seconds
+            if max_idle_poll_seconds is not None
+            else event_transport_settings.outbox_idle_poll_max_seconds,
+        )
         self.owner = owner or f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+        self._dispatch_incident = DependencyIncident(
+            "outbox.database", logger=logger
+        )
+        self._publish_incident = DependencyIncident(
+            "outbox.message_bus", logger=logger
+        )
 
     async def dispatch_once(self) -> int:
         claimed = await self._claim_batch()
+        published: list[UUID] = []
+        failed: list[tuple[ClaimedEvent, Exception]] = []
         for event in claimed:
-            await self._publish(event)
+            error = await self._publish_to_bus(event)
+            if error is None:
+                published.append(event.id)
+            else:
+                failed.append((event, error))
+        # Preserve publish order within each Redis stream while acknowledging the
+        # common successful case in one PostgreSQL transaction. The old
+        # per-event acknowledgement transaction allowed a large record batch to
+        # monopolize the database for thousands of round trips.
+        await self._mark_published_many(published)
+        for event, error in failed:
+            await self._mark_failed(event, error)
         return len(claimed)
 
     async def run(self) -> None:
-        logger.info("Transactional outbox dispatcher started", owner=self.owner)
         infrastructure_failures = 0
+        idle_delay = self.poll_seconds
         while True:
             try:
                 dispatched = await self.dispatch_once()
@@ -81,16 +113,22 @@ class OutboxDispatcher:
                 infrastructure_failures += 1
                 delay = min(30.0, 2 ** min(infrastructure_failures - 1, 5))
                 delay *= random.uniform(0.75, 1.25)
-                logger.warning(
-                    "Outbox dispatcher infrastructure failure; retrying",
-                    owner=self.owner,
-                    error_type=type(exc).__name__,
-                    retry_in_seconds=round(delay, 3),
+                self._dispatch_incident.record_failure(
+                    error_type=type(exc).__name__
                 )
                 await asyncio.sleep(delay)
                 continue
+            self._dispatch_incident.record_success()
             if dispatched == 0:
-                await asyncio.sleep(self.poll_seconds)
+                await asyncio.sleep(
+                    min(
+                        self.max_idle_poll_seconds,
+                        idle_delay * random.uniform(0.9, 1.1),
+                    )
+                )
+                idle_delay = min(self.max_idle_poll_seconds, idle_delay * 2)
+            else:
+                idle_delay = self.poll_seconds
 
     async def _claim_batch(self) -> list[ClaimedEvent]:
         now = datetime.now(timezone.utc)
@@ -122,13 +160,35 @@ class OutboxDispatcher:
                     payload=row.payload,
                     attempts=row.attempts,
                     occurred_at=row.occurred_at,
+                    correlation_id=getattr(row, "correlation_id", None),
+                    causation_id=getattr(row, "causation_id", None),
+                    request_id=getattr(row, "request_id", None),
                 )
                 for row in rows
             ]
 
     async def _publish(self, event: ClaimedEvent) -> None:
+        """Publish and persist one outcome (used by focused replay/tests)."""
+
+        error = await self._publish_to_bus(event)
+        if error is None:
+            await self._mark_published(event.id)
+        else:
+            await self._mark_failed(event, error)
+
+    async def _publish_to_bus(self, event: ClaimedEvent) -> Exception | None:
         started = asyncio.get_running_loop().time()
-        with tracer.start_as_current_span("lemma.outbox.publish") as span:
+        with (
+            event_lineage(
+                correlation_id=event.correlation_id or event.id,
+                event_id=event.id,
+                causation_id=event.causation_id,
+                request_id=event.request_id,
+                event_type=event.event_type,
+                consumer="outbox.publisher",
+            ),
+            tracer.start_as_current_span("lemma.outbox.publish") as span,
+        ):
             span.set_attribute("lemma.event_id", str(event.id))
             span.set_attribute("lemma.event_type", event.event_type)
             span.set_attribute("lemma.event_stream", event.stream)
@@ -141,33 +201,34 @@ class OutboxDispatcher:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # publication boundary; persisted for retry
-                await self._mark_failed(event, exc)
                 failed_counter.add(1, {"event_type": event.event_type})
-                span.record_exception(exc)
-                logger.warning(
-                    "Outbox publication failed",
-                    event_id=str(event.id),
-                    event_type=event.event_type,
-                    stream=event.stream,
-                    attempt=event.attempts + 1,
-                    error_type=type(exc).__name__,
+                record_exception_on_current_span(exc)
+                self._publish_incident.record_failure(
+                    error_type=type(exc).__name__
                 )
-                return
+                return exc
 
-            await self._mark_published(event.id)
+            self._publish_incident.record_success()
             published_counter.add(1, {"event_type": event.event_type})
             publish_latency.record(
                 (asyncio.get_running_loop().time() - started) * 1000,
                 {"event_type": event.event_type},
             )
+            return None
 
     async def _mark_published(self, event_id: UUID) -> None:
+        await self._mark_published_many((event_id,))
+
+    async def _mark_published_many(self, event_ids: Iterable[UUID]) -> None:
+        selected = tuple(event_ids)
+        if not selected:
+            return
         now = datetime.now(timezone.utc)
         async with self._session_maker() as session, session.begin():
             await session.execute(
                 update(DomainEventOutbox)
                 .where(
-                    DomainEventOutbox.id == event_id,
+                    DomainEventOutbox.id.in_(selected),
                     DomainEventOutbox.lease_owner == self.owner,
                 )
                 .values(
@@ -234,7 +295,9 @@ async def outbox_dispatcher_lifespan(
     session_maker: Callable[[], AsyncSession], message_bus
 ) -> AsyncIterator[OutboxDispatcher]:
     dispatcher = OutboxDispatcher(session_maker, message_bus)
-    task = asyncio.create_task(dispatcher.run(), name="domain-event-outbox-dispatcher")
+    task = create_background_task(
+        dispatcher.run(), name="domain-event-outbox-dispatcher"
+    )
     try:
         yield dispatcher
     finally:

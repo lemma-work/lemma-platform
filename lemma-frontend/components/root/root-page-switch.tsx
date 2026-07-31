@@ -1,17 +1,26 @@
 'use client';
 
 import { useEffect, useSyncExternalStore } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { PageLoader } from '@/components/brand/loader';
-import DashboardHomePage from '@/components/home/dashboard-home-page';
-import LandingPage from '@/components/landing/landing-page';
-import { AccountOnboarding } from '@/components/onboarding/account-onboarding';
 import { useLemmaAuth } from '@/lib/hooks/use-lemma-auth';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
 import {
     readLastOpenedPodId,
     subscribeToLastOpenedPodId,
 } from '@/lib/pods/last-opened-pod';
+
+const DashboardHomePage = dynamic(() => import('@/components/home/dashboard-home-page'), {
+    loading: () => <PageLoader />,
+});
+const LandingPage = dynamic(() => import('@/components/landing/landing-page'), {
+    loading: () => <PageLoader />,
+});
+const AccountOnboarding = dynamic(
+    () => import('@/components/onboarding/account-onboarding').then((module) => module.AccountOnboarding),
+    { loading: () => <PageLoader /> }
+);
 
 type RootPageMode = 'redirect' | 'home';
 

@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "resources": {
+      "runtime/lemma-local.json": "lemma-local.json"
+    },
+    "macOS": {
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist"
+    }
+  }
+}

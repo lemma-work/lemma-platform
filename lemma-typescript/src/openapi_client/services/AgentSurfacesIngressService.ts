@@ -39,6 +39,17 @@ export class AgentSurfacesIngressService {
         });
     }
     /**
+     * Handle Telegram manager-bot webhook
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static surfaceWebhookHandleTelegramManager(): CancelablePromise<any> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/surfaces/webhooks/telegram-manager',
+        });
+    }
+    /**
      * Verify surface webhook using the platform callback URL
      * Webhook verification endpoint for platforms that require it.
      * @param platform

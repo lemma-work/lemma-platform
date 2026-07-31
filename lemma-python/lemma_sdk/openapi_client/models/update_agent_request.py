@@ -184,7 +184,7 @@ class UpdateAgentRequest:
                 agent_runtime_type_0 = AgentRuntimeConfig.from_dict(data)
 
                 return agent_runtime_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(AgentRuntimeConfig | None | Unset, data)
 
@@ -221,7 +221,7 @@ class UpdateAgentRequest:
                 input_schema_type_0 = UpdateAgentRequestInputSchemaType0.from_dict(data)
 
                 return input_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UpdateAgentRequestInputSchemaType0, data)
 
@@ -249,7 +249,7 @@ class UpdateAgentRequest:
                 metadata_type_0 = UpdateAgentRequestMetadataType0.from_dict(data)
 
                 return metadata_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UpdateAgentRequestMetadataType0, data)
 
@@ -270,7 +270,7 @@ class UpdateAgentRequest:
                 )
 
                 return output_schema_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UpdateAgentRequestOutputSchemaType0, data)
 
@@ -292,7 +292,7 @@ class UpdateAgentRequest:
                     toolsets_type_0.append(toolsets_type_0_item)
 
                 return toolsets_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[AgentToolset] | None | Unset, data)
 
@@ -309,7 +309,7 @@ class UpdateAgentRequest:
                 visibility_type_0 = ResourceVisibility(data)
 
                 return visibility_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | ResourceVisibility | Unset, data)
 

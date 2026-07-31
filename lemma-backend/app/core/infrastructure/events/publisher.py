@@ -25,9 +25,8 @@ class EventPublisher:
             )
         async with SessionUnitOfWorkFactory(get_session_maker())() as uow:
             uow.collect_events([event])
-        logger.info(
-            "Staged event in transactional outbox",
+        logger.debug(
+            "infrastructure.publisher.staged_event_transactional_outbox.observed",
             event_id=str(event.event_id),
             event_type=event.event_type,
-            stream=stream,
         )

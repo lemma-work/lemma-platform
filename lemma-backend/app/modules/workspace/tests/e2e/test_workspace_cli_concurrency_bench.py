@@ -29,6 +29,15 @@ from app.modules.agent.tools.workspace_cli.models import ExecCommandRequest
 
 pytestmark = [pytest.mark.e2e, pytest.mark.workspace]
 
+# The semantic regression this probe guards against is a completed command
+# waiting for the default 30-second yield window before returning. Shared CI
+# runners can add several seconds of Docker and scheduler latency even while
+# all calls are genuinely concurrent, so do not use this integration test as a
+# tight end-user latency SLO. Returning within two-thirds of the yield window
+# still distinguishes the broken path with substantial runner headroom.
+DEFAULT_YIELD_WINDOW_SECONDS = 30.0
+FAST_YIELD_COMPLETION_LIMIT_SECONDS = DEFAULT_YIELD_WINDOW_SECONDS * (2 / 3)
+
 
 async def _run(ctx: BaseAgentContext, cmd: str, *, timeout: int | None = 60):
     # timeout=None -> agent default path (yield mode, yield_time_ms=30000).
@@ -156,7 +165,12 @@ async def test_workspace_cli_parallel_tool_calls_bench(
     #     fast command must still return instantly, not wait the yield window. ---
     dt, r = await _run(ctx, "echo hi", timeout=None)
     print(f"YIELD-mode single echo:       {dt:6.2f}s  completed={r.completed}  (must be ~0s, not ~30s)")
-    assert dt < 5, f"fast command blocked for {dt:.1f}s in yield mode (regression)"
+    assert r.success, r.error
+    assert r.completed, "fast command unexpectedly returned a background process"
+    assert dt < FAST_YIELD_COMPLETION_LIMIT_SECONDS, (
+        f"fast command entered the {DEFAULT_YIELD_WINDOW_SECONDS:.0f}s yield window "
+        f"and blocked for {dt:.1f}s"
+    )
 
     for n in (3, 4):
         t0 = time.perf_counter()
@@ -165,6 +179,14 @@ async def test_workspace_cli_parallel_tool_calls_bench(
         lat = [d for d, _ in results]
         oks = sum(1 for _, r in results if r.success)
         print(f"YIELD-mode parallel x{n} echo:  wall={wall:6.2f}s  per-call {_fmt(lat)}  ok={oks}/{n}")
-        assert wall < 6, f"yield-mode parallel blocked for {wall:.1f}s (regression)"
+        failures = [r.error for _, r in results if not r.success]
+        assert oks == n, f"yield-mode parallel commands failed: {failures}"
+        assert all(r.completed for _, r in results), (
+            "fast parallel commands unexpectedly returned background processes"
+        )
+        assert wall < FAST_YIELD_COMPLETION_LIMIT_SECONDS, (
+            f"yield-mode parallel calls entered the "
+            f"{DEFAULT_YIELD_WINDOW_SECONDS:.0f}s yield window and blocked for {wall:.1f}s"
+        )
 
     print("=====================================================\n")

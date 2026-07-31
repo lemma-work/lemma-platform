@@ -16,8 +16,11 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError, TimeoutError as RedisTimeoutError
 
 from app.core.config import settings
+from app.core.infrastructure.redis.client import get_redis
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
+from app.core.request_context import create_background_task
 
 logger = get_logger(__name__)
 meter = metrics.get_meter(__name__)
@@ -44,13 +47,17 @@ class RedisChannelAdapter:
     def __init__(self, redis_url: str | None = None, *, client: Redis | None = None):
         self.redis_url = redis_url
         self._redis = client
-        self._owns_client = client is None
         self._pubsub: PubSub | None = None
         self._listener_task: asyncio.Task[None] | None = None
         self._clients_by_channel: dict[str, set[_ClientSubscription]] = {}
         self._connect_lock = asyncio.Lock()
         self._subscription_lock = asyncio.Lock()
         self._closing = False
+        self._connection_incident = DependencyIncident(
+            "realtime_pubsub",
+            logger=logger,
+            degradation_threshold=2,
+        )
 
     async def connect(self) -> None:
         """Create the shared Redis pool; the Pub/Sub lease stays lazy."""
@@ -58,14 +65,7 @@ class RedisChannelAdapter:
             return
         async with self._connect_lock:
             if self._redis is None:
-                self._redis = Redis.from_url(
-                    self.redis_url or settings.redis_url,
-                    decode_responses=True,
-                    health_check_interval=30,
-                    socket_keepalive=True,
-                    max_connections=settings.redis_max_connections,
-                )
-                self._owns_client = True
+                self._redis = get_redis(url=self.redis_url or settings.redis_url)
 
     async def disconnect(self) -> None:
         """Stop the one listener, close its lease, then close the owned pool."""
@@ -87,16 +87,31 @@ class RedisChannelAdapter:
             self._close_client(client, RuntimeError("Realtime service stopped"))
 
         await self._close_pubsub()
-        redis_client = self._redis
+        # The pool is shared process-wide, so this releases the reference
+        # rather than closing it; close_redis_clients() disposes it at
+        # lifespan shutdown. The Pub/Sub lease above is genuinely owned and is
+        # closed by _close_pubsub().
         self._redis = None
-        if redis_client is not None and self._owns_client:
-            await redis_client.aclose()
         self._closing = False
 
     async def _client(self) -> Redis:
         await self.connect()
         assert self._redis is not None
         return self._redis
+
+    async def ping(self) -> bool:
+        """Return True if the shared Redis client can respond to ``PING``.
+
+        Used by the ``/health/ready`` check. Never raises: a down Redis is
+        reported as ``False`` so readiness returns 503 rather than erroring.
+        """
+        if self._redis is None:
+            return False
+        try:
+            await self._redis.ping()
+            return True
+        except RedisError:
+            return False
 
     async def publish(self, channel: str, message: object) -> None:
         """Publish a transient payload through the shared Redis pool."""
@@ -135,14 +150,46 @@ class RedisChannelAdapter:
         async with self._subscription_lock:
             pubsub = await self._ensure_pubsub()
             new_channels = [
-                channel for channel in client.channels if channel not in self._clients_by_channel
+                channel
+                for channel in client.channels
+                if channel not in self._clients_by_channel
             ]
             if new_channels:
-                await pubsub.subscribe(*new_channels)
+                try:
+                    await pubsub.subscribe(*new_channels)
+                except (RedisConnectionError, RedisTimeoutError, OSError) as exc:
+                    reconnect_counter.add(1)
+                    logger.debug(
+                        "infrastructure.channel_service.realtime_pub_sub_subscribe_replacing.diagnostic",
+                        error_type=type(exc).__name__,
+                    )
+                    await self._replace_pubsub()
+                    pubsub = await self._ensure_pubsub()
+                    recovery_channels = tuple(
+                        dict.fromkeys((*self._clients_by_channel, *new_channels))
+                    )
+                    try:
+                        await pubsub.subscribe(*recovery_channels)
+                    except RedisConnectionError, RedisTimeoutError, OSError:
+                        # Existing logical subscribers must retain the reconnecting
+                        # listener even when the one inline retry also fails.
+                        if self._clients_by_channel:
+                            self._ensure_listener()
+                        raise
             for channel in client.channels:
                 self._clients_by_channel.setdefault(channel, set()).add(client)
             subscriber_delta.add(1)
             self._ensure_listener()
+
+    async def _replace_pubsub(self) -> None:
+        """Stop the listener and discard a stale Pub/Sub connection lease."""
+        task = self._listener_task
+        self._listener_task = None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await self._close_pubsub()
 
     async def _unregister(self, client: _ClientSubscription) -> None:
         if client.closed:
@@ -165,14 +212,12 @@ class RedisChannelAdapter:
 
     async def _ensure_pubsub(self) -> PubSub:
         if self._pubsub is None:
-            self._pubsub = (await self._client()).pubsub(
-                ignore_subscribe_messages=True
-            )
+            self._pubsub = (await self._client()).pubsub(ignore_subscribe_messages=True)
         return self._pubsub
 
     def _ensure_listener(self) -> None:
         if self._listener_task is None or self._listener_task.done():
-            self._listener_task = asyncio.create_task(
+            self._listener_task = create_background_task(
                 self._listen(),
                 name="redis-pubsub-multiplexer",
             )
@@ -188,6 +233,7 @@ class RedisChannelAdapter:
                     data = message.get("data")
                     if not isinstance(data, (str, bytes)):
                         continue
+                    self._connection_incident.record_success()
                     raw_channel = message.get("channel")
                     channel = (
                         raw_channel.decode()
@@ -202,10 +248,7 @@ class RedisChannelAdapter:
                 if self._closing:
                     return
                 reconnect_counter.add(1)
-                logger.warning(
-                    "Realtime Pub/Sub connection lost; reconnecting",
-                    error_type=type(exc).__name__,
-                )
+                self._connection_incident.record_failure(error_type=type(exc).__name__)
                 await self._reconnect(backoff)
                 backoff = min(backoff * 2, RECONNECT_MAX_SECONDS)
 
@@ -266,8 +309,10 @@ class RedisChannelAdapter:
             return
         try:
             await pubsub.aclose()
-        except (RedisError, OSError):
-            logger.warning("Failed to close realtime Pub/Sub connection")
+        except RedisError, OSError:
+            logger.debug(
+                "infrastructure.channel_service.close_realtime_pub_sub_connection.diagnostic"
+            )
 
 
 channel_service = RedisChannelAdapter()

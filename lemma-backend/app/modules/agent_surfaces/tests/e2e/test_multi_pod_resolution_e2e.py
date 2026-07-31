@@ -518,11 +518,12 @@ async def test_shared_system_bot_multi_user_routing_matrix(
             message_id=107,
         ),
     )
-    if non_member_ctx is not None:
-        assert isinstance(non_member_ctx, SurfaceReplyContext)
-        message = non_member_ctx.reply_message or ""
-        assert f"/pods/{org_a.pod_id}" not in message
-        assert f"/pods/{org_b.pod_id}" not in message
+    assert isinstance(non_member_ctx, SurfaceReplyContext)
+    assert non_member_ctx.reply_kind == "surface_setup"
+    message = non_member_ctx.reply_message or ""
+    assert "set up or select a surface" in message
+    assert f"/pods/{org_a.pod_id}" not in message
+    assert f"/pods/{org_b.pod_id}" not in message
 
 
 @pytest.mark.parametrize("platform", ["TELEGRAM", "WHATSAPP"])
@@ -646,7 +647,7 @@ async def test_custom_bot_scope_and_system_bot_threads_do_not_cross(
         receiver_surface_ids=[custom_surface_id],
     )
     assert isinstance(non_member_ctx, SurfaceReplyContext)
-    assert f"/pods/{pod_id}" in (non_member_ctx.reply_message or "")
+    assert f"/pod/{pod_id}" in (non_member_ctx.reply_message or "")
 
     unknown_external = _external_id(platform, 703)
     unresolved_ctx = await _prepare_platform_dm(

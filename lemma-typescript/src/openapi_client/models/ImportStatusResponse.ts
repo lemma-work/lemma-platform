@@ -13,11 +13,14 @@ export type ImportStatusResponse = {
     committed_steps?: Array<number>;
     current_step?: (number | null);
     error?: (string | null);
+    error_code?: (string | null);
     events_url: string;
     import_id: string;
     plan?: (ImportPlanResponse | null);
     pod_id: string;
     progress?: ExportProgressResponse;
+    retryable?: boolean;
     source_kind: string;
     status: ImportStatus;
+    warnings?: Array<string>;
 };

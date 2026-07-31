@@ -12,7 +12,7 @@ import {
 import type { Column } from '@/lib/types';
 import { useFileUpload } from '@/lib/hooks/use-files';
 import { useDatastoreQuery, useTable, useCreateRecord } from '@/lib/hooks/use-datastores';
-import { Upload, X, FileIcon, Loader2 } from 'lucide-react';
+import { Check, Upload, X, FileIcon, Loader2 } from '@/components/ui/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { sanitizeRecordPayload } from '@/lib/utils/datastore-records';
 
@@ -221,9 +221,7 @@ function FormField({
                         `}
                     >
                         {Boolean(value) && (
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                            </svg>
+                            <Check className="size-3" weight="bold" aria-hidden="true" />
                         )}
                     </button>
                     <span className="ml-2 text-sm text-[var(--text-secondary)]">{Boolean(value) ? 'Yes' : 'No'}</span>

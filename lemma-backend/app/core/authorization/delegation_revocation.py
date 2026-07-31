@@ -21,8 +21,10 @@ from uuid import UUID
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+_store_incident = DependencyIncident("delegation_revocation_store", logger=logger)
 
 _revocation_cache: RedisJsonCache | None = None
 
@@ -48,13 +50,10 @@ async def revoke_delegation(*, actor_id: UUID) -> None:
         return
     try:
         await cache.set_json(str(actor_id), {"revoked": True})
-    except Exception:
-        logger.warning(
-            "Delegation-revocation store unavailable; workload %s not revoked "
-            "(its token will still expire naturally).",
-            actor_id,
-            exc_info=True,
-        )
+    except Exception as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _store_incident.record_success()
 
 
 async def is_delegation_revoked(*, actor_id: UUID) -> bool:
@@ -64,12 +63,8 @@ async def is_delegation_revoked(*, actor_id: UUID) -> bool:
         return False
     try:
         payload = await cache.get_json(str(actor_id))
-    except Exception:
-        logger.warning(
-            "Delegation-revocation store unavailable; treating workload %s as "
-            "not revoked (safe for availability).",
-            actor_id,
-            exc_info=True,
-        )
+    except Exception as exc:
+        _store_incident.record_failure(error_type=type(exc).__name__)
         return False
+    _store_incident.record_success()
     return payload is not None

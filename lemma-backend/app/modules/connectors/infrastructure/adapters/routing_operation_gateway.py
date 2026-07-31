@@ -106,10 +106,9 @@ class RoutingOperationGateway(AppOperationGatewayPort):
             )
         except (asyncio.TimeoutError, TimeoutError) as exc:
             logger.warning(
-                "connector operation %s on %s timed out after %.0fs",
-                operation_name,
-                connector_id,
-                timeout,
+                "connector.operation.timeout",
+                operation_name=operation_name,
+                connector_id=connector_id,
             )
             raise OperationExecutionTimeoutError(
                 f"Operation '{operation_name}' timed out after {timeout:.0f}s. "

@@ -173,7 +173,7 @@ class PodJoinRequestCreateResponse:
                 approved_at_type_0 = isoparse(data)
 
                 return approved_at_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(datetime.datetime | None | Unset, data)
 
@@ -190,7 +190,7 @@ class PodJoinRequestCreateResponse:
                 approved_by_user_id_type_0 = UUID(data)
 
                 return approved_by_user_id_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UUID, data)
 
@@ -209,7 +209,7 @@ class PodJoinRequestCreateResponse:
                 org_role_type_0 = OrganizationRole(data)
 
                 return org_role_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | OrganizationRole | Unset, data)
 
@@ -226,7 +226,7 @@ class PodJoinRequestCreateResponse:
                 pod_role_type_0 = PodRole(data)
 
                 return pod_role_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | PodRole | Unset, data)
 

@@ -98,12 +98,10 @@ class SurfaceReachResolver:
             return None
         try:
             return await asyncio.wait_for(coro, timeout=_LIVE_HANDLE_TIMEOUT_SECONDS)
-        except Exception as exc:  # timeout / API failure — never break the request
+        except Exception:  # timeout / API failure — never break the request
             logger.debug(
-                "Surface reach live handle failed for surface=%s platform=%s: %s",
-                surface.id,
-                surface.surface_type,
-                exc,
+                "agent_surfaces.surface_reach_resolver.surface_reach_live_handle_surface.observed",
+                surface_type=surface.surface_type,
             )
         return None
 
@@ -172,11 +170,9 @@ class SurfaceReachResolver:
                                 name = str(body.get("displayName") or "").strip()
                                 if name:
                                     return name
-            except Exception as exc:  # Application.Read.All may 403 — fall back
+            except Exception:  # Application.Read.All may 403 — fall back
                 logger.debug(
-                    "Teams servicePrincipal lookup failed for surface=%s: %s",
-                    surface.id,
-                    exc,
+                    "agent_surfaces.surface_reach_resolver.teams_serviceprincipal_lookup_surface_s.observed"
                 )
         # Fallback: configured bot display name (still a live-derived handle for
         # write-through purposes, but requires no external call).
@@ -196,11 +192,9 @@ class SurfaceReachResolver:
                 )
                 if account and account.display_name:
                     return account.display_name
-            except Exception as exc:
+            except Exception:
                 logger.debug(
-                    "Surface reach account fallback failed for surface=%s: %s",
-                    surface.id,
-                    exc,
+                    "agent_surfaces.surface_reach_resolver.surface_reach_account_fallback_surface.observed"
                 )
         return surface.surface_identity_email or None
 
@@ -214,9 +208,7 @@ class SurfaceReachResolver:
         try:
             surface.surface_identity_username = handle
             await surface_repository.update(surface)
-        except Exception as exc:
+        except Exception:
             logger.debug(
-                "Surface reach write-through failed for surface=%s: %s",
-                surface.id,
-                exc,
+                "agent_surfaces.surface_reach_resolver.surface_reach_write_through_surface.observed"
             )

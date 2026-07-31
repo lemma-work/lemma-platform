@@ -1,5 +1,6 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
+import { playSoundFeedback } from "@/lib/feedback/sound-feedback";
 
 export interface SwitchProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "role" | "aria-checked"> {
     checked?: boolean;
@@ -19,6 +20,7 @@ const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(
                     onClick?.(event);
                     if (!event.defaultPrevented && !disabled) {
                         onCheckedChange?.(!checked);
+                        playSoundFeedback('toggle-change');
                     }
                 }}
                 ref={ref}

@@ -12,6 +12,8 @@ pytestmark = pytest.mark.unit
         ("abc_def", "Abc Def"),
         ("my-cool-pod", "My Cool Pod"),
         ("sales_2024", "Sales 2024"),
+        ("Email-test_pod Pod", "Email Test Pod Pod"),
+        ("customer_success-Team Workspace", "Customer Success Team Workspace"),
         ("Acme Support AI", "Acme Support AI"),  # already human -> untouched
         ("Acme Inc", "Acme Inc"),
         ("iOS", "iOS"),  # mixed case preserved

@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Loader2 } from 'lucide-react';
+import { Check, Loader2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { useSetDefaultSurface, useUserSurfaces } from '@/lib/hooks/use-pod-surfaces';

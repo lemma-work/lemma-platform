@@ -78,10 +78,12 @@ class ScheduleStartService:
         if schedule is None or (
             schedule.workflow_id is None and schedule.agent_id is None
         ):
-            logger.info("No target for schedule", schedule_id=schedule_id)
+            logger.debug(
+                "workflow.schedule_start_service.no_target_schedule.observed",
+                schedule_id=schedule_id,
+            )
             return
         if not schedule.is_active:
-            logger.info("Inactive schedule skipped", schedule_id=str(schedule.id))
             return
         run_user_id = UUID(str(user_id))
 
@@ -97,11 +99,6 @@ class ScheduleStartService:
             source_occurred_at=source_occurred_at,
         )
         if schedule_run is None:
-            logger.info(
-                "Duplicate or terminal schedule run skipped",
-                schedule_id=str(schedule.id),
-                source_event_id=schedule_event_id,
-            )
             return
         if schedule_run.status == ScheduleRunStatus.DEAD_LETTERED:
             await self._record_fire(
@@ -186,10 +183,11 @@ class ScheduleStartService:
                 )
             except Exception as exc:
                 run_status = await run_repo.mark_failed(schedule_run.id, exc)
-                logger.exception(
-                    "Failed to start agent for schedule",
+                logger.debug(
+                    'workflow.schedule_start_service.start_agent_schedule.propagated',
                     agent_id=str(schedule.agent_id),
                     schedule_id=schedule_id,
+                    exc_info=True,
                 )
                 await self._record_fire(
                     schedule_repo,
@@ -235,10 +233,12 @@ class ScheduleStartService:
         metadata: dict | None,
         llm_output: dict | None,
     ) -> None:
-        logger.info("Waking workflow run from scheduler", run_id=run_id, wait_ref=external_ref)
+        logger.debug(
+            "workflow.schedule_start_service.waking_workflow_run_scheduler.observed",
+            run_id=run_id,
+        )
         run = await self._engine.run_repo.get(UUID(run_id))
         if run is None:
-            logger.info("No workflow run found for scheduler wake", run_id=run_id)
             return
         if run.user_id != user_id:
             raise ValueError("workflow timer user_id does not match the run owner")

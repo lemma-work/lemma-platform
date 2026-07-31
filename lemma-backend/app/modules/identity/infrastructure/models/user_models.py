@@ -1,5 +1,5 @@
-from datetime import date
-from sqlalchemy import Boolean, Date, Index, String, func
+from datetime import date, datetime
+from sqlalchemy import Boolean, Date, DateTime, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from app.core.infrastructure.db.base import UUIDAuditBase
@@ -14,10 +14,22 @@ class User(UUIDAuditBase):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deactivated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deactivation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     first_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     last_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    mobile_number: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    mobile_number: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, index=True
+    )
+    mobile_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     telegram_username: Mapped[str | None] = mapped_column(
         String(255), nullable=True, index=True
     )
@@ -29,6 +41,12 @@ class User(UUIDAuditBase):
 
     __table_args__ = (
         Index("uq_users_email_lower", func.lower(email), unique=True),
+        Index(
+            "uq_users_verified_mobile_e164",
+            mobile_number,
+            unique=True,
+            postgresql_where=text("mobile_verified_at IS NOT NULL"),
+        ),
     )
 
     def to_entity(self) -> UserEntity:

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAssistantController, useConversationMessages } from 'lemma-sdk/react';
 import { useAgent } from '@/lib/hooks/use-agents';
@@ -8,6 +9,8 @@ import { useMessages } from '@/lib/hooks/use-assistants';
 import { useAccounts, useConnectors, useAuthConfigs, useCreateConnectRequest } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { buildScopedConversationHref } from '@/lib/assistant/conversation-composer-context';
+import { requestConversationStageNavigation } from '@/lib/assistant/conversation-presentation';
 import { useInfiniteScroll } from '@/lib/hooks/use-infinite-scroll';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -34,7 +37,7 @@ import {
     Plus,
     Search,
     X,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 
 interface AgentTestPanelProps {
     podId: string;
@@ -43,6 +46,12 @@ interface AgentTestPanelProps {
     openConversationId?: string | null;
     openConversationRequestKey?: number;
     isFullView?: boolean;
+    /**
+     * Which half to show. `'split'` puts the run history beside the run, which
+     * needs real width; a narrow dock passes `'conversation'` or `'history'` and
+     * switches between them itself.
+     */
+    view?: 'split' | 'conversation' | 'history';
     onToggleFullView?: () => void;
     onClose?: () => void;
 }
@@ -151,6 +160,7 @@ export function AgentTestPanel({
     openConversationId,
     openConversationRequestKey,
     isFullView,
+    view = 'split',
     onToggleFullView,
     onClose,
 }: AgentTestPanelProps) {
@@ -172,7 +182,12 @@ export function AgentTestPanel({
     const client = useMemo(() => getLemmaClient(podId), [podId]);
     const hasInputSchema = hasSchemaProperties(agent?.input_schema);
     const hasOutputSchema = hasSchemaProperties(agent?.output_schema);
-    const isConversationalAgent = Boolean(agent) && !hasInputSchema && !hasOutputSchema;
+    // What decides this is the *input* side alone. An agent with no declared
+    // inputs has nothing to fill in, so it is talked to — a run form whose only
+    // content is "this agent does not need input" is a form with no purpose.
+    // A declared output still shapes the answer; it is rendered from the
+    // conversation the same way either way.
+    const isConversationalAgent = Boolean(agent) && !hasInputSchema;
     const inputPropertyEntries = useMemo(() => {
         if (!hasInputSchema || !isRecord(agent?.input_schema) || !isRecord(agent.input_schema.properties)) return [];
         return Object.entries(agent.input_schema.properties);
@@ -193,26 +208,26 @@ export function AgentTestPanel({
         client,
         podId,
         agentName: agent?.name || agentName,
-        conversationId: controller.activeConversationId,
-        enabled: Boolean(agent && controller.activeConversationId),
+        conversationId: controller.openedConversationId,
+        enabled: Boolean(agent && controller.openedConversationId),
         autoLoad: true,
         autoResume: true,
         syncOnTurnEnd: true,
         limit: 100,
     });
     const refreshConversationMessages = conversationMessages.refresh;
-    const activeConversationId = controller.activeConversationId;
-    const selectConversation = controller.selectConversation;
+    const openedConversationId = controller.openedConversationId;
+    const openConversation = controller.openConversation;
     const settledConversationRef = useRef<string | null>(null);
     const handledOpenRequestRef = useRef<string | number | null>(null);
-    const { data: rawMessagesData, refetch: refetchRawMessages } = useMessages(podId, activeConversationId || '', { limit: 100 });
+    const { data: rawMessagesData, refetch: refetchRawMessages } = useMessages(podId, openedConversationId || '', { limit: 100 });
     const rawMessages = useMemo(
         () => (rawMessagesData as { items?: Message[] } | undefined)?.items || [],
         [rawMessagesData],
     );
     const activeConversation = useMemo(
-        () => controller.conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
-        [activeConversationId, controller.conversations],
+        () => controller.conversations.find((conversation) => conversation.id === openedConversationId) ?? null,
+        [controller.conversations, openedConversationId],
     );
     const controllerView = useMemo<AssistantControllerView>(() => {
         const base = controller as unknown as AssistantControllerView;
@@ -249,28 +264,28 @@ export function AgentTestPanel({
         if (handledOpenRequestRef.current === requestKey) return;
         handledOpenRequestRef.current = requestKey;
 
-        if (activeConversationId !== openConversationId) {
-            selectConversation(openConversationId);
+        if (openedConversationId !== openConversationId) {
+            openConversation(openConversationId);
         }
 
         void refreshConversationMessages({ conversationId: openConversationId, limit: 100 });
     }, [
-        activeConversationId,
+        openedConversationId,
         agent,
         openConversationId,
         openConversationRequestKey,
         refreshConversationMessages,
-        selectConversation,
+        openConversation,
     ]);
 
     useEffect(() => {
-        const conversationId = controller.activeConversationId;
+        const conversationId = controller.openedConversationId;
         if (!conversationId) {
             settledConversationRef.current = null;
             return;
         }
 
-        if (controller.isActiveConversationRunning) {
+        if (controller.isOpenedConversationRunning) {
             settledConversationRef.current = null;
             return;
         }
@@ -281,12 +296,12 @@ export function AgentTestPanel({
             refetchRawMessages(),
             refreshConversationMessages({ conversationId, limit: 100 }),
         ]);
-    }, [controller.activeConversationId, controller.isActiveConversationRunning, refetchRawMessages, refreshConversationMessages]);
+    }, [controller.isOpenedConversationRunning, controller.openedConversationId, refetchRawMessages, refreshConversationMessages]);
 
     useEffect(() => {
-        const conversationId = controller.activeConversationId;
+        const conversationId = controller.openedConversationId;
         const hasVisibleOutput = hasOutputSchema ? Boolean(parsedOutput) : Boolean(parsedOutput || assistantText);
-        if (!conversationId || controller.isActiveConversationRunning || hasVisibleOutput) return;
+        if (!conversationId || controller.isOpenedConversationRunning || hasVisibleOutput) return;
 
         let cancelled = false;
         let attempts = 0;
@@ -313,8 +328,8 @@ export function AgentTestPanel({
         };
     }, [
         assistantText,
-        controller.activeConversationId,
-        controller.isActiveConversationRunning,
+        controller.isOpenedConversationRunning,
+        controller.openedConversationId,
         hasOutputSchema,
         parsedOutput,
         refetchRawMessages,
@@ -350,7 +365,7 @@ export function AgentTestPanel({
         try {
             const payload = buildInputDataFromForm(formData, agent?.input_schema);
             await controller.sendMessage(formatAgentRunInput(payload), { forceNewConversation: true });
-            const conversationId = controller.activeConversationId;
+            const conversationId = controller.openedConversationId;
             if (conversationId) {
                 void Promise.allSettled([
                     refetchRawMessages(),
@@ -370,13 +385,17 @@ export function AgentTestPanel({
     };
 
     const openActiveConversationPage = useCallback(() => {
-        if (controller.activeConversationId) {
-            router.push(`/pod/${podId}/conversations/${encodeURIComponent(controller.activeConversationId)}`);
+        if (controller.openedConversationId) {
+            router.push(buildScopedConversationHref({
+                podId,
+                conversationId: controller.openedConversationId,
+                agentName: agent?.name || agentName,
+            }));
             return;
         }
 
         onToggleFullView?.();
-    }, [controller.activeConversationId, onToggleFullView, podId, router]);
+    }, [agent?.name, agentName, controller.openedConversationId, onToggleFullView, podId, router]);
 
     const visibleApps = (agent?.accessible_connectors || []).filter(config => {
         const app = resolveConnector(config.app_name);
@@ -400,7 +419,13 @@ export function AgentTestPanel({
             || title.toLowerCase().includes(normalizedSearch);
     });
 
-    const hasActiveRun = Boolean(controller.activeConversationId);
+    const hasActiveRun = Boolean(controller.openedConversationId);
+    // `isFullView` is the expand-to-page state and always wins; otherwise the
+    // caller's `view` decides which half a narrow container shows. `split` is
+    // the only one with a second column beside the history — on its own the
+    // history fills whatever it is docked into.
+    const resolvedView = isFullView ? 'conversation' : view;
+    const isSplit = resolvedView === 'split';
     const historyScrollRef = useRef<HTMLDivElement | null>(null);
     const historySentinelRef = useInfiniteScroll({
         hasMore: controller.hasMoreConversations,
@@ -409,7 +434,12 @@ export function AgentTestPanel({
         rootRef: historyScrollRef,
     });
     const historyPanel = (
-        <aside className="agent-test-history-panel flex h-full min-h-0 w-full flex-col border-r border-[color:var(--row-border)] bg-[var(--row-bg)] lg:w-[340px] lg:shrink-0">
+        <aside
+            className={cn(
+                'agent-test-history-panel flex h-full min-h-0 w-full flex-col bg-[var(--row-bg)]',
+                isSplit && 'border-r border-[color:var(--row-border)] lg:w-[340px] lg:shrink-0',
+            )}
+        >
             <div className="agent-test-history-header shrink-0 bg-[var(--card-bg)] px-3 py-3">
                 <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
@@ -452,21 +482,31 @@ export function AgentTestPanel({
                 ) : (
                   <>
                     {filteredConversations.map((conversation) => {
-                    const isActive = controller.activeConversationId === conversation.id;
+                    const isActive = controller.openedConversationId === conversation.id;
+                    const href = buildScopedConversationHref({
+                        podId,
+                        conversationId: conversation.id,
+                        agentName: agent?.name || agentName,
+                    });
+
+                    // A past run opens as its own workspace tab rather than
+                    // replacing what is in the dock — you came back to read it,
+                    // not to lose the agent you were editing. A link, so
+                    // cmd-click still gets a real browser tab.
                     return (
-                        <button
+                        <Link
                             key={conversation.id}
-                            type="button"
+                            href={href}
+                            onClick={(event) => {
+                                if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+                                if (requestConversationStageNavigation(href)) event.preventDefault();
+                            }}
                             className={cn(
-                                'agent-test-history-button w-full cursor-pointer rounded-lg border px-3 py-2.5 text-left transition-colors',
+                                'agent-test-history-button block w-full cursor-pointer rounded-lg border px-3 py-2.5 text-left transition-colors',
                                 isActive
                                     ? 'tone-card-action bg-[var(--card-bg)] shadow-[var(--shadow-xs)]'
                                     : 'border-transparent bg-transparent hover:border-[color:var(--row-border)] hover:bg-[var(--card-bg)]'
                             )}
-                            onClick={() => {
-                                controller.selectConversation(conversation.id);
-                                void refreshConversationMessages({ conversationId: conversation.id, limit: 100 });
-                            }}
                         >
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
@@ -477,7 +517,7 @@ export function AgentTestPanel({
                                     {formatRelativeTime(conversation.updated_at || conversation.created_at)}
                                 </span>
                             </div>
-                        </button>
+                        </Link>
                     );
                     })}
                     <div ref={historySentinelRef} aria-hidden className="h-px" />
@@ -492,10 +532,21 @@ export function AgentTestPanel({
         </aside>
     );
 
+    const showHistory = resolvedView !== 'conversation';
+    const showRun = resolvedView !== 'history';
+
+    if (showHistory && !showRun) {
+        return (
+            <div className="agent-test-panel flex h-full min-h-0 bg-[var(--card-bg)]">
+                {historyPanel}
+            </div>
+        );
+    }
+
     if (isConversationalAgent) {
         return (
-            <div className={cn('agent-test-panel grid h-full min-h-0 items-stretch bg-[var(--card-bg)]', isFullView ? 'grid-cols-1' : 'surface-split-2 lg:grid-cols-[340px_minmax(0,1fr)]')}>
-                {!isFullView ? historyPanel : null}
+            <div className={cn('agent-test-panel grid h-full min-h-0 items-stretch bg-[var(--card-bg)]', isSplit ? 'surface-split-2 lg:grid-cols-[340px_minmax(0,1fr)]' : 'grid-cols-1')}>
+                {isSplit ? historyPanel : null}
                 <div className="h-full min-h-0 min-w-0">
                     <AssistantExperienceView
                         controller={controllerView}
@@ -515,7 +566,7 @@ export function AgentTestPanel({
                         outputSchema={agent?.output_schema}
                         headerActions={(
                             <>
-                                {onToggleFullView || controller.activeConversationId ? (
+                                {onToggleFullView || controller.openedConversationId ? (
                                     <Button
                                         variant="ghost"
                                         size="icon"
@@ -554,8 +605,8 @@ export function AgentTestPanel({
     }
 
     return (
-        <div className={cn('agent-test-panel grid h-full min-h-0 items-stretch bg-[var(--card-bg)]', isFullView ? 'grid-cols-1' : 'surface-split-2 lg:grid-cols-[340px_minmax(0,1fr)]')}>
-            {!isFullView ? historyPanel : null}
+        <div className={cn('agent-test-panel grid h-full min-h-0 items-stretch bg-[var(--card-bg)]', isSplit ? 'surface-split-2 lg:grid-cols-[340px_minmax(0,1fr)]' : 'grid-cols-1')}>
+            {isSplit ? historyPanel : null}
             <div className="flex min-h-0 min-w-0 flex-col bg-[var(--card-bg)]">
                 <div className="agent-test-run-header sticky top-0 z-10 flex h-14 shrink-0 items-center justify-between bg-[var(--card-bg)] px-3">
                     <div className="min-w-0">
@@ -564,7 +615,7 @@ export function AgentTestPanel({
                     </div>
 
                     <div className="flex items-center gap-2">
-                        {onToggleFullView || controller.activeConversationId ? (
+                        {onToggleFullView || controller.openedConversationId ? (
                             <Button
                                 variant="ghost"
                                 size="icon"
@@ -747,10 +798,10 @@ export function AgentTestPanel({
                                     </span>
                                     <Button
                                         onClick={handleRun}
-                                        disabled={isStartingRun || controller.isActiveConversationRunning || missingRequiredKeys.length > 0}
+                                        disabled={isStartingRun || controller.isOpenedConversationRunning || missingRequiredKeys.length > 0}
                                         className="agent-test-run-button"
                                     >
-                                        {isStartingRun || controller.isActiveConversationRunning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
+                                        {isStartingRun || controller.isOpenedConversationRunning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
                                         Start run
                                     </Button>
                                 </div>

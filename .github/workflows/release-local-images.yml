@@ -1,8 +1,10 @@
 name: Release Local Stack Images
 
-# Builds the four images the local-stack installer (lemma-stack) consumes,
-# pushes them to ghcr.io, and attaches a release manifest (lemma-local.json)
-# to the GitHub release. lemma-stack resolves:
+# Builds the backend, frontend, AgentBox manager compatibility image, and the
+# provider-neutral workspace/function images. It also assembles the native host
+# packs and private guest runtimes consumed by Lemma Desktop. Published runs
+# attach them to the GitHub release; branch-test runs retain them in Actions.
+# lemma-stack resolves:
 #   stable  -> releases/latest/download/lemma-local.json
 #   <X.Y.Z> -> releases/download/v<X.Y.Z>/lemma-local.json
 #
@@ -21,6 +23,11 @@ on:
         description: "Release version (e.g. 0.1.0). Uses tag v<version>."
         required: true
         type: string
+      publish:
+        description: "Publish/repair the GitHub Release. Disable for a branch test artifact."
+        required: true
+        default: true
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -42,6 +49,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+      - name: Verify branch-test Desktop version
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          requested = os.environ["VERSION"].removeprefix("v")
+          desktop = json.loads(Path("desktop/tauri.conf.json").read_text())["version"]
+          if requested != desktop:
+              raise SystemExit(
+                  f"branch-test runtime {requested} does not match Desktop {desktop}"
+              )
+          PY
       - name: Verify protected evidence
         uses: ./.github/actions/require-backend-protected-e2e
         with:
@@ -63,11 +88,14 @@ jobs:
             context: .
             dockerfile: lemma-frontend/Dockerfile
           - name: lemma-agentbox
-            context: agentbox
-            dockerfile: agentbox/Dockerfile
-          - name: lemma-agentbox-runtime
             context: .
-            dockerfile: agentbox/Dockerfile.runtime
+            dockerfile: agentbox/Dockerfile
+          - name: lemma-agentbox-workspace
+            context: .
+            dockerfile: agentbox/Dockerfile.workspace
+          - name: lemma-agentbox-function
+            context: .
+            dockerfile: agentbox/Dockerfile.function
         platform:
           - arch: amd64
             runner: ubuntu-latest
@@ -128,11 +156,14 @@ jobs:
           - lemma-backend
           - lemma-frontend
           - lemma-agentbox
-          - lemma-agentbox-runtime
+          - lemma-agentbox-workspace
+          - lemma-agentbox-function
     steps:
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -140,7 +171,13 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            image_tag="v${version}"
+          else
+            image_tag="test-${GITHUB_SHA:0:12}"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Download digests
         uses: actions/download-artifact@v8
@@ -161,10 +198,17 @@ jobs:
 
       - name: Create and push manifest list
         working-directory: /tmp/digests
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
+          tags=(
+            -t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ steps.version.outputs.image_tag }}
+          )
+          if [[ "${PUBLISH}" == "true" ]]; then
+            tags+=(-t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest)
+          fi
           docker buildx imagetools create \
-            -t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:v${{ steps.version.outputs.version }} \
-            -t ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:latest \
+            "${tags[@]}" \
             $(printf '${{ env.IMAGE_PREFIX }}/${{ matrix.image }}@sha256:%s ' *)
 
       - name: Record merged digest
@@ -173,10 +217,39 @@ jobs:
         working-directory: /tmp/digests
         run: |
           mkdir -p digests-out
-          d=$(docker buildx imagetools inspect \
-            "${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:v${{ steps.version.outputs.version }}" \
-            --format '{{json .Manifest.Digest}}' | tr -d '"')
-          echo "{\"name\": \"${{ matrix.image }}\", \"digest\": \"$d\"}" > "digests-out/${{ matrix.image }}.json"
+          IMAGE="${{ env.IMAGE_PREFIX }}/${{ matrix.image }}:${{ steps.version.outputs.image_tag }}" \
+          NAME="${{ matrix.image }}" \
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          ref = os.environ["IMAGE"]
+          manifest = json.loads(subprocess.check_output(
+              ["docker", "buildx", "imagetools", "inspect", ref, "--raw"],
+              text=True,
+          ))
+          platforms = {
+              f"{item['platform']['os']}/{item['platform']['architecture']}": item["digest"]
+              for item in manifest.get("manifests", [])
+              if item.get("platform", {}).get("os") and item.get("platform", {}).get("architecture")
+          }
+          required = {"linux/amd64", "linux/arm64"}
+          if not required.issubset(platforms):
+              raise SystemExit(f"{ref} is missing release platforms: {required - platforms.keys()}")
+          digest = subprocess.check_output(
+              [
+                  "docker", "buildx", "imagetools", "inspect", ref,
+                  "--format", "{{json .Manifest.Digest}}",
+              ],
+              text=True,
+          ).strip().strip('"')
+          entry = {"name": os.environ["NAME"], "digest": digest, "platforms": platforms}
+          Path(f"digests-out/{os.environ['NAME']}.json").write_text(
+              json.dumps(entry, indent=2) + "\n"
+          )
+          PY
 
       - name: Upload merged digest
         uses: actions/upload-artifact@v4
@@ -185,14 +258,136 @@ jobs:
           path: /tmp/digests/digests-out/${{ matrix.image }}.json
           retention-days: 1
 
-  manifest:
-    name: Publish release manifest
+  infra-digests:
+    name: Pin third-party infrastructure images
     runs-on: ubuntu-latest
-    needs: merge
+    needs: protected-e2e-gate
+    env:
+      POSTGRES_IMAGE: docker.io/pgvector/pgvector:0.8.3-pg16
+      REDIS_IMAGE: docker.io/redis/redis-stack-server:7.2.0-v19
+      SUPERTOKENS_IMAGE: docker.io/supertokens/supertokens-postgresql:11.4.5
     steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve immutable manifest digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          refs = {
+              "postgres": os.environ["POSTGRES_IMAGE"],
+              "redis": os.environ["REDIS_IMAGE"],
+              "supertokens": os.environ["SUPERTOKENS_IMAGE"],
+          }
+          pinned = {}
+          for name, ref in refs.items():
+              manifest = json.loads(subprocess.check_output(
+                  ["docker", "buildx", "imagetools", "inspect", ref, "--raw"],
+                  text=True,
+              ))
+              platforms = {
+                  f"{item['platform']['os']}/{item['platform']['architecture']}": item["digest"]
+                  for item in manifest.get("manifests", [])
+                  if item.get("platform", {}).get("os") and item.get("platform", {}).get("architecture")
+              }
+              required = {"linux/amd64", "linux/arm64"}
+              if not required.issubset(platforms):
+                  raise SystemExit(f"{ref} is missing release platforms: {required - platforms.keys()}")
+              digest = subprocess.check_output(
+                  [
+                      "docker", "buildx", "imagetools", "inspect", ref,
+                      "--format", "{{json .Manifest.Digest}}",
+                  ],
+                  text=True,
+              ).strip().strip('"')
+              if not digest.startswith("sha256:"):
+                  raise SystemExit(f"could not resolve digest for {ref}: {digest}")
+              pinned[name] = {"ref": ref, "digest": digest, "platforms": platforms}
+          Path("infra-digests.json").write_text(json.dumps(pinned, indent=2) + "\n")
+          PY
+
+      - name: Upload infrastructure digests
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-digests
+          path: infra-digests.json
+          if-no-files-found: error
+          retention-days: 1
+
+  guest-runtimes:
+    name: Build managed guest runtime (${{ matrix.target }})
+    needs: protected-e2e-gate
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-aarch64
+            runner: ubuntu-24.04-arm
+          - target: windows-x86_64
+            runner: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install ARM64 kernel unpacker
+        if: matrix.target == 'macos-aarch64'
+        run: sudo apt-get update && sudo apt-get install -y zstd
+
+      - name: Build guest control daemon
+        run: cargo build --manifest-path local-runtime/guestd/Cargo.toml --release
+
+      - name: Assemble private guest artifact
+        shell: bash
+        run: |
+          bash scripts/build_local_guest_runtime.sh \
+            --target "${{ matrix.target }}" \
+            --guestd local-runtime/guestd/target/release/lemma-guestd \
+            --output "guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip"
+
+      - name: Upload managed guest runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-runtime-${{ matrix.target }}
+          path: |
+            guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip
+            guest-runtime-out/lemma-guest-runtime-${{ matrix.target }}.zip.json
+          if-no-files-found: error
+          retention-days: 1
+
+  host-packs:
+    name: Build native host pack (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    needs: [merge, infra-digests]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
       - name: Resolve version
         id: version
         shell: bash
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
         run: |
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
@@ -200,7 +395,194 @@ jobs:
             version="${{ inputs.version }}"
           fi
           version="${version#v}"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            image_tag="v${version}"
+          else
+            image_tag="test-${GITHUB_SHA:0:12}"
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Import Windows host-pack signing certificate
+        if: >-
+          matrix.target == 'x86_64-pc-windows-msvc' &&
+          (github.event_name == 'push' || inputs.publish)
+        id: windows-signing
+        uses: ./.github/actions/setup-windows-signing
+        with:
+          certificate: ${{ secrets.WINDOWS_CERTIFICATE }}
+          certificate-password: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          timestamp-url: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+
+      - name: Download merged image digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: merged-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Download infrastructure digests
+        uses: actions/download-artifact@v8
+        with:
+          name: infra-digests
+          path: digests
+
+      - name: Generate pack release input
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ steps.version.outputs.image_tag }}
+          PREFIX: ${{ env.IMAGE_PREFIX }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          image_tag = os.environ["IMAGE_TAG"]
+          prefix = os.environ["PREFIX"]
+          platform = {
+              "aarch64-apple-darwin": "linux/arm64",
+              "x86_64-pc-windows-msvc": "linux/amd64",
+          }[os.environ["TARGET"]]
+          digests = {}
+          for path in Path("digests").glob("*.json"):
+              entry = json.loads(path.read_text())
+              if "name" in entry:
+                  digests[entry["name"]] = entry
+
+          def image(name):
+              return {
+                  "ref": f"{prefix}/{name}:{image_tag}",
+                  "digest": digests[name]["platforms"][platform],
+              }
+
+          infra = json.loads(Path("digests/infra-digests.json").read_text())
+          for entry in infra.values():
+              entry["digest"] = entry["platforms"][platform]
+              entry.pop("platforms", None)
+
+          release = {
+              "schema_version": 1,
+              "version": version,
+              "min_admin_version": "0.1.0",
+              "images": {
+                  "backend": image("lemma-backend"),
+                  "frontend": image("lemma-frontend"),
+                  "agentbox_workspace": image("lemma-agentbox-workspace"),
+                  "agentbox_function": image("lemma-agentbox-function"),
+              },
+              "infra": infra,
+          }
+          Path("host-release.json").write_text(json.dumps(release, indent=2) + "\n")
+          PY
+
+      - name: Build relocatable backend and frontend pack
+        shell: bash
+        run: |
+          mkdir -p host-pack-out
+          python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
+            --release-manifest host-release.json
+
+      - name: Sign downloadable Windows host runtime
+        if: >-
+          matrix.target == 'x86_64-pc-windows-msvc' &&
+          (github.event_name == 'push' || inputs.publish)
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $signTool = Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" `
+            -ErrorAction Stop |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) { throw "Windows SDK signtool.exe was not found" }
+          foreach ($path in @(
+            "host-pack-out/local-runtime/backend/python/python.exe",
+            "host-pack-out/local-runtime/frontend/node/node.exe"
+          )) {
+            if (-not (Test-Path $path)) { throw "Host runtime executable is missing: $path" }
+            & $signTool.FullName sign `
+              /sha1 $env:CERTIFICATE_THUMBPRINT `
+              /fd SHA256 `
+              /tr $env:WINDOWS_TIMESTAMP_URL `
+              /td SHA256 `
+              $path
+            if ($LASTEXITCODE -ne 0) { throw "Could not sign host runtime executable: $path" }
+            if ((Get-AuthenticodeSignature $path).Status -ne "Valid") {
+              throw "Host runtime signature verification failed: $path"
+            }
+          }
+
+      - name: Archive native host pack
+        shell: bash
+        run: |
+          python scripts/build_local_host_pack.py \
+            --output host-pack-out/local-runtime \
+            --release-manifest host-release.json \
+            --archive "host-pack-out/lemma-host-pack-${{ matrix.target }}.zip" \
+            --archive-existing
+
+      - name: Upload host pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: host-pack-${{ matrix.target }}
+          path: |
+            host-pack-out/lemma-host-pack-${{ matrix.target }}.zip
+            host-pack-out/lemma-host-pack-${{ matrix.target }}.zip.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove Windows host-pack signing certificate
+        if: always() && matrix.target == 'x86_64-pc-windows-msvc' && steps.windows-signing.outcome == 'success'
+        shell: pwsh
+        env:
+          CERTIFICATE_THUMBPRINT: ${{ steps.windows-signing.outputs.thumbprint }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:CERTIFICATE_THUMBPRINT)) {
+            Remove-Item `
+              "Cert:\CurrentUser\My\$env:CERTIFICATE_THUMBPRINT" `
+              -Force `
+              -ErrorAction SilentlyContinue
+          }
+
+  manifest:
+    name: Publish release manifest
+    runs-on: ubuntu-latest
+    needs: [merge, infra-digests, guest-runtimes, host-packs]
+    steps:
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          else
+            version="${{ inputs.version }}"
+          fi
+          version="${version#v}"
+          if [[ "${PUBLISH}" == "true" ]]; then
+            image_tag="v${version}"
+          else
+            image_tag="test-${GITHUB_SHA:0:12}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Download merged digests
         uses: actions/download-artifact@v8
@@ -209,11 +591,33 @@ jobs:
           path: digests
           merge-multiple: true
 
+      - name: Download native host packs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: host-pack-*
+          path: host-packs
+          merge-multiple: true
+
+      - name: Download infrastructure digests
+        uses: actions/download-artifact@v8
+        with:
+          name: infra-digests
+          path: digests
+
+      - name: Download managed guest runtimes
+        uses: actions/download-artifact@v8
+        with:
+          pattern: guest-runtime-*
+          path: guest-runtimes
+          merge-multiple: true
+
       - name: Generate lemma-local.json
         shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_TAG: ${{ steps.version.outputs.image_tag }}
           PREFIX: ${{ env.IMAGE_PREFIX }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           python3 - <<'PY'
           import json
@@ -222,16 +626,73 @@ jobs:
           from pathlib import Path
 
           version = os.environ["VERSION"]
+          image_tag = os.environ["IMAGE_TAG"]
           prefix = os.environ["PREFIX"]
+          repository = os.environ["REPOSITORY"]
           digests = {}
           for path in Path("digests").glob("*.json"):
               entry = json.loads(path.read_text())
-              digests[entry["name"]] = entry["digest"]
+              if "name" in entry:
+                  digests[entry["name"]] = entry["digest"]
 
           def image(name: str) -> dict:
-              return {"ref": f"{prefix}/{name}:v{version}", "digest": digests[name]}
+              return {"ref": f"{prefix}/{name}:{image_tag}", "digest": digests[name]}
+
+          host_packs = {}
+          for path in sorted(Path("host-packs").glob("lemma-host-pack-*.zip")):
+              target = path.stem.removeprefix("lemma-host-pack-")
+              platform, architecture = {
+                  "aarch64-apple-darwin": ("macos", "aarch64"),
+                  "x86_64-pc-windows-msvc": ("windows", "x86_64"),
+              }[target]
+              import hashlib
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
+              if metadata["sha256"] != digest or metadata["size"] != path.stat().st_size:
+                  raise SystemExit(f"{path.name} metadata mismatch")
+              host_packs[target] = {
+                  "url": (
+                      f"https://github.com/{repository}/releases/download/"
+                      f"v{version}/{path.name}"
+                  ),
+                  "sha256": digest,
+                  "size": path.stat().st_size,
+                  "expanded_size": metadata["expanded_size"],
+                  "format": "zip",
+                  "platform": platform,
+                  "architecture": architecture,
+                  "runtime_version": version,
+              }
+
+          guest_runtimes = {}
+          for path in sorted(Path("guest-runtimes").glob("lemma-guest-runtime-*.zip")):
+              target = path.stem.removeprefix("lemma-guest-runtime-")
+              platform, architecture = {
+                  "macos-aarch64": ("linux", "aarch64"),
+                  "windows-x86_64": ("linux", "x86_64"),
+              }[target]
+              import hashlib
+              digest = hashlib.sha256(path.read_bytes()).hexdigest()
+              metadata = json.loads(path.with_suffix(path.suffix + ".json").read_text())
+              if metadata["sha256"] != digest or metadata["size"] != path.stat().st_size:
+                  raise SystemExit(f"{path.name} metadata mismatch")
+              guest_runtimes[target] = {
+                  "url": (
+                      f"https://github.com/{repository}/releases/download/"
+                      f"v{version}/{path.name}"
+                  ),
+                  "sha256": digest,
+                  "size": path.stat().st_size,
+                  "expanded_size": metadata["expanded_size"],
+                  "format": "zip",
+                  "platform": platform,
+                  "architecture": architecture,
+                  "runtime_version": version,
+              }
 
           manifest = {
+              # Additive schema-1 field: older lemma-stack clients ignore
+              # host_packs and continue to consume the same release safely.
               "schema_version": 1,
               "version": version,
               "released_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -239,26 +700,247 @@ jobs:
               "images": {
                   "backend": image("lemma-backend"),
                   "frontend": image("lemma-frontend"),
+                  # Legacy compatibility only; current lemma-stack does not pull it.
                   "agentbox": image("lemma-agentbox"),
-                  "agentbox_runtime": image("lemma-agentbox-runtime"),
+                  "agentbox_workspace": image("lemma-agentbox-workspace"),
+                  "agentbox_function": image("lemma-agentbox-function"),
               },
+              # Keep schema-1 compatibility for older lemma-stack clients:
+              # public infra entries remain strings, now pinned to the
+              # multi-platform index digest. Native host packs separately use
+              # the exact per-platform child digest resolved above.
               "infra": {
-                  "postgres": "docker.io/pgvector/pgvector:0.8.3-pg16",
-                  "redis": "docker.io/redis/redis-stack:7.2.0-v19",
-                  "supertokens": "docker.io/supertokens/supertokens-postgresql:11.4.5",
-                  "kreuzberg": "ghcr.io/kreuzberg-dev/kreuzberg:4.9.9",
+                  name: f"{entry['ref']}@{entry['digest']}"
+                  for name, entry in json.loads(
+                      Path("digests/infra-digests.json").read_text()
+                  ).items()
               },
+              "host_packs": host_packs,
+              "guest_runtimes": guest_runtimes,
           }
           Path("lemma-local.json").write_text(json.dumps(manifest, indent=2) + "\n")
+          for host_target, guest_target in (
+              ("aarch64-apple-darwin", "macos-aarch64"),
+              ("x86_64-pc-windows-msvc", "windows-x86_64"),
+          ):
+              if host_target not in host_packs or guest_target not in guest_runtimes:
+                  continue
+              compressed = host_packs[host_target]["size"] + guest_runtimes[guest_target]["size"]
+              expanded = (
+                  host_packs[host_target]["expanded_size"]
+                  + guest_runtimes[guest_target]["expanded_size"]
+              )
+              if compressed > 750 * 1024 * 1024:
+                  raise SystemExit(f"{host_target} compressed runtime exceeds 750 MiB")
+              if expanded > 2250 * 1024 * 1024:
+                  raise SystemExit(f"{host_target} expanded runtime exceeds 2.25 GiB")
+              print(json.dumps({
+                  "target": host_target,
+                  "compressed_bytes": compressed,
+                  "expanded_bytes": expanded,
+                  "host_breakdown": json.loads(
+                      next(Path("host-packs").glob(f"lemma-host-pack-{host_target}.zip.json")).read_text()
+                  ).get("breakdown", {}),
+                  "guest_breakdown": json.loads(
+                      next(Path("guest-runtimes").glob(f"lemma-guest-runtime-{guest_target}.zip.json")).read_text()
+                  ).get("breakdown", {}),
+                  "oci_images": manifest["infra"] | {
+                      name: manifest["images"][name]
+                      for name in ("agentbox_workspace", "agentbox_function")
+                  },
+              }, indent=2))
           print(json.dumps(manifest, indent=2))
           PY
 
       - name: Attach manifest to release
+        if: github.event_name == 'push' || inputs.publish
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          files: lemma-local.json
+          files: |
+            lemma-local.json
+            host-packs/lemma-host-pack-*.zip
+            guest-runtimes/lemma-guest-runtime-*.zip
           # Only generate release notes on a real tag push; workflow_dispatch
           # re-runs are used to repair an existing release (backfill the
           # lemma-local.json asset) and must not overwrite the release body.
           generate_release_notes: ${{ github.event_name == 'push' }}
+
+      - name: Upload branch-test runtime bundle
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-local-test-${{ github.sha }}
+          path: |
+            lemma-local.json
+            host-packs/lemma-host-pack-*.zip
+            guest-runtimes/lemma-guest-runtime-*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload branch-test manifest for Desktop packaging
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-local-test-manifest-${{ github.sha }}
+          path: lemma-local.json
+          if-no-files-found: error
+          retention-days: 1
+
+  macos-test-desktop:
+    name: Package self-contained macOS test app
+    if: github.event_name == 'workflow_dispatch' && !inputs.publish
+    runs-on: macos-14
+    needs: manifest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/target
+          key: desktop-test-cargo-${{ runner.os }}-${{ hashFiles('desktop/Cargo.lock') }}
+          restore-keys: desktop-test-cargo-${{ runner.os }}-
+
+      - name: Download macOS native host pack
+        uses: actions/download-artifact@v8
+        with:
+          name: host-pack-aarch64-apple-darwin
+          path: desktop/runtime/download
+
+      - name: Download macOS managed guest runtime
+        uses: actions/download-artifact@v8
+        with:
+          name: guest-runtime-macos-aarch64
+          path: desktop/runtime/download
+
+      - name: Download exact branch-test manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: lemma-local-test-manifest-${{ github.sha }}
+          path: desktop/runtime/download
+
+      - name: Verify and stage compressed PR test runtime
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          TARGET: aarch64-apple-darwin
+          GUEST_TARGET: macos-aarch64
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("desktop/runtime/download")
+          manifest = json.loads((root / "lemma-local.json").read_text())
+          version = os.environ["VERSION"].removeprefix("v")
+          if manifest["version"] != version:
+              raise SystemExit("branch-test manifest version does not match Desktop")
+          for group, prefix, target in (
+              ("host_packs", "lemma-host-pack", os.environ["TARGET"]),
+              ("guest_runtimes", "lemma-guest-runtime", os.environ["GUEST_TARGET"]),
+          ):
+              archive = root / f"{prefix}-{target}.zip"
+              expected = manifest[group][target]
+              actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+              if archive.stat().st_size != expected["size"] or actual != expected["sha256"]:
+                  raise SystemExit(f"{archive.name} digest/size mismatch")
+          host = manifest["host_packs"][os.environ["TARGET"]]
+          guest = manifest["guest_runtimes"][os.environ["GUEST_TARGET"]]
+          manifest["host_packs"] = {os.environ["TARGET"]: {
+              **host, "url": None, "resource": "host-runtime.zip"
+          }}
+          manifest["guest_runtimes"] = {os.environ["GUEST_TARGET"]: {
+              **guest, "url": None, "resource": "guest-runtime.zip"
+          }}
+          Path("desktop/runtime/lemma-local.json").write_text(
+              json.dumps(manifest, indent=2) + "\n"
+          )
+          PY
+
+          mkdir -p desktop/runtime/bundled
+          cp "desktop/runtime/download/lemma-host-pack-${TARGET}.zip" \
+            desktop/runtime/bundled/host-runtime.zip
+          cp "desktop/runtime/download/lemma-guest-runtime-${GUEST_TARGET}.zip" \
+            desktop/runtime/bundled/guest-runtime.zip
+          test ! -e desktop/runtime/local-runtime
+          test ! -e desktop/runtime/managed-runtime
+
+      - name: Bake splash concepts
+        run: node desktop/scripts/extract-concepts.mjs
+
+      - name: Verify baked splash concepts are committed
+        run: git diff --exit-code desktop/ui/concepts.gen.json
+
+      - name: Build native local sidecars
+        run: desktop/scripts/build-sidecar.sh
+
+      - name: Run Desktop tests
+        working-directory: desktop
+        run: cargo test --locked
+
+      - name: Sign virtualization helper with test entitlement
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          codesign --force --options runtime \
+            --entitlements desktop/entitlements.plist \
+            --sign - \
+            "${helper}"
+          codesign --verify --strict --verbose=2 "${helper}"
+          codesign -d --entitlements :- "${helper}" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+
+      - name: Build compressed macOS PR test DMG
+        working-directory: desktop
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          set -euo pipefail
+          npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+
+      - name: Verify compressed PR test application
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="desktop/target/release/bundle/macos/Lemma.app"
+          test -x "${app}/Contents/MacOS/lemma-locald"
+          test -x "${app}/Contents/MacOS/lemma-runtime"
+          test -x "${app}/Contents/Resources/lemma-vz"
+          test -f "${app}/Contents/Resources/lemma-local.json"
+          test -f "${app}/Contents/Resources/host-runtime.zip"
+          test -f "${app}/Contents/Resources/guest-runtime.zip"
+          test ! -e "${app}/Contents/Resources/local-runtime"
+          test ! -e "${app}/Contents/Resources/managed-runtime"
+          app_bytes="$(du -sk "${app}" | awk '{print $1 * 1024}')"
+          test "${app_bytes}" -le "$((850 * 1024 * 1024))"
+          codesign --verify --deep --strict --verbose=2 "${app}"
+          codesign -d --entitlements :- \
+            "${app}/Contents/Resources/lemma-vz" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+          test "$(jq -r .version "${app}/Contents/Resources/lemma-local.json")" = \
+            "$(jq -r .version desktop/tauri.conf.json)"
+
+      - name: Upload compressed macOS PR test DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemma-desktop-macos-pr-test-${{ github.sha }}
+          path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
+          if-no-files-found: error
+          retention-days: 14

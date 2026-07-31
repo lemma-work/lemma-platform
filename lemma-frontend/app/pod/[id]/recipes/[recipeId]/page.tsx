@@ -2,18 +2,20 @@
 
 import { use, type ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Check, ChevronDown, ExternalLink, PlayCircle, Sparkles } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ExternalLink, PlayCircle, Sparkles } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { RecipeReadme } from '@/components/recipes/recipe-readme';
 import { renderRecipeIcon } from '@/components/recipes/recipe-icon';
-import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { StarterPreview } from '@/components/recipes/starter-preview';
+import { ResourceHeader, ResourceHeroTitle, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { Button } from '@/components/ui/button';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import {
-    RECIPE_BUILDS_LABEL,
     RECIPE_CATEGORIES,
+    RECIPE_OUTPUT_LABEL,
+    getPrimaryThemeForRecipe,
     getRecipeAccent,
     getRecipeById,
     getRecipeHighlights,
@@ -38,17 +40,16 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
                 <RecipeDetail podId={podId} recipe={recipe} />
             ) : (
                 <ResourceIndexShell>
-                    <ResourceIndexHeader
-                        title="Recipe not found"
-                        productIconTone="apps"
+                    <ResourceHeader
+                        title="Starter not found"
                         backHref={`/pod/${podId}/recipes`}
-                        backLabel="Recipes"
+                        backLabel="Starters"
                     />
                     <div className="surface-panel p-6">
                         <Button asChild variant="outline">
                             <Link href={`/pod/${podId}/recipes`}>
                                 <ArrowLeft className="mr-2 h-4 w-4" />
-                                Back to recipes
+                                Back to starters
                             </Link>
                         </Button>
                     </div>
@@ -70,6 +71,10 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
     const accent = getRecipeAccent(recipe);
     const highlights = getRecipeHighlights(recipe);
     const categoryLabel = RECIPE_CATEGORIES.find((category) => category.id === recipe.category)?.label;
+    const theme = getPrimaryThemeForRecipe(recipe);
+    const backHref = theme
+        ? `/pod/${podId}/recipes?theme=${encodeURIComponent(theme.id)}`
+        : `/pod/${podId}/recipes`;
 
     const helper = isPrompt
         ? 'Opens a conversation where the assistant builds this with you. You stay in control of every step.'
@@ -77,11 +82,11 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title={recipe.name}
-                productIconTone="apps"
-                backHref={`/pod/${podId}/recipes`}
-                backLabel="Recipes"
+                backHref={backHref}
+                backLabel={theme?.name || 'Starters'}
+                titleOwner="page"
                 actions={recipe.source.kind === 'repo' ? (
                     <a
                         href={recipe.source.github}
@@ -97,7 +102,7 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
 
             <div className="space-y-5">
                 <section className="recipe-hero rounded-xl p-5 sm:p-6" data-accent={accent}>
-                    <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
                         <div className="min-w-0 flex-1">
                             <div className="flex items-start gap-3.5">
                                 <span className="recipe-icon-tile h-12 w-12 shrink-0 rounded-xl" data-accent={accent}>
@@ -105,25 +110,27 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
                                 </span>
                                 <div className="min-w-0">
                                     <p className="type-eyebrow-mono text-[var(--text-tertiary)]">
-                                        {isPrompt ? 'Prompt recipe' : 'Kit recipe'} · {RECIPE_BUILDS_LABEL[recipe.builds]}
+                                        {categoryLabel || (isPrompt ? 'Starter' : 'Published kit')}
                                     </p>
-                                    <h1 className="mt-1 text-2xl font-semibold tracking-normal text-[var(--text-primary)]">{recipe.name}</h1>
+                                    <ResourceHeroTitle className="mt-1 text-2xl font-semibold tracking-normal text-[var(--text-primary)]">
+                                        {recipe.name}
+                                    </ResourceHeroTitle>
                                 </div>
                             </div>
-                            <p className="mt-3.5 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{recipe.blurb}</p>
+                            <p className="mt-3.5 max-w-2xl text-base font-medium leading-6 text-[var(--text-primary)]">{recipe.kicker}</p>
+                            <p className="mt-1.5 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">{recipe.blurb}</p>
                             <div className="mt-4 flex flex-wrap gap-2">
-                                {categoryLabel ? <MetaChip>{categoryLabel}</MetaChip> : null}
-                                <MetaChip>{RECIPE_BUILDS_LABEL[recipe.builds]}</MetaChip>
-                                {recipe.featured ? <MetaChip>Fast to value</MetaChip> : null}
+                                {recipe.outputs.map((output) => <MetaChip key={output}>{RECIPE_OUTPUT_LABEL[output]}</MetaChip>)}
                             </div>
                         </div>
 
-                        <div className="flex shrink-0 flex-col items-start gap-2 lg:items-end">
+                        <div className="flex shrink-0 flex-col gap-3">
+                            <StarterPreview recipe={recipe} compact />
                             <Button onClick={() => launchRecipe(recipe)} disabled={!canBuild} size="lg">
                                 {isPrompt ? <Sparkles className="mr-2 h-4 w-4" /> : <PlayCircle className="mr-2 h-4 w-4" />}
                                 Add to {podName}
                             </Button>
-                            <p className="max-w-[15rem] text-xs leading-5 text-[var(--text-tertiary)] lg:text-right">
+                            <p className="text-xs leading-5 text-[var(--text-tertiary)]">
                                 {canBuild ? helper : 'You don’t have permission to build in this pod.'}
                             </p>
                         </div>
@@ -133,7 +140,7 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
                 <section className="surface-panel p-5">
                     <p className="type-eyebrow-mono text-[var(--text-tertiary)]">What you’ll get</p>
                     <h2 className="mt-1 text-lg font-semibold text-[var(--text-primary)]">
-                        {isPrompt ? 'A working first version, built with you' : 'A full setup, installed with you'}
+                        {isPrompt ? 'A coherent first version, built inside this pod' : 'A full setup, installed with you'}
                     </h2>
                     <ul className="mt-4 grid gap-2.5 sm:grid-cols-3">
                         {highlights.map((point) => (

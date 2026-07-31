@@ -40,7 +40,7 @@ async def listen_internal(
     except FileNotFoundError:
         return ListenResponse(success=False, error=f"File not found: {path}")
     except Exception as exc:
-        logger.warning("speech.listen read failed path=%s error=%s", path, exc)
+        logger.debug('agent.speech.speech_listen_read_path_s.diagnostic')
         return ListenResponse(success=False, error=f"Could not read file: {exc}")
 
     if not content:
@@ -59,7 +59,7 @@ async def listen_internal(
             language=request.language,
         )
     except Exception as exc:
-        logger.warning("speech.listen transcribe failed path=%s error=%s", path, exc)
+        logger.debug('agent.speech.speech_listen_transcribe_path_s.diagnostic')
         return ListenResponse(success=False, error=f"Transcription failed: {exc}")
 
     return ListenResponse(
@@ -116,11 +116,9 @@ async def _deliver_voice_note(deps: BaseAgentContext, path: str) -> bool:
     try:
         from app.composition.agent_surface_runtime import deliver_voice_note
 
-        return await deliver_voice_note(
-            conversation_id=conversation_id, file_path=path
-        )
-    except Exception as exc:
-        logger.warning("speech.say surface delivery failed error=%s", exc)
+        return await deliver_voice_note(conversation_id=conversation_id, file_path=path)
+    except Exception:
+        logger.debug('agent.speech.speech_say_surface_delivery_s.diagnostic')
         return False
 
 
@@ -137,7 +135,7 @@ async def say_internal(deps: BaseAgentContext, request: SayRequest) -> SayRespon
             text, voice=request.voice, output_format=output_format
         )
     except Exception as exc:
-        logger.warning("speech.say synthesize failed error=%s", exc)
+        logger.debug('agent.speech.speech_say_synthesize_s.diagnostic')
         return SayResponse(success=False, error=f"Speech synthesis failed: {exc}")
 
     if not audio_bytes:
@@ -154,7 +152,7 @@ async def say_internal(deps: BaseAgentContext, request: SayRequest) -> SayRespon
                 search_enabled=False,
             )
     except Exception as exc:
-        logger.warning("speech.say persist failed error=%s", exc)
+        logger.debug('agent.speech.speech_say_persist_s.diagnostic')
         return SayResponse(success=False, error=f"Could not save audio: {exc}")
 
     delivered = await _deliver_voice_note(deps, entity.path)

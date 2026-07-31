@@ -91,7 +91,6 @@ async def handle_function_run_event(
             parsed = FunctionRunFailedEvent.model_validate(event)
             status = "FAILED"
             output = {"error": parsed.error}
-        fs_logger.info("Workflow: Received function run %s for %s", status, parsed.run_id)
         await job_queue.enqueue(
             "resume_workflow_run_for_function",
             function_run_id=str(parsed.run_id),
@@ -123,10 +122,6 @@ async def handle_agent_run_event(
 
     async def process() -> None:
         parsed = AgentRunCompletedEvent.model_validate(event)
-        fs_logger.info(
-            "Workflow: Received AgentRunCompleted for conversation %s",
-            parsed.conversation_id,
-        )
         async with uow_factory() as uow:
             waiting = await SqlAlchemyWorkflowRunWaitRepository(
                 uow
@@ -134,9 +129,9 @@ async def handle_agent_run_event(
                 WorkflowRunWaitType.AGENT, str(parsed.conversation_id)
             )
         if waiting is None:
-            fs_logger.debug(
-                "Workflow: Ignoring AgentRunCompleted for non-workflow conversation %s",
-                parsed.conversation_id,
+            logger.debug(
+                "workflow.handlers.ignoring_agentruncompleted_non_workflow_conversation.observed",
+                conversation_id=parsed.conversation_id,
             )
             return
 
@@ -157,8 +152,9 @@ async def resume_workflow_run_for_function(
 ):
     """Resume a workflow waiting for a function run."""
     worker_ctx: AppWorkerContext = streaq_worker.context
-    logger.info(
-        f"Job: Resuming workflow run waiting for function run {function_run_id}"
+    logger.debug(
+        "workflow.handlers.job_resuming_workflow_run_waiting.observed",
+        function_run_id=function_run_id,
     )
 
     async with worker_ctx.uow() as uow:
@@ -179,8 +175,8 @@ async def resume_workflow_run_for_agent(
     worker_ctx: AppWorkerContext = streaq_worker.context
 
     _ = attempt
-    logger.info(
-        "Job: Resuming workflow run waiting for agent conversation",
+    logger.debug(
+        "workflow.handlers.job_resuming_workflow_run_waiting.observed",
         agent_conversation_id=agent_conversation_id,
     )
 
@@ -239,8 +235,6 @@ async def on_schedule_fired(
     source_occurred_at = event.scheduled_at or event.occurred_at
     schedule_event_id = event.source_event_id
 
-    fs_logger.info(f"Workflow: Received ScheduleFired for {schedule_id}")
-
     # Dedup redelivered schedule fires: streaq drops a duplicate enqueue while a
     # task with the same _job_id is still queued/running (its lock releases on
     # completion), which covers the common at-least-once redelivery window between
@@ -282,7 +276,6 @@ async def check_and_start_flows_for_schedule(
 ):
     """Check schedules and start or wake workflow runs."""
     worker_ctx: AppWorkerContext = streaq_worker.context
-    logger.info(f"Job: Checking flows for schedule {schedule_id}")
 
     async with worker_ctx.uow() as uow:
         service = ScheduleStartService(WorkflowEngine(uow))

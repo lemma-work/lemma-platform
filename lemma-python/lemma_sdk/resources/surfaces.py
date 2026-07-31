@@ -13,6 +13,8 @@ from ..openapi_client.api.agent_surfaces import (
     agent_surface_send,
     agent_surface_setup,
     agent_surface_setup_guide,
+    agent_surface_telegram_managed_get,
+    agent_surface_telegram_managed_start,
     agent_surface_update,
 )
 from ..openapi_client.api.agent_surfaces_me import (
@@ -32,6 +34,12 @@ from ..openapi_client.models.surface_send_request import SurfaceSendRequest
 from ..openapi_client.models.surface_send_response import SurfaceSendResponse
 from ..openapi_client.models.surface_setup_response import SurfaceSetupResponse
 from ..openapi_client.models.surface_update_request import SurfaceUpdateRequest
+from ..openapi_client.models.telegram_managed_bot_setup_request import (
+    TelegramManagedBotSetupRequest,
+)
+from ..openapi_client.models.telegram_managed_bot_setup_response import (
+    TelegramManagedBotSetupResponse,
+)
 from ..openapi_client.models.user_surfaces_response import UserSurfacesResponse
 from .base import BoundResource, Resource
 
@@ -111,6 +119,27 @@ class PodSurfaces(BoundResource):
     def setup_guide(self, platform: str) -> SurfacePlatformSetupGuide:
         """Pre-creation platform checklist — works before any surface exists."""
         return self._call(agent_surface_setup_guide, self._pod_uuid(), platform)
+
+    def start_telegram_bot_setup(
+        self,
+        request: TelegramManagedBotSetupRequest | dict,
+    ) -> TelegramManagedBotSetupResponse:
+        return self._call(
+            agent_surface_telegram_managed_start,
+            self._pod_uuid(),
+            body=request,
+            body_model=TelegramManagedBotSetupRequest,
+        )
+
+    def get_telegram_bot_setup(
+        self,
+        setup_id: str,
+    ) -> TelegramManagedBotSetupResponse:
+        return self._call(
+            agent_surface_telegram_managed_get,
+            self._pod_uuid(),
+            setup_id,
+        )
 
     def channels(self, name: str) -> AvailableSurfaceChannelsResponse:
         return self._call(agent_surface_channels, self._pod_uuid(), name)

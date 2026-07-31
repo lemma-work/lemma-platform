@@ -15,7 +15,6 @@ interface PodSettingsStat {
 interface PodSettingsShellProps {
     podId: string;
     title: string;
-    description: string;
     action?: ReactNode;
     stats?: PodSettingsStat[];
     children: ReactNode;
@@ -24,7 +23,6 @@ interface PodSettingsShellProps {
 export function PodSettingsShell({
     podId,
     title,
-    description,
     action,
     stats = [],
     children,
@@ -36,8 +34,6 @@ export function PodSettingsShell({
                     podId={podId}
                     showBack={false}
                     title={title}
-                    description={description}
-                    productIconTone="settings"
                     meta={stats.length > 0 ? <PodHeaderMetrics items={stats.map((stat) => ({ label: stat.label, value: stat.value }))} /> : undefined}
                     actions={action}
                     switcher={<PodSettingsNav podId={podId} />}

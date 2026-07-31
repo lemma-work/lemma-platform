@@ -7,6 +7,7 @@ import {
   getPendingDesktopAuth,
   isLemmaDesktop,
   readDesktopRequestIdFromSearch,
+  shouldUseDesktopBrowserHandoff,
   storePendingDesktopAuth,
 } from "./desktop";
 
@@ -27,6 +28,14 @@ describe("desktop auth helpers", () => {
     expect(isLemmaDesktop()).toBe(false);
     window.__LEMMA_DESKTOP__ = { version: "0.2.1", mode: "local" };
     expect(isLemmaDesktop()).toBe(true);
+  });
+
+  it("uses the browser handoff only for hosted desktop accounts", () => {
+    expect(shouldUseDesktopBrowserHandoff()).toBe(false);
+    window.__LEMMA_DESKTOP__ = { version: "0.2.1", mode: "local" };
+    expect(shouldUseDesktopBrowserHandoff()).toBe(false);
+    window.__LEMMA_DESKTOP__ = { version: "0.2.1", mode: "hosted" };
+    expect(shouldUseDesktopBrowserHandoff()).toBe(true);
   });
 
   it("accepts only bounded URL-safe request ids", () => {

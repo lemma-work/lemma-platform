@@ -8,20 +8,11 @@ from ..io import emit, list_items
 from ..payload import read_json
 from ..state import fail, run_with_client, state_from_ctx
 
-app = typer.Typer(help="Agent runtime profiles and daemon harnesses.")
+app = typer.Typer(help="Agent runtime profiles.")
 profiles_app = typer.Typer(help="Organization runtime profile commands.")
 app.add_typer(profiles_app, name="profiles")
 
-PROFILE_SOURCES = ("USER_DAEMON", "OPENAI_COMPATIBLE", "ANTHROPIC_COMPATIBLE")
-
-
-@app.command("harnesses")
-def list_harnesses(ctx: typer.Context) -> None:
-    """List daemon-backed harnesses available to the current user."""
-    state = state_from_ctx(ctx)
-    result = run_with_client(ctx, lambda client, _s: client.runtime.harnesses())
-    if result is not None:
-        emit(state, result)
+PROFILE_SOURCES = ("AGENT_HOST", "OPENAI_COMPATIBLE", "ANTHROPIC_COMPATIBLE")
 
 
 @profiles_app.command("list")
@@ -70,16 +61,16 @@ def get_profile(
 def create_profile(
     ctx: typer.Context,
     source: str = typer.Argument(
-        ..., help="USER_DAEMON, OPENAI_COMPATIBLE, or ANTHROPIC_COMPATIBLE."
+        ..., help="AGENT_HOST, OPENAI_COMPATIBLE, or ANTHROPIC_COMPATIBLE."
     ),
     name: str | None = typer.Option(None, "--name", help="Profile display name."),
-    daemon_id: str | None = typer.Option(
-        None, "--daemon-id", help="Daemon UUID (USER_DAEMON only)."
-    ),
-    harness_kind: str | None = typer.Option(
+    harness_id: str | None = typer.Option(
         None,
-        "--harness",
-        help="CODEX, CLAUDE_CODE, or OPENCODE (USER_DAEMON only).",
+        "--harness-id",
+        help=(
+            "Agent Host harness UUID (AGENT_HOST only). "
+            "List them with `lemma agent-host harnesses`."
+        ),
     ),
     base_url: str | None = typer.Option(
         None, "--base-url", help="Provider base URL (OPENAI_COMPATIBLE)."
@@ -103,8 +94,7 @@ def create_profile(
     payload["source"] = (payload.get("source") or source).upper()
     for key, value in (
         ("name", name),
-        ("daemon_id", daemon_id),
-        ("harness_kind", harness_kind.upper() if harness_kind else None),
+        ("harness_id", harness_id),
         ("base_url", base_url),
         ("api_key", api_key),
         ("default_model_name", default_model_name),

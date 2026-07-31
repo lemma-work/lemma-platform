@@ -41,9 +41,9 @@ async def on_schedule_deactivated(
         if parsed.schedule_type != ScheduleType.TIME:
             return
         await SchedulerAPIClient().remove_job(parsed.schedule_id)
-        fs_logger.info(
-            "Removed TIME job for breaker-disabled schedule %s",
-            parsed.schedule_id,
+        fs_logger.debug(
+            "schedule.time_job.removed",
+            schedule_id=str(parsed.schedule_id),
         )
 
     await inbox.process("schedule.runtime-lifecycle", event, apply_runtime_state)

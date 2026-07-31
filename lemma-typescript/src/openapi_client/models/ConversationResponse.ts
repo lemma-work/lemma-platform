@@ -14,6 +14,7 @@ export type ConversationResponse = {
     instructions?: (string | null);
     last_run_error?: (string | null);
     last_run_finished_at?: (string | null);
+    last_run_retryable?: boolean;
     last_run_status?: (AgentRunStatus | null);
     metadata?: (Record<string, any> | null);
     organization_id?: (string | null);

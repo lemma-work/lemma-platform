@@ -104,11 +104,10 @@ class ConversationTitleService:
                         user_text=user_text,
                         reply_text=reply_text,
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "LLM title generation failed for %s, using first message: %s",
-                        conversation_id,
-                        exc,
+                except Exception:
+                    logger.debug(
+                        'agent.conversation_title_service.llm_title_generation_s_using.diagnostic',
+                        conversation_id=conversation_id,
                     )
             if not title:
                 title = _title_from_user_message(user_text)
@@ -131,11 +130,10 @@ class ConversationTitleService:
                 title_updated_payload(conversation_id, title),
             )
             return title
-        except Exception as exc:  # never break the calling worker
-            logger.warning(
-                "Conversation title generation failed for %s: %s",
-                conversation_id,
-                exc,
+        except Exception:  # never break the calling worker
+            logger.debug(
+                'agent.conversation_title_service.conversation_title_generation_s_s.diagnostic',
+                conversation_id=conversation_id,
             )
             return None
 

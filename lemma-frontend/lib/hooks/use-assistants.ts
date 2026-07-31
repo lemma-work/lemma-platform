@@ -14,6 +14,7 @@ import { getLemmaClient } from '../sdk/lemma-client';
 
 export interface ConversationScope {
     podId?: string | null;
+    agentName?: string | null;
     assistantName?: string | null;
     assistantId?: string | null; // deprecated alias
     organizationId?: string | null;
@@ -46,7 +47,7 @@ function normalizeAgentAssistant(raw: Record<string, unknown>): Assistant {
         tool_sets: toolsets,
         toolsets,
         accessible_tables: (raw.accessible_tables as Assistant['accessible_tables'] | undefined) || [],
-        accessible_folders: (raw.accessible_folders as string[] | undefined) || [],
+        accessible_folders: (raw.accessible_folders as Assistant['accessible_folders'] | undefined) || [],
         accessible_connectors: (raw.accessible_connectors as Assistant['accessible_connectors'] | undefined) || [],
         agent_names: (raw.agent_names as string[] | undefined) || [],
         function_names: (raw.function_names as string[] | undefined) || [],
@@ -155,10 +156,10 @@ export function useScopedConversations(scope: ConversationScope, params?: { limi
     return useQuery({
         queryKey: ['conversations', scope, params],
         queryFn: async () => {
-            const assistantName = scope.assistantName ?? scope.assistantId ?? undefined;
+            const agentName = scope.agentName ?? scope.assistantName ?? scope.assistantId ?? undefined;
             const response = await getLemmaClient(scope.podId || undefined).conversations.list({
                 pod_id: scope.podId ?? undefined,
-                agent_name: assistantName,
+                agent_name: agentName,
                 limit: params?.limit,
                 page_token: params?.cursor,
             });

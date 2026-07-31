@@ -49,7 +49,7 @@ def is_valid_fernet_key(secret: bytes) -> bool:
     try:
         Fernet(secret)
         return True
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return False
 
 
@@ -140,8 +140,10 @@ def legacy_candidate_secrets() -> list[bytes]:
         try:
             for material in parse_keyset(raw_keyset).keys.values():
                 add(material.secret)
-        except RuntimeError as exc:
-            logger.warning("Ignoring unparsable SECRET_ENCRYPTION_KEYSET for legacy decrypt: %s", exc)
+        except RuntimeError:
+            logger.debug(
+                'crypto.keys.ignoring_unparsable_secret_encryption_keyset.diagnostic'
+            )
 
     if settings.secret_encryption_key:
         add(settings.secret_encryption_key.encode("utf-8"))

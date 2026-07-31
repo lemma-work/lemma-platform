@@ -8,7 +8,7 @@
     <true/>
     <key>NSExceptionDomains</key>
     <dict>
-      <key>127-0-0-1.sslip.io</key>
+      <key>lemma.localhost</key>
       <dict>
         <key>NSExceptionAllowsInsecureHTTPLoads</key>
         <true/>

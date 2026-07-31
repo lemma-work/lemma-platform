@@ -11,8 +11,8 @@ import {
     Plus,
     Share2,
     Waypoints,
-    type LucideIcon,
-} from 'lucide-react';
+    type LemmaIcon,
+} from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { LemmaMark } from '@/components/brand/logo';
@@ -21,7 +21,7 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { EmptyState } from '@/components/shared/empty-state';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceIndexHeader, ResourceIndexShell, ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell, ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
@@ -124,9 +124,8 @@ export default function AgentsPage({
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title="Agents"
-                productIconTone="agents"
                 meta={<ConceptHint concept="agent" />}
                 actions={(
                     canCreateAgent ? <Link href={`/pod/${podId}/agents/new`}>
@@ -141,13 +140,25 @@ export default function AgentsPage({
             <SectionPrimer concept="agent" className="mb-4" />
 
             {isLoading ? (
-                <div className="space-y-4">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                        {[1, 2, 3, 4].map((item) => (
-                            <div key={`agent-metric-skeleton-${item}`} className="h-28 animate-pulse rounded-lg bg-[var(--surface-2)]" />
+                <div className="space-y-3" role="status" aria-label="Loading agents">
+                    <div className="flex items-center gap-2 py-1">
+                        {[1, 2, 3].map((item) => (
+                            <div key={`agent-metric-skeleton-${item}`} className="lemma-skeleton h-7 w-24 rounded-md" />
                         ))}
                     </div>
-                    <div className="h-80 animate-pulse rounded-lg bg-[var(--surface-2)]" />
+                    <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {[1, 2, 3].map((item) => (
+                            <div key={`resource-card-skeleton-${item}`} className="surface-panel h-48 space-y-4 p-4">
+                                <div className="lemma-skeleton h-11 w-11 rounded-lg" />
+                                <div className="space-y-2">
+                                    <div className="lemma-skeleton h-4 w-32 rounded-md" />
+                                    <div className="lemma-skeleton h-3 w-full rounded-full" />
+                                    <div className="lemma-skeleton h-3 w-4/5 rounded-full" />
+                                </div>
+                                <div className="lemma-skeleton h-3 w-24 rounded-full" />
+                            </div>
+                        ))}
+                    </div>
                 </div>
             ) : agents.length === 0 ? (
                 <EmptyState
@@ -264,7 +275,7 @@ function AgentMonogram({ name }: { name: string }) {
     );
 }
 
-function AgentStat({ icon: Icon, value, label }: { icon: LucideIcon; value: number; label: string }) {
+function AgentStat({ icon: Icon, value, label }: { icon: LemmaIcon; value: number; label: string }) {
     return (
         <span className="inline-flex items-center gap-1" title={label} aria-label={label}>
             <Icon className="h-3.5 w-3.5" aria-hidden />

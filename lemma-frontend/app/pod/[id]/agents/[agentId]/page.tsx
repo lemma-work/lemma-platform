@@ -1,26 +1,25 @@
 'use client';
 
-import { use, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowUp, Boxes, Loader2, Plus, Save, Share2 } from 'lucide-react';
+import { use, useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Loader2, MessageSquare, Save } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { AgentEditor } from '@/components/agents/agent-editor';
-import { InlineChannelForm } from '@/components/pod/inline-channel-form';
-import { InlineTriggerForm } from '@/components/pod/inline-trigger-form';
-import { RecentConversations, SurfaceConnectChip, SurfaceIdentityChip, TriggerIdentityChip } from '@/components/pod/resource-automation';
+import { AgentIdentityHeader } from '@/components/agents/agent-identity-header';
+import { AgentInstructions } from '@/components/agents/agent-instructions';
+import { AgentTestPanel } from '@/components/agents/agent-test-panel';
+import { AgentWiringRows } from '@/components/agents/agent-wiring-rows';
+import { TourLayer } from '@/components/education/coachmark';
 import {
-    ResourceDetailHeader,
+    ResourceHeader,
     ResourceDetailShell,
     ResourceDetailViewport,
-    ResourceTabPane,
+    ResourceWorkSplit,
 } from '@/components/pod/resource-layout';
-import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ResourceArrivalNotice } from '@/components/shared/resource-feedback';
-import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
+import type { ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { getAgentOverviewState } from '@/lib/agents/overview-state';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useAgent, useUpdateAgent } from '@/lib/hooks/use-agents';
 import { useConversations } from '@/lib/hooks/use-assistants';
@@ -28,16 +27,17 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { Agent, UpdateAgentData } from '@/lib/types';
 import { formatAgentName } from '@/lib/utils/agents';
-import { SURFACE_PLATFORM_META, getSurfacePlatformKey } from '@/lib/utils/surfaces';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
-type AgentDetailMode = 'overview' | 'edit';
-
-function agentInitials(name: string): string {
-    const tokens = name.trim().split(/[\s\-_]+/).filter(Boolean);
-    if (tokens.length >= 2) return `${tokens[0][0]}${tokens[1][0]}`.toUpperCase();
-    return (tokens[0] || name).slice(0, 2).toUpperCase();
-}
-
+/**
+ * One agent, one page.
+ *
+ * There used to be an Overview/Edit switch here, which split one job — making
+ * the agent good — across two screens: what it can reach lived in the editor,
+ * who can reach it lived in the overview, and the identity was stated in both.
+ * Now the page reads top to bottom as who it is, how it is wired, and how it
+ * behaves, with a dock on the right for actually running it.
+ */
 export default function AgentDetailPage({
     params,
 }: {
@@ -45,13 +45,13 @@ export default function AgentDetailPage({
 }) {
     const { id: podId, agentId: agentNameParam } = use(params);
     const agentName = agentNameParam;
-    const pathname = usePathname();
-    const router = useRouter();
     const searchParams = useSearchParams();
     const podAccess = usePodAccess(podId);
     const canUpdateAgent = podAccess.can('agent.update');
     const canUseSchedules = podAccess.canAny(['schedule.read', 'schedule.create']);
     const canCreateSchedule = podAccess.can('schedule.create');
+    const canUpdateSchedule = podAccess.can('schedule.update');
+    const canDeleteSchedule = podAccess.can('schedule.delete');
     const canUseSurfaces = podAccess.canAccessRoute('surfaces');
 
     const { data: agentData, isLoading } = useAgent(podId, agentName);
@@ -70,9 +70,10 @@ export default function AgentDetailPage({
 
     const [localAgent, setLocalAgent] = useState<Agent | null>(null);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-    const [message, setMessage] = useState('');
-    const [channelSheetOpen, setChannelSheetOpen] = useState(false);
-    const [triggerSheetOpen, setTriggerSheetOpen] = useState(false);
+    const [isDockOpen, setIsDockOpen] = useState<boolean | null>(null);
+    const [dockView, setDockView] = useState<'conversation' | 'history'>('conversation');
+    const [layoutWidth, setLayoutWidth] = useState(0);
+    const layoutObserverRef = useRef<ResizeObserver | null>(null);
     const lastSavedHashRef = useRef('');
 
     const buildUpdatePayload = useCallback((agent: Agent) => ({
@@ -98,6 +99,25 @@ export default function AgentDetailPage({
             lastSavedHashRef.current = JSON.stringify(buildUpdatePayload(agentData));
         }
     }, [agentData, buildUpdatePayload, hasUnsavedChanges]);
+
+    /**
+     * A callback ref, not an effect: this page renders a loading state until the
+     * agent arrives, so on mount there is no node to measure yet and a
+     * mount-only effect would attach nothing and never retry — leaving the
+     * width at zero and the split permanently side-by-side.
+     */
+    const measureLayout = useCallback((node: HTMLDivElement | null) => {
+        layoutObserverRef.current?.disconnect();
+        layoutObserverRef.current = null;
+        if (!node) return;
+
+        const syncWidth = () => setLayoutWidth(node.getBoundingClientRect().width);
+        syncWidth();
+
+        const observer = new ResizeObserver(syncWidth);
+        observer.observe(node);
+        layoutObserverRef.current = observer;
+    }, []);
 
     const isEqualValue = (currentValue: unknown, nextValue: unknown): boolean => {
         if (Object.is(currentValue, nextValue)) return true;
@@ -144,6 +164,7 @@ export default function AgentDetailPage({
             await updateAgentAsync({ podId, agentName, data: payload });
             lastSavedHashRef.current = payloadHash;
             setHasUnsavedChanges(false);
+            playSoundFeedback('action-success');
         } catch (error) {
             console.error('Failed to save agent:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to save agent. Please try again.');
@@ -171,85 +192,52 @@ export default function AgentDetailPage({
     }, [agentName, buildUpdatePayload, canUpdateAgent, hasUnsavedChanges, localAgent, podId, updateAgentAsync]);
 
     const canUpdateCurrentAgent = resourceAllows(localAgent, 'agent.update', canUpdateAgent);
-    const activeMode: AgentDetailMode = canUpdateCurrentAgent && searchParams.get('mode') === 'edit' ? 'edit' : 'overview';
+    const openConversationId = searchParams.get('conversation');
 
-    const setActiveMode = useCallback((nextMode: AgentDetailMode) => {
-        if (nextMode === 'edit' && !canUpdateCurrentAgent) return;
-        const nextParams = new URLSearchParams(searchParams.toString());
-        if (nextMode === 'edit') {
-            nextParams.set('mode', 'edit');
-        } else {
-            nextParams.delete('mode');
-        }
-        const nextQuery = nextParams.toString();
-        router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
-    }, [canUpdateCurrentAgent, pathname, router, searchParams]);
-
-    if (isLoading) {
+    if (isLoading || !localAgent) {
         return (
-            <div className="flex h-full items-center justify-center bg-transparent">
+            <div className="flex h-full items-center justify-center">
                 <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
             </div>
         );
     }
 
-    if (!localAgent) {
-        return (
-            <div className="flex h-full items-center justify-center bg-transparent">
-                <div className="text-center">
-                    <h2 className="font-display text-2xl font-semibold text-[var(--text-primary)]">Agent not found</h2>
-                </div>
-            </div>
-        );
-    }
-
     const displayName = localAgent.name || agentName;
+    const label = formatAgentName(displayName);
     const agentShareUrl = typeof window === 'undefined'
         ? undefined
         : `${window.location.origin}/pod/${podId}/agents/${encodeURIComponent(displayName)}`;
 
-    const toolCount = (localAgent.tool_sets?.length ?? localAgent.toolsets?.length ?? 0)
-        + (localAgent.accessible_tables?.length ?? 0)
-        + (localAgent.accessible_folders?.length ?? 0)
-        + (localAgent.accessible_connectors?.length ?? 0);
-
-    // Platforms this agent doesn't already answer on — shown as faded connect
-    // icons alongside its live channels. `podConnectedPlatforms` distinguishes
-    // "already connected, just route it here" from "not connected at all".
-    const reachedPlatforms = new Set(agentSurfaces.map((surface) => getSurfacePlatformKey(surface)));
-    const podConnectedPlatforms = new Set(automation.surfaces.map((surface) => getSurfacePlatformKey(surface)));
-    const unreachedPlatforms = Object.keys(SURFACE_PLATFORM_META).filter((key) => !reachedPlatforms.has(key));
-
-    // Hand off to the pod's new-conversation flow, scoped to this agent (`?agent=`)
-    // and carrying the first message (`assistantMessage`) so it sends on arrival.
-    const startConversation = () => {
-        const text = message.trim();
-        const params = new URLSearchParams({ agent: displayName });
-        if (text) params.set('assistantMessage', text);
-        router.push(`/pod/${podId}/conversations/new?${params.toString()}`);
-    };
+    // A brand-new agent has nothing to read and everything to try, so the dock
+    // starts open on it. One that already runs opens quiet — you came to change
+    // something, and its real conversations live on the conversations page.
+    const isDraft = getAgentOverviewState({
+        surfaceCount: agentSurfaces.length,
+        scheduleCount: agentSchedules.length,
+        conversationCount: recentConversations.length,
+        canUseSurfaces,
+        canUseSchedules,
+        canCreateSchedule,
+    }) === 'draft';
+    // A conversation id in the URL is a request to look at that run, so it opens
+    // the dock too — until the reader closes it themselves.
+    const dockOpen = isDockOpen ?? (isDraft || Boolean(openConversationId));
+    const isStackedLayout = dockOpen && layoutWidth > 0 && layoutWidth < 1040;
 
     return (
         <ResourceDetailShell>
-            <ResourceDetailHeader
-                title={formatAgentName(displayName)}
-                productIconTone="agents"
+            <TourLayer tour="agent-editor" />
+            <ResourceHeader
+                title={label}
+                // The identity block below owns the name; the bar takes it back
+                // only once that block scrolls out of the pane.
+                titleOwner="page"
                 backHref={`/pod/${podId}/ai`}
                 backLabel="Agents"
-                meta={<ResourceVisibilityBadge visibility={localAgent.visibility} resourceLabel="agents" />}
-                // NB: do not drive `fullscreen` from state here. On a non-workflow route
-                // it toggles the layout's fullscreen branch (PodShell), which re-parents
-                // and remounts this page, and the header's setTopbar cleanup/setup then
-                // ping-pongs fullscreen → infinite render loop. The editor renders fine in
-                // the normal shell (as the original edit mode did).
                 fullscreen={false}
-                tabs={(
-                    <AgentModeSwitch value={activeMode} onChange={setActiveMode} canEdit={canUpdateCurrentAgent} />
-                )}
                 actions={(
-                    <TooltipProvider>
                     <>
-                        {activeMode === 'edit' && canUpdateCurrentAgent && (hasUnsavedChanges || updateAgent.isPending) ? (
+                        {canUpdateCurrentAgent && (hasUnsavedChanges || updateAgent.isPending) ? (
                             <Button
                                 type="button"
                                 size="sm"
@@ -258,257 +246,137 @@ export default function AgentDetailPage({
                                 disabled={updateAgent.isPending || !hasUnsavedChanges}
                             >
                                 {updateAgent.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                                {updateAgent.isPending ? 'Saving...' : 'Save changes'}
+                                {updateAgent.isPending ? 'Saving…' : 'Save changes'}
                             </Button>
                         ) : null}
-                        {canUpdateCurrentAgent ? (
-                            <ResourceShareButton
-                                value={localAgent.visibility}
-                                podId={podId}
-                                resourceType="agent"
-                                resourceId={localAgent.id}
-                                resourceLabel="agents"
-                                resourceName={formatAgentName(displayName)}
-                                shareUrl={agentShareUrl}
-                                onChange={handleShareVisibilityChange}
-                                trigger={({ openShare, disabled }) => (
-                                    <Tooltip>
-                                        <TooltipTrigger asChild>
-                                            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded" onClick={openShare} disabled={disabled} aria-label="Share">
-                                                <Share2 className="h-4 w-4" />
-                                            </Button>
-                                        </TooltipTrigger>
-                                        <TooltipContent>Share</TooltipContent>
-                                    </Tooltip>
-                                )}
-                            />
-                        ) : null}
+                        <Button
+                            type="button"
+                            variant={dockOpen ? 'secondary' : 'outline'}
+                            size="sm"
+                            className="h-8 gap-1.5 px-2.5 text-xs font-medium"
+                            onClick={() => setIsDockOpen(!dockOpen)}
+                            aria-pressed={dockOpen}
+                        >
+                            <MessageSquare className="h-3.5 w-3.5" />
+                            Try it
+                        </Button>
                     </>
-                    </TooltipProvider>
                 )}
             />
 
             <ResourceDetailViewport>
-                <ResourceTabPane active={activeMode === 'overview'}>
-                    {activeMode === 'overview' ? (
-                        <div className="h-full overflow-y-auto bg-[var(--pod-main-bg)]">
-                            <div className="max-w-3xl px-5 py-8 sm:py-10">
-                                <section className="flex items-start gap-4">
-                                    <ResourceIcon
-                                        iconUrl={localAgent.icon_url}
-                                        alt={`${formatAgentName(displayName)} icon`}
-                                        label={displayName}
-                                        imageClassName="object-contain p-1.5"
-                                        className="h-14 w-14 shrink-0 rounded-lg bg-[var(--card-bg)] shadow-[var(--shadow-xs)]"
-                                        fallback={(
-                                            <span className="resource-monogram flex h-full w-full items-center justify-center rounded-lg text-lg font-semibold">
-                                                {agentInitials(displayName)}
-                                            </span>
-                                        )}
+                <div ref={measureLayout} className="h-full min-h-0">
+                <ResourceWorkSplit
+                    // Measured off the split itself, not the window: a pod
+                    // sidebar or a docked assistant narrows this long before the
+                    // viewport says anything. Side by side needs room for a
+                    // readable prompt *and* the dock; below that they stack.
+                    isStacked={isStackedLayout}
+                    main={(
+                        <div className="resource-page-scroll">
+                            <div className="resource-page-column">
+                                {/* Who it is and how it is wired are one card: both
+                                    answer "what is this thing", and neither is the
+                                    work. The prompt gets its own. */}
+                                <section className="resource-card">
+                                    <AgentIdentityHeader
+                                        podId={podId}
+                                        agent={localAgent}
+                                        onUpdate={handleUpdate}
+                                        canEdit={canUpdateCurrentAgent}
+                                        shareUrl={agentShareUrl}
+                                        onShareVisibilityChange={handleShareVisibilityChange}
                                     />
-                                    <div className="min-w-0 flex-1 pt-0.5">
-                                        <h1 className="truncate font-display text-2xl font-semibold tracking-tight text-[var(--text-primary)]">{formatAgentName(displayName)}</h1>
-                                        {localAgent.description?.trim() ? (
-                                            <p className="mt-1.5 text-sm leading-6 text-[var(--text-secondary)]">{localAgent.description.trim()}</p>
-                                        ) : null}
-                                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                                            <MetaChip
-                                                icon={<Boxes className="h-3.5 w-3.5" aria-hidden />}
-                                                onClick={canUpdateCurrentAgent ? () => setActiveMode('edit') : undefined}
-                                            >
-                                                {toolCount} tool{toolCount === 1 ? '' : 's'}
-                                            </MetaChip>
-                                        </div>
-                                    </div>
+
+                                    <AgentWiringRows
+                                        podId={podId}
+                                        agent={localAgent}
+                                        onUpdate={handleUpdate}
+                                        canEdit={canUpdateCurrentAgent}
+                                        surfaces={agentSurfaces}
+                                        schedules={agentSchedules}
+                                        canUseSurfaces={canUseSurfaces}
+                                        canUseSchedules={canUseSchedules}
+                                        canCreateSchedule={canCreateSchedule}
+                                        canUpdateSchedule={canUpdateSchedule}
+                                        canDeleteSchedule={canDeleteSchedule}
+                                    />
                                 </section>
 
-                                {canUseSurfaces ? (
-                                    <div className="mt-6 flex flex-wrap items-center gap-2">
-                                        <span className="text-sm text-[var(--text-secondary)]">Channels</span>
-                                        {agentSurfaces.map((surface) => (
-                                            <SurfaceIdentityChip key={surface.id} surface={surface} reachFor={displayName} />
-                                        ))}
-                                        {unreachedPlatforms.map((platformKey) => (
-                                            <SurfaceConnectChip
-                                                key={platformKey}
-                                                platformKey={platformKey}
-                                                connectedInPod={podConnectedPlatforms.has(platformKey)}
-                                                manageHref={`/pod/${podId}/surfaces`}
-                                                onRoute={() => setChannelSheetOpen(true)}
-                                            />
-                                        ))}
-                                    </div>
+                                <AgentInstructions
+                                    agent={localAgent}
+                                    onUpdate={handleUpdate}
+                                    canEdit={canUpdateCurrentAgent}
+                                />
+                            </div>
+                        </div>
+                    )}
+                    aside={dockOpen ? (
+                        <div className="agent-dock">
+                            <div className="agent-dock-bar">
+                                <div className="segmented-control">
+                                    <button
+                                        type="button"
+                                        className="segmented-control-item"
+                                        data-active={dockView === 'conversation'}
+                                        onClick={() => setDockView('conversation')}
+                                    >
+                                        Run
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="segmented-control-item"
+                                        data-active={dockView === 'history'}
+                                        onClick={() => setDockView('history')}
+                                    >
+                                        History
+                                    </button>
+                                </div>
+
+                                {/* Runs go through the server, which only knows the
+                                    saved agent — so an unsaved draft would be tested
+                                    as the old version. Say so rather than let the
+                                    result quietly disagree with the editor. */}
+                                {hasUnsavedChanges ? (
+                                    <button
+                                        type="button"
+                                        className="agent-dock-stale"
+                                        onClick={() => void handleSave()}
+                                        disabled={updateAgent.isPending}
+                                    >
+                                        Testing the saved version — save first
+                                    </button>
                                 ) : null}
-
-                                {canUseSchedules ? (
-                                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                                        <span className="text-sm text-[var(--text-secondary)]">Triggers</span>
-                                        {agentSchedules.map((schedule) => (
-                                            <TriggerIdentityChip key={schedule.id} schedule={schedule} />
-                                        ))}
-                                        {canCreateSchedule ? (
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                size="icon"
-                                                className="h-8 w-8 shrink-0 rounded-lg border-dashed text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                                                onClick={() => setTriggerSheetOpen(true)}
-                                                aria-label="New trigger"
-                                            >
-                                                <Plus className="h-4 w-4" />
-                                            </Button>
-                                        ) : null}
-                                    </div>
-                                ) : null}
-
-                                <section className="mt-7">
-                                    <div className="form-field-control p-2.5">
-                                        <textarea
-                                            value={message}
-                                            onChange={(event) => setMessage(event.target.value)}
-                                            onKeyDown={(event) => {
-                                                if (event.key === 'Enter' && !event.shiftKey) {
-                                                    event.preventDefault();
-                                                    startConversation();
-                                                }
-                                            }}
-                                            placeholder={`Message ${formatAgentName(displayName)}…`}
-                                            rows={3}
-                                            className="inline-edit-field min-h-20 w-full resize-none px-2.5 py-2 text-sm leading-6"
-                                        />
-                                        <div className="flex items-center justify-between gap-3 px-1.5 pb-1">
-                                            <span className="truncate text-xs text-[var(--text-tertiary)]">
-                                                Enter to send · Shift + Enter for a new line
-                                            </span>
-                                            <Button type="button" size="icon" className="h-8 w-8 shrink-0 rounded-full" onClick={startConversation} aria-label="Start conversation">
-                                                <ArrowUp className="h-4 w-4" />
-                                            </Button>
-                                        </div>
-                                    </div>
-                                </section>
-
-                                <RecentConversations podId={podId} conversations={recentConversations} agentName={displayName} />
                             </div>
 
-                            <Sheet open={channelSheetOpen} onOpenChange={setChannelSheetOpen}>
-                                <SheetContent side="right" className="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-md">
-                                    <SheetHeader>
-                                        <SheetTitle>Add channel</SheetTitle>
-                                        <SheetDescription>Route a connected surface to this agent, or connect a new one.</SheetDescription>
-                                    </SheetHeader>
-                                    <InlineChannelForm
-                                        podId={podId}
-                                        agentName={displayName}
-                                        allSurfaces={automation.surfaces}
-                                        manageHref={`/pod/${podId}/surfaces`}
-                                        onDone={() => setChannelSheetOpen(false)}
-                                        onCancel={() => setChannelSheetOpen(false)}
-                                    />
-                                </SheetContent>
-                            </Sheet>
-
-                            <Sheet open={triggerSheetOpen} onOpenChange={setTriggerSheetOpen}>
-                                <SheetContent side="right" className="flex w-full flex-col gap-4 overflow-y-auto sm:max-w-md">
-                                    <SheetHeader>
-                                        <SheetTitle>New trigger</SheetTitle>
-                                        <SheetDescription>What wakes this agent up on its own.</SheetDescription>
-                                    </SheetHeader>
-                                    <InlineTriggerForm
-                                        podId={podId}
-                                        target={{ kind: 'agent', name: displayName }}
-                                        moreOptionsHref={`/pod/${podId}/schedules/new?agent=${encodeURIComponent(displayName)}`}
-                                        onCreated={() => setTriggerSheetOpen(false)}
-                                        onCancel={() => setTriggerSheetOpen(false)}
-                                    />
-                                </SheetContent>
-                            </Sheet>
+                            <div className="agent-dock-body">
+                                <AgentTestPanel
+                                    podId={podId}
+                                    agentName={displayName}
+                                    agentOverride={localAgent}
+                                    view={dockView}
+                                    openConversationId={openConversationId}
+                                    onClose={() => setIsDockOpen(false)}
+                                />
+                            </div>
                         </div>
                     ) : null}
-                </ResourceTabPane>
-
-                <ResourceTabPane active={activeMode === 'edit'}>
-                    {activeMode === 'edit' && canUpdateCurrentAgent ? (
-                        <AgentEditor
-                            podId={podId}
-                            agent={localAgent}
-                            onUpdate={handleUpdate}
-                            isNameEditable={false}
-                            shareUrl={agentShareUrl}
-                            onShareVisibilityChange={handleShareVisibilityChange}
-                        />
-                    ) : null}
-                </ResourceTabPane>
+                    /* `border-l-0`/`border-t-0`: the dock carries its own card
+                       border, and the split's edge rule would double it. */
+                    asideClassName={isStackedLayout
+                        ? 'agent-dock-shell agent-dock-shell-stacked w-full border-t-0'
+                        : 'agent-dock-shell w-[min(30rem,42%)] border-l-0'}
+                />
+                </div>
             </ResourceDetailViewport>
 
             <ResourceArrivalNotice
                 resource="agent"
                 title="Agent created"
-                description="Start a conversation to try it, connect a channel so people can reach it, or add a trigger to run it on its own."
+                description="Write its instructions, wire up what it can use, then try it in the panel on the right."
                 celebrate
-                actions={[
-                    ...(canUpdateCurrentAgent ? [{ label: 'Set up', onClick: () => setActiveMode('edit'), variant: 'primary' as const }] : []),
-                ]}
                 className="mx-4 mt-3"
             />
         </ResourceDetailShell>
-    );
-}
-
-function MetaChip({
-    icon,
-    onClick,
-    children,
-}: {
-    icon: ReactNode;
-    onClick?: () => void;
-    children: ReactNode;
-}) {
-    if (!onClick) {
-        return (
-            <span className="chip chip-sm chip-muted">
-                {icon}{children}
-            </span>
-        );
-    }
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className="chip chip-sm chip-muted custom-focus-ring cursor-pointer transition-colors hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
-        >
-            {icon}{children}
-        </button>
-    );
-}
-
-function AgentModeSwitch({
-    value,
-    onChange,
-    canEdit,
-}: {
-    value: AgentDetailMode;
-    onChange: (value: AgentDetailMode) => void;
-    canEdit: boolean;
-}) {
-    if (!canEdit) return null;
-    const items: Array<{ value: AgentDetailMode; label: string }> = [
-        { value: 'overview', label: 'Overview' },
-        { value: 'edit', label: 'Edit' },
-    ];
-    return (
-        <div className="segmented-control">
-            {items.map((item) => (
-                <button
-                    key={item.value}
-                    type="button"
-                    onClick={() => onChange(item.value)}
-                    className="segmented-control-item custom-focus-ring"
-                    data-active={value === item.value}
-                    aria-pressed={value === item.value}
-                >
-                    {item.label}
-                </button>
-            ))}
-        </div>
     );
 }

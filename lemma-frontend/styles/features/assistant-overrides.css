@@ -11,9 +11,9 @@
 
 /* Lemma-branded assistant scope (SDK >= 0.2.27 surface coverage). */
 .pod-assistant-shell {
-  --assistant-radius-shell: 12px;
-  --assistant-radius-item: 9px;
-  --assistant-radius-bubble: 12px;
+  --assistant-radius-shell: 10px;
+  --assistant-radius-item: 8px;
+  --assistant-radius-bubble: 10px;
   --assistant-radius-inline: 7px;
 }
 
@@ -24,20 +24,16 @@
 .pod-assistant-shell .lemma-assistant-tool-details-panel,
 .pod-assistant-shell .lemma-assistant-widget-card-frame {
   border-color: color-mix(in srgb, var(--border-default) 84%, transparent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 .pod-assistant-shell .lemma-assistant-message-user-bubble {
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--action-primary) 96%, transparent),
-    color-mix(in srgb, var(--intelligence) 92%, transparent)
-  );
+  background: var(--action-primary);
 }
 
 .pod-assistant-shell .lemma-assistant-conversation-list-item-active {
-  border-color: color-mix(in srgb, var(--delight) 46%, var(--border-default));
-  background: color-mix(in srgb, var(--delight) 10%, var(--surface-1));
+  border-color: var(--border-default);
+  background: var(--surface-1);
 }
 
 .pod-assistant-shell .lemma-assistant-empty-state-suggestion {
@@ -131,11 +127,11 @@
 }
 
 .lemma-assistant-user-approval-card {
-  border-radius: 1rem;
+  border-radius: var(--radius-3xl);
 }
 
 .lemma-assistant-user-message-bubble {
-  border-radius: 0.75rem;
+  border-radius: var(--radius-2xl);
 }
 
 .lemma-assistant-choice-dot {
@@ -168,11 +164,11 @@
      one continuous strip across all three regions. */
   border-bottom-color: color-mix(in srgb, var(--border-subtle) 32%, transparent);
   background: var(--pod-main-bg);
-  padding: 0 1rem;
+  padding: 0 var(--space-4);
 }
 
 .pod-assistant-sidebar-surface .lemma-assistant-header h3 {
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   font-weight: 400;
   line-height: 1rem;
   letter-spacing: 0;
@@ -208,7 +204,7 @@
   background: transparent !important;
   box-shadow: none !important;
   padding-inline: 0.875rem;
-  padding-bottom: 0.875rem;
+  padding-bottom: var(--space-3-5);
 }
 
 .pod-assistant-sidebar-surface .lemma-assistant-composer::before,
@@ -216,11 +212,30 @@
   display: none;
 }
 
+.conversation-presentation-layout {
+  grid-template-columns: minmax(22rem, 0.88fr) minmax(30rem, 1.12fr);
+}
+
+@container pod-surface (max-width: 980px) {
+  .conversation-presentation-layout {
+    display: block;
+  }
+
+  .conversation-presentation-chat {
+    display: none;
+  }
+
+  .conversation-presentation-stage {
+    height: 100%;
+    border-left-width: 0;
+  }
+}
+
 .lemma-assistant-inline-tool-button,
 .lemma-assistant-inline-approval-button {
   color: var(--text-secondary);
   font-family: var(--font-body-family);
-  font-size: 0.8125rem;
+  font-size: var(--text-xs);
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.25rem;
@@ -236,7 +251,7 @@
 .lemma-assistant-run-trace-header {
   color: var(--text-secondary);
   font-family: var(--font-body-family);
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.5rem;

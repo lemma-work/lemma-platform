@@ -12,12 +12,12 @@ not a user turn:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from pydantic_ai import RunContext
 from pydantic_ai._agent_graph import ModelRequestContext
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelRequest, SystemPromptPart
+
+from app.modules.agent.domain.runtime_notes import build_runtime_notes
 
 
 class CurrentTimeCapability(AbstractCapability[object]):
@@ -34,9 +34,8 @@ class CurrentTimeCapability(AbstractCapability[object]):
         ctx: RunContext[object],
         request_context: ModelRequestContext,
     ) -> ModelRequestContext:
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         marker = ModelRequest(
-            parts=[SystemPromptPart(content=f"Current date and time: {now} (UTC).")]
+            parts=[SystemPromptPart(content=build_runtime_notes())]
         )
         request_context.messages = [*request_context.messages, marker]
         return request_context

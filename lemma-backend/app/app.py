@@ -1,8 +1,11 @@
 import asyncio
+import re
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import Depends, FastAPI
+from opentelemetry import metrics
 from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
 from scalar_fastapi import get_scalar_api_reference
@@ -25,15 +28,21 @@ from app.core.infrastructure.jobs.streaq_job_queue import (
     close_streaq_job_queue,
     get_streaq_job_queue,
 )
+from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
+from app.core.infrastructure.redis.client import close_redis_clients
 from app.core.security import verify_auth
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
-from app.core.log.log import setup_logging, get_logger
+from app.modules.identity.infrastructure.supertokens_auth.abuse_middleware import (
+    AuthAbuseMiddleware,
+)
+from app.core.log.log import setup_logging, get_logger, validate_release_identity
 from app.core.observability.telemetry import (
     init_telemetry,
     instrument_database_engine,
     instrument_fastapi_app,
+    shutdown_telemetry,
 )
 from app.core.infrastructure.channels.channel_service import channel_service
 
@@ -43,9 +52,16 @@ from app.core.registry.installed import OSS_MODULES
 from app.auth_app import get_auth_app
 from app.mcp_server import get_agent_mcp_app, get_pod_mcp_app
 from app.core.infrastructure.db.session import get_engine
-from app.core.request_context import reset_request_id, set_request_id
+from app.core.request_context import (
+    bind_request_context,
+    create_background_task,
+    create_inherited_task,
+)
 
 logger = get_logger(__name__)
+meter = metrics.get_meter(__name__)
+http_request_count = meter.create_counter("lemma.http.server.requests")
+http_request_duration = meter.create_histogram("lemma.http.server.duration_ms")
 
 OPENAPI_SCHEMA_RENAMES = {
     "fastapi___compat__v2__Body_file__upload": "DatastoreFileUploadRequest",
@@ -106,7 +122,7 @@ def _apply_error_response_schema(schema: dict) -> dict:
             for status_code, response in responses.items():
                 try:
                     code_int = int(status_code)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
                 if code_int < 400 or not isinstance(response, dict):
                     continue
@@ -125,7 +141,6 @@ async def lifespan(app: FastAPI):
             await stack.enter_async_context(pod_mcp_app.lifespan(app))
 
         # Core startup
-        logger.info("Application starting up")
         from app.core.concurrency.offload import configure_thread_pool
         from app.core.observability.loop_watchdog import loop_lag_watchdog
 
@@ -133,14 +148,16 @@ async def lifespan(app: FastAPI):
         watchdog_task = (
             None
             if getattr(app.state, "embedded_worker", False)
-            else asyncio.create_task(loop_lag_watchdog(service_name="lemma-api"))
+            else create_background_task(
+                loop_lag_watchdog(service_name="lemma-api"),
+                name="api-loop-lag-watchdog",
+            )
         )
         initialize_supertokens()
         await channel_service.connect()
         await get_streaq_job_queue().connect()
         await get_message_bus().connect()
-        logger.info("Redis broker started")
-
+        started = False
         try:
             # Module-contributed API lifespans (e.g. datastore query-role
             # backfill on enter; surface-dedup + user-cache close on exit).
@@ -151,10 +168,15 @@ async def lifespan(app: FastAPI):
                 # CLOUD_MODULES) is stashed on app.state by create_app.
                 modules = getattr(app.state, "lemma_modules", OSS_MODULES)
                 await enter_api_lifespans(module_stack, modules, app)
+                # Emit only after every core and module lifespan has entered.
+                # service.version and release.sha come from LEMMA_RELEASE_SHA.
+                logger.info("service.started")
+                started = True
                 yield
         finally:
             # Core closers — explicit and last so they tear down after modules.
-            logger.info("Application shutting down")
+            if started:
+                logger.info("service.stopped")
             if watchdog_task is not None and not watchdog_task.done():
                 watchdog_task.cancel()
                 try:
@@ -163,19 +185,27 @@ async def lifespan(app: FastAPI):
                     pass
             await close_streaq_job_queue()
             await close_message_bus()
+            await close_redis_json_caches()
+            await close_redis_clients()
             await close_engine()
             await channel_service.disconnect()
-            from app.modules.datastore.infrastructure.session import close_datastore_engine
+            from app.modules.datastore.infrastructure.session import (
+                close_datastore_engine,
+            )
 
             await close_datastore_engine()
+            shutdown_telemetry()
 
 
-class RequestIdMiddleware:
-    """Ensure every request carries an ``x-request-id``: reuse an inbound one or
-    mint a new one, make it visible to downstream handlers (the authz layer reads
-    it), and echo it on the response so clients/agents can quote it in reports."""
+class RequestObserverMiddleware:
+    """Bind HTTP correlation, emit bounded terminal signals, and record metrics."""
 
     HEADER = b"x-request-id"
+    REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+    SLOW_SECONDS = 2.0
+    QUIET_PATHS = frozenset(
+        {"/health", "/health/live", "/health/ready", "/health/capabilities", "/livez"}
+    )
 
     def __init__(self, app):
         self.app = app
@@ -185,30 +215,162 @@ class RequestIdMiddleware:
             await self.app(scope, receive, send)
             return
 
-        headers = scope.get("headers") or []
-        existing = next((v for k, v in headers if k == self.HEADER), None)
-        if existing is not None:
-            request_id = existing.decode("latin-1")
+        headers = list(scope.get("headers") or [])
+        existing = next((v for k, v in headers if k.lower() == self.HEADER), None)
+        inbound = existing.decode("latin-1") if existing is not None else ""
+        if self.REQUEST_ID_RE.fullmatch(inbound):
+            request_id = inbound
         else:
             request_id = uuid.uuid4().hex
-            # Inject into request headers so request.headers.get("x-request-id")
-            # (read by the authz layer) sees the minted id.
-            scope = dict(scope)
-            scope["headers"] = [*headers, (self.HEADER, request_id.encode("latin-1"))]
+
+        correlation_id = uuid.uuid7()
+        scope = dict(scope)
+        scope["headers"] = [
+            (key, value) for key, value in headers if key.lower() != self.HEADER
+        ] + [(self.HEADER, request_id.encode("ascii"))]
+        scope.setdefault("state", {})
+
+        started_at = time.perf_counter()
+        response_started_at: float | None = None
+        status_code = 500
+        content_type = ""
 
         async def send_with_request_id(message):
+            nonlocal response_started_at, status_code, content_type
             if message["type"] == "http.response.start":
-                raw_headers = list(message.get("headers") or [])
-                if not any(k.lower() == self.HEADER for k, _ in raw_headers):
-                    raw_headers.append((self.HEADER, request_id.encode("latin-1")))
+                response_started_at = time.perf_counter()
+                status_code = int(message.get("status", 500))
+                raw_headers = [
+                    (key, value)
+                    for key, value in list(message.get("headers") or [])
+                    if key.lower() != self.HEADER
+                ]
+                content_type = next(
+                    (
+                        value.decode("latin-1").lower()
+                        for key, value in raw_headers
+                        if key.lower() == b"content-type"
+                    ),
+                    "",
+                )
+                raw_headers.append((self.HEADER, request_id.encode("ascii")))
                 message = {**message, "headers": raw_headers}
             await send(message)
 
-        token = set_request_id(request_id)
-        try:
-            await self.app(scope, receive, send_with_request_id)
-        finally:
-            reset_request_id(token)
+        caught: Exception | None = None
+        cancelled = False
+        with bind_request_context(request_id=request_id, correlation_id=correlation_id):
+            try:
+                await self.app(scope, receive, send_with_request_id)
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+            except Exception as exc:
+                caught = exc
+                raise
+            finally:
+                finished_at = time.perf_counter()
+                duration_ms = round((finished_at - started_at) * 1000, 1)
+                route = self._route_template(scope)
+                attributes = {
+                    "http.request.method": str(scope.get("method", "UNKNOWN")),
+                    "http.route": route,
+                    "http.response.status_class": f"{status_code // 100}xx",
+                }
+                http_request_count.add(1, attributes)
+                http_request_duration.record(duration_ms, attributes)
+
+                if str(scope.get("path", "")) in self.QUIET_PATHS:
+                    continue_logging = False
+                else:
+                    continue_logging = True
+                if continue_logging and not cancelled:
+                    state = scope.get("state") or {}
+                    recorded = state.get("lemma_exception")
+                    failure = caught or recorded
+                    fields = {
+                        "method": str(scope.get("method", "UNKNOWN")),
+                        "route": route,
+                        "status_code": status_code,
+                        "duration_ms": duration_ms,
+                    }
+                    if status_code >= 500 or caught is not None:
+                        fields["error_type"] = state.get(
+                            "lemma_error_type",
+                            type(failure).__name__ if failure else "HTTPError",
+                        )
+                        fields["error_code"] = state.get(
+                            "lemma_error_code", "INTERNAL_ERROR"
+                        )
+                        exc_info = (
+                            (type(failure), failure, failure.__traceback__)
+                            if isinstance(failure, BaseException)
+                            else None
+                        )
+                        logger.error(
+                            "http.request.failed",
+                            method=fields["method"],
+                            route=fields["route"],
+                            status_code=fields["status_code"],
+                            duration_ms=fields["duration_ms"],
+                            error_type=fields["error_type"],
+                            error_code=fields["error_code"],
+                            exc_info=exc_info,
+                        )
+                    elif status_code == 429:
+                        logger.warning(
+                            "http.request.rate_limited",
+                            method=fields["method"],
+                            route=fields["route"],
+                            status_code=fields["status_code"],
+                            duration_ms=fields["duration_ms"],
+                        )
+                    else:
+                        streaming = content_type.startswith("text/event-stream")
+                        elapsed = (
+                            (response_started_at - started_at)
+                            if streaming and response_started_at is not None
+                            else (finished_at - started_at)
+                        )
+                        if elapsed >= self.SLOW_SECONDS:
+                            fields["duration_ms"] = round(elapsed * 1000, 1)
+                            fields["latency_kind"] = (
+                                "time_to_first_byte" if streaming else "total"
+                            )
+                            logger.warning(
+                                "http.request.slow",
+                                method=fields["method"],
+                                route=fields["route"],
+                                status_code=fields["status_code"],
+                                duration_ms=fields["duration_ms"],
+                                latency_kind=fields["latency_kind"],
+                            )
+                        elif settings.local_http_access_logs_enabled:
+                            logger.info(
+                                "http.request.local_completed",
+                                method=fields["method"],
+                                route=fields["route"],
+                                status_code=fields["status_code"],
+                                duration_ms=fields["duration_ms"],
+                            )
+                        else:
+                            logger.debug(
+                                "http.request.completed",
+                                method=fields["method"],
+                                route=fields["route"],
+                                status_code=fields["status_code"],
+                                duration_ms=fields["duration_ms"],
+                            )
+
+    @staticmethod
+    def _route_template(scope: dict) -> str:
+        route = scope.get("route")
+        value = getattr(route, "path_format", None) or getattr(route, "path", None)
+        return value if isinstance(value, str) else "unmatched"
+
+
+# Compatibility name retained for imports and generated SDK tests.
+RequestIdMiddleware = RequestObserverMiddleware
 
 
 class RequestBodyLimitMiddleware:
@@ -277,6 +439,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         json_logs=settings.json_logs_enabled,
         log_level=settings.log_level,
     )
+    validate_release_identity(settings.environment)
     app = FastAPI(
         title=settings.app_name,
         description="Authentication API with JWT, user management, and OAuth support",
@@ -333,6 +496,11 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
 
     app.add_middleware(get_middleware())
 
+    # Apply the shared 60/minute/IP auth ceiling to custom /auth routes. The
+    # mounted SuperTokens app applies the same key itself, so non-auth APIs and
+    # /st requests are deliberately skipped here.
+    app.add_middleware(AuthAbuseMiddleware, auth_paths_only=True)
+
     # CORS
     app.add_middleware(
         CORSMiddleware,
@@ -342,7 +510,12 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
         # X-Lemma-Client is sent by the browser SDK on every request; it must be
         # allowed or the browser blocks the (preflighted) call as a CORS error.
-        allow_headers=["Content-Type", "Authorization", "X-Lemma-Client"]
+        allow_headers=[
+            "Content-Type",
+            "Authorization",
+            "X-Lemma-Client",
+            "x-altcha-payload",
+        ]
         + get_all_cors_headers(),
         # Let browser SDK clients read the correlation id off the response.
         # SuperTokens sets `front-token`/`anti-csrf` (and the `st-*` token pair in
@@ -352,6 +525,7 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
         # them here or the front-token gets clobbered and the SDK can't read it.
         expose_headers=[
             "X-Request-Id",
+            "Retry-After",
             "front-token",
             "anti-csrf",
             "st-access-token",
@@ -380,29 +554,130 @@ def create_app(modules=OSS_MODULES) -> FastAPI:
     # routers() thunk. See app/modules/<name>/module.py.
     include_module_routers(app, modules)
 
-    # Health check
-    @app.get("/health")
-    async def health_check():
-        return {"status": "healthy", "message": "API is running"}
-
-    # Liveness: 503 when the event loop is wedged (lag over the unhealthy
-    # threshold), so a Kubernetes liveness probe restarts the process. A fully
-    # blocked loop can't serve this at all, which trips the probe's timeout —
-    # either way a hung process is restarted instead of hanging silently.
+    # Liveness: process/event-loop check only. No DB or network dependency, so
+    # it normally completes within ~100 ms. 503 when the event loop is wedged
+    # (lag over the unhealthy threshold), so a liveness probe restarts the
+    # process. A fully blocked loop can't serve this at all, which trips the
+    # probe's timeout — either way a hung process is restarted instead of
+    # hanging silently.
+    @app.get("/health/live", include_in_schema=False)
     @app.get("/livez", include_in_schema=False)
-    async def livez():
+    async def health_live():
         from app.core.observability.loop_watchdog import (
             get_loop_lag_seconds,
             is_loop_healthy,
         )
 
+        healthy = is_loop_healthy()
         payload = {
-            "status": "ok" if is_loop_healthy() else "unhealthy",
+            "status": "ok" if healthy else "unhealthy",
             "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
         }
-        return JSONResponse(
-            payload, status_code=200 if is_loop_healthy() else 503
+        return JSONResponse(payload, status_code=200 if healthy else 503)
+
+    # Readiness: bounded, concurrent checks for dependencies required to serve
+    # new work. Each check has ~1 s; the whole endpoint has a ~2 s deadline.
+    # 503 when not ready; only generic component states are exposed, never
+    # connection strings or provider responses.
+    @app.get("/health/ready", include_in_schema=False)
+    async def health_ready():
+        import asyncio as _asyncio
+
+        from sqlalchemy import text
+
+        async def _db_ok() -> bool:
+            try:
+                engine = get_engine()
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                return True
+            except Exception:
+                return False
+
+        async def _redis_ok() -> bool:
+            try:
+                return await channel_service.ping()
+            except Exception:
+                return False
+
+        async def _with_timeout(coro, seconds: float) -> bool:
+            try:
+                return await _asyncio.wait_for(coro, timeout=seconds)
+            except Exception:
+                return False
+
+        # Run dependency checks concurrently; each is individually bounded and
+        # the pair is bounded by the overall gather timeout.
+        db_task = redis_task = None
+        try:
+            db_task = create_inherited_task(_with_timeout(_db_ok(), 1.0))
+            redis_task = create_inherited_task(_with_timeout(_redis_ok(), 1.0))
+            db_ok, redis_ok = await _asyncio.wait_for(
+                _asyncio.gather(db_task, redis_task), timeout=2.0
+            )
+        except Exception:
+            db_ok, redis_ok = False, False
+        finally:
+            for t in (db_task, redis_task):
+                if t is not None and not t.done():
+                    t.cancel()
+
+        components = {
+            "db": "ok" if db_ok else "down",
+            "redis": "ok" if redis_ok else "down",
+        }
+        ready = bool(db_ok) and bool(redis_ok)
+        payload = {
+            "status": "ready" if ready else "not_ready",
+            "components": components,
+        }
+        if settings.lemma_runtime_instance_id:
+            payload["instance_id"] = settings.lemma_runtime_instance_id
+        return JSONResponse(payload, status_code=200 if ready else 503)
+
+    @app.get("/health/capabilities", include_in_schema=False)
+    async def health_capabilities():
+        from app.modules.datastore.module import embedding_capability
+
+        embeddings = embedding_capability()
+        payload = {
+            "status": (
+                "degraded" if embeddings.status == "degraded" else embeddings.status
+            ),
+            "capabilities": {
+                "embeddings": {
+                    "status": embeddings.status,
+                    "detail": embeddings.detail,
+                }
+            },
+        }
+        if settings.lemma_local_ai_ready is not None:
+            payload["capabilities"]["ai_profile"] = {
+                "status": "ready" if settings.lemma_local_ai_ready else "needs_setup",
+                "detail": (
+                    "Local AI provider is configured"
+                    if settings.lemma_local_ai_ready
+                    else "Configure an AI provider in Lemma Control Center"
+                ),
+            }
+        if settings.lemma_runtime_instance_id:
+            payload["instance_id"] = settings.lemma_runtime_instance_id
+        return payload
+
+    # Compatibility alias for /health/live during probe migration.
+    @app.get("/health", include_in_schema=False)
+    async def health_alias():
+        from app.core.observability.loop_watchdog import (
+            get_loop_lag_seconds,
+            is_loop_healthy,
         )
+
+        healthy = is_loop_healthy()
+        payload = {
+            "status": "ok" if healthy else "unhealthy",
+            "loop_lag_seconds": round(get_loop_lag_seconds(), 3),
+        }
+        return JSONResponse(payload, status_code=200 if healthy else 503)
 
     @app.get("/scalar", include_in_schema=False)
     async def scalar_html():
@@ -455,4 +730,10 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.app:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "app.app:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        access_log=False,
+    )

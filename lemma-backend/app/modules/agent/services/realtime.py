@@ -29,8 +29,8 @@ async def publish_conversation_event(
         service = channel_service or await get_channel_service()
         await service.publish(conversation_channel(conversation_id), payload)
     except Exception as exc:
-        logger.warning(
-            "Failed publishing agent realtime event",
+        logger.debug(
+            'agent.realtime.publishing_agent_realtime_event.diagnostic',
             conversation_id=str(conversation_id),
             error_type=type(exc).__name__,
         )

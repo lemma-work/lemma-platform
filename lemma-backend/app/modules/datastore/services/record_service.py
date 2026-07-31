@@ -32,7 +32,7 @@ class RecordService:
     def __init__(
         self,
         record_repository: DatastoreRecordRepositoryPort,
-        event_dispatcher: Callable[[], Awaitable[int]],
+        event_dispatcher: Callable[[], Awaitable[int]] | None = None,
         authorization_service: object | None = None,
         user_repository: UserReader | None = None,
     ):

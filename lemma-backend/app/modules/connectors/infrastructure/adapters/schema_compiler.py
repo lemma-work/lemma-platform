@@ -91,7 +91,9 @@ class _RestrictedSchemaParser:
         if selected is None:
             return {}
 
-        schemas = {name: self._model_schema(model) for name, model in self.models.items()}
+        schemas = {
+            name: self._model_schema(model) for name, model in self.models.items()
+        }
         selected_schema = schemas[selected]
         referenced = self._referenced_model_names(self.models[selected])
         recursive = selected in referenced
@@ -111,7 +113,10 @@ class _RestrictedSchemaParser:
                     raise UnsafeSchemaSnippet(f"Import is not allowed: {node.module}")
                 continue
             if isinstance(node, ast.Import):
-                if any(alias.name.split(".", 1)[0] not in _ALLOWED_IMPORTS for alias in node.names):
+                if any(
+                    alias.name.split(".", 1)[0] not in _ALLOWED_IMPORTS
+                    for alias in node.names
+                ):
                     raise UnsafeSchemaSnippet("Import is not allowed")
                 continue
             if isinstance(node, ast.ClassDef):
@@ -160,7 +165,9 @@ class _RestrictedSchemaParser:
         properties: dict[str, Any] = {}
         required: list[str] = []
         for item in model.body:
-            if not isinstance(item, ast.AnnAssign) or not isinstance(item.target, ast.Name):
+            if not isinstance(item, ast.AnnAssign) or not isinstance(
+                item.target, ast.Name
+            ):
                 continue
             field_name = item.target.id
             properties[field_name] = self._annotation_schema(item.annotation)
@@ -171,7 +178,9 @@ class _RestrictedSchemaParser:
                 self._apply_field(item.value, properties[field_name])
                 if item.value.args:
                     default = item.value.args[0]
-                    is_required = isinstance(default, ast.Constant) and default.value is Ellipsis
+                    is_required = (
+                        isinstance(default, ast.Constant) and default.value is Ellipsis
+                    )
                 else:
                     is_required = not any(
                         keyword.arg == "default" for keyword in item.value.keywords
@@ -203,10 +212,19 @@ class _RestrictedSchemaParser:
         if short_name in self.models:
             return {"$ref": f"#/$defs/{short_name}"}
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-            return {"anyOf": [self._annotation_schema(node.left), self._annotation_schema(node.right)]}
+            return {
+                "anyOf": [
+                    self._annotation_schema(node.left),
+                    self._annotation_schema(node.right),
+                ]
+            }
         if isinstance(node, ast.Subscript):
             base = (_name(node.value) or "").rsplit(".", 1)[-1]
-            args = list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+            args = (
+                list(node.slice.elts)
+                if isinstance(node.slice, ast.Tuple)
+                else [node.slice]
+            )
             if base in {"Optional"}:
                 return {"anyOf": [self._annotation_schema(args[0]), {"type": "null"}]}
             if base in {"Union"}:
@@ -227,11 +245,11 @@ class _RestrictedSchemaParser:
             if base in {"dict", "Dict", "Mapping"}:
                 return {
                     "type": "object",
-                    "additionalProperties": self._annotation_schema(args[-1]) if args else {},
+                    "additionalProperties": self._annotation_schema(args[-1])
+                    if args
+                    else {},
                 }
-        raise UnsafeSchemaSnippet(
-            f"Unsupported annotation: {ast.unparse(node)[:120]}"
-        )
+        raise UnsafeSchemaSnippet(f"Unsupported annotation: {ast.unparse(node)[:120]}")
 
     def _referenced_model_names(self, model: ast.ClassDef) -> set[str]:
         return {
@@ -250,8 +268,8 @@ class PydanticCodeSchemaCompiler(SchemaCompilerPort):
         try:
             return _RestrictedSchemaParser(code).parse()
         except (SyntaxError, UnsafeSchemaSnippet) as exc:
-            self.logger.warning(
-                "Rejected connector schema snippet",
+            self.logger.debug(
+                'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic',
                 error_type=type(exc).__name__,
             )
             return {}

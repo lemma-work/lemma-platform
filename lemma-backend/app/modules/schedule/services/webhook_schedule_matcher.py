@@ -22,12 +22,15 @@ class WebhookScheduleMatcher:
         if self.schedule_repository is None:
             raise ValueError("schedule_repository is required")
 
-    async def match(self, source: str, metadata: Dict[str, Any]) -> List[ScheduleEntity]:
-        logger.info("Matching webhook for source", source=source, metadata=metadata)
+    async def match(
+        self, source: str, metadata: Dict[str, Any]
+    ) -> List[ScheduleEntity]:
         if source == "composio":
             provider_id = metadata.get("provider_id")
             if not provider_id:
-                logger.warning("Composio webhook missing provider_id in metadata")
+                logger.debug(
+                    'schedule.webhook_schedule_matcher.composio_webhook_missing_provider_id.diagnostic'
+                )
                 return []
 
             return await self.schedule_repository.find_by_config(
@@ -35,5 +38,4 @@ class WebhookScheduleMatcher:
                 criteria={"provider_trigger_id": provider_id},
             )
 
-        logger.info("No matching schedules found for %s webhook", source)
         return []

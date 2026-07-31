@@ -1,11 +1,16 @@
+from datetime import datetime
 from uuid import UUID
-from typing import Optional, Dict, Any, List
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.authorization.context import ResourceType, ResourceVisibility
 from app.core.authorization.grants import ensure_grant_uses_resource_name
-from app.modules.function.domain.entities import FunctionStatus, FunctionRunStatus, FunctionType
+from app.modules.function.domain.entities import (
+    FunctionRunStatus,
+    FunctionStatus,
+    FunctionType,
+)
+from app.modules.function.domain.types import JsonObject
 
 
 class CreateFunctionRequest(BaseModel):
@@ -18,10 +23,10 @@ class CreateFunctionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    description: Optional[str] = None
-    icon_url: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
-    code: Optional[str] = Field(
+    description: str | None = None
+    icon_url: str | None = None
+    config: JsonObject | None = None
+    code: str | None = Field(
         default=None,
         description=(
             "Python source for the function. When provided, the platform analyzes "
@@ -36,10 +41,12 @@ class CreateFunctionRequest(BaseModel):
 class UpdateFunctionRequest(BaseModel):
     """Request to update a function."""
 
-    description: Optional[str] = None
-    icon_url: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
-    code: Optional[str] = Field(
+    model_config = ConfigDict(extra="forbid")
+
+    description: str | None = None
+    icon_url: str | None = None
+    config: JsonObject | None = None
+    code: str | None = Field(
         default=None,
         description=(
             "Updated Python source for the function. When provided, the platform "
@@ -47,20 +54,22 @@ class UpdateFunctionRequest(BaseModel):
             "config_schema on the returned function."
         ),
     )
-    type: Optional[FunctionType] = None
-    visibility: Optional[ResourceVisibility] = None
+    type: FunctionType | None = None
+    visibility: ResourceVisibility | None = None
 
 
 class ExecuteFunctionRequest(BaseModel):
     """Request to execute a function."""
 
-    input_data: Dict[str, Any] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="forbid")
+
+    input_data: JsonObject = Field(default_factory=dict)
 
 
 class FunctionResourcePermissionRequest(BaseModel):
     resource_type: ResourceType
     resource_name: str
-    permission_ids: List[str] = Field(default_factory=list)
+    permission_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -69,19 +78,19 @@ class FunctionResourcePermissionRequest(BaseModel):
 
 
 class FunctionPermissionsReplaceRequest(BaseModel):
-    grants: List[FunctionResourcePermissionRequest] = Field(default_factory=list)
+    grants: list[FunctionResourcePermissionRequest] = Field(default_factory=list)
 
 
 class FunctionResourcePermissionResponse(BaseModel):
     resource_type: ResourceType
     resource_name: str
-    permission_ids: List[str] = Field(default_factory=list)
+    permission_ids: list[str] = Field(default_factory=list)
 
 
 class FunctionPermissionsResponse(BaseModel):
     function_id: UUID
     function_name: str
-    grants: List[FunctionResourcePermissionResponse] = Field(default_factory=list)
+    grants: list[FunctionResourcePermissionResponse] = Field(default_factory=list)
 
 
 class FunctionResponse(BaseModel):
@@ -91,39 +100,35 @@ class FunctionResponse(BaseModel):
     pod_id: UUID
     user_id: UUID
     name: str
-    description: Optional[str] = None
-    icon_url: Optional[str] = None
-    input_schema: Dict[str, Any] = Field(
+    description: str | None = None
+    icon_url: str | None = None
+    input_schema: JsonObject = Field(
         description="Input JSON schema derived from the function code."
     )
-    output_schema: Dict[str, Any] = Field(
+    output_schema: JsonObject = Field(
         description="Output JSON schema derived from the function code."
     )
-    config_schema: Optional[Dict[str, Any]] = Field(
+    config_schema: JsonObject | None = Field(
         default=None,
         description="Optional configuration schema derived from the function code.",
     )
-    config: Optional[Dict[str, Any]] = None
+    config: JsonObject | None = None
     type: FunctionType
     status: FunctionStatus
     visibility: str = "POD"
-    code_path: Optional[str] = None
-    code_hash: Optional[str] = None
-    code: Optional[str] = (
+    code_path: str | None = None
+    revision_hash: str | None = None
+    code: str | None = (
         None  # Include code content if requested? Controller usually handles this.
     )
-    python_packages: List[str] = Field(
-        default_factory=list,
-        description="pip dependencies declared in the code's #python_packages header.",
-    )
-    created_at: Any
-    updated_at: Any
+    created_at: datetime | None
+    updated_at: datetime | None
 
     model_config = {"from_attributes": True}
 
 
 class FunctionActionResponse(FunctionResponse):
-    allowed_actions: List[str] = Field(default_factory=list)
+    allowed_actions: list[str] = Field(default_factory=list)
 
 
 class FunctionDetailResponse(FunctionActionResponse):
@@ -144,26 +149,25 @@ class FunctionSummaryResponse(BaseModel):
     pod_id: UUID
     user_id: UUID
     name: str
-    description: Optional[str] = None
-    icon_url: Optional[str] = None
-    config: Optional[Dict[str, Any]] = None
+    description: str | None = None
+    icon_url: str | None = None
+    config: JsonObject | None = None
     type: FunctionType
     status: FunctionStatus
     visibility: str = "POD"
-    code_path: Optional[str] = None
-    code_hash: Optional[str] = None
-    python_packages: List[str] = Field(default_factory=list)
-    created_at: Any
-    updated_at: Any
-    allowed_actions: List[str] = Field(default_factory=list)
+    code_path: str | None = None
+    revision_hash: str | None = None
+    created_at: datetime | None
+    updated_at: datetime | None
+    allowed_actions: list[str] = Field(default_factory=list)
 
 
 class FunctionListResponse(BaseModel):
     """List of functions."""
 
-    items: List[FunctionSummaryResponse]
+    items: list[FunctionSummaryResponse]
     limit: int
-    next_page_token: Optional[str] = None
+    next_page_token: str | None = None
 
 
 class FunctionRunResponse(BaseModel):
@@ -171,19 +175,18 @@ class FunctionRunResponse(BaseModel):
 
     id: UUID
     function_id: UUID
+    revision_hash: str | None = None
     user_id: UUID
-    input_data: Optional[Dict[str, Any]] = None
-    output_data: Optional[Dict[str, Any]] = None
+    input_data: JsonObject | None = None
+    output_data: JsonObject | None = None
     status: FunctionRunStatus
-    user_email: Optional[str] = None
-    job_id: Optional[str] = None
-    workspace_session_id: Optional[str] = None
-    workspace_process_id: Optional[str] = None
-    error: Optional[str] = None
-    logs: Optional[str] = None
-    started_at: Any
-    completed_at: Any
-    created_at: Any
+    user_email: str | None = None
+    job_id: str | None = None
+    error: str | None = None
+    logs: str | None = None
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime | None
 
     model_config = {"from_attributes": True}
 
@@ -195,9 +198,9 @@ class FunctionRunSummaryResponse(BaseModel):
     function_id: UUID
     user_id: UUID
     status: FunctionRunStatus
-    started_at: Any
-    completed_at: Any
-    created_at: Any
+    started_at: datetime | None
+    completed_at: datetime | None
+    created_at: datetime | None
 
     model_config = {"from_attributes": True}
 
@@ -205,9 +208,9 @@ class FunctionRunSummaryResponse(BaseModel):
 class FunctionRunListResponse(BaseModel):
     """List of function runs."""
 
-    items: List[FunctionRunSummaryResponse]
+    items: list[FunctionRunSummaryResponse]
     limit: int
-    next_page_token: Optional[str] = None
+    next_page_token: str | None = None
 
 
 class FunctionMessageResponse(BaseModel):

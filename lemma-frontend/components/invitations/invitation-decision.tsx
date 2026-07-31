@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
-import { ArrowRight, CheckCircle2, UserRound, XCircle } from "lucide-react";
+import { ArrowRight, CheckCircle2, UserRound, XCircle } from "@/components/ui/icons";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";

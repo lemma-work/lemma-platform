@@ -1,7 +1,7 @@
 'use client';
 
 import { EmptyState } from '@/components/shared/empty-state';
-import { Plug } from 'lucide-react';
+import { Plug } from '@/components/ui/icons';
 import type { Connector } from '@/lib/types';
 import { ConnectorCard } from './connector-card';
 import { hasAdvancedOptions } from './connector-utils';

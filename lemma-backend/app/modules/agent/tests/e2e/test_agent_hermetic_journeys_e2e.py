@@ -6,7 +6,6 @@ import asyncio
 import json
 from uuid import uuid4
 
-import httpx
 import pytest
 from fastapi import status
 
@@ -350,8 +349,33 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     authenticated_client,
     fixed_test_org,
     e2e_settings,
+    monkeypatch,
 ):
     """Provider profiles discover models and reject unsafe or unusable config."""
+    from app.modules.agent.services.runtime_profile_service import (
+        DiscoveredModel,
+        _validate_public_base_url,
+    )
+
+    async def discover_anthropic_models(**_kwargs):
+        return [DiscoveredModel("mock-safe-model", supports_vision=True)]
+
+    async def discover_openai_models(*, base_url: str, **_kwargs):
+        await _validate_public_base_url(base_url)
+        if base_url.endswith("/missing"):
+            return []
+        return [DiscoveredModel("mock-safe-model", supports_vision=True)]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_profile_service."
+        "_discover_anthropic_compatible_models",
+        discover_anthropic_models,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_profile_service."
+        "_discover_openai_compatible_models",
+        discover_openai_models,
+    )
     canary = "CANARY_ANTHROPIC_PROFILE_KEY_b628"
     created = await authenticated_client.post(
         f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
@@ -422,17 +446,16 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     assert unsafe_url.json()["message"] == "base_url must be a public http(s) URL"
     assert "CANARY_SSRF_KEY" not in unsafe_url.text
 
-    unavailable_daemon = await authenticated_client.post(
+    unavailable_harness = await authenticated_client.post(
         f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
         json={
-            "source": "USER_DAEMON",
-            "daemon_id": str(uuid4()),
-            "harness_kind": "CODEX",
+            "source": "AGENT_HOST",
+            "harness_id": str(uuid4()),
             "name": "Unavailable laptop",
         },
     )
-    assert unavailable_daemon.status_code == status.HTTP_400_BAD_REQUEST
-    assert "not available" in unavailable_daemon.json()["message"]
+    assert unavailable_harness.status_code == status.HTTP_400_BAD_REQUEST
+    assert "not available" in unavailable_harness.json()["message"]
 
 
 @pytest.mark.asyncio
@@ -567,13 +590,15 @@ async def test_public_http_sse_lifecycle_persists_messages_title_usage_and_histo
 
 
 @pytest.mark.asyncio
+@pytest.mark.workspace
 async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results(
     authenticated_client,
     fixed_test_org,
     e2e_settings,
     worker,
+    configure_workspace_api_url,
 ):
-    del worker
+    del worker, configure_workspace_api_url
     runtime = await _create_runtime_profile(
         authenticated_client,
         fixed_test_org,
@@ -1077,14 +1102,16 @@ async def test_scripted_pod_data_and_file_tools_cross_worker_authorization_bound
 
 
 @pytest.mark.asyncio
+@pytest.mark.workspace
 async def test_dynamic_function_and_agent_tools_create_durable_child_runs(
     authenticated_client,
     fixed_test_org,
     e2e_settings,
     worker,
+    configure_workspace_api_url,
 ):
     """Invoke granted functions and agents through the generated tool schemas."""
-    del worker
+    del worker, configure_workspace_api_url
     runtime = await _create_runtime_profile(
         authenticated_client,
         fixed_test_org,
@@ -1123,13 +1150,6 @@ async def {function_name}(
     assert created_function.status_code == status.HTTP_201_CREATED, (
         created_function.text
     )
-    async with httpx.AsyncClient(base_url=e2e_settings.agentbox_api_url) as client:
-        configured = await client.post(
-            "/__test__/function-executor/configure",
-            json={"modes": ["success"], "log_message": "dynamic function completed"},
-        )
-    assert configured.status_code == status.HTTP_200_OK, configured.text
-
     child_name = f"child_{uuid4().hex[:8]}"
     child = await authenticated_client.post(
         f"/pods/{pod_id}/agents",

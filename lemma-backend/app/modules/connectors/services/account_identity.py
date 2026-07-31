@@ -72,8 +72,12 @@ async def resolve_account_identity(
     still created, just unlabeled and not deduped)."""
     creds = _as_dict(credentials)
     profile = profile if isinstance(profile, dict) else {}
-    raw = creds.get("raw_response") if isinstance(creds.get("raw_response"), dict) else {}
-    user_data = creds.get("user_data") if isinstance(creds.get("user_data"), dict) else {}
+    raw = (
+        creds.get("raw_response") if isinstance(creds.get("raw_response"), dict) else {}
+    )
+    user_data = (
+        creds.get("user_data") if isinstance(creds.get("user_data"), dict) else {}
+    )
     app = (connector_id or "").lower()
 
     try:
@@ -88,9 +92,9 @@ async def resolve_account_identity(
         if app == "slack":
             return _slack_identity(creds, profile, raw, user_data)
         return _generic_identity(creds, profile, raw, user_data)
-    except Exception as exc:  # pragma: no cover - identity is best-effort
-        logger.warning(
-            "Account identity resolution failed for connector=%s: %s", app, exc
+    except Exception:  # pragma: no cover - identity is best-effort
+        logger.debug(
+            'connectors.account_identity.account_identity_resolution_connector_s.diagnostic'
         )
         return AccountIdentity()
 
@@ -106,8 +110,10 @@ async def _telegram_identity(creds: dict) -> AccountIdentity:
             response = await client.post(url)
             response.raise_for_status()
             result = (response.json() or {}).get("result") or {}
-    except Exception as exc:
-        logger.warning("Telegram getMe failed while resolving account identity: %s", exc)
+    except Exception:
+        logger.debug(
+            'connectors.account_identity.telegram_getme_while_resolving_account.diagnostic'
+        )
         return AccountIdentity()
     bot_id = result.get("id")
     bot_id_str = str(bot_id) if bot_id is not None else None
@@ -123,7 +129,9 @@ async def _telegram_identity(creds: dict) -> AccountIdentity:
 def _whatsapp_identity(creds: dict) -> AccountIdentity:
     phone_number_id = _str(creds.get("phone_number_id"))
     waba_id = _str(creds.get("waba_id"))
-    display_phone = _str(creds.get("display_phone_number")) or _str(creds.get("phone_number"))
+    display_phone = _str(creds.get("display_phone_number")) or _str(
+        creds.get("phone_number")
+    )
     return AccountIdentity(
         provider_account_id=phone_number_id or waba_id,
         display_name=display_phone or phone_number_id or waba_id,
@@ -140,7 +148,9 @@ def _resend_identity(creds: dict) -> AccountIdentity:
     )
 
 
-def _email_identity(creds: dict, profile: dict, raw: dict, user_data: dict) -> AccountIdentity:
+def _email_identity(
+    creds: dict, profile: dict, raw: dict, user_data: dict
+) -> AccountIdentity:
     email = (
         _nested(profile, "email_address")
         or _nested(profile, "emailAddress")
@@ -160,7 +170,9 @@ def _email_identity(creds: dict, profile: dict, raw: dict, user_data: dict) -> A
     )
 
 
-def _slack_identity(creds: dict, profile: dict, raw: dict, user_data: dict) -> AccountIdentity:
+def _slack_identity(
+    creds: dict, profile: dict, raw: dict, user_data: dict
+) -> AccountIdentity:
     team_name = (
         _nested(raw, "team", "name")
         or _nested(raw, "team_name")
@@ -180,7 +192,9 @@ def _slack_identity(creds: dict, profile: dict, raw: dict, user_data: dict) -> A
     )
 
 
-def _generic_identity(creds: dict, profile: dict, raw: dict, user_data: dict) -> AccountIdentity:
+def _generic_identity(
+    creds: dict, profile: dict, raw: dict, user_data: dict
+) -> AccountIdentity:
     email = _nested(profile, "email") or _str(creds.get("email"))
     provider_account_id = (
         _nested(raw, "provider_account_id")

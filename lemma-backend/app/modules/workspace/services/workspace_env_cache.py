@@ -6,7 +6,8 @@ import json
 from datetime import datetime, timezone
 from typing import Protocol
 
-from redis.asyncio import Redis
+
+from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
 from app.core.crypto import get_secret_cipher
@@ -34,7 +35,7 @@ class RedisWorkspaceEnvCache(WorkspaceEnvCachePort):
         key_prefix: str = "workspace:env:v2",
         cipher: SecretCipher | None = None,
     ):
-        self._redis = Redis.from_url(redis_url or settings.redis_url, decode_responses=True)
+        self._redis = get_redis(url=redis_url or settings.redis_url)
         self._key_prefix = key_prefix
         self._cipher = cipher or get_secret_cipher()
 
@@ -91,7 +92,10 @@ class RedisWorkspaceEnvCache(WorkspaceEnvCachePort):
             await self._redis.delete(*keys)
 
     async def close(self) -> None:
-        await self._redis.aclose()
+        # The client is shared process-wide; closing it here would break
+        # every other component still using the same pool. Disposal is
+        # close_redis_clients()'s job at lifespan shutdown.
+        self._redis = None
 
 
 def get_default_workspace_env_ttl_seconds() -> int:

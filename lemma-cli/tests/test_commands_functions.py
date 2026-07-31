@@ -179,3 +179,36 @@ def test_functions_runs_get_dispatches_api(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert captured.get("run_get_function") == "adder"
     assert captured.get("run_id") == "run-9"
+
+
+def test_functions_run_uses_low_latency_poll_default(monkeypatch):
+    client, captured = _make_client_and_captured()
+    _patch(monkeypatch, client)
+
+    def run_and_wait(
+        _functions,
+        *,
+        function,
+        inputs,
+        wait,
+        wait_timeout,
+        poll_interval,
+    ):
+        captured["run_function"] = function
+        captured["run_inputs"] = inputs
+        captured["wait"] = wait
+        captured["wait_timeout"] = wait_timeout
+        captured["poll_interval"] = poll_interval
+        return {"id": "run-1", "status": "COMPLETED"}
+
+    monkeypatch.setattr(functions, "_run_and_optionally_wait", run_and_wait)
+
+    result = runner.invoke(
+        app,
+        ["functions", "run", "adder", "--pod", "pod-1"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert captured["run_function"] == "adder"
+    assert captured["wait"] is True
+    assert captured["poll_interval"] == 0.5

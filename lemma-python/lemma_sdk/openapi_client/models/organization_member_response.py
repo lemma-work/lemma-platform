@@ -110,7 +110,7 @@ class OrganizationMemberResponse:
                 user_type_0 = UserResponse.from_dict(data)
 
                 return user_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UserResponse, data)
 

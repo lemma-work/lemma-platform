@@ -169,7 +169,7 @@ async def test_user_created_agent_gets_only_its_selected_toolsets():
 
 @pytest.mark.asyncio
 async def test_todo_toolset_gated_by_agent_definition(monkeypatch):
-    # RunToolAssembler feeds BOTH the in-process harness and the daemon MCP path,
+    # RunToolAssembler feeds BOTH the in-process harness and the remote MCP path,
     # so a user-created agent gets the todo tools only when its toolsets include
     # TODO — never implicitly.
     from app.modules.agent.tools import callable_tool_factory as ctf
@@ -309,26 +309,17 @@ async def test_display_resource_returns_browser_access_url(
     user_id = uuid4()
     calls: list[tuple[str, object]] = []
 
-    class FakeAgentBoxClient:
-        def __init__(self, *, base_url: str, api_key: str, timeout_seconds: float):
-            calls.append(("init", (base_url, api_key, timeout_seconds)))
-
-        async def ensure_sandbox(self, sandbox_id: str, *, env: dict[str, str]):
-            calls.append(("ensure_sandbox", (sandbox_id, env)))
-            return SimpleNamespace(id=sandbox_id)
-
-        async def get_app_access_url(
+    class FakeWorkspaceSandboxService:
+        async def create_browser_access(
             self,
-            sandbox_id: str,
-            app_name: str,
+            requested_user_id: UUID,
             *,
             ttl_seconds: int,
         ):
-            calls.append(("get_app_access_url", (sandbox_id, app_name, ttl_seconds)))
+            calls.append(("create_browser_access", (requested_user_id, ttl_seconds)))
             return SimpleNamespace(
-                app="browser",
                 url="https://browser.example/access-token",
-                expires_at=1893456000,
+                expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
             )
 
         async def close(self):
@@ -336,27 +327,8 @@ async def test_display_resource_returns_browser_access_url(
 
     monkeypatch.setattr(
         user_interaction_adapter,
-        "AgentBoxClient",
-        FakeAgentBoxClient,
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.WorkspaceSandboxService,
-        "_resolve_runtime",
-        lambda: "docker",
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.WorkspaceSandboxService,
-        "resolve_workspace_host_url_for_runtime",
-        lambda runtime, api_url: f"{runtime}:{api_url}",
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings, "agentbox_api_url", "https://agentbox.test"
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings, "agentbox_api_key", "agentbox-key"
-    )
-    monkeypatch.setattr(
-        user_interaction_adapter.settings, "api_url", "https://api.test"
+        "WorkspaceSandboxService",
+        FakeWorkspaceSandboxService,
     )
 
     ctx = SimpleNamespace(deps=SimpleNamespace(user_id=user_id))
@@ -372,15 +344,7 @@ async def test_display_resource_returns_browser_access_url(
     assert response.url == "https://browser.example/access-token"
     assert response.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
     assert calls == [
-        ("init", ("https://agentbox.test", "agentbox-key", 300.0)),
-        (
-            "ensure_sandbox",
-            (
-                user_id.hex,
-                {"LEMMA_BASE_URL": "docker:https://api.test"},
-            ),
-        ),
-        ("get_app_access_url", (user_id.hex, "browser", 1800)),
+        ("create_browser_access", (user_id, 1800)),
         ("close", None),
     ]
 
@@ -639,8 +603,8 @@ async def test_request_approval_auto_execute_failure_reports_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_interaction_tools_guide_instead_of_pausing_on_daemon_harness():
-    """On daemon/MCP runs (no pause signal) the tools never raise or block; they
+async def test_interaction_tools_guide_instead_of_pausing_on_remote_harness():
+    """On remote/MCP runs (no pause signal) the tools never raise or block; they
     return guidance so the model falls back to a conversational ask."""
     ask = await ask_user(
         _ask_ctx(supports_pause_signal=False),  # type: ignore[arg-type]
@@ -651,7 +615,7 @@ async def test_interaction_tools_guide_instead_of_pausing_on_daemon_harness():
     assert "continue this conversation" in (ask.message or "")
 
     approval = await request_approval(
-        _approval_ctx("approval-daemon", supports_pause_signal=False),  # type: ignore[arg-type]
+        _approval_ctx("approval-remote", supports_pause_signal=False),  # type: ignore[arg-type]
         tool_name="exec_command",
         args={"cmd": "ls"},
         title="List files?",
@@ -790,8 +754,8 @@ def test_runtime_context_brief_is_appended_to_agent_prompt():
     assert prompt.index("Answer briefly.") < prompt.index("# Runtime Context")
 
 
-def test_daemon_prompt_includes_surface_platform_fragment():
-    # Daemon harnesses (include_toolset_prompts=True) get per-platform guidance
+def test_remote_harness_prompt_includes_surface_platform_fragment():
+    # Remote harnesses (include_toolset_prompts=True) get per-platform guidance
     # appended in build_agent_instructions; the in-process harness gets it from
     # SurfacePlatformCapability instead.
     conversation = Conversation(pod_id=uuid4(), user_id=uuid4())
@@ -1463,7 +1427,9 @@ def test_surface_history_window_drops_runs_older_than_window(monkeypatch):
     recent = _run_with_age(run_index=1, hours_ago=1)
     runner = AgentRunnerService(uow_factory=object(), harness_registry=object())
 
-    selected = runner._select_runtime_history(runs=[old, recent], conversation=_surface_conversation())
+    selected = runner._select_runtime_history(
+        runs=[old, recent], conversation=_surface_conversation()
+    )
     grouped = _messages_by_run(selected)
 
     # The 48h-old run is outside the 24h window; only the recent run remains.
@@ -1619,10 +1585,10 @@ def test_persisted_agent_prompt_includes_web_search_with_toolset():
     assert "save-webpage https://example.com/article" in prompt
 
 
-def test_daemon_instructions_include_todo_guidance_only_with_toolset():
-    # Daemon harnesses get toolset prompts folded into instructions (no capability
+def test_remote_harness_instructions_include_todo_guidance_only_with_toolset():
+    # Remote harnesses get toolset prompts folded into instructions (no capability
     # layer). The todo task-list guidance must ride along — but only when the agent
-    # actually has TODO — so daemons behave like the in-process LEMMA harness.
+    # actually has TODO — so they behave like the in-process LEMMA harness.
     pod_id, user_id = uuid4(), uuid4()
     conversation = Conversation(pod_id=pod_id, user_id=user_id, agent_id=uuid4())
 
@@ -1640,10 +1606,10 @@ def test_daemon_instructions_include_todo_guidance_only_with_toolset():
         instruction="x",
         toolsets=[AgentToolset.TODO],
     )
-    daemon_prompt = build_agent_instructions(
+    remote_prompt = build_agent_instructions(
         agent=with_todo, conversation=conversation, ctx=object()
     )
-    assert "# Task list" in daemon_prompt and "write_todos" in daemon_prompt
+    assert "# Task list" in remote_prompt and "write_todos" in remote_prompt
 
     # The in-process LEMMA harness suppresses toolset prompts (the TodoCapability
     # supplies the same guidance), so it's not double-included here.

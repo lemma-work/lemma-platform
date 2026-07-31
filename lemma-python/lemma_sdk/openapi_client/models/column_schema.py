@@ -212,7 +212,7 @@ class ColumnSchema:
                 foreign_key_type_0 = ForeignKeySpec.from_dict(data)
 
                 return foreign_key_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ForeignKeySpec | None | Unset, data)
 
@@ -238,7 +238,7 @@ class ColumnSchema:
                 options_type_0 = cast(list[str], data)
 
                 return options_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(list[str] | None | Unset, data)
 
@@ -261,7 +261,7 @@ class ColumnSchema:
                 type_params_type_0 = ColumnSchemaTypeParamsType0.from_dict(data)
 
                 return type_params_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(ColumnSchemaTypeParamsType0 | None | Unset, data)
 

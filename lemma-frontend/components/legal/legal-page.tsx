@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowLeft, ArrowUpRight } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight } from '@/components/ui/icons';
 import { Logo } from '@/components/brand/logo';
 import { config } from '@/lib/config';
 import type { LegalDocument } from '@/lib/data/legal';

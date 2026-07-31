@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import type { CatalogSurface } from '@/lib/surfaces/catalog';
 import type { AssistantSurface } from '@/lib/types';
 import type {
     AvailableSurfaceChannelsResponse,
@@ -11,6 +12,8 @@ import type {
     SurfacePlatformSetupGuide,
     SurfaceSetupResponse,
     SurfaceUpdateRequest,
+    TelegramManagedBotSetupRequest,
+    TelegramManagedBotSetupResponse,
     UserSurfacesResponse,
 } from 'lemma-sdk';
 
@@ -25,6 +28,11 @@ export interface UpdatePodSurfaceInput {
     podId: string;
     surfaceName: string;
     data: SurfaceUpdateRequest;
+}
+
+export interface StartTelegramManagedBotSetupInput {
+    podId: string;
+    data: TelegramManagedBotSetupRequest;
 }
 
 const surfacesKey = (podId: string) => ['pod-surfaces', podId];
@@ -44,6 +52,26 @@ function invalidatePodSurfaces(
     queryClient.invalidateQueries({ queryKey: channelsPrefix(podId) });
     queryClient.invalidateQueries({ queryKey: userSurfacesKey() });
 }
+
+/**
+ * The connectable-surface catalog for a pod: which platforms this deployment can
+ * actually run, the credential schema to connect an account, and whether the org
+ * has already claimed each platform's Lemma-managed bot/number. Drives the setup
+ * modal so a platform the deployment can't support is never offered.
+ */
+export const useAvailableSurfaces = (podId: string | undefined, enabled = true) => {
+    return useQuery({
+        queryKey: ['pod-available-surfaces', podId],
+        queryFn: async () => {
+            const response = await getLemmaClient().podSurfaces.available(podId!);
+            return (response.surfaces ?? []) as CatalogSurface[];
+        },
+        enabled: Boolean(podId) && enabled,
+        // The claim half changes whenever any pod in the org connects a surface,
+        // so keep this fresher than the per-pod list.
+        staleTime: 15_000,
+    });
+};
 
 export const usePodSurfaces = (podId: string | undefined) => {
     return useQuery({
@@ -117,6 +145,51 @@ export const useCreatePodSurface = () => {
         mutationFn: ({ podId, data }: CreatePodSurfaceInput) =>
             getLemmaClient().podSurfaces.create(podId, data),
         onSuccess: (_data, vars) => invalidatePodSurfaces(queryClient, vars.podId),
+    });
+};
+
+export const useStartTelegramManagedBotSetup = () => {
+    return useMutation({
+        mutationFn: ({ podId, data }: StartTelegramManagedBotSetupInput) =>
+            getLemmaClient().podSurfaces.startTelegramBotSetup(
+                podId,
+                data,
+            ) as Promise<TelegramManagedBotSetupResponse>,
+    });
+};
+
+export function telegramManagedBotSetupPollInterval(
+    status: TelegramManagedBotSetupResponse['status'] | undefined,
+    queryStatus: 'pending' | 'error' | 'success',
+): number | false {
+    if (
+        queryStatus === 'error' ||
+        status === 'COMPLETE' ||
+        status === 'FAILED'
+    ) {
+        return false;
+    }
+    return 1500;
+}
+
+export const useTelegramManagedBotSetup = (
+    podId: string,
+    setupId: string | null | undefined,
+) => {
+    return useQuery({
+        queryKey: ['telegram-managed-bot-setup', podId, setupId],
+        queryFn: () =>
+            getLemmaClient().podSurfaces.getTelegramBotSetup(
+                podId,
+                setupId as string,
+            ) as Promise<TelegramManagedBotSetupResponse>,
+        enabled: Boolean(podId && setupId),
+        refetchInterval: (query) =>
+            telegramManagedBotSetupPollInterval(
+                query.state.data?.status,
+                query.state.status,
+            ),
+        refetchIntervalInBackground: true,
     });
 };
 

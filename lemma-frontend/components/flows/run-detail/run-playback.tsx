@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Clock } from 'lucide-react';
+import { Clock } from '@/components/ui/icons';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import { cn } from '@/lib/utils';
 import { NodeType, WorkflowNode } from '@/lib/types';

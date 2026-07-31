@@ -25,17 +25,31 @@ class UserService:
         self.organization_repository = organization_repository
         self.user_cache = user_cache
 
-    async def create_user(self, entity: UserEntity) -> UserEntity:
+    async def create_user(
+        self, entity: UserEntity, *, send_welcome: bool = True
+    ) -> UserEntity:
         entity.email = normalize_identity_email(entity.email)
         existing = await self.user_repository.get_by_email(entity.email)
         if existing:
             raise UserConflictError("User with this email already exists")
 
-        entity.mark_signed_up()
+        if send_welcome:
+            entity.mark_signed_up()
         user = await self.user_repository.create(entity)
         if self.user_cache is not None:
             await self.user_cache.set(user)
         return user
+
+    async def mark_email_verified(self, user_id: UUID) -> UserEntity:
+        """Persist the first verified transition and its one-time welcome event."""
+        user = await self.user_repository.get(user_id)
+        if not user:
+            raise UserNotFoundError()
+        user.mark_email_verified()
+        updated = await self.user_repository.update(user)
+        if self.user_cache is not None:
+            await self.user_cache.set(updated)
+        return updated
 
     async def get_user(self, user_id: UUID) -> UserEntity:
         if self.user_cache is not None:
@@ -56,7 +70,7 @@ class UserService:
         """Reject mobile/telegram values already held by another user.
 
         These power identity resolution, so duplicates must be blocked with a
-        clean 409 before the DB partial-unique indexes raise an IntegrityError.
+        clean 409 before the database unique indexes raise an IntegrityError.
         """
         digits = normalize_mobile_digits(entity.mobile_number)
         if digits:

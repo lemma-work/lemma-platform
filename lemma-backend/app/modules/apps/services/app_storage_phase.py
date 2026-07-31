@@ -49,6 +49,7 @@ class _AssetReadInputs:
     normalized_asset_path: str
     quoted_etag: str
     app: dict[str, str] | None = None
+    branding: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +126,7 @@ class AppStoragePhase:
                 content,
                 inputs.pod_id,
                 app=inputs.app,
+                branding=inputs.branding,
             )
         return AppAssetDocument(
             content=content,
@@ -182,7 +184,9 @@ class AppStoragePhase:
                 ),
             )
             raise
-        return _WrittenBundle(source_path=source_path, dist_archive_path=dist_archive_path)
+        return _WrittenBundle(
+            source_path=source_path, dist_archive_path=dist_archive_path
+        )
 
     async def cleanup_written_bundle(
         self, plan: _UploadPlan, written: _WrittenBundle
@@ -211,8 +215,11 @@ class AppStoragePhase:
             for release in cleanup.releases:
                 await self._delete_release_files(storage, release)
             await storage.delete_prefix("")
-        except Exception as exc:  # pragma: no cover - best-effort cleanup
-            logger.warning("App storage cleanup failed for %s: %s", cleanup.app_id, exc)
+        except Exception:  # pragma: no cover - best-effort cleanup
+            logger.debug(
+                'apps.app_storage_phase.app_storage_cleanup_s_s.diagnostic',
+                app_id=cleanup.app_id,
+            )
 
     async def _delete_release_files(
         self,

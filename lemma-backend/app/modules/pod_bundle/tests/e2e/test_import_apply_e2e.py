@@ -155,6 +155,61 @@ async def test_apply_idempotent_on_reapply(authenticated_client, test_pod, worke
     assert names.count("clients") == 1
 
 
+async def test_folder_exists_before_agent_grants_are_applied(
+    authenticated_client, test_pod, worker, tmp_path
+):
+    """A workload may grant access to a bundled folder; create the folder first."""
+    root = tmp_path / f"bundle-{uuid4().hex[:8]}"
+    _write(
+        root / "pod.json",
+        {"name": "Folder Grants", "format_version": 2, "variables": {}},
+    )
+    _write(
+        root / "files" / "knowledge" / ".folder.json",
+        {"visibility": "POD"},
+    )
+    _write(
+        root / "agents" / "researcher" / "researcher.json",
+        {
+            "name": "researcher",
+            "instruction": "Use the knowledge folder.",
+            "permissions": {
+                "grants": [
+                    {
+                        "resource_type": "folder",
+                        "resource_name": "/knowledge",
+                        "permission_ids": ["folder.read"],
+                    }
+                ]
+            },
+        },
+    )
+
+    pod_id = test_pod["id"]
+    import_id = await _upload(authenticated_client, pod_id, pack_bundle(root))
+    planned = await _wait(
+        authenticated_client,
+        pod_id,
+        import_id,
+        until={"AWAITING_CONFIRMATION", "FAILED"},
+    )
+    assert planned["status"] == "AWAITING_CONFIRMATION", planned
+    kinds = [step["kind"] for step in planned["plan"]["steps"]]
+    assert kinds.index("FILE") < kinds.index("AGENT_GRANTS")
+
+    apply = await authenticated_client.post(
+        f"/pods/{pod_id}/bundle/imports/{import_id}/apply", json={}
+    )
+    assert apply.status_code == status.HTTP_202_ACCEPTED, apply.text
+    completed = await _wait(
+        authenticated_client,
+        pod_id,
+        import_id,
+        until={"COMPLETED", "FAILED"},
+    )
+    assert completed["status"] == "COMPLETED", completed
+
+
 async def test_apply_destructive_requires_confirmation(
     authenticated_client, fixed_test_org, worker, tmp_path
 ):

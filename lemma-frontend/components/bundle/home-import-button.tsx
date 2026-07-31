@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Download } from 'lucide-react';
+import { Download } from '@/components/ui/icons';
 
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
 import { ImportDialog } from './import-dialog';

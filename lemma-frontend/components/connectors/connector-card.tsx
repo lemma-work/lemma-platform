@@ -3,7 +3,7 @@
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
-import { CheckCircle2, ExternalLink, Loader2, Plug, RefreshCw } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Loader2, Plug, RefreshCw } from '@/components/ui/icons';
 import Image from 'next/image';
 import type { Account, Connector } from '@/lib/types';
 import {

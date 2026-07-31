@@ -1,62 +1,42 @@
 import { createElement, type ReactElement } from 'react';
 import {
     BookOpen,
-    Briefcase,
-    CalendarDays,
     Contact2,
     Eye,
-    Flame,
     Inbox,
-    Lightbulb,
     ListChecks,
-    type LucideIcon,
+    type LemmaIcon,
     MessageSquare,
     MessagesSquare,
     Newspaper,
-    NotebookPen,
     PackageOpen,
     PanelsTopLeft,
-    Receipt,
     RefreshCw,
     Send,
     Sparkles,
     Workflow,
-} from 'lucide-react';
+} from '@/components/ui/icons';
 
 import type { Recipe, RecipeBuilds } from '@/lib/recipes/recipes';
 
-const BY_ID: Record<string, LucideIcon> = {
-    // quick wins
-    'personal-crm': Contact2,
-    'reading-digest': BookOpen,
-    'meeting-notes': ListChecks,
-    'job-tracker': Briefcase,
-    'habit-tracker': Flame,
-    'daily-log': NotebookPen,
-    // bots & surfaces
-    'slack-standup-bot': MessageSquare,
-    'expense-logger-bot': Receipt,
-    'ask-my-data-bot': MessagesSquare,
-    'email-intake-bot': Inbox,
-    'site-support-bot': MessagesSquare,
-    // creators & indies
-    'content-idea-engine': Lightbulb,
-    'newsletter-curator': Newspaper,
-    'competitor-watch': Eye,
-    'lead-finder': Send,
-    // consultants
-    'client-invoice-tracker': Receipt,
-    'proposal-drafter': NotebookPen,
-    // team ops
-    'renewal-review': RefreshCw,
-    'support-triage': MessagesSquare,
-    'approvals-queue': ListChecks,
-    'standup-digest': CalendarDays,
-    'content-pipeline': NotebookPen,
-    'lightweight-crm': Contact2,
+const BY_ID: Record<string, LemmaIcon> = {
+    'dashboard-internal-tool': PanelsTopLeft,
+    'inbox-review-queue': Inbox,
+    'knowledge-workspace': BookOpen,
+    'portal-intake': Send,
+    'whatsapp-agent': MessageSquare,
+    'telegram-agent-app': Send,
+    'slack-agent': MessagesSquare,
+    'email-agent': Inbox,
+    'teams-agent': MessagesSquare,
+    'monitor-alert': Eye,
+    'intake-triage': RefreshCw,
+    'approval-review': ListChecks,
+    'scheduled-briefing': Newspaper,
+    'follow-up-chaser': Contact2,
 };
 
-const BY_BUILDS: Record<RecipeBuilds, LucideIcon> = {
+const BY_BUILDS: Record<RecipeBuilds, LemmaIcon> = {
     app: PanelsTopLeft,
     agent: Sparkles,
     workflow: Workflow,
@@ -64,7 +44,7 @@ const BY_BUILDS: Record<RecipeBuilds, LucideIcon> = {
     pod: PackageOpen,
 };
 
-function pickRecipeIcon(recipe: Recipe): LucideIcon {
+function pickRecipeIcon(recipe: Recipe): LemmaIcon {
     if (recipe.source.kind === 'repo') return PackageOpen;
     return BY_ID[recipe.id] ?? BY_BUILDS[recipe.builds] ?? PanelsTopLeft;
 }

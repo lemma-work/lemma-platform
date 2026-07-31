@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDisplayMessageRows,
   collectCompletedRunTraceGroups,
+  completedTurnTraceDurations,
   dedupToolInvocations,
   isAskUserToolName,
   isRenderableUserInteractionInvocation,
@@ -10,6 +11,7 @@ import {
   latestPlanSummary,
   messageTextContent,
   normalizeAssistantMarkdown,
+  prepareMessagesForDisplay,
 } from "../core/agent/display.js";
 import { normalizeAgentToolName } from "../core/agent/tool-names.js";
 import { parseAssistantStreamEvent } from "../assistant-events.js";
@@ -90,6 +92,14 @@ describe("parseAssistantStreamEvent completed", () => {
     });
     expect(parsed.status).toBe("COMPLETED");
   });
+
+  it("treats a stopped replay as terminal", () => {
+    const parsed = parseAssistantStreamEvent({
+      type: "stopped",
+      data: { status: "STOPPED" },
+    });
+    expect(parsed.status).toBe("STOPPED");
+  });
 });
 
 function tool(id: string, inv: Record<string, unknown>): AssistantRenderableMessage {
@@ -156,42 +166,204 @@ describe("latestPlanSummary", () => {
     expect(plan?.steps).toHaveLength(2);
     expect(plan?.completedCount).toBe(1);
     expect(plan?.inProgressCount).toBe(1);
+    expect(plan?.pendingCount).toBe(0);
+    expect(plan?.isComplete).toBe(false);
     expect(plan?.activeStep).toBe("B");
   });
 
-  it("projects a write_todos invocation from markdown checklist lines", () => {
+  it("projects the two-state write_todos contract and identifies the next step", () => {
     const plan = latestPlanSummary([
       tool("a", {
         toolCallId: "c",
         toolName: "write_todos",
-        args: { todos: ["- [x] Fetch report", "- [~] Parse rows", "- [ ] Summarize"] },
+        args: { todos: ["- [x] Fetch report", "- [ ] Parse rows", "- [ ] Summarize"] },
         state: "result",
         result: {},
       }),
     ]);
     expect(plan?.steps).toHaveLength(3);
     expect(plan?.completedCount).toBe(1);
-    expect(plan?.inProgressCount).toBe(1);
-    expect(plan?.activeStep).toBe("Parse rows");
+    expect(plan?.inProgressCount).toBe(0);
+    expect(plan?.pendingCount).toBe(2);
+    expect(plan?.running).toBe(true);
+    expect(plan?.nextStep).toBe("Parse rows");
   });
 
-  it("prefers the write_todos result's full list over partial call args", () => {
+  it("prefers the backend's full markdown result over partial call args", () => {
     const plan = latestPlanSummary([
       tool("a", {
         toolCallId: "c",
-        toolName: "write_todos",
+        toolName: "mcp__lemma_tools__lemma_write_todos",
         args: { todos: ["- [x] Step two"] },
         state: "result",
-        result: { todos: [
-          { content: "Step one", status: "completed" },
-          { content: "Step two", status: "completed" },
-          { content: "Step three", status: "in_progress" },
-        ] },
+        result: { todos: ["- [x] Step one", "- [x] Step two", "- [ ] Step three"] },
       }),
     ]);
     expect(plan?.steps).toHaveLength(3);
     expect(plan?.completedCount).toBe(2);
-    expect(plan?.activeStep).toBe("Step three");
+    expect(plan?.nextStep).toBe("Step three");
+  });
+
+  it("marks a fully completed plan as complete and accepts the backend's star checkbox", () => {
+    const plan = latestPlanSummary([
+      tool("a", {
+        toolCallId: "c",
+        toolName: "write_todos",
+        args: { todos: ["* [*] Ship it"] },
+        state: "result",
+        result: {},
+      }),
+    ]);
+    expect(plan?.completedCount).toBe(1);
+    expect(plan?.pendingCount).toBe(0);
+    expect(plan?.running).toBe(false);
+    expect(plan?.isComplete).toBe(true);
+  });
+
+  it("merges a streaming partial write_todos update into the last full plan", () => {
+    const plan = latestPlanSummary([
+      tool("initial", {
+        toolCallId: "initial-plan",
+        toolName: "write_todos",
+        args: { todos: ["- [ ] Step one", "- [ ] Step two", "- [ ] Step three"] },
+        state: "result",
+        result: { todos: ["- [ ] Step one", "- [ ] Step two", "- [ ] Step three"] },
+      }),
+      tool("update", {
+        toolCallId: "update-step",
+        toolName: "write_todos",
+        args: { todos: ["- [x] Step one"] },
+        state: "call",
+      }),
+    ]);
+
+    expect(plan?.steps).toEqual([
+      { step: "Step one", status: "completed" },
+      { step: "Step two", status: "pending" },
+      { step: "Step three", status: "pending" },
+    ]);
+  });
+
+  it("recovers the observed XML-flattened plan and ignores accumulated history", () => {
+    const finalSnapshot =
+      "RESEARCH DONE</item>\n"
+      + "<item>DECK DONE</item>\n"
+      + "<item>WRITE HTML DONE</item>\n"
+      + "<item>RENDER PDF DONE</item>\n"
+      + "<item>UPLOAD DONE";
+    const plan = latestPlanSummary([
+      tool("corrupt-plan", {
+        toolCallId: "corrupt-plan",
+        toolName: "write_todos",
+        args: { todos: [finalSnapshot] },
+        state: "result",
+        result: {
+          todos: [
+            "- [ ] [ ] Research Hermes Agent</td>\n<item>- [ ] Build deck</td>",
+            "- [ ] [x] Research Hermes Agent</td>\n<item>- [x] Build deck</td>",
+            "- [ ] RESEARCH DONE",
+            "- [ ] DECK DONE",
+            "- [ ] WRITE HTML",
+            "- [ ] RENDER PDF",
+            "- [ ] UPLOAD",
+            `- [ ] ${finalSnapshot}`,
+          ],
+        },
+      }),
+    ]);
+
+    expect(plan?.steps).toEqual([
+      { step: "RESEARCH", status: "completed" },
+      { step: "DECK", status: "completed" },
+      { step: "WRITE HTML", status: "completed" },
+      { step: "RENDER PDF", status: "completed" },
+      { step: "UPLOAD", status: "completed" },
+    ]);
+    expect(plan?.isComplete).toBe(true);
+  });
+
+  it("recovers prose statuses from an in-progress flattened snapshot", () => {
+    const plan = latestPlanSummary([
+      tool("progress-plan", {
+        toolCallId: "progress-plan",
+        toolName: "write_todos",
+        args: {
+          todos: [
+            "Research Hermes Agent — done</item>\n"
+            + "<item>Outline & deck .pptx — done</item>\n"
+            + "<item>Write HTML report — in progress</item>\n"
+            + "<item>Convert HTML → PDF (weasyprint)</item>\n"
+            + "<item>Upload both to /me/ and share paths</item>\n</todos>",
+          ],
+        },
+        state: "call",
+      }),
+    ]);
+
+    expect(plan?.completedCount).toBe(2);
+    expect(plan?.inProgressCount).toBe(1);
+    expect(plan?.activeStep).toBe("Write HTML report");
+    expect(plan?.pendingCount).toBe(2);
+  });
+});
+
+describe("thought duration projection", () => {
+  it("does not infer thought seconds from message-to-final-answer timestamps", () => {
+    const messages: AssistantRenderableMessage[] = [
+      { id: "u", role: "user", content: "go", createdAt: new Date("2026-07-30T10:00:00Z") },
+      {
+        id: "note",
+        role: "assistant",
+        content: "Checking the data.",
+        kind: "THINKING",
+        createdAt: new Date("2026-07-30T10:00:01Z"),
+        metadata: { is_final_answer: false },
+      },
+      {
+        id: "final",
+        role: "assistant",
+        content: "Done.",
+        createdAt: new Date("2026-07-30T10:01:01Z"),
+        metadata: { is_final_answer: true },
+      },
+    ];
+
+    const durations = completedTurnTraceDurations(messages);
+    expect(durations.has(1)).toBe(true);
+    expect(durations.get(1)).toBeUndefined();
+
+    const projected = prepareMessagesForDisplay(messages)[1].message;
+    const reasoning = projected.parts?.find((part) => part.type === "reasoning");
+    expect(reasoning?.durationMs).toBeUndefined();
+  });
+
+  it("preserves a runtime-supplied thought duration", () => {
+    const messages: AssistantRenderableMessage[] = [
+      { id: "u", role: "user", content: "go" },
+      {
+        id: "thinking",
+        role: "assistant",
+        content: "",
+        kind: "THINKING",
+        parts: [{
+          id: "reasoning",
+          type: "reasoning",
+          text: "Checking the data.",
+          state: "done",
+          durationMs: 4200,
+        }],
+      },
+      {
+        id: "final",
+        role: "assistant",
+        content: "Done.",
+        metadata: { is_final_answer: true },
+      },
+    ];
+
+    const projected = prepareMessagesForDisplay(messages)[1].message;
+    const reasoning = projected.parts?.find((part) => part.type === "reasoning");
+    expect(reasoning?.durationMs).toBe(4200);
   });
 });
 

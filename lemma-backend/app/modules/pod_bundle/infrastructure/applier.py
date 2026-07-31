@@ -63,7 +63,6 @@ class BundleApplier:
         handler = {
             StepKind.TABLE: self._apply_table,
             StepKind.TABLE_DATA: self._apply_table_data,
-            StepKind.FUNCTION: self._apply_function,
             StepKind.AGENT: self._apply_agent,
             StepKind.AGENT_GRANTS: self._apply_agent_grants,
             StepKind.SCHEDULE: self._apply_schedule,
@@ -72,8 +71,8 @@ class BundleApplier:
             StepKind.FILE: self._apply_file,
         }.get(step.kind)
         if handler is None:
-            # APP is applied by the self-scoped AppStepRunner (it builds in the
-            # agentbox with no pooled connection held), so it never reaches here.
+            # APP and FUNCTION are applied by self-scoped runners because they
+            # perform AgentBox/storage I/O with no pooled connection held.
             raise StepNotApplicableError(
                 f"{step.kind.value} import is not supported yet; skipped."
             )
@@ -204,68 +203,6 @@ class BundleApplier:
             search_enabled=bool(meta.get("search_enabled", True)),
             visibility=meta.get("visibility") or "POD",
         )
-
-    # --- functions -------------------------------------------------------
-
-    async def _apply_function(self, step: PlanStep) -> None:
-        from app.composition.pod_bundle_resources import build_function_service
-        from app.modules.function.contracts import (
-            FunctionEntity,
-            FunctionUpdateEntity,
-        )
-
-        service = build_function_service(self._uow)
-        payload = self._load("functions", step.name)
-        code = payload.get("code")
-        code = code if isinstance(code, str) else None
-        existing = await service.get_function_by_name(
-            self._pod_id, step.name, self._user_id, raise_not_found=False, ctx=self._ctx
-        )
-        if existing is None:
-            entity = FunctionEntity(
-                pod_id=self._pod_id,
-                user_id=self._user_id,
-                name=step.name,
-                description=payload.get("description"),
-                icon_url=payload.get("icon_url"),
-                config=payload.get("config"),
-                visibility=payload.get("visibility") or "POD",
-            )
-            function = await service.create_function(
-                entity, self._user_id, code=code, ctx=self._ctx
-            )
-        else:
-            function = await service.update_function(
-                self._pod_id,
-                step.name,
-                FunctionUpdateEntity(
-                    description=payload.get("description"),
-                    icon_url=payload.get("icon_url"),
-                    code=code,
-                    config=payload.get("config"),
-                    visibility=payload.get("visibility"),
-                ),
-                self._user_id,
-                ctx=self._ctx,
-            )
-
-        # Resource grants (e.g. datastore-table read/write) are what let the
-        # function's LemmaDataStoreClient actually reach its tables at run time.
-        # Apply them in the same short UoW as the create/update so an imported
-        # function is executable immediately, then drop the delegated-token env
-        # cache so the new scopes take effect on the next run.
-        grants = _grants_from_payload(payload)
-        if grants and function.id is not None:
-            from app.composition.pod_bundle_apps import (
-                invalidate_function_workspace_env_cache,
-            )
-
-            await self._apply_grants(
-                grantee_type="FUNCTION", grantee_id=function.id, grants=grants
-            )
-            await invalidate_function_workspace_env_cache(
-                pod_id=self._pod_id, function_id=function.id
-            )
 
     # --- agents ----------------------------------------------------------
 
@@ -434,9 +371,7 @@ class BundleApplier:
         # fields survive — this is what previously dropped account_id,
         # connector_trigger_id, filter_instruction and filter_output_schema.
         fields = {
-            key: value
-            for key, value in payload.items()
-            if key in SCHEDULE_APPLY_FIELDS
+            key: value for key, value in payload.items() if key in SCHEDULE_APPLY_FIELDS
         }
         fields["name"] = step.name
         fields["schedule_type"] = ScheduleType(str(payload.get("schedule_type")))
@@ -522,10 +457,9 @@ class BundleApplier:
         # The surface's pod-unique name (defaults to the lowercased platform);
         # the upsert is keyed by it so several surfaces of the same platform
         # round-trip.
-        resolved_name = (
-            str(payload.get("name") or "").strip()
-            or AgentSurfaceEntity.default_name_for(platform)
-        )
+        resolved_name = str(
+            payload.get("name") or ""
+        ).strip() or AgentSurfaceEntity.default_name_for(platform)
 
         # Only the create-request fields (extra='forbid'); drop export-only keys.
         # account_id has already been substituted from the provided account
@@ -560,7 +494,9 @@ class BundleApplier:
         service = get_surface_service(self._uow)
 
         agent = (
-            await _get_agent(agent_service, self._pod_id, request.default_agent_name, self._ctx)
+            await _get_agent(
+                agent_service, self._pod_id, request.default_agent_name, self._ctx
+            )
             if request.default_agent_name
             else None
         )
@@ -574,7 +510,7 @@ class BundleApplier:
 
         if existing is None:
             config = await _resolve_surface_config(
-                pod_id=self._pod_id,
+                uow=self._uow, pod_id=self._pod_id, platform=platform,
                 config_input=request.config,
                 agent_service=agent_service,
                 ctx=self._ctx,
@@ -596,8 +532,8 @@ class BundleApplier:
             return
 
         config = await _merge_surface_config(
+            uow=self._uow, pod_id=self._pod_id, platform=platform,
             existing=existing.config,
-            pod_id=self._pod_id,
             config_input=request.config,
             agent_service=agent_service,
             ctx=self._ctx,
@@ -653,11 +589,11 @@ def _grants_from_payload(payload: dict[str, Any]) -> list[_GrantInput]:
         try:
             resource_type = ResourceType(str(raw_type))
         except ValueError:
-            logger.warning("Skipping grant with unknown resource_type %r", raw_type)
+            logger.debug('pod_bundle.applier.skipping_grant_unknown_resource_type.diagnostic', raw_type=raw_type)
             continue
         resource_name = entry.get("resource_name")
         if not resource_name:
-            logger.warning("Skipping grant without a resource_name: %r", entry)
+            logger.debug('pod_bundle.applier.skipping_grant_without_resource_name.diagnostic')
             continue
         grants.append(
             _GrantInput(
@@ -695,7 +631,7 @@ def _agent_toolsets(payload: dict[str, Any]) -> list[Any]:
         try:
             toolset = AgentToolset(str(raw))
         except ValueError:
-            logger.warning("Skipping unknown agent toolset %r", raw)
+            logger.debug('pod_bundle.applier.skipping_unknown_agent_toolset_r.diagnostic')
             continue
         if toolset is AgentToolset.VIEW_IMAGE:
             continue
@@ -716,7 +652,7 @@ def _read_json_file(path: Path) -> dict[str, Any]:
 
     try:
         parsed = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
 

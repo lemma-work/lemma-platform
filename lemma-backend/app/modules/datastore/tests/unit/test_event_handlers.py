@@ -160,4 +160,4 @@ async def test_enqueue_file_processing_covers_disabled_and_duplicate_paths(monke
     monkeypatch.setattr(handlers.settings, "e2e_disable_worker_file_autoindex", False)
     await handlers._enqueue_file_processing(event, logger)
     queue.enqueue.assert_awaited_once()
-    assert "duplicate" in logger.info.call_args.args[0]
+    logger.info.assert_not_called()

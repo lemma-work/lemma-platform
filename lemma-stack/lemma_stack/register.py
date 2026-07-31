@@ -37,7 +37,7 @@ def register_local_server(
     if path.exists():
         try:
             config = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             config = {}
     if not isinstance(config, dict):
         config = {}

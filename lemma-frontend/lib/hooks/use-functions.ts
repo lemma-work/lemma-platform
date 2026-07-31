@@ -2,10 +2,10 @@
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
-import { ConnectorMode, ResourceType, TableAccessMode, type ConnectorAccessConfig, type CreateFunctionData, type Function as FunctionType, type FunctionRun, type ResourcePermissionGrant, type TableAccessEntry, type UpdateFunctionData } from '@/lib/types';
+import { ConnectorMode, ResourceType, AccessMode, type ConnectorAccessConfig, type CreateFunctionData, type FolderAccessEntry, type Function as FunctionType, type FunctionRun, type ResourcePermissionGrant, type TableAccessEntry, type UpdateFunctionData } from '@/lib/types';
 
-function tablePermissionIds(mode: TableAccessMode | string | undefined): string[] {
-    if (mode === TableAccessMode.READ) {
+function tablePermissionIds(mode: AccessMode | string | undefined): string[] {
+    if (mode === AccessMode.READ) {
         return ['datastore.table.read', 'datastore.record.read'];
     }
     return ['datastore.table.read', 'datastore.record.read', 'datastore.record.write'];
@@ -16,14 +16,34 @@ function grantsToTableAccess(grants: ResourcePermissionGrant[] | undefined): Tab
         .filter((grant) => grant.resource_type === ResourceType.DATASTORE_TABLE)
         .map((grant) => ({
             table_name: grant.resource_name,
-            mode: grant.permission_ids?.includes('datastore.record.write') ? TableAccessMode.WRITE : TableAccessMode.READ,
+            mode: grant.permission_ids?.includes('datastore.record.write') ? AccessMode.WRITE : AccessMode.READ,
         }));
 }
 
-function grantsToFolderAccess(grants: ResourcePermissionGrant[] | undefined): string[] {
+function folderPermissionIds(mode: AccessMode | string | undefined): string[] {
+    if (mode === AccessMode.READ) {
+        return ['folder.read'];
+    }
+    return ['folder.read', 'folder.write'];
+}
+
+function grantsToFolderAccess(grants: ResourcePermissionGrant[] | undefined): FolderAccessEntry[] {
     return (grants || [])
         .filter((grant) => grant.resource_type === ResourceType.FOLDER)
-        .map((grant) => grant.resource_name);
+        .map((grant) => ({
+            folder_path: grant.resource_name,
+            mode: grant.permission_ids?.includes('folder.write') ? AccessMode.WRITE : AccessMode.READ,
+        }));
+}
+
+/** Folder grants that predate the read/write split kept full access. */
+function normalizeFolderAccess(raw: unknown): FolderAccessEntry[] | undefined {
+    if (!Array.isArray(raw)) return undefined;
+    return raw.map((entry) => (
+        typeof entry === 'string'
+            ? { folder_path: entry, mode: AccessMode.WRITE }
+            : entry as FolderAccessEntry
+    ));
 }
 
 function grantsToConnectorAccess(grants: ResourcePermissionGrant[] | undefined): ConnectorAccessConfig[] {
@@ -60,11 +80,11 @@ async function buildResourceGrants(
         });
     }
 
-    for (const folderName of data.accessible_folders || []) {
+    for (const folder of data.accessible_folders || []) {
         grants.push({
             resource_type: ResourceType.FOLDER,
-            resource_name: folderName,
-            permission_ids: ['folder.read', 'folder.write'],
+            resource_name: folder.folder_path,
+            permission_ids: folderPermissionIds(folder.mode),
         });
     }
 
@@ -122,7 +142,7 @@ function normalizeFunction(raw: Record<string, unknown>): FunctionType {
         allowed_actions: Array.isArray(raw.allowed_actions) ? raw.allowed_actions.filter((action): action is string => typeof action === 'string') : undefined,
         permissions,
         accessible_tables: (raw.accessible_tables as FunctionType['accessible_tables'] | undefined) ?? grantsToTableAccess(grants),
-        accessible_folders: (raw.accessible_folders as string[] | undefined) ?? grantsToFolderAccess(grants),
+        accessible_folders: normalizeFolderAccess(raw.accessible_folders) ?? grantsToFolderAccess(grants),
         accessible_connectors: (raw.accessible_connectors as FunctionType['accessible_connectors'] | undefined) ?? grantsToConnectorAccess(grants),
         status: raw.status as FunctionType['status'],
         type: raw.type as FunctionType['type'],
@@ -150,8 +170,8 @@ function normalizeFunctionRun(raw: Record<string, unknown>): FunctionRun {
         id: String(raw.id || ''),
         function_id: String(raw.function_id || ''),
         user_id: String(raw.user_id || ''),
-        input_data: (raw.input_data as Record<string, unknown> | null | undefined) ?? null,
-        output_data: outputData,
+        input_data: ((raw.input_data as Record<string, unknown> | null | undefined) ?? null) as FunctionRun['input_data'],
+        output_data: outputData as FunctionRun['output_data'],
         status: raw.status as FunctionRun['status'],
         error: (raw.error as string | null | undefined) ?? null,
         logs: (raw.logs as string | null | undefined) ?? null,

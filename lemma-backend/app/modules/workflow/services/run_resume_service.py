@@ -44,7 +44,8 @@ class RunResumeService:
         )
         if wait is None:
             logger.debug(
-                "No active workflow wait for agent conversation %s", conversation_id
+                "workflow.run_resume_service.no_active_workflow_wait_agent.observed",
+                conversation_id=conversation_id,
             )
             return False
 
@@ -73,7 +74,10 @@ class RunResumeService:
             WorkflowRunWaitType.FUNCTION, function_run_id
         )
         if wait is None:
-            logger.debug("No active workflow wait for function run %s", function_run_id)
+            logger.debug(
+                "workflow.run_resume_service.no_active_workflow_wait_function.observed",
+                function_run_id=function_run_id,
+            )
             return False
 
         if output is None:
@@ -148,13 +152,14 @@ class RunResumeService:
                 if handled:
                     acted += 1
             except Exception:
-                logger.exception(
+                logger.error(
                     "workflow.reconcile.failed",
                     wait_id=str(wait.id),
                     run_id=str(wait.run_id),
+                    exc_info=True,
                 )
         if acted:
-            logger.info("workflow.reconcile.recovered", count=acted)
+            logger.debug("workflow.reconcile.recovered", count=acted)
         return acted
 
     # -- internals ---------------------------------------------------------------
@@ -231,11 +236,9 @@ class RunResumeService:
             return False
         try:
             scheduled_at = datetime.fromisoformat(scheduled_at_raw)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             logger.warning(
-                "workflow.reconcile.time_wait_bad_scheduled_at",
-                wait_id=str(wait.id),
-                scheduled_at=scheduled_at_raw,
+                "workflow.reconcile.time_wait_bad_scheduled_at", wait_id=str(wait.id)
             )
             return False
         if scheduled_at.tzinfo is None:
@@ -247,7 +250,6 @@ class RunResumeService:
             "workflow.reconcile.firing_lost_timer",
             run_id=str(wait.run_id),
             wait_id=str(wait.id),
-            external_ref=wait.external_ref,
         )
         ctx = await self._run_context_for_wait(wait)
         ctx_token = set_current_context(ctx)

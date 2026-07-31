@@ -25,6 +25,8 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      agentbox: ${{ steps.filter.outputs.agentbox }}
+      agent_host: ${{ steps.filter.outputs.agent_host }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -67,6 +69,74 @@ jobs:
               - '.github/actions/setup-apple-signing/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-desktop.yml'
+            agent_host:
+              - 'agent-host/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release-agent-host.yml'
+            agentbox:
+              - 'agentbox/**'
+              - 'agentbox-client/**'
+              # agentbox/uv.lock pins lemma-sdk as an editable path dependency on
+              # ../lemma-python, so a version bump there makes the lock stale and
+              # `uv sync --locked` fail. Without this the job would not run on
+              # that change and the rot would surface on some later, unrelated PR.
+              - 'lemma-python/**'
+              - '.github/workflows/ci.yml'
+
+  agentbox:
+    name: AgentBox providers, state, and runtime
+    needs: changes
+    if: needs.changes.outputs.agentbox == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agentbox
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: agentbox
+          POSTGRES_PASSWORD: agentbox
+          POSTGRES_DB: agentbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentbox -d agentbox_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: agentbox/uv.lock
+      - name: Install AgentBox with every provider and state backend
+        run: uv sync --all-extras --locked
+      - name: Ruff
+        run: uv run ruff check agentbox tests ../agentbox-client/agentbox_client ../agentbox-client/tests
+      - name: AgentBox OpenAPI contract drift
+        run: uv run python ../agentbox-client/scripts/generate.py --check
+      - name: AgentBox non-e2e tests with real PostgreSQL parity
+        run: uv run python -m pytest tests -m "not e2e"
+        env:
+          AGENTBOX_TEST_POSTGRES_URL: postgresql://agentbox:agentbox@localhost:5432/agentbox_test
+      - name: AgentBox client tests
+        run: uv run python -m pytest ../agentbox-client/tests
+      - name: Docker daemon smoke
+        run: |
+          docker version
+          docker info
+      - name: Build canonical Docker conformance images
+        run: make build-test-images
+      - name: Real Docker provider contract
+        timeout-minutes: 20
+        run: >-
+          uv run python -m pytest
+          tests/adapters/test_docker_real.py
+          --junitxml=agentbox-docker-e2e.xml
+        env:
+          AGENTBOX_RUN_DOCKER_TESTS: "1"
 
   backend-unit:
     name: lemma-backend unit
@@ -96,7 +166,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync deps
-        run: uv sync
+        run: uv sync --extra local
       - name: Unit tests with coverage
         run: make coverage-backend-unit
         env:
@@ -135,7 +205,7 @@ jobs:
         with:
           enable-cache: true
       - name: Sync deps
-        run: uv sync
+        run: uv sync --extra local
       - name: Ruff handwritten backend
         run: make lint
       - name: Async-safety lint
@@ -187,7 +257,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+      - name: Check Python SDK lockfile
+        working-directory: lemma-python
+        run: uv lock --check
       - name: Install SDK + CLI
         run: |
           python -m pip install --upgrade pip
@@ -249,7 +323,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - uses: actions/setup-node@v5
         with:
           node-version: 24
@@ -353,7 +427,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: Install uv
         run: pip install uv
       - name: Install lemma-cli from local checkout
@@ -391,6 +465,45 @@ jobs:
           if ($content -notmatch "lemma-stack") { Write-Error "install.ps1 missing lemma-stack"; exit 1 }
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
+
+  agent-host:
+    name: Agent Host crate
+    needs: changes
+    if: needs.changes.outputs.agent_host == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent-host/target
+          key: agent-host-cargo-${{ runner.os }}-${{ hashFiles('agent-host/Cargo.lock') }}
+          restore-keys: agent-host-cargo-${{ runner.os }}-
+
+      # reqwest is built with native-tls, so the crate links against the system
+      # OpenSSL rather than vendoring one.
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Check formatting
+        working-directory: agent-host
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: agent-host
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: agent-host
+        run: cargo test --locked
 
   desktop:
     name: macOS desktop build + codesign
@@ -448,31 +561,95 @@ jobs:
       - name: Verify baked splash concepts are committed
         run: git diff --exit-code desktop/ui/concepts.gen.json
 
-      - name: Build supervisor sidecar
+      - name: Build native local sidecars
         run: desktop/scripts/build-sidecar.sh
 
       - name: Run desktop tests
         working-directory: desktop
         run: cargo test --locked
 
-      - name: Build and codesign DMG
+      - name: Stage CI online runtime manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./desktop/tauri.conf.json').version")"
+          mkdir -p desktop/runtime
+          jq -n \
+            --arg version "${version}" \
+            '{
+              schema_version: 1,
+              version: $version,
+              host_packs: {
+                "aarch64-apple-darwin": {
+                  url: "https://downloads.example.invalid/lemma-host-pack.zip",
+                  sha256: ("0" * 64),
+                  size: 1,
+                  expanded_size: 1,
+                  format: "zip",
+                  platform: "macos",
+                  architecture: "aarch64",
+                  runtime_version: $version
+                }
+              },
+              guest_runtimes: {
+                "macos-aarch64": {
+                  url: "https://downloads.example.invalid/lemma-guest-runtime.zip",
+                  sha256: ("0" * 64),
+                  size: 1,
+                  expanded_size: 1,
+                  format: "zip",
+                  platform: "linux",
+                  architecture: "aarch64",
+                  runtime_version: $version
+                }
+              }
+            }' > desktop/runtime/lemma-local.json
+
+      - name: Sign virtualization helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          helper="desktop/binaries/lemma-vz-aarch64-apple-darwin"
+          args=(
+            --force
+            --options runtime
+            --entitlements desktop/entitlements.plist
+            --sign "${APPLE_SIGNING_IDENTITY}"
+          )
+          if [[ "${APPLE_SIGNING_IDENTITY}" != "-" ]]; then
+            args+=(--timestamp)
+          fi
+          codesign "${args[@]}" "${helper}"
+          codesign --verify --strict --verbose=2 "${helper}"
+          codesign -d --entitlements :- "${helper}" 2>&1 \
+            | grep -F "com.apple.security.virtualization"
+
+      - name: Build and codesign online DMG
         working-directory: desktop
-        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.dist.conf.json
+        run: npx -y @tauri-apps/cli@2.11.4 build --config tauri.online.conf.json
 
       - name: Verify application signature
         shell: bash
         run: |
           set -euo pipefail
           app="desktop/target/release/bundle/macos/Lemma.app"
-          sidecar="${app}/Contents/MacOS/lemma-supervisor"
-          uv="${app}/Contents/MacOS/uv"
+          locald="${app}/Contents/MacOS/lemma-locald"
+          runtime_bridge="${app}/Contents/MacOS/lemma-runtime"
+          vz="${app}/Contents/Resources/lemma-vz"
 
           test -d "${app}"
-          test -x "${sidecar}"
-          test -x "${uv}"
+          test -x "${locald}"
+          test -x "${runtime_bridge}"
+          test -x "${vz}"
+          test -f "${app}/Contents/Resources/lemma-local.json"
+          test ! -e "${app}/Contents/MacOS/lemma-supervisor"
+          test ! -e "${app}/Contents/MacOS/uv"
           codesign --verify --deep --strict --verbose=2 "${app}"
-          codesign --verify --strict --verbose=2 "${sidecar}"
-          codesign --verify --strict --verbose=2 "${uv}"
+          codesign --verify --strict --verbose=2 "${locald}"
+          codesign --verify --strict --verbose=2 "${runtime_bridge}"
+          codesign --verify --strict --verbose=2 "${vz}"
+          codesign -d --entitlements :- "${vz}" 2>/dev/null \
+            | grep -F "com.apple.security.virtualization"
 
           signature_info="$(codesign -dvvv "${app}" 2>&1)"
           printf '%s\n' "${signature_info}"
@@ -510,6 +687,8 @@ jobs:
       - install-experience
       - windows-cli
       - desktop
+      - agentbox
+      - agent-host
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed

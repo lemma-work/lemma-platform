@@ -123,14 +123,6 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         if not isinstance(callback_query, dict):
             return None
         token = str(callback_query.get("data") or "").strip()
-        stored = await get_callback_token(token)
-        if not stored:
-            return None
-        callback_id = str(stored.get("callback_id") or "").strip()
-        if not callback_id:
-            return None
-        decision = str(stored.get("decision") or "").strip()
-        header = str(stored.get("header") or "").strip()
         message = callback_query.get("message") or {}
         chat = message.get("chat") or {}
         from_user = callback_query.get("from") or {}
@@ -139,19 +131,65 @@ class TelegramSurfaceAdapter(BaseSurfaceAdapter):
         common_kwargs: dict[str, Any] = {
             "platform": "TELEGRAM",
             "external_channel_id": chat_id,
-            "external_thread_id": str(thread_id) if thread_id is not None else None,
+            "external_thread_id": (
+                str(thread_id) if thread_id is not None else chat_id
+            ),
             "external_user_id": str(from_user.get("id") or "").strip() or None,
-            "callback_id": callback_id,
             "reply_target": {"chat_id": chat_id} if chat_id else {},
             "dedup_id": str(callback_query.get("id") or "").strip() or None,
             "raw_payload": payload,
         }
+        stored = await get_callback_token(token)
+        if not stored:
+            return ParsedSurfaceInteraction(
+                interaction_state="expired",
+                **common_kwargs,
+            )
+        action = str(stored.get("action") or "").strip()
+        if action:
+            return ParsedSurfaceInteraction(
+                action=action,
+                **common_kwargs,
+            )
+        callback_id = str(stored.get("callback_id") or "").strip()
+        if not callback_id:
+            return ParsedSurfaceInteraction(
+                interaction_state="expired",
+                **common_kwargs,
+            )
+        common_kwargs["callback_id"] = callback_id
+        decision = str(stored.get("decision") or "").strip()
+        header = str(stored.get("header") or "").strip()
         if decision:
             return ParsedSurfaceInteraction(approval_decision=decision, **common_kwargs)
         value = stored.get("value")
-        if not header or value == _OTHER_CALLBACK_VALUE:
-            return None
+        if value == _OTHER_CALLBACK_VALUE:
+            return ParsedSurfaceInteraction(
+                interaction_state="other",
+                **common_kwargs,
+            )
+        if not header:
+            return ParsedSurfaceInteraction(
+                interaction_state="expired",
+                **common_kwargs,
+            )
         return ParsedSurfaceInteraction(values={header: value}, **common_kwargs)
+
+    async def acknowledge_interaction(
+        self,
+        *,
+        credentials: dict[str, Any],
+        interaction: ParsedSurfaceInteraction,
+        text: str | None = None,
+        show_alert: bool = False,
+        clear_actions: bool = False,
+    ) -> None:
+        await TelegramPlatformService(credentials).acknowledge_interaction(
+            interaction,
+            text=text,
+            show_alert=show_alert,
+            clear_actions=clear_actions,
+        )
 
     async def add_processing_indicator(
         self,

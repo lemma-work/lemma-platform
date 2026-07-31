@@ -130,6 +130,24 @@ function requireConversationId(conversationId?: string | null): string {
   return conversationId;
 }
 
+function waitForStreamReconnect(attempt: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+
+  const delayMs = Math.min(2 ** Math.min(Math.max(attempt - 1, 0), 4) * 1000, 10_000);
+  return new Promise((resolve) => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const handleAbort = () => {
+      clearTimeout(timeoutId);
+      resolve(false);
+    };
+    timeoutId = setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve(true);
+    }, delayMs);
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
+}
+
 function normalizeScope(
   client: LemmaClient,
   defaults: ConversationScope,
@@ -573,6 +591,7 @@ export class AgentController {
     this.patch({ isStreaming: true, error: null });
     this.clearStreamingText();
     let sawTerminalStatus = false;
+    let streamFailure: unknown = null;
 
     try {
       for await (const event of readSSE(stream)) {
@@ -636,53 +655,69 @@ export class AgentController {
         }
       }
 
+    } catch (streamError) {
+      if (!(streamError instanceof Error && streamError.name === "AbortError")) {
+        streamFailure = streamError;
+      }
+    }
+
+    try {
       if (!controller.signal.aborted) {
-        if (!sawTerminalStatus && isConversationRunningStatus(this.state.status)) {
-          const reconId = streamConversationId ?? this.state.conversationId;
-          if (reconId && this.streamReconnectCount < 3) {
+        const syncConversationId = streamConversationId ?? this.state.conversationId;
+        if (!sawTerminalStatus && syncConversationId) {
+          while (!controller.signal.aborted) {
+            const latestConversation = await this.refreshConversation(syncConversationId);
+            await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
+            if (controller.signal.aborted) break;
+
+            const latestStatus = latestConversation?.status ?? this.state.status;
+            if (!isConversationRunningStatus(latestStatus)) {
+              this.streamReconnectCount = 0;
+              streamFailure = null;
+              break;
+            }
+
             this.streamReconnectCount += 1;
-            const delay = Math.pow(2, this.streamReconnectCount - 1) * 1000;
-            await new Promise<void>((resolve) => setTimeout(resolve, delay));
-            if (!controller.signal.aborted && isConversationRunningStatus(this.state.status)) {
-              try {
-                const scope = normalizeScope(this.client, this.scopeDefaults);
-                const scopedClient = applyPodScope(this.client, scope.podId);
-                const newStream = await scopedClient.conversations.resumeStream(reconId, {
-                  pod_id: scope.podId ?? undefined,
-                  signal: controller.signal,
-                });
-                // Sync any messages delivered while the stream was dropped.
-                await this.loadMessages({ conversationId: reconId, limit: 100 });
-                this.streamReconnectCount = 0;
-                return this.consume({
-                  stream: newStream,
-                  controller,
-                  streamConversationId: reconId,
-                  syncAfterStream,
-                });
-              } catch { /* fall through to WAITING */ }
+            const shouldReconnect = await waitForStreamReconnect(
+              this.streamReconnectCount,
+              controller.signal,
+            );
+            if (!shouldReconnect) break;
+
+            try {
+              const scope = normalizeScope(this.client, this.scopeDefaults);
+              const scopedClient = applyPodScope(this.client, scope.podId);
+              const newStream = await scopedClient.conversations.resumeStream(syncConversationId, {
+                pod_id: scope.podId ?? undefined,
+                signal: controller.signal,
+              });
+              this.streamReconnectCount = 0;
+              return await this.consume({
+                stream: newStream,
+                controller,
+                streamConversationId: syncConversationId,
+                syncAfterStream,
+              });
+            } catch (reconnectError) {
+              if (reconnectError instanceof Error && reconnectError.name === "AbortError") break;
+              streamFailure = reconnectError;
             }
           }
-          this.streamReconnectCount = 0;
-          this.setConversationStatus("WAITING");
-        }
-        this.clearStreamingText();
-        this.clearStreamingTool();
-
-        const shouldSync = syncAfterStream ?? this.options.syncOnTurnEnd;
-        const syncConversationId = streamConversationId ?? this.state.conversationId;
-        if (shouldSync && syncConversationId) {
+        } else if (syncConversationId && (syncAfterStream ?? this.options.syncOnTurnEnd)) {
           await this.refreshConversation(syncConversationId);
           await this.loadMessages({ conversationId: syncConversationId, limit: 100 });
         }
-      }
-    } catch (streamError) {
-      if (!(streamError instanceof Error && streamError.name === "AbortError")) {
-        const normalized = normalizeError(streamError, "Failed to stream conversation.");
-        this.patch({ error: normalized });
-        this.options.onError?.(streamError);
+
+        if (!controller.signal.aborted && streamFailure) {
+          const normalized = normalizeError(streamFailure, "Failed to stream conversation.");
+          this.patch({ error: normalized });
+          this.options.onError?.(streamFailure);
+        }
       }
     } finally {
+      this.clearStreamingText();
+      this.clearStreamingTool();
+      if (controller.signal.aborted) this.streamReconnectCount = 0;
       if (this.abort === controller) {
         this.abort = null;
       }

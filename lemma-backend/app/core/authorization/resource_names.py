@@ -274,6 +274,5 @@ async def resolve_resource_names_by_ids(
         logger.debug(
             "authorization.resource_names.dangling_grants_skipped",
             pod_id=str(pod_id),
-            refs=sorted(f"{t.value}:{i}" for t, i in dangling),
         )
     return resolved

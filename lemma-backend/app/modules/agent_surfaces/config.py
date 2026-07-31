@@ -18,7 +18,10 @@ from app.core.settings_env import dotenv_path
 
 class SurfaceSettings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=dotenv_path(), env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
+        env_file=dotenv_path(),
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
     )
 
     # Microsoft Teams bot (separate from login OAuth)
@@ -88,6 +91,13 @@ class SurfaceSettings(BaseSettings):
         default=None,
         description="Meta app secret for verifying WhatsApp webhook signatures",
     )
+    whatsapp_display_phone_number: Optional[str] = Field(
+        default=None,
+        description=(
+            "Human-messageable global Lemma WhatsApp number. When omitted, the "
+            "number is resolved from Meta using whatsapp_phone_number_id."
+        ),
+    )
 
     # Telegram
     telegram_bot_token: Optional[str] = Field(
@@ -96,6 +106,23 @@ class SurfaceSettings(BaseSettings):
     telegram_webhook_secret: Optional[str] = Field(
         default=None,
         description="Secret token expected in native Telegram webhook requests",
+    )
+    telegram_manager_bot_token: Optional[str] = Field(
+        default=None,
+        description=(
+            "Token for the Telegram control-plane bot that provisions dedicated "
+            "managed bots for surfaces."
+        ),
+    )
+    telegram_manager_bot_username: Optional[str] = Field(
+        default=None,
+        description=(
+            "Username of the Telegram control-plane bot, without or with the @ prefix."
+        ),
+    )
+    telegram_manager_webhook_secret: Optional[str] = Field(
+        default=None,
+        description="Secret token expected on Telegram manager webhook requests.",
     )
 
     # Resend (system email surface)
@@ -150,6 +177,13 @@ class SurfaceSettings(BaseSettings):
         description=(
             "Start the native Telegram getUpdates receiver from the worker process. "
             "This is intended for local/server environments without Telegram webhooks."
+        ),
+    )
+    enable_telegram_manager_polling_mode: bool = Field(
+        default=False,
+        description=(
+            "Poll the Telegram manager bot from the worker process. Intended for "
+            "local development without a public HTTPS webhook."
         ),
     )
     enable_slack_socket_mode: bool = Field(

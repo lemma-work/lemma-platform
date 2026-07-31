@@ -43,7 +43,7 @@ def test_backend_changes_do_not_trigger_committed_spec_codegen() -> None:
 
 def test_opt_in_workflows_do_not_run_on_every_pr_sync() -> None:
     e2e = _read(".github/workflows/e2e.yml")
-    windows = _read(".github/workflows/windows-daemon.yml")
+    windows = _read(".github/workflows/windows-agent-host.yml")
 
     assert "types: [labeled, synchronize" not in e2e
     assert "types: [labeled, synchronize" not in windows

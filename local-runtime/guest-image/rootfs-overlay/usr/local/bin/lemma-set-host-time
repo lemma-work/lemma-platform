@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+source=/mnt/lemma-control/host.epoch
+if [ ! -r "$source" ]; then
+  echo "trusted host epoch is missing" >&2
+  exit 1
+fi
+
+epoch="$(tr -d '\r\n' < "$source")"
+case "$epoch" in
+  ''|*[!0-9]*)
+    echo "trusted host epoch is invalid" >&2
+    exit 1
+    ;;
+esac
+if [ "$epoch" -lt 1700000000 ] || [ "$epoch" -gt 4102444800 ]; then
+  echo "trusted host epoch is outside the supported range" >&2
+  exit 1
+fi
+
+date -u -s "@$epoch" >/dev/null

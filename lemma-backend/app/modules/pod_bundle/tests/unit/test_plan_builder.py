@@ -239,6 +239,11 @@ async def test_account_variable_missing_connector_is_rejected(tmp):
 
 async def test_agent_grants_step_deferred_after_resources(tmp):
     root = _build_bundle(tmp)
+    _write(root / "files" / "knowledge" / ".folder.json", {"visibility": "POD"})
+    _write(
+        root / "workflows" / "research" / "research.json",
+        {"name": "research"},
+    )
     _write(
         root / "agents" / "bot" / "bot.json",
         {"name": "bot", "permissions": {"grants": [{"resource_type": "table"}]}},
@@ -247,3 +252,5 @@ async def test_agent_grants_step_deferred_after_resources(tmp):
     kinds = [s.kind for s in plan.steps]
     assert StepKind.AGENT in kinds and StepKind.AGENT_GRANTS in kinds
     assert kinds.index(StepKind.AGENT) < kinds.index(StepKind.AGENT_GRANTS)
+    assert kinds.index(StepKind.WORKFLOW) < kinds.index(StepKind.AGENT_GRANTS)
+    assert kinds.index(StepKind.FILE) < kinds.index(StepKind.AGENT_GRANTS)

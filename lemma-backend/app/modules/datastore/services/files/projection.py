@@ -47,11 +47,9 @@ class FileProjection:
             await self.storage.delete_prefix(
                 build_datastore_child_container_prefix(pod_id, path)
             )
-        except Exception as exc:
-            logger.warning(
-                "Failed to delete derived child artifacts for %s: %s",
-                path,
-                exc,
+        except Exception:
+            logger.debug(
+                'datastore.projection.delete_derived_child_artifacts_s.diagnostic',
                 exc_info=True,
             )
 
@@ -66,20 +64,18 @@ class FileProjection:
         if file_entity.is_file and delete_storage:
             try:
                 await self.storage.delete_file(self.storage_key(file_entity))
-            except Exception as exc:
-                logger.warning(
-                    "Failed to delete file %s: %s", file_entity.path, exc, exc_info=True
+            except Exception:
+                logger.debug(
+                    'datastore.projection.delete_file_s_s.diagnostic', exc_info=True
                 )
             await self.delete_child_artifacts(file_entity.pod_id, file_entity.path)
 
         if file_entity.is_file:
             try:
                 await search_service.remove_file(file_entity.id)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to remove indexed chunks for %s: %s",
-                    file_entity.id,
-                    exc,
+            except Exception:
+                logger.debug(
+                    'datastore.projection.remove_indexed_chunks_s_s.diagnostic',
                     exc_info=True,
                 )
 

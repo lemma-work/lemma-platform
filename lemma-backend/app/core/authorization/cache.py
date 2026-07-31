@@ -17,8 +17,10 @@ from app.core.authorization.context import PrincipalRef
 from app.core.config import settings
 from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.core.log.log import get_logger
+from app.core.observability.dependency_incident import DependencyIncident
 
 logger = get_logger(__name__)
+_role_cache_incident = DependencyIncident("authorization_role_cache", logger=logger)
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,13 +113,12 @@ async def get_role_snapshot(
         payload = await cache.get_raw(
             _snapshot_suffix(user_id, organization_id, pod_id)
         )
-    except Exception:
+    except Exception as exc:
         # Redis unavailable -> miss; the snapshot is re-derived from the DB.
         # Warn so an outage is visible before it turns into DB pressure.
-        logger.warning(
-            "Role-snapshot cache read failed; re-deriving from DB.", exc_info=True
-        )
+        _role_cache_incident.record_failure(error_type=type(exc).__name__)
         return None
+    _role_cache_incident.record_success()
     if not payload:
         return None
     try:
@@ -139,10 +140,11 @@ async def set_role_snapshot(
             _snapshot_suffix(user_id, snapshot.organization_id, snapshot.pod_id),
             _serialize(snapshot),
         )
-    except Exception:
-        # Redis unavailable -> skip caching (next access re-derives). Warn so
-        # an outage is visible before it turns into DB pressure.
-        logger.warning("Role-snapshot cache write failed.", exc_info=True)
+    except Exception as exc:
+        # Redis unavailable -> skip caching; sustained failures are aggregated.
+        _role_cache_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _role_cache_incident.record_success()
 
 
 async def invalidate_role_snapshot_cache(
@@ -174,9 +176,7 @@ async def invalidate_role_snapshot_cache(
             await cache.delete_prefix(f"{user_id}:")
         else:
             await cache.clear_prefix()
-    except Exception:
-        logger.warning(
-            "Role-snapshot cache invalidation failed; stale snapshots persist "
-            "until the TTL elapses.",
-            exc_info=True,
-        )
+    except Exception as exc:
+        _role_cache_incident.record_failure(error_type=type(exc).__name__)
+    else:
+        _role_cache_incident.record_success()

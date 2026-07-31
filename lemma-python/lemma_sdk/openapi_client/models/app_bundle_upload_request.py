@@ -99,7 +99,7 @@ class AppBundleUploadRequest:
                 dist_archive_type_0 = File(payload=BytesIO(data))
 
                 return dist_archive_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(File | None | Unset, data)
 
@@ -116,7 +116,7 @@ class AppBundleUploadRequest:
                 source_archive_type_0 = File(payload=BytesIO(data))
 
                 return source_archive_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(File | None | Unset, data)
 

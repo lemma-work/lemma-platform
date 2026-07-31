@@ -1,4 +1,6 @@
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Union
+from uuid import UUID
 
 from supertokens_python.recipe.session.interfaces import SessionContainer
 from supertokens_python.recipe.thirdparty.interfaces import (
@@ -7,6 +9,7 @@ from supertokens_python.recipe.thirdparty.interfaces import (
     SignInUpOkResult,
 )
 from supertokens_python.recipe.thirdparty.types import RawUserInfoFromProvider
+from sqlalchemy import func, select
 
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -16,6 +19,7 @@ from app.modules.identity.domain.user_entities import UserEntity
 from app.modules.identity.infrastructure.organization_repositories import (
     OrganizationRepository,
 )
+from app.modules.identity.infrastructure.models.user_models import User
 from app.modules.identity.infrastructure.user_repositories import UserRepository
 from app.modules.identity.infrastructure.supertokens_auth.auth_method_conflicts import (
     get_emailpassword_conflict_reason,
@@ -47,6 +51,12 @@ def override_thirdparty_functions(
         user_context: Dict[str, Any],
     ):
         email = normalize_identity_email(email)
+        async with async_session_maker() as db_session:
+            local_user = await db_session.scalar(
+                select(User).where(func.lower(User.email) == email)
+            )
+        if local_user is not None and not local_user.is_active:
+            return SignInUpNotAllowed("Unable to sign in with this account")
         users = await list_users_by_email(
             tenant_id=tenant_id,
             email=email,
@@ -59,9 +69,8 @@ def override_thirdparty_functions(
             third_party_user_id=third_party_user_id,
         )
 
-        if (
-            not has_matching_thirdparty_user
-            and has_emailpassword_login_method(users, email)
+        if not has_matching_thirdparty_user and has_emailpassword_login_method(
+            users, email
         ):
             return SignInUpNotAllowed(get_emailpassword_conflict_reason())
 
@@ -79,7 +88,11 @@ def override_thirdparty_functions(
         )
 
         if isinstance(result, SignInUpOkResult):
-            if session is None and result.created_new_recipe_user and len(result.user.login_methods) == 1:
+            if (
+                session is None
+                and result.created_new_recipe_user
+                and len(result.user.login_methods) == 1
+            ):
                 async with async_session_maker() as db_session:
                     uow = SqlAlchemyUnitOfWork(db_session)
                     message_bus = get_message_bus()
@@ -89,18 +102,21 @@ def override_thirdparty_functions(
                             uow, message_bus=message_bus
                         ),
                     )
-                    created_user = await user_service.create_user(
+                    await user_service.create_user(
                         UserEntity(
-                            id=result.user.id,
+                            id=UUID(result.user.id),
                             email=normalize_identity_email(result.user.emails[0]),
-                            is_verified=True,
+                            is_verified=is_verified,
+                            email_verified_at=(
+                                datetime.now(timezone.utc) if is_verified else None
+                            ),
                             is_active=True,
                             is_superuser=False,
                             is_deleted=False,
-                        )
+                        ),
+                        send_welcome=is_verified,
                     )
                     await uow.commit()
-                    logger.info(f"User created successfully: {created_user}")
 
         return result
 

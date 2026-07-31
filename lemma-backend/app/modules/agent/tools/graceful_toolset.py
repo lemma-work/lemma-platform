@@ -43,10 +43,8 @@ class GracefulToolset(WrapperToolset[Any]):
         except Exception as exc:  # noqa: BLE001 - intentional catch-all boundary
             if is_control_flow_exception(exc):
                 raise
-            logger.warning(
-                "Tool %r failed; returning error to model instead of aborting run: %s",
-                name,
-                exc,
+            logger.debug(
+                'agent.graceful_toolset.tool_r_returning_model_instead.diagnostic',
                 exc_info=True,
             )
             return format_tool_error(name, exc)

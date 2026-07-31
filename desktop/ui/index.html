@@ -149,6 +149,27 @@
     color: var(--ink-faint);
     transition: opacity 1s ease;
   }
+  .operation-status {
+    display: flex;
+    min-height: 3.6em;
+    max-width: 620px;
+    margin: 14px 0 0;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    color: var(--ink-soft);
+  }
+  .operation-detail {
+    font-size: 0.94rem;
+    font-weight: 520;
+    line-height: 1.35;
+  }
+  .operation-meta {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    color: var(--gold-deep);
+  }
   .whisper {
     margin: 64px 0 0;
     max-width: 480px;
@@ -232,6 +253,7 @@
     font-size: 0.84rem;
   }
   .scene.choosing .truth,
+  .scene.choosing .operation-status,
   .scene.choosing .whisper,
   .scene.choosing .corner,
   .scene.choosing .progress { display: none; }
@@ -438,19 +460,36 @@
   /* ---------- quiet chrome ---------- */
   .progress {
     position: fixed;
-    bottom: 0;
+    top: 0;
     left: 0;
     right: 0;
-    height: 4px;
-    background: rgba(28, 24, 18, 0.07);
+    z-index: 80;
+    height: 8px;
+    overflow: hidden;
+    background: rgba(28, 24, 18, 0.13);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
   }
   .progress > div {
     height: 100%;
     width: 0%;
-    background: linear-gradient(90deg, #d89b3d, var(--gold));
+    position: relative;
+    background: linear-gradient(90deg, #f1ba60 0%, #d89b3d 45%, var(--gold) 100%);
     border-radius: 0 99px 99px 0;
-    box-shadow: 0 0 14px rgba(216, 155, 61, 0.6);
-    transition: width 1.2s ease;
+    box-shadow:
+      0 0 18px rgba(216, 155, 61, 0.8),
+      2px 0 10px rgba(192, 128, 31, 0.85);
+    transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  .progress.active > div::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(105deg, transparent 20%, rgba(255, 255, 255, 0.65) 50%, transparent 80%);
+    animation: progress-shine 1.7s ease-in-out infinite;
+  }
+  @keyframes progress-shine {
+    from { transform: translateX(-110%); }
+    to { transform: translateX(110%); }
   }
   .corner {
     position: absolute;
@@ -489,6 +528,24 @@
   }
   .scene.awake button.cta { opacity: 1; transform: none; }
   button.cta:hover { background: #2a2a28; }
+  button.cta:disabled { cursor: wait; opacity: 0.78; }
+  button.cta.busy {
+    opacity: 1;
+    transform: none;
+  }
+  button.cta.busy::after {
+    content: "";
+    display: inline-block;
+    width: 0.78em;
+    height: 0.78em;
+    margin-left: 10px;
+    border: 2px solid rgba(250, 246, 238, 0.42);
+    border-top-color: #faf6ee;
+    border-radius: 50%;
+    vertical-align: -0.08em;
+    animation: button-spin 0.75s linear infinite;
+  }
+  @keyframes button-spin { to { transform: rotate(360deg); } }
 
   .errbox {
     max-width: 560px;
@@ -513,25 +570,82 @@
     cursor: pointer;
   }
   .err-actions button.dark { background: #131313; border-color: #131313; color: #faf6ee; }
+  .err-actions button:disabled { cursor: wait; opacity: 0.55; }
 
-  pre.log {
-    position: absolute;
+  .log-panel {
+    position: fixed;
+    z-index: 100;
     left: 50%;
-    bottom: 46px;
+    top: 58px;
     transform: translateX(-50%);
-    width: min(720px, 84vw);
-    max-height: 180px;
-    overflow: auto;
-    background: rgba(16, 18, 20, 0.94);
+    width: min(820px, 88vw);
+    height: min(330px, 42vh);
+    overflow: hidden;
+    background: #101214;
     color: #d7dce2;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    box-shadow: 0 24px 70px rgba(16, 18, 20, 0.34);
+    text-align: left;
+  }
+  .log-header {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 14px 0 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: rgba(215, 220, 226, 0.72);
+    font-family: var(--mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .log-header button {
+    all: unset;
+    cursor: pointer;
+    padding: 5px 8px;
+    border-radius: 6px;
+    color: #f3f5f7;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .log-header button:hover { background: rgba(255, 255, 255, 0.1); }
+  .log-actions { display: flex; align-items: center; gap: 4px; }
+  .log-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .log-tabs button {
+    flex: 0 0 auto;
+    border: 0;
+    border-radius: 999px;
+    padding: 5px 10px;
+    background: transparent;
+    color: rgba(215, 220, 226, 0.58);
+    font-family: var(--mono);
+    font-size: 0.64rem;
+    cursor: pointer;
+  }
+  .log-tabs button.active {
+    background: rgba(216, 155, 61, 0.18);
+    color: #f3d39d;
+  }
+  pre.log {
+    height: calc(100% - 87px);
+    margin: 0;
+    overflow: auto;
     font-family: var(--mono);
     font-size: 0.7rem;
     line-height: 1.5;
-    border-radius: 12px;
-    padding: 12px 15px;
-    text-align: left;
+    padding: 14px 16px 20px;
     user-select: text;
   }
+  .scene.log-open .corner { z-index: 110; }
+  .scene.log-open .corner.right { display: none; }
   [hidden] { display: none !important; }
 
   @media (prefers-reduced-motion: reduce) {
@@ -580,7 +694,7 @@
         <span class="choice-top">
           <span class="flag">Local</span>
         </span>
-        <strong>Run Lemma on this Mac</strong>
+        <strong id="local-choice-title">Run Lemma on this Mac</strong>
         <span class="choice-body">Set up local services and keep workspace data here.</span>
         <span class="choice-action">Review →</span>
       </button>
@@ -590,10 +704,10 @@
 
   <section id="local-confirm" hidden>
     <p class="setup-kicker">Local setup</p>
-    <p class="choice-intro">Lemma will install and run services on this Mac.</p>
+    <p class="choice-intro" id="local-confirm-intro">Lemma will install and run services on this Mac.</p>
     <div class="local-review">
       <ul>
-        <li>Workspace data is stored on this Mac.</li>
+        <li id="local-data-copy">Workspace data is stored on this Mac.</li>
         <li>First setup takes a few minutes and uses additional disk space.</li>
         <li>AI models and connected integrations may send data to their providers.</li>
       </ul>
@@ -605,12 +719,18 @@
     </div>
   </section>
 
+  <div class="operation-status" id="operation-status" hidden aria-live="polite">
+    <span class="operation-detail" id="operation-detail"></span>
+    <span class="operation-meta" id="operation-meta"></span>
+  </div>
+
   <p class="whisper" id="whisper"></p>
 
-  <button class="cta" id="open-app" type="button" hidden>Create your account</button>
+  <button class="cta" id="open-app" type="button" hidden>Open Lemma</button>
   <div id="errwrap" hidden>
     <p class="errbox" id="errdetail"></p>
     <div class="err-actions">
+      <button class="dark" id="prepare-windows" type="button" hidden>Set up Windows runtime</button>
       <button class="dark" id="retry" type="button">Try again</button>
       <button id="error-logs" type="button">View log</button>
     </div>
@@ -623,7 +743,18 @@
   </div>
   <div class="corner right" id="runinfo"></div>
 
-  <pre class="log" id="log" hidden></pre>
+  <div class="log-panel" id="log-panel" hidden>
+    <div class="log-header">
+      <span id="log-title">Runtime diagnostics</span>
+      <div class="log-actions">
+        <button id="copy-log" type="button">Copy</button>
+        <button id="open-log-folder" type="button">Open folder</button>
+        <button id="close-log" type="button">Close</button>
+      </div>
+    </div>
+    <div class="log-tabs" id="log-tabs" role="tablist"></div>
+    <pre class="log" id="log"></pre>
+  </div>
 </div>
 
 <script>
@@ -636,9 +767,12 @@
         start: () => invoke("start"),
         stop: (includeInfra = false) => invoke("stop", { includeInfra }),
         restart: () => invoke("restart"),
+        prepareRuntime: () => invoke("prepare_runtime"),
         openApp: () => invoke("open_app"),
         openAuth: (mode = "signin") => invoke("login", { mode }),
         openLogs: () => invoke("open_logs"),
+        diagnosticLogs: (source, cursor = null) =>
+          invoke("diagnostic_logs", { source, cursor }),
         chooseConnectionMode: () => invoke("choose_connection_mode"),
         setConnectionMode: (mode) => invoke("set_connection_mode", { mode }),
         getState: () => invoke("get_state"),
@@ -657,8 +791,10 @@
         status: key, phase: key, phaseKey: key,
         progress: Math.round(((i + 1) / seq.length) * 100),
         etaSeconds: (seq.length - i) * 7, setup: true,
+        downloadedBytes: key === "download" ? 104857600 : null,
+        totalBytes: key === "download" ? 524288000 : null,
         error: false, ready: key === "ready", running: true,
-        mode: "local", url: "http://localhost:3711",
+        mode: "local", url: "http://app.lemma.localhost:3711",
       });
       listeners.log.forEach((cb) => cb(`[demo] phase: ${key}`));
       if (i < seq.length - 1) { i += 1; timer = setTimeout(step, 7000); }
@@ -667,9 +803,20 @@
       start: () => { clearTimeout(timer); i = 0; step(); },
       stop: () => clearTimeout(timer),
       restart: () => { clearTimeout(timer); i = 0; step(); },
+      prepareRuntime: () => console.log("[demo] prepare Windows runtime"),
       openApp: () => console.log("[demo] open app"),
       openAuth: (mode = "signin") => console.log("[demo] open auth", mode),
       openLogs: () => console.log("[demo] open logs"),
+      diagnosticLogs: (source) => Promise.resolve({
+        source: source || "events",
+        entries: `[demo] ${source || "events"} log is available here`,
+        nextCursor: "v1:demo:1",
+        sources: [
+          { id: "events", label: "Events" },
+          { id: "backend", label: "Backend" },
+          { id: "frontend", label: "Frontend" },
+        ],
+      }),
       chooseConnectionMode: () => console.log("[demo] switch mode"),
       setConnectionMode: (mode) => { console.log("[demo] mode:", mode); if (mode === "local") window.lemmaDesktop.start(); },
       getState: () => Promise.resolve({ status: "waiting", phaseKey: "boot", progress: 2, ready: false, running: false, error: false, setup: true, mode: "undecided" }),
@@ -679,8 +826,10 @@
   })();
 
   // ---- the script: poetic line + honest mono subtitle per real phase ----
+  const IS_WINDOWS = /Windows/i.test(navigator.userAgent);
+  const DEVICE = IS_WINDOWS ? "PC" : "Mac";
   const VOICE = {
-    boot:       ["A new kind of workspace is arriving on this Mac.", "starting"],
+    boot:       [`A new kind of workspace is arriving on this ${DEVICE}.`, "starting"],
     download:   ["Bringing the runtime here.", "downloading runtime"],
     check:      ["Preparing the ground.", "toolchain & configuration"],
     infra:      ["Giving it memory.", "database & cache"],
@@ -693,17 +842,31 @@
     stopping:   ["Winding down.", "stopping services"],
     stopped:    ["Asleep.", "services stopped"],
   };
-  const READY_LINE = "It's ready. Create your account.";
+  const READY_LINE = "It's ready. Opening Lemma.";
 
   const scene = document.getElementById("scene");
   const lineEl = document.getElementById("line");
   const truth = document.getElementById("truth");
   const whisper = document.getElementById("whisper");
+  const progressEl = document.querySelector(".progress");
   const bar = document.getElementById("bar");
   const runinfo = document.getElementById("runinfo");
   const openBtn = document.getElementById("open-app");
   const errwrap = document.getElementById("errwrap");
   const errdetail = document.getElementById("errdetail");
+  const retryBtn = document.getElementById("retry");
+  const prepareWindowsBtn = document.getElementById("prepare-windows");
+  const operationStatus = document.getElementById("operation-status");
+  const operationDetail = document.getElementById("operation-detail");
+  const operationMeta = document.getElementById("operation-meta");
+
+  if (IS_WINDOWS) {
+    document.getElementById("local-choice-title").textContent = "Run Lemma on this PC";
+    document.getElementById("local-confirm-intro").textContent =
+      "Lemma will install and run services on this PC.";
+    document.getElementById("local-data-copy").textContent =
+      "Workspace data is stored on this PC.";
+  }
 
   let shownLine = "";
   let queuedLine = null;
@@ -733,22 +896,107 @@
 
   let sawSetup = false;
   let lastPhase = "";
+  let lastState = null;
+  let readyOpenTimer = null;
+  let startRequestPending = false;
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return "";
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit += 1;
+    }
+    const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
+    return `${value.toFixed(digits)} ${units[unit]}`;
+  }
+  function operationSummary(s) {
+    const parts = [];
+    if (Number.isFinite(s.progress)) parts.push(`${Math.min(100, Math.max(0, s.progress))}%`);
+    if (Number.isFinite(s.downloadedBytes) && Number.isFinite(s.totalBytes) && s.totalBytes > 0) {
+      parts.push(`${formatBytes(s.downloadedBytes)} of ${formatBytes(s.totalBytes)}`);
+    }
+    if (Number.isFinite(s.throughputBytesPerSecond) && s.throughputBytesPerSecond > 0) {
+      parts.push(`${formatBytes(s.throughputBytesPerSecond)}/s`);
+    }
+    if (s.etaSeconds) parts.push(`about ${formatEta(s.etaSeconds)} remaining`);
+    return parts.join(" · ");
+  }
+  function operationDescription(s, fallback) {
+    const status = String(s.status || "").trim();
+    const phase = String(s.phase || "").trim();
+    if (!status || status === phase) return fallback;
+    const prefix = `${phase}: `;
+    return status.startsWith(prefix) ? status.slice(prefix.length) : status;
+  }
+  function hideOperationStatus() {
+    operationStatus.hidden = true;
+    operationDetail.textContent = "";
+    operationMeta.textContent = "";
+  }
+  function showOperationStatus(title, detail, meta) {
+    say(title);
+    operationDetail.textContent = detail;
+    operationMeta.textContent = meta;
+    operationStatus.hidden = false;
+  }
+  function clearPrimaryBusy() {
+    startRequestPending = false;
+    openBtn.disabled = false;
+    openBtn.classList.remove("busy");
+    openBtn.removeAttribute("aria-busy");
+  }
+  function scheduleReadyOpen() {
+    clearTimeout(readyOpenTimer);
+    readyOpenTimer = setTimeout(async () => {
+      if (!lastState?.ready || lastState.error) return;
+      try {
+        await window.lemmaDesktop.openApp();
+      } catch (error) {
+        clearPrimaryBusy();
+        openBtn.hidden = false;
+        openBtn.textContent = "Open Lemma";
+        appendLog(`ERROR ${String(error)}`);
+      }
+    }, 650);
+  }
   function renderState(s) {
     if (!s || !s.phaseKey) return;
     if (s.mode === "undecided") return;
+    lastState = s;
     switchModeBtn.hidden = s.mode !== "local";
     if (s.running || s.ready) hideConnectionChoice();
     if (s.setup) sawSetup = true;
     lastPhase = s.phaseKey;
 
     if (s.error) {
+      if (logPanel.hidden) activeLogSource = diagnosticSourceForState(s);
+      clearTimeout(readyOpenTimer);
+      clearPrimaryBusy();
+      hideOperationStatus();
+      progressEl.classList.remove("active");
       window.__orb?.stall();
       scene.classList.add("stalled");
       scene.classList.remove("awake");
-      say("Something stopped.");
-      truth.textContent = "";
+      const needsWindowsSetup = ["wsl-required", "wsl-setup-denied"].includes(s.errorCode);
+      const needsWindowsRestart = s.errorCode === "wsl-reboot-required";
+      say(needsWindowsSetup
+        ? "Windows needs one permission."
+        : needsWindowsRestart
+          ? "One restart, then Lemma continues."
+          : "Something stopped.");
+      truth.textContent = needsWindowsSetup
+        ? "one-time Windows setup · no Docker Desktop or Ubuntu"
+        : needsWindowsRestart
+          ? "restart Windows, then reopen Lemma"
+          : "";
       errdetail.textContent = s.status || "startup failed";
       errwrap.hidden = false;
+      prepareWindowsBtn.hidden = !needsWindowsSetup;
+      prepareWindowsBtn.disabled = false;
+      prepareWindowsBtn.textContent = "Set up Windows runtime";
+      retryBtn.hidden = needsWindowsSetup || needsWindowsRestart;
       openBtn.hidden = true;
       whisper.classList.remove("on");
       return;
@@ -756,19 +1004,27 @@
     if (scene.classList.contains("stalled")) window.__orb?.resume();
     scene.classList.remove("stalled");
     errwrap.hidden = true;
+    prepareWindowsBtn.hidden = true;
+    retryBtn.hidden = false;
 
     const voice = VOICE[s.phaseKey] || VOICE.boot;
     if (s.ready) {
+      clearPrimaryBusy();
+      hideOperationStatus();
       window.__orb?.awake();
       scene.classList.add("awake");
       say(READY_LINE);
       truth.textContent = VOICE.ready[1];
-      primaryAction = "auth";
-      openBtn.textContent = "Create your account";
+      primaryAction = "open";
+      openBtn.textContent = "Open Lemma";
       openBtn.hidden = false;
       whisper.classList.remove("on");
       stopWhispers();
-    } else if (s.phaseKey === "stopped" || (!s.running && s.phaseKey !== "boot")) {
+      scheduleReadyOpen();
+    } else if (s.phaseKey === "stopped") {
+      clearTimeout(readyOpenTimer);
+      clearPrimaryBusy();
+      hideOperationStatus();
       window.__orb?.resume();
       scene.classList.add("awake");
       say(VOICE.stopped[0]);
@@ -784,12 +1040,21 @@
         startWhispers();
       }
       openBtn.hidden = true;
-      say(voice[0]);
-      const eta = s.etaSeconds ? ` · ~${formatEta(s.etaSeconds)}` : "";
-      truth.textContent = voice[1] + eta;
+      openBtn.disabled = true;
+      openBtn.classList.remove("busy");
+      const title = String(s.phase || "").trim() || voice[0];
+      showOperationStatus(
+        title,
+        operationDescription(s, voice[1]),
+        operationSummary(s),
+      );
+      truth.textContent = s.setup
+        ? "first setup in progress · keep lemma open"
+        : "local services are starting";
     }
 
     bar.style.width = `${Math.min(100, s.progress || 0)}%`;
+    progressEl.classList.toggle("active", !s.ready && !s.error && s.phaseKey !== "stopped");
     runinfo.textContent = s.ready
       ? ""
       : sawSetup
@@ -837,47 +1102,173 @@
     .catch(() => {});
 
   // ---- log ----------------------------------------------------------------
+  const logPanel = document.getElementById("log-panel");
   const logEl = document.getElementById("log");
+  const logTabs = document.getElementById("log-tabs");
   const logLines = [];
+  let activeLogSource = "events";
+  let diagnosticLog = "";
+  let diagnosticCursor = null;
+  let logRefreshTimer = null;
+  function diagnosticSourceForState(s) {
+    if (s?.logSource) return s.logSource;
+    const text = `${s?.phaseKey || ""} ${s?.status || ""} ${s?.errorCode || ""}`.toLowerCase();
+    if (text.includes("migration")) return "migrations";
+    if (text.includes("frontend") || text.includes("eaddrinuse")) return "frontend";
+    if (text.includes("backend") || text.includes("health gate")) return "backend";
+    if (text.includes("download") || text.includes("artifact") || text.includes("install")) return "installer";
+    if (text.includes("runtime") || text.includes("container") || text.includes("registry") || text.includes("guest")) {
+      return "vm";
+    }
+    return "events";
+  }
+  function renderLog() {
+    const live = activeLogSource === "events" ? logLines.join("\n") : "";
+    const sections = [diagnosticLog, live].filter(Boolean);
+    logEl.textContent = sections.join("\n");
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function renderLogTabs(sources) {
+    logTabs.innerHTML = "";
+    for (const source of sources || []) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = source.label;
+      button.classList.toggle("active", source.id === activeLogSource);
+      button.addEventListener("click", () => selectLogSource(source.id));
+      logTabs.appendChild(button);
+    }
+  }
+  async function refreshDiagnosticLog({ append = false } = {}) {
+    try {
+      const snapshot = await window.lemmaDesktop.diagnosticLogs(
+        activeLogSource,
+        append ? diagnosticCursor : null,
+      );
+      if (append && snapshot.entries && !snapshot.entries.startsWith("No ")) {
+        diagnosticLog += snapshot.entries;
+      } else if (!append) {
+        diagnosticLog = snapshot.entries || "";
+      }
+      diagnosticCursor = snapshot.nextCursor;
+      renderLogTabs(snapshot.sources);
+    } catch (error) {
+      diagnosticLog = `Could not read ${activeLogSource} log: ${String(error)}`;
+    }
+    if (!logPanel.hidden) renderLog();
+  }
+  async function selectLogSource(source) {
+    activeLogSource = source;
+    diagnosticCursor = null;
+    diagnosticLog = "";
+    await refreshDiagnosticLog();
+  }
+  function startLogRefresh() {
+    clearInterval(logRefreshTimer);
+    logRefreshTimer = setInterval(() => {
+      if (!logPanel.hidden) refreshDiagnosticLog({ append: true });
+    }, 1000);
+  }
+  function stopLogRefresh() {
+    clearInterval(logRefreshTimer);
+    logRefreshTimer = null;
+  }
   function appendLog(line) {
     if (!line) return;
     logLines.push(line);
     if (logLines.length > 500) logLines.shift();
-    if (!logEl.hidden) { logEl.textContent = logLines.join("\n"); logEl.scrollTop = logEl.scrollHeight; }
+    if (!logPanel.hidden) renderLog();
   }
   function toggleLog() {
-    logEl.hidden = !logEl.hidden;
-    if (!logEl.hidden) { logEl.textContent = logLines.join("\n"); logEl.scrollTop = logEl.scrollHeight; }
+    logPanel.hidden = !logPanel.hidden;
+    scene.classList.toggle("log-open", !logPanel.hidden);
+    document.getElementById("toggle-log").textContent = logPanel.hidden ? "log" : "close log";
+    if (!logPanel.hidden) {
+      refreshDiagnosticLog();
+      startLogRefresh();
+    } else {
+      stopLogRefresh();
+    }
   }
   document.getElementById("toggle-log").addEventListener("click", toggleLog);
-  document.getElementById("error-logs").addEventListener("click", toggleLog);
+  document.getElementById("error-logs").addEventListener("click", () => {
+    activeLogSource = diagnosticSourceForState(lastState);
+    diagnosticCursor = null;
+    diagnosticLog = "";
+    toggleLog();
+  });
+  document.getElementById("close-log").addEventListener("click", toggleLog);
+  document.getElementById("open-log-folder").addEventListener("click", () =>
+    window.lemmaDesktop.openLogs().catch((error) => appendLog(`ERROR ${String(error)}`))
+  );
+  document.getElementById("copy-log").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(logEl.textContent || "");
+    } catch (error) {
+      appendLog(`ERROR Could not copy log: ${String(error)}`);
+    }
+  });
 
   // ---- actions ------------------------------------------------------------
-  let primaryAction = "auth";
+  let primaryAction = "open";
+  async function requestStart() {
+    if (startRequestPending) return;
+    startRequestPending = true;
+    clearTimeout(readyOpenTimer);
+    openBtn.disabled = true;
+    openBtn.classList.add("busy");
+    openBtn.setAttribute("aria-busy", "true");
+    openBtn.textContent = "Starting Lemma";
+    openBtn.hidden = true;
+    showOperationStatus("Starting Lemma.", "Preparing local services", "6%");
+    truth.textContent = "request accepted · keep lemma open";
+    progressEl.classList.add("active");
+    const currentProgress = Number.parseFloat(bar.style.width) || 0;
+    bar.style.width = `${Math.max(6, currentProgress)}%`;
+    try {
+      await window.lemmaDesktop.start();
+    } catch (error) {
+      clearPrimaryBusy();
+      hideOperationStatus();
+      openBtn.hidden = false;
+      openBtn.textContent = "Try Start again";
+      appendLog(`ERROR ${String(error)}`);
+    }
+  }
   openBtn.addEventListener("click", async () => {
     if (primaryAction === "start") {
-      window.lemmaDesktop.start();
+      await requestStart();
       return;
     }
     openBtn.disabled = true;
-    openBtn.textContent = "Opening account setup…";
+    openBtn.textContent = "Opening Lemma…";
     try {
-      await window.lemmaDesktop.openAuth("signup");
+      await window.lemmaDesktop.openApp();
     } catch (error) {
       openBtn.disabled = false;
-      openBtn.textContent = "Try account setup again";
-      say("Account setup did not open.");
+      openBtn.textContent = "Try opening Lemma again";
+      say("Lemma did not open.");
       truth.textContent = "";
-      errdetail.textContent = String(error || "Could not open account setup.");
+      errdetail.textContent = String(error || "Could not open Lemma.");
       errwrap.hidden = false;
     }
   });
-  document.getElementById("retry").addEventListener("click", () => {
+  retryBtn.addEventListener("click", async () => {
     errwrap.hidden = true;
     scene.classList.remove("stalled");
     say(VOICE.boot[0]);
     startWhispers();
-    window.lemmaDesktop.start();
+    await requestStart();
+  });
+  prepareWindowsBtn.addEventListener("click", () => {
+    prepareWindowsBtn.disabled = true;
+    prepareWindowsBtn.textContent = "Waiting for Windows…";
+    errdetail.textContent = "Approve the Windows prompt. Lemma will continue here when setup finishes.";
+    window.lemmaDesktop.prepareRuntime().catch((error) => {
+      prepareWindowsBtn.disabled = false;
+      prepareWindowsBtn.textContent = "Try Windows setup again";
+      errdetail.textContent = String(error || "Windows runtime setup could not start.");
+    });
   });
   const switchModeBtn = document.getElementById("switch-mode");
   switchModeBtn.addEventListener("click", () => window.lemmaDesktop.chooseConnectionMode());
@@ -897,6 +1288,7 @@
     confirmLocalBtn.textContent = "Install local services";
     stopWhispers();
     whisper.classList.remove("on");
+    hideOperationStatus();
     say("Where do you want to run Lemma?");
     truth.textContent = "no local services are installed until you confirm";
   }
@@ -906,6 +1298,7 @@
     localConfirmEl.hidden = false;
     switchModeBtn.hidden = true;
     localSetupError.hidden = true;
+    hideOperationStatus();
     say("Set up Lemma on this Mac?");
     truth.textContent = "review before installation";
   }
@@ -920,8 +1313,8 @@
     confirmLocalBtn.disabled = true;
     confirmLocalBtn.textContent = "Starting…";
     hideConnectionChoice();
-    say(VOICE.boot[0]);
-    truth.textContent = "";
+    showOperationStatus("Preparing local Lemma.", "Starting the private runtime", "2%");
+    truth.textContent = "first setup in progress · keep lemma open";
     try {
       await window.lemmaDesktop.setConnectionMode("local");
       switchModeBtn.hidden = false;
@@ -950,6 +1343,7 @@
   truth.textContent = "";
   window.lemmaDesktop.onLog(appendLog);
   window.lemmaDesktop.onState(renderState);
+  refreshDiagnosticLog();
   function shouldAutoStart(s) {
     return Boolean(
       s &&
@@ -965,7 +1359,9 @@
       showChooser();
     } else {
       renderState(s);
-      if (shouldAutoStart(s)) window.lemmaDesktop.start();
+      if (shouldAutoStart(s)) {
+        requestStart();
+      }
     }
   });
 </script>

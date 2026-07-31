@@ -111,7 +111,11 @@ async def _run_function(
         function_name,
         run_id,
     )
-    assert final_run["status"] == expected_status, final_run
+    assert final_run["status"] == expected_status, {
+        "status": final_run["status"],
+        "error": final_run.get("error"),
+        "run_id": final_run["id"],
+    }
     return final_run
 
 
@@ -624,7 +628,7 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
     )
     row = record
 
-    path = Path("/workspace/function-note-{suffix}.txt")
+    path = Path("/tmp/function-note-{suffix}.txt")
     path.write_text(data.note, encoding="utf-8")
     uploaded = pod.files.upload(
         path,
@@ -1533,9 +1537,7 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     test_pod,
     monkeypatch,
 ):
-    from app.modules.function.application import (
-        function_run_executor as function_engine_module,
-    )
+    from app.core.config import settings as backend_settings
 
     pod_id = test_pod["id"]
     suffix = uuid4().hex[:8]
@@ -1543,7 +1545,6 @@ async def test_api_function_timeout_marks_run_failed_and_stops_execution(
     table_name = f"timeout_records_{suffix}"
 
     await _create_table(authenticated_client, pod_id, table_name)
-    monkeypatch.setattr(function_engine_module, "_API_FUNCTION_TIMEOUT_SECONDS", 2)
 
     code = f"""#input_type_name: TimeoutInput
 #output_type_name: TimeoutResult
@@ -1581,6 +1582,9 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
         },
     )
 
+    # Function creation performs schema extraction and prewarms the revision
+    # worker. Restrict only the execution whose timeout behavior this test owns.
+    monkeypatch.setattr(backend_settings, "function_api_deadline_seconds", 2)
     response = await authenticated_client.post(
         f"/pods/{pod_id}/functions/{function_name}/runs",
         json={"input_data": {"title": "should-not-write"}},
@@ -1798,29 +1802,19 @@ async def {function_name}(ctx: FunctionContext, data: SaveExpenseInput) -> SaveE
 
 @pytest.mark.slow
 @pytest.mark.asyncio
-async def test_job_function_long_run_survives_sandbox_idle_reaper(
+async def test_job_function_long_run_is_not_destroyed_while_active(
     authenticated_client,
     test_pod,
     worker,
 ):
-    """A JOB that runs longer than the sandbox idle timeout still completes.
-
-    A JOB occupies the sandbox through the function_executor app and holds no
-    runtime session, so without the worker's keepalive heartbeat the idle reaper
-    would delete the sandbox mid-run. Here the sandbox idle window is shrunk well
-    below the function's ~60s runtime, so the run only completes if the heartbeat
-    keeps resetting the idle clock. (The worker heartbeats every 30s by default,
-    so the idle timeout must stay above that.)
-    """
+    """An active run prevents function-sandbox idle cleanup without heartbeats."""
     import agentbox.config as agentbox_config
 
     original = {
-        "sandbox_idle": agentbox_config.settings.agentbox_sandbox_idle_timeout_seconds,
-        "session_idle": agentbox_config.settings.agentbox_session_idle_timeout_seconds,
+        "function_idle": agentbox_config.settings.agentbox_function_idle_seconds,
         "cleanup": agentbox_config.settings.agentbox_cleanup_interval_seconds,
     }
-    agentbox_config.settings.agentbox_sandbox_idle_timeout_seconds = 45
-    agentbox_config.settings.agentbox_session_idle_timeout_seconds = 45
+    agentbox_config.settings.agentbox_function_idle_seconds = 5
     agentbox_config.settings.agentbox_cleanup_interval_seconds = 5
     try:
         pod_id = test_pod["id"]
@@ -1873,11 +1867,8 @@ async def {function_name}(ctx: FunctionContext, data: JobInput) -> JobResult:
         assert final_run["status"] == "COMPLETED", final_run
         assert final_run["output_data"]["slept"] == 60
     finally:
-        agentbox_config.settings.agentbox_sandbox_idle_timeout_seconds = original[
-            "sandbox_idle"
-        ]
-        agentbox_config.settings.agentbox_session_idle_timeout_seconds = original[
-            "session_idle"
+        agentbox_config.settings.agentbox_function_idle_seconds = original[
+            "function_idle"
         ]
         agentbox_config.settings.agentbox_cleanup_interval_seconds = original["cleanup"]
 

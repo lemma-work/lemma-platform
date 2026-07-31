@@ -1,0 +1,19 @@
+[package]
+name = "lemma-guestd"
+version = "0.1.0"
+description = "Private guest control service for Lemma's managed local runtime"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[dev-dependencies]
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

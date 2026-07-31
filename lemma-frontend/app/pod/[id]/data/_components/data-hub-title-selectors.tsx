@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, ChevronDown, Database, FolderPlus, Loader2, Plus } from 'lucide-react';
+import { Check, ChevronDown, Database, FolderPlus, Loader2, Plus } from '@/components/ui/icons';
 
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ResourceTitleButton } from '@/components/pod/resource-layout';
@@ -52,7 +52,7 @@ export function FolderTitleSelector({
                 <DropdownMenuLabel>Folders</DropdownMenuLabel>
                 <DropdownMenuItem onClick={() => onBreadcrumbClick(null)}>
                     <span className="mr-2 inline-flex">
-                        <ProductIcon tone="folders" size="sm" />
+                        <ProductIcon kind="folders" size="sm" />
                     </span>
                     Home
                     {!currentFolderPath ? <Check className="ml-auto h-3.5 w-3.5" /> : null}
@@ -62,7 +62,7 @@ export function FolderTitleSelector({
                     return (
                         <DropdownMenuItem key={folder.id} onClick={() => onBreadcrumbClick(path)}>
                             <span className="mr-2 inline-flex">
-                                <ProductIcon tone="folders" size="sm" />
+                                <ProductIcon kind="folders" size="sm" />
                             </span>
                             <span className="truncate">{folder.name}</span>
                             {currentFolderPath === path ? <Check className="ml-auto h-3.5 w-3.5" /> : null}

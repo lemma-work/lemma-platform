@@ -19,7 +19,7 @@ async def _reconcile_failure_breakers(context) -> AsyncIterator[None]:
         count = await ScheduleRunOutcomeService(uow).reconcile_tripped_schedules()
     if count:
         logger.warning(
-            "Reconciled historically tripped schedules",
+            "schedule.breakers.reconciled",
             deactivated_count=count,
         )
     yield

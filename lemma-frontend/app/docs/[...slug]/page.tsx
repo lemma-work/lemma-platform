@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound, redirect } from 'next/navigation';
 import { DocsPageView } from '@/components/docs/docs-shell';
 import { docsPages, getDocsPageFromSegments } from '@/lib/data/docs';
+import { socialCardPath } from '@/lib/share/social-card';
 
 type DocsRouteProps = {
   params: Promise<{
@@ -37,10 +38,35 @@ export async function generateMetadata({ params }: DocsRouteProps): Promise<Meta
   return {
     title: `${page.title} Documentation`,
     description: page.description,
+    alternates: {
+      canonical: `/docs/${page.slug}`,
+    },
     openGraph: {
       title: `${page.title} | Lemma Docs`,
       description: page.description,
       type: 'article',
+      images: [{
+        url: socialCardPath({
+          variant: 'build',
+          title: page.title,
+          detail: page.description,
+          label: `lemma.work/docs/${page.slug}`,
+        }),
+        width: 1200,
+        height: 630,
+        alt: `${page.title} | Lemma Docs`,
+      }],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: `${page.title} | Lemma Docs`,
+      description: page.description,
+      images: [socialCardPath({
+        variant: 'build',
+        title: page.title,
+        detail: page.description,
+        label: `lemma.work/docs/${page.slug}`,
+      })],
     },
   };
 }

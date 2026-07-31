@@ -3,12 +3,20 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
+import json
+import logging
+import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from uuid import UUID, uuid4
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 import pytest
-from sqlalchemy import update
+from pydantic import SecretStr
+from sqlalchemy import select, update
 from supertokens_python.recipe.thirdparty.providers import config_utils
 from supertokens_python.recipe.thirdparty.providers.custom import GenericProvider
 from supertokens_python.recipe.thirdparty.types import (
@@ -20,6 +28,23 @@ from supertokens_python.recipe.thirdparty.types import (
 from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationInvitation,
 )
+from app.modules.identity.infrastructure.models.user_models import User
+from app.core.infrastructure.events.models import DomainEventOutbox
+from app.core.infrastructure.db.session import async_session_maker
+from app.modules.identity.domain.events import UserSignedUpEvent
+from app.modules.identity.events.handlers import _dispatch_identity_event
+from app.modules.identity.infrastructure.adapters.email_adapter import (
+    SmtpIdentityEmailAdapter,
+)
+from app.modules.identity.services.telegram_oidc import (
+    TelegramOIDCError,
+    TelegramOIDCService,
+)
+from app.modules.identity.services import telegram_oidc
+from app.modules.identity.services import email_policy
+from app.modules.identity.services.auth_abuse import get_auth_abuse_store
+from app.core.config import settings
+from app.modules.test_support.e2e_base import verify_emailpassword_for_tests
 
 pytestmark = pytest.mark.e2e
 
@@ -35,6 +60,68 @@ def _emailpassword_payload(email: str, password: str) -> dict:
             {"id": "password", "value": password},
         ]
     }
+
+
+def _filesystem_emails(output_dir: str, recipient: str) -> list[dict]:
+    messages: list[dict] = []
+    for path in sorted(Path(output_dir).glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except OSError, json.JSONDecodeError:
+            continue
+        if payload.get("to_email") == recipient:
+            messages.append(payload)
+    return messages
+
+
+async def _wait_for_email(
+    output_dir: str,
+    recipient: str,
+    subject: str,
+    *,
+    timeout_seconds: float = 10,
+) -> dict:
+    deadline = asyncio.get_running_loop().time() + timeout_seconds
+    while asyncio.get_running_loop().time() < deadline:
+        matches = [
+            message
+            for message in _filesystem_emails(output_dir, recipient)
+            if message.get("subject") == subject
+        ]
+        if matches:
+            return matches[-1]
+        await asyncio.sleep(0.1)
+    raise AssertionError(f"Timed out waiting for {subject!r} filesystem email")
+
+
+def _email_link(message: dict) -> str:
+    text = str(message.get("text_content") or "")
+    link = next((word for word in text.split() if "token=" in word), "")
+    assert link, message
+    return link
+
+
+def _email_link_token(message: dict) -> str:
+    token = parse_qs(urlparse(_email_link(message)).query).get("token", [])
+    assert token, message
+    return token[0]
+
+
+def _solve_altcha(challenge: dict) -> str:
+    number = next(
+        candidate
+        for candidate in range(challenge["maxnumber"] + 1)
+        if hashlib.sha256(f"{challenge['salt']}{candidate}".encode()).hexdigest()
+        == challenge["challenge"]
+    )
+    payload = {
+        "algorithm": challenge["algorithm"],
+        "challenge": challenge["challenge"],
+        "number": number,
+        "salt": challenge["salt"],
+        "signature": challenge["signature"],
+    }
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
 
 @pytest.fixture
@@ -223,9 +310,28 @@ async def test_emailpassword_signup_and_signin_normalize_email(
     ) or signup_response.cookies.get("sAccessToken")
     assert signup_token
 
-    me_response = await async_client.get(
+    unverified_me_response = await async_client.get(
         "/users/me",
         headers=_auth_headers(signup_token),
+    )
+    assert unverified_me_response.status_code in {401, 403}
+
+    await verify_emailpassword_for_tests(signup_payload["user"]["id"], normalized_email)
+
+    async_client.cookies.clear()
+    verified_signin_response = await async_client.post(
+        "/st/auth/signin",
+        json=_emailpassword_payload(signin_email, password),
+    )
+    verified_token = verified_signin_response.headers.get(
+        "st-access-token"
+    ) or verified_signin_response.cookies.get("sAccessToken")
+    assert verified_signin_response.status_code == 200
+    assert verified_token
+
+    me_response = await async_client.get(
+        "/users/me",
+        headers=_auth_headers(verified_token),
     )
     assert me_response.status_code == 200, me_response.text
     assert me_response.json()["email"] == normalized_email
@@ -240,6 +346,497 @@ async def test_emailpassword_signup_and_signin_normalize_email(
     assert signin_payload["status"] == "OK", signin_payload
     assert signin_payload["user"]["id"] == signup_payload["user"]["id"]
     assert signin_payload["user"]["emails"] == [normalized_email]
+
+
+@pytest.mark.asyncio
+async def test_disposable_email_is_rejected_before_account_creation(
+    async_client: AsyncClient,
+):
+    email = f"blocked-{uuid4().hex[:10]}@mailinator.com"
+    response = await async_client.post(
+        "/st/auth/signup",
+        json=_emailpassword_payload(email, "TestPassword@123"),
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "SIGN_UP_NOT_ALLOWED"
+
+    async with async_session_maker() as session:
+        local_user = await session.scalar(select(User).where(User.email == email))
+    assert local_user is None
+
+
+@pytest.mark.asyncio
+async def test_domain_without_explicit_mx_is_rejected_before_account_creation(
+    async_client: AsyncClient,
+    monkeypatch,
+):
+    email = f"blocked-{uuid4().hex[:10]}@legacy.example"
+    monkeypatch.setattr(settings, "auth_email_deliverability_checks_enabled", True)
+    monkeypatch.setattr(settings, "auth_disposable_email_domains_enabled", False)
+
+    async def a_record_fallback(_email):
+        return SimpleNamespace(normalized=email, mx_fallback_type="A")
+
+    monkeypatch.setattr(email_policy, "_validate_with_dns", a_record_fallback)
+    response = await async_client.post(
+        "/st/auth/signup",
+        json=_emailpassword_payload(email, "TestPassword@123"),
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "SIGN_UP_NOT_ALLOWED",
+        "reason": "Please use a valid, non-disposable email address",
+    }
+    async with async_session_maker() as session:
+        local_user = await session.scalar(select(User).where(User.email == email))
+    assert local_user is None
+
+
+@pytest.mark.asyncio
+async def test_emailpassword_verification_welcome_and_password_reset_filesystem_flow(
+    async_client: AsyncClient,
+    e2e_settings,
+):
+    email = f"realistic-auth-{uuid4().hex[:10]}@example.com"
+    original_password = "OriginalPassword@123"
+    replacement_password = "ReplacementPassword@123"
+    signup_body = _emailpassword_payload(email, original_password)
+
+    signup = await async_client.post("/st/auth/signup", json=signup_body)
+    signup_payload = signup.json()
+    assert signup.status_code == 200
+    assert signup_payload["status"] == "OK"
+    signup_token = signup.headers.get("st-access-token") or signup.cookies.get(
+        "sAccessToken"
+    )
+    assert signup_token
+    auth_headers = _auth_headers(signup_token)
+
+    # Signup alone must neither grant application access nor enqueue a welcome.
+    blocked = await async_client.get("/users/me", headers=auth_headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["claimValidationErrors"][0]["id"] == "st-ev"
+    assert _filesystem_emails(e2e_settings.email_output_dir, email) == []
+
+    send_verification = await async_client.post(
+        "/st/auth/user/email/verify/token",
+        headers=auth_headers,
+    )
+    assert send_verification.status_code == 200
+    assert send_verification.json()["status"] == "OK"
+    verification_message = await _wait_for_email(
+        e2e_settings.email_output_dir,
+        email,
+        "Verify your Lemma email",
+    )
+    assert "Verify email" in verification_message["html_content"]
+    verification_link = urlparse(_email_link(verification_message))
+    assert verification_link.path == "/auth/verify-email"
+    assert parse_qs(verification_link.query)["tenantId"] == ["public"]
+    assert "Button not working?" in verification_message["html_content"]
+    assert "Account security" in verification_message["text_content"]
+    verification_token = _email_link_token(verification_message)
+
+    verify = await async_client.post(
+        "/st/auth/user/email/verify",
+        headers=auth_headers,
+        json={"token": verification_token},
+    )
+    assert verify.status_code == 200
+    assert verify.json()["status"] == "OK"
+
+    consumed_verification = await async_client.post(
+        "/st/auth/user/email/verify",
+        json={"token": verification_token},
+    )
+    assert consumed_verification.status_code == 200
+    assert (
+        consumed_verification.json()["status"]
+        == "EMAIL_VERIFICATION_INVALID_TOKEN_ERROR"
+    )
+
+    # Verification creates one durable welcome event. Deliver it through the
+    # production event handler and filesystem email adapter; the platform's
+    # generic outbox/Redis worker boundary has its own container E2E coverage.
+    async with async_session_maker() as session:
+        welcome_events = list(
+            (
+                await session.scalars(
+                    select(DomainEventOutbox).where(
+                        DomainEventOutbox.event_type
+                        == UserSignedUpEvent.get_event_type()
+                    )
+                )
+            ).all()
+        )
+    assert len(welcome_events) == 1
+    assert welcome_events[0].payload["email"] == email
+    await _dispatch_identity_event(
+        welcome_events[0].payload,
+        logging.getLogger("identity-e2e"),
+        SmtpIdentityEmailAdapter(),
+    )
+
+    welcome = await _wait_for_email(
+        e2e_settings.email_output_dir,
+        email,
+        "Welcome to Lemma",
+    )
+    assert "Your account is ready" in welcome["text_content"]
+    assert (
+        len(
+            [
+                message
+                for message in _filesystem_emails(e2e_settings.email_output_dir, email)
+                if message["subject"] == "Welcome to Lemma"
+            ]
+        )
+        == 1
+    )
+
+    # A fresh sign-in now creates an application-eligible session.
+    async_client.cookies.clear()
+    verified_signin = await async_client.post("/st/auth/signin", json=signup_body)
+    verified_token = verified_signin.headers.get(
+        "st-access-token"
+    ) or verified_signin.cookies.get("sAccessToken")
+    assert verified_signin.json()["status"] == "OK"
+    assert verified_token
+    me = await async_client.get("/users/me", headers=_auth_headers(verified_token))
+    assert me.status_code == 200
+    assert me.json()["email"] == email
+
+    request_reset = await async_client.post(
+        "/st/auth/user/password/reset/token",
+        json={"formFields": [{"id": "email", "value": email}]},
+    )
+    assert request_reset.status_code == 200
+    assert request_reset.json()["status"] == "OK"
+    reset_message = await _wait_for_email(
+        e2e_settings.email_output_dir,
+        email,
+        "Reset your Lemma password",
+    )
+    assert "Reset password" in reset_message["html_content"]
+    reset_link = urlparse(_email_link(reset_message))
+    assert reset_link.path == "/auth/reset-password"
+    assert parse_qs(reset_link.query)["tenantId"] == ["public"]
+    assert "Button not working?" in reset_message["html_content"]
+    assert "Account security" in reset_message["text_content"]
+    reset_token = _email_link_token(reset_message)
+
+    reset = await async_client.post(
+        "/st/auth/user/password/reset",
+        json={
+            "token": reset_token,
+            "formFields": [{"id": "password", "value": replacement_password}],
+        },
+    )
+    assert reset.status_code == 200
+    assert reset.json()["status"] == "OK"
+    consumed_reset = await async_client.post(
+        "/st/auth/user/password/reset",
+        json={
+            "token": reset_token,
+            "formFields": [{"id": "password", "value": replacement_password}],
+        },
+    )
+    assert consumed_reset.status_code == 200
+    assert consumed_reset.json()["status"] == "RESET_PASSWORD_INVALID_TOKEN_ERROR"
+
+    old_password = await async_client.post("/st/auth/signin", json=signup_body)
+    assert old_password.json()["status"] == "WRONG_CREDENTIALS_ERROR"
+    new_password = await async_client.post(
+        "/st/auth/signin",
+        json=_emailpassword_payload(email, replacement_password),
+    )
+    assert new_password.json()["status"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_signup_altcha_replay_tampering_and_ip_rate_limit(
+    async_client: AsyncClient,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "auth_abuse_protection_enabled", True)
+    monkeypatch.setattr(settings, "auth_altcha_enabled", True)
+    monkeypatch.setattr(settings, "auth_altcha_hmac_key", SecretStr("e2e-altcha-key"))
+    monkeypatch.setattr(settings, "auth_altcha_max_number", 100)
+
+    async def challenge() -> dict:
+        response = await async_client.get(
+            "/auth/altcha/challenge", params={"purpose": "signup"}
+        )
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True
+        return response.json()
+
+    first_challenge = await challenge()
+    first_proof = _solve_altcha(first_challenge)
+    first_email = f"altcha-first-{uuid4().hex[:8]}@example.com"
+    first = await async_client.post(
+        "/st/auth/signup",
+        headers={"x-altcha-payload": first_proof},
+        json=_emailpassword_payload(first_email, "TestPassword@123"),
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "OK"
+
+    async_client.cookies.clear()
+    replay = await async_client.post(
+        "/st/auth/signup",
+        headers={"x-altcha-payload": first_proof},
+        json=_emailpassword_payload(
+            f"altcha-replay-{uuid4().hex[:8]}@example.com", "TestPassword@123"
+        ),
+    )
+    assert replay.status_code == 400
+    assert "already used" in replay.text
+
+    tampered_challenge = await challenge()
+    solved_proof = _solve_altcha(tampered_challenge)
+    tampered_payload = json.loads(
+        base64.urlsafe_b64decode(solved_proof + "=" * (-len(solved_proof) % 4))
+    )
+    tampered_payload["signature"] = "0" * 64
+    tampered_proof = (
+        base64.urlsafe_b64encode(json.dumps(tampered_payload).encode())
+        .decode()
+        .rstrip("=")
+    )
+    tampered = await async_client.post(
+        "/st/auth/signup",
+        headers={"x-altcha-payload": tampered_proof},
+        json=_emailpassword_payload(
+            f"altcha-tampered-{uuid4().hex[:8]}@example.com", "TestPassword@123"
+        ),
+    )
+    assert tampered.status_code == 400
+    assert "Invalid proof-of-work" in tampered.text
+
+    # Isolate the boundary check from the replay/tampering requests above.
+    store = get_auth_abuse_store()
+    ip_hash = store.digest("127.0.0.1")
+    await store.clear(
+        f"identity:rate:global:{ip_hash}",
+        f"identity:rate:email-action:ip:15m:{ip_hash}",
+        f"identity:rate:email-action:ip:day:{ip_hash}",
+    )
+
+    for index in range(5):
+        async_client.cookies.clear()
+        proof = _solve_altcha(await challenge())
+        accepted = await async_client.post(
+            "/st/auth/signup",
+            headers={"x-altcha-payload": proof},
+            json=_emailpassword_payload(
+                f"altcha-limit-{index}-{uuid4().hex[:8]}@example.com",
+                "TestPassword@123",
+            ),
+        )
+        assert accepted.status_code == 200, accepted.text
+
+    async_client.cookies.clear()
+    limited = await async_client.post(
+        "/st/auth/signup",
+        headers={"x-altcha-payload": _solve_altcha(await challenge())},
+        json=_emailpassword_payload(
+            f"altcha-limited-{uuid4().hex[:8]}@example.com", "TestPassword@123"
+        ),
+    )
+    assert limited.status_code == 429
+    assert int(limited.headers["Retry-After"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_signed_bounce_events_only_deactivate_on_hard_bounce(
+    async_client: AsyncClient,
+    signup_user,
+    monkeypatch,
+):
+    webhook_secret = "e2e-bounce-secret"
+    monkeypatch.setattr(
+        settings, "auth_bounce_webhook_secret", SecretStr(webhook_secret)
+    )
+    hard_bounced = await signup_user(email=f"hard-bounce-{uuid4().hex[:8]}@example.com")
+    soft_bounced = await signup_user(email=f"soft-bounce-{uuid4().hex[:8]}@example.com")
+
+    async def send_event(payload: dict) -> Response:
+        body = json.dumps(payload, separators=(",", ":")).encode()
+        timestamp = str(int(time.time()))
+        signature = hmac.new(
+            webhook_secret.encode(),
+            f"{timestamp}.".encode() + body,
+            hashlib.sha256,
+        ).hexdigest()
+        return await async_client.post(
+            "/auth/email/bounces",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Lemma-Timestamp": timestamp,
+                "X-Lemma-Signature": f"sha256={signature}",
+            },
+        )
+
+    hard_payload = {
+        "email": hard_bounced["email"],
+        "event": "hard_bounce",
+    }
+    hard_response = await send_event(hard_payload)
+    assert hard_response.status_code == 204
+    # Provider retries are idempotent against the already-deactivated user.
+    assert (await send_event(hard_payload)).status_code == 204
+
+    soft_response = await send_event(
+        {
+            "email": soft_bounced["email"],
+            "event": "soft_bounce",
+        }
+    )
+    assert soft_response.status_code == 204
+
+    async with async_session_maker() as session:
+        hard_user = await session.get(User, UUID(hard_bounced["id"]))
+        soft_user = await session.get(User, UUID(soft_bounced["id"]))
+    assert hard_user is not None
+    assert hard_user.is_active is False
+    assert hard_user.deactivation_reason == "HARD_BOUNCE"
+    assert soft_user is not None and soft_user.is_active is True
+
+    # Password-reset remains enumeration-safe but produces no further email
+    # after the account has been deactivated by a confirmed hard bounce.
+    existing_messages = _filesystem_emails(
+        settings.email_output_dir, hard_bounced["email"]
+    )
+    reset_response = await async_client.post(
+        "/st/auth/user/password/reset/token",
+        json={"formFields": [{"id": "email", "value": hard_bounced["email"]}]},
+    )
+    assert reset_response.status_code == 200
+    assert reset_response.json()["status"] == "OK"
+    assert (
+        _filesystem_emails(settings.email_output_dir, hard_bounced["email"])
+        == existing_messages
+    )
+
+    revoked_session = await async_client.get(
+        "/users/me", headers=_auth_headers(hard_bounced["token"])
+    )
+    assert revoked_session.status_code in {401, 403}
+    blocked_signin = await async_client.post(
+        "/st/auth/signin",
+        json=_emailpassword_payload(hard_bounced["email"], hard_bounced["password"]),
+    )
+    assert blocked_signin.json()["status"] == "SIGN_IN_NOT_ALLOWED"
+
+
+@pytest.mark.asyncio
+async def test_telegram_oidc_verifies_mobile_then_creates_global_cookie_session(
+    async_client: AsyncClient,
+    signup_user,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "telegram_oidc_client_id", "telegram-e2e-client")
+    monkeypatch.setattr(
+        settings,
+        "telegram_oidc_client_secret",
+        SecretStr("telegram-e2e-secret"),
+    )
+    monkeypatch.setattr(
+        settings,
+        "telegram_oidc_redirect_uri",
+        "http://testserver/auth/telegram/callback",
+    )
+    phone = "+14155552671"
+
+    async def exchange_and_validate(self, *, code, transaction):
+        assert code == "telegram-authorization-code"
+        assert transaction.code_verifier
+        assert transaction.nonce
+        return {
+            "sub": "telegram-user-123",
+            "phone_number": phone,
+            "phone_number_verified": True,
+        }
+
+    monkeypatch.setattr(
+        telegram_oidc.TelegramOIDCService,
+        "exchange_and_validate",
+        exchange_and_validate,
+    )
+
+    user = await signup_user(email=f"telegram-login-{uuid4().hex[:8]}@example.com")
+    profile_return_to = settings.frontend_url.rstrip("/") + "/profile"
+    verify_start = await async_client.get(
+        "/auth/telegram/start",
+        headers=_auth_headers(user["token"]),
+        params={
+            "purpose": "verify_mobile",
+            "return_to": profile_return_to,
+        },
+    )
+    assert verify_start.status_code == 303
+    verify_authorization = urlparse(verify_start.headers["location"])
+    verify_query = parse_qs(verify_authorization.query)
+    assert verify_query["scope"] == ["openid profile phone"]
+    assert verify_query["code_challenge_method"] == ["S256"]
+    assert verify_query["nonce"]
+
+    verify_callback = await async_client.get(
+        "/auth/telegram/callback",
+        headers=_auth_headers(user["token"]),
+        params={
+            "state": verify_query["state"][0],
+            "code": "telegram-authorization-code",
+        },
+    )
+    assert verify_callback.status_code == 303
+    assert verify_callback.headers["location"] == profile_return_to
+
+    async with async_session_maker() as session:
+        verified_user = await session.get(User, UUID(user["id"]))
+    assert verified_user is not None
+    assert verified_user.mobile_number == phone
+    assert verified_user.mobile_verified_at is not None
+
+    async_client.cookies.clear()
+    signin_start = await async_client.get(
+        "/auth/telegram/start",
+        params={
+            "purpose": "signin",
+            "return_to": "https://attacker.example/steal-session",
+        },
+    )
+    assert signin_start.status_code == 303
+    signin_query = parse_qs(urlparse(signin_start.headers["location"]).query)
+    signin_callback = await async_client.get(
+        "/auth/telegram/callback",
+        params={
+            "state": signin_query["state"][0],
+            "code": "telegram-authorization-code",
+        },
+    )
+    assert signin_callback.status_code == 303
+    assert signin_callback.headers["location"] == (
+        settings.auth_frontend_url.rstrip("/") + "/"
+    )
+    assert async_client.cookies.get("sAccessToken")
+    telegram_me = await async_client.get("/users/me")
+    assert telegram_me.status_code == 200
+    assert telegram_me.json()["id"] == user["id"]
+
+    async_client.cookies.clear()
+    replay = await async_client.get(
+        "/auth/telegram/callback",
+        params={
+            "state": signin_query["state"][0],
+            "code": "telegram-authorization-code",
+        },
+    )
+    assert replay.status_code == 303
+    assert "telegram_error=unable_to_authenticate" in replay.headers["location"]
 
 
 @pytest.mark.asyncio
@@ -1181,20 +1778,54 @@ async def test_profile_mobile_and_telegram_uniqueness(
     first_headers = _auth_headers(first["token"])
     second_headers = _auth_headers(second["token"])
 
+    for invalid_mobile in (
+        "5551234567",  # No explicit country code.
+        "+1234567",  # Too short for the supported E.164 profile format.
+        "+1234567890123456",  # Longer than E.164's 15-digit maximum.
+        "+1 555 CALL-NOW",  # Non-formatting characters are not accepted.
+    ):
+        invalid = await async_client.post(
+            "/users/me/profile",
+            headers=first_headers,
+            json={"mobile_number": invalid_mobile},
+        )
+        assert invalid.status_code == 422
+        assert invalid.json()["code"] == "VALIDATION_ERROR"
+        assert "Enter a mobile number with its country code" in str(
+            invalid.json()["details"]
+        )
+
     set_first = await async_client.post(
         "/users/me/profile",
         headers=first_headers,
         json={"mobile_number": "+1 555 123 4567", "telegram_username": "AnukulT"},
     )
     assert set_first.status_code == 201
+    assert set_first.json()["mobile_number"] == "+15551234567"
 
-    # Same digits, different formatting -> conflict.
+    # Formatting differences do not permit two profiles to claim the same
+    # normalized number, even while both numbers are unverified.
     dup_mobile = await async_client.post(
         "/users/me/profile",
         headers=second_headers,
-        json={"mobile_number": "1(555)123-4567"},
+        json={"mobile_number": "+1(555)123-4567"},
     )
     assert dup_mobile.status_code == 409
+    assert dup_mobile.json()["message"] == "This mobile number is already in use"
+
+    async with async_session_maker() as session:
+        verified_owner = await session.get(User, UUID(first["id"]))
+        assert verified_owner is not None
+        verified_owner.mobile_number = "+15551234567"
+        verified_owner.mobile_verified_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    telegram_service = TelegramOIDCService()
+    try:
+        with pytest.raises(TelegramOIDCError, match="already in use"):
+            await telegram_service.verify_mobile(UUID(second["id"]), "+15551234567")
+    finally:
+        await telegram_service.close()
 
     # Same telegram username, different case -> conflict.
     dup_telegram = await async_client.post(
@@ -1219,6 +1850,61 @@ async def test_profile_mobile_and_telegram_uniqueness(
         json={"mobile_number": "+1 555 123 4567", "telegram_username": "AnukulT"},
     )
     assert resave.status_code == 201
+
+    # A user-editable change can never inherit Telegram's verification proof.
+    changed = await async_client.post(
+        "/users/me/profile",
+        headers=first_headers,
+        json={"mobile_number": "+1 555 000 9999"},
+    )
+    assert changed.status_code == 201
+    async with async_session_maker() as session:
+        changed_owner = await session.get(User, UUID(first["id"]))
+    assert changed_owner is not None
+    assert changed_owner.mobile_verified_at is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_profile_mobile_claims_allow_exactly_one_owner(
+    async_client: AsyncClient,
+    signup_user,
+):
+    first = await signup_user(email=f"claim-first-{uuid4().hex[:8]}@example.com")
+    second = await signup_user(email=f"claim-second-{uuid4().hex[:8]}@example.com")
+    suffix = f"{int(uuid4().hex[:8], 16) % 10_000_000:07d}"
+    canonical = f"+1555{suffix}"
+
+    responses = await asyncio.gather(
+        async_client.post(
+            "/users/me/profile",
+            headers=_auth_headers(first["token"]),
+            json={"mobile_number": canonical},
+        ),
+        async_client.post(
+            "/users/me/profile",
+            headers=_auth_headers(second["token"]),
+            json={"mobile_number": f"+1 (555) {suffix[:3]}-{suffix[3:]}"},
+        ),
+    )
+
+    assert sorted(response.status_code for response in responses) == [201, 409], [
+        response.text for response in responses
+    ]
+    conflict = next(response for response in responses if response.status_code == 409)
+    assert conflict.json()["message"] == "This mobile number is already in use"
+
+    async with async_session_maker() as session:
+        users = list(
+            (
+                await session.execute(
+                    select(User).where(
+                        User.id.in_([UUID(first["id"]), UUID(second["id"])])
+                    )
+                )
+            ).scalars()
+        )
+    assert [user.mobile_number for user in users].count(canonical) == 1
+    assert [user.mobile_number for user in users].count(None) == 1
 
 
 @pytest.mark.asyncio

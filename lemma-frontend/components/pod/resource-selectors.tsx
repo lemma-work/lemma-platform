@@ -2,14 +2,18 @@
 
 import { useState } from 'react';
 import Image from 'next/image';
-import { useQuery } from '@tanstack/react-query';
 import { useAgents } from '@/lib/hooks/use-agents';
 import { useFunctions } from '@/lib/hooks/use-functions';
 import { useConnectors, useAccounts, useAuthConfigs } from '@/lib/hooks/use-connectors';
 import { usePod } from '@/lib/hooks/use-pods';
 import { useTables } from '@/lib/hooks/use-datastores';
-import { ConnectorAccessConfig, ConnectorMode, Table, TableAccessMode } from '@/lib/types';
-import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { ConnectorAccessConfig, ConnectorMode, Table, AccessMode } from '@/lib/types';
+import { FolderPickerLevel } from '@/components/pod/folder-picker-tree';
+import {
+    ROOT_DIRECTORY,
+    ancestorFolderPaths,
+    folderDisplayPath,
+} from '@/lib/files/folder-picker';
 import { formatAgentName } from '@/lib/utils/agents';
 import { Badge } from '@/components/ui/badge';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -20,7 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from '@/components/ui/button';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import { cn } from '@/lib/utils';
-import { Puzzle, Database, Plus, AlertCircle, Folder, Bot, Code2, X } from 'lucide-react';
+import { Puzzle, Database, Plus, AlertCircle, Folder, Bot, Code2, X } from '@/components/ui/icons';
 
 export function formatAccessLabel(value: string) {
     return value.toLowerCase().replace(/[_-]+/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
@@ -306,8 +310,8 @@ export function DatastoresSelector({
     podId: string;
     selected: string[];
     onChange: (names: string[]) => void;
-    modeByName?: Record<string, TableAccessMode | undefined>;
-    onModeChange?: (name: string, mode: TableAccessMode) => void;
+    modeByName?: Record<string, AccessMode | undefined>;
+    onModeChange?: (name: string, mode: AccessMode) => void;
     className?: string;
     showLabel?: boolean;
 }) {
@@ -330,7 +334,7 @@ export function DatastoresSelector({
                 {selectedTables.length > 0 ? (
                     <div className="space-y-1.5">
                         {selectedTables.map((name) => {
-                            const mode = modeByName?.[name] || TableAccessMode.WRITE;
+                            const mode = modeByName?.[name] || AccessMode.WRITE;
                             return (
                                 <div key={name} className="resource-list-row">
                                     <span className="flex-1 truncate text-sm text-[var(--text-secondary)]">{name}</span>
@@ -339,17 +343,17 @@ export function DatastoresSelector({
                                         <div className="segmented-control">
                                             <button
                                                 type="button"
-                                                onClick={() => onModeChange(name, TableAccessMode.READ)}
+                                                onClick={() => onModeChange(name, AccessMode.READ)}
                                                 className="segmented-control-item"
-                                                data-active={mode === TableAccessMode.READ}
+                                                data-active={mode === AccessMode.READ}
                                             >
                                                 Read
                                             </button>
                                             <button
                                                 type="button"
-                                                onClick={() => onModeChange(name, TableAccessMode.WRITE)}
+                                                onClick={() => onModeChange(name, AccessMode.WRITE)}
                                                 className="segmented-control-item"
-                                                data-active={mode === TableAccessMode.WRITE}
+                                                data-active={mode === AccessMode.WRITE}
                                             >
                                                 Write
                                             </button>
@@ -561,110 +565,25 @@ export function FunctionsSelector({
     );
 }
 
-type FolderOption = {
-    id: string;
-    name: string;
-    path: string;
-};
-
-const ROOT_DIRECTORY = '/';
-const MAX_FOLDER_SCAN_COUNT = 2000;
-
-function isFolderItem(item: { kind?: string | null }): boolean {
-    return item.kind === 'FOLDER';
-}
-
-function normalizeFolderPath(path?: string | null): string | undefined {
-    if (path === undefined || path === null) return undefined;
-
-    const trimmed = path.trim();
-    if (!trimmed || trimmed === ROOT_DIRECTORY) return ROOT_DIRECTORY;
-
-    const normalized = `/${trimmed.replace(/^\/+/, '').replace(/\/+/g, '/')}`;
-    return normalized.length > 1 && normalized.endsWith('/')
-        ? normalized.slice(0, -1)
-        : normalized;
-}
-
-async function fetchFolderOptions(podId: string): Promise<FolderOption[]> {
-    const client = getLemmaClient(podId);
-    const queue: Array<{ directoryPath: string; parentPath: string }> = [{ directoryPath: ROOT_DIRECTORY, parentPath: '' }];
-    const queuedPaths = new Set<string>([ROOT_DIRECTORY]);
-    const visitedPaths = new Set<string>();
-    const foldersById = new Map<string, FolderOption>();
-
-    while (queue.length > 0) {
-        const current = queue.shift();
-        if (!current) break;
-        if (visitedPaths.has(current.directoryPath)) continue;
-
-        visitedPaths.add(current.directoryPath);
-        if (visitedPaths.size > MAX_FOLDER_SCAN_COUNT) {
-            console.warn(`Folder scan stopped after ${MAX_FOLDER_SCAN_COUNT} directories to avoid recursive loops.`);
-            break;
-        }
-
-        let pageToken: string | undefined = undefined;
-        do {
-            const page = await client.files.list({
-                directoryPath: current.directoryPath === ROOT_DIRECTORY ? undefined : current.directoryPath,
-                limit: 200,
-                pageToken,
-            });
-
-            for (const item of page.items || []) {
-                if (!isFolderItem(item)) continue;
-
-                const name = item.name || item.id;
-                const fallbackPath = current.parentPath ? `/${current.parentPath}/${name}` : `/${name}`;
-                const fullPath = normalizeFolderPath(item.path || fallbackPath) || fallbackPath;
-                const normalizedPath = fullPath.replace(/^\/+/, '');
-
-                if (normalizedPath === 'me') continue;
-
-                foldersById.set(item.id, {
-                    id: item.id,
-                    name,
-                    path: fullPath,
-                });
-
-                if (!visitedPaths.has(fullPath) && !queuedPaths.has(fullPath)) {
-                    queue.push({ directoryPath: fullPath, parentPath: normalizedPath });
-                    queuedPaths.add(fullPath);
-                }
-            }
-
-            pageToken = page.next_page_token || undefined;
-        } while (pageToken);
-    }
-
-    return Array.from(foldersById.values()).sort((a, b) => a.path.localeCompare(b.path));
-}
-
 export function FoldersSelector({
     podId,
     selected,
     onChange,
+    modeByPath,
+    onModeChange,
     className,
     showLabel = true,
 }: {
     podId: string;
     selected: string[];
     onChange: (folderIds: string[]) => void;
+    modeByPath?: Record<string, AccessMode | undefined>;
+    onModeChange?: (folderPath: string, mode: AccessMode) => void;
     className?: string;
     showLabel?: boolean;
 }) {
-    const [isFolderMenuOpen, setIsFolderMenuOpen] = useState(false);
-    const shouldLoadFolders = !!podId && (selected.length > 0 || isFolderMenuOpen);
-    const { data: folders = [], isFetching: isFetchingFolders } = useQuery({
-        queryKey: ['folder-options', podId],
-        queryFn: () => fetchFolderOptions(podId),
-        enabled: shouldLoadFolders,
-        staleTime: 5 * 60 * 1000,
-        gcTime: 15 * 60 * 1000,
-        refetchOnMount: false,
-        refetchOnReconnect: false,
-    });
+    const [isPickerOpen, setIsPickerOpen] = useState(false);
+    const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
 
     const toggleFolder = (folderPath: string) => {
         const next = selected.includes(folderPath)
@@ -673,75 +592,101 @@ export function FoldersSelector({
         onChange(next);
     };
 
-    const selectedFolders = selected
-        .map((path) => folders.find((folder) => folder.path === path))
-        .filter((folder): folder is FolderOption => Boolean(folder));
+    const toggleExpanded = (folderPath: string) => {
+        setExpandedPaths((prev) => {
+            const next = new Set(prev);
+            if (!next.delete(folderPath)) next.add(folderPath);
+            return next;
+        });
+    };
 
-    const unknownSelections = selected.filter((path) => !folders.some((folder) => folder.path === path));
+    const handlePickerOpenChange = (open: boolean) => {
+        // Opening on the folders already linked, rather than a bare root list,
+        // means the picker starts where the reader left off.
+        if (open) {
+            setExpandedPaths(new Set(selected.flatMap(ancestorFolderPaths)));
+        }
+        setIsPickerOpen(open);
+    };
+
+    // Selections are paths, so the list renders without resolving anything —
+    // no request fires until the picker is opened.
+    const selectedPaths = [...selected].sort((a, b) => a.localeCompare(b));
 
     return (
         <PropertyRow label="Folders" icon={Folder} className={className} showLabel={showLabel}>
             <div className="resource-stack">
-                {selected.length > 0 ? (
+                {selectedPaths.length > 0 ? (
                     <div className="space-y-1.5">
-                        {selectedFolders.map((folder) => (
-                            <div key={folder.path} className="resource-list-row">
-                                <span className="flex-1 truncate text-sm text-[var(--text-secondary)]">{folder.path.replace(/^\//, '')}</span>
-                                <button
-                                    type="button"
-                                    onClick={() => toggleFolder(folder.path)}
-                                    className="resource-remove-button"
-                                    aria-label={`Remove ${folder.path}`}
-                                >
-                                    <X className="h-3.5 w-3.5" />
-                                </button>
-                            </div>
-                        ))}
+                        {selectedPaths.map((path) => {
+                            const mode = modeByPath?.[path] || AccessMode.WRITE;
 
-                        {unknownSelections.map((id) => (
-                            <div key={id} className="resource-list-row">
-                                <span className="flex-1 truncate text-sm text-[var(--text-tertiary)]">{id}</span>
-                                <button
-                                    type="button"
-                                    onClick={() => toggleFolder(id)}
-                                    className="resource-remove-button"
-                                    aria-label={`Remove ${id}`}
-                                >
-                                    <X className="h-3.5 w-3.5" />
-                                </button>
-                            </div>
-                        ))}
+                            return (
+                                <div key={path} className="resource-list-row">
+                                    <span className="flex-1 truncate text-sm text-[var(--text-secondary)]" title={path}>
+                                        {folderDisplayPath(path)}
+                                    </span>
+
+                                    {onModeChange && (
+                                        <div className="segmented-control">
+                                            <button
+                                                type="button"
+                                                onClick={() => onModeChange(path, AccessMode.READ)}
+                                                className="segmented-control-item"
+                                                data-active={mode === AccessMode.READ}
+                                            >
+                                                Read
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => onModeChange(path, AccessMode.WRITE)}
+                                                className="segmented-control-item"
+                                                data-active={mode === AccessMode.WRITE}
+                                            >
+                                                Write
+                                            </button>
+                                        </div>
+                                    )}
+
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleFolder(path)}
+                                        className="resource-remove-button"
+                                        aria-label={`Remove ${path}`}
+                                    >
+                                        <X className="h-3.5 w-3.5" />
+                                    </button>
+                                </div>
+                            );
+                        })}
                     </div>
                 ) : (
                     <span className="px-1 text-sm text-[var(--text-tertiary)]">No folders linked</span>
                 )}
 
-                <DropdownMenu open={isFolderMenuOpen} onOpenChange={setIsFolderMenuOpen}>
-                    <DropdownMenuTrigger asChild>
+                <Popover open={isPickerOpen} onOpenChange={handlePickerOpenChange}>
+                    <PopoverTrigger asChild>
                         <button type="button" className="resource-add-trigger">
                             <Plus className="h-3.5 w-3.5" /> Link folder
                         </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-72">
-                        <DropdownMenuLabel>Available folders</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        {isFetchingFolders ? (
-                            <div className="p-2 text-xs text-[var(--text-tertiary)] text-center">Loading folders...</div>
-                        ) : folders.length === 0 ? (
-                            <QuietEmptyState className="justify-center p-2 text-xs">No folders found</QuietEmptyState>
-                        ) : (
-                            folders.map((folder) => (
-                                <DropdownMenuCheckboxItem
-                                    key={folder.id}
-                                    checked={selected.includes(folder.path)}
-                                    onCheckedChange={() => toggleFolder(folder.path)}
-                                >
-                                    <span className="truncate">{folder.path.replace(/^\//, '')}</span>
-                                </DropdownMenuCheckboxItem>
-                            ))
-                        )}
-                    </DropdownMenuContent>
-                </DropdownMenu>
+                    </PopoverTrigger>
+                    <PopoverContent align="start" className="folder-picker-popover">
+                        <div className="folder-picker-header">Available folders</div>
+                        <div className="folder-picker-list">
+                            {isPickerOpen ? (
+                                <FolderPickerLevel
+                                    podId={podId}
+                                    directoryPath={ROOT_DIRECTORY}
+                                    depth={0}
+                                    selected={selected}
+                                    expandedPaths={expandedPaths}
+                                    onToggleFolder={toggleFolder}
+                                    onToggleExpanded={toggleExpanded}
+                                />
+                            ) : null}
+                        </div>
+                    </PopoverContent>
+                </Popover>
             </div>
         </PropertyRow>
     );

@@ -1,25 +1,24 @@
 'use client';
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Database, Loader2, Plus } from 'lucide-react';
+import { Database, Loader2, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { DatastoreTableView } from '@/components/data/datastore-table-view';
 import { DatastoreTableSkeleton } from '@/components/data/datastore-table-skeleton';
-import { DocumentViewer } from '@/components/documents/document-viewer';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import {
     showResourceCreatedToast,
     showResourceErrorToast,
 } from '@/components/shared/resource-feedback';
-import { TableBuilder } from '@/components/tables/table-builder';
 import { Button } from '@/components/ui/button';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { Input } from '@/components/ui/input';
@@ -71,8 +70,27 @@ import { DataHubHeaderActions } from './_components/data-hub-header-actions';
 import { FolderUploadStatusBanner } from './_components/folder-upload-status-banner';
 import { FileSearchResults } from './_components/file-search-results';
 import { FileEntriesBrowser } from './_components/file-entries-browser';
-import { FolderUploadConfirmDialog, NewMarkdownFileDialog } from './_components/data-hub-dialogs';
 import { FolderTitleSelector, TableTitleSelector } from './_components/data-hub-title-selectors';
+
+const DocumentViewer = dynamic(
+    () => import('@/components/documents/document-viewer').then((module) => module.DocumentViewer),
+    {
+        loading: () => (
+            <div className="flex min-h-0 flex-1 items-center justify-center">
+                <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
+            </div>
+        ),
+    }
+);
+const TableBuilder = dynamic(
+    () => import('@/components/tables/table-builder').then((module) => module.TableBuilder)
+);
+const FolderUploadConfirmDialog = dynamic(() =>
+    import('./_components/data-hub-dialogs').then((module) => module.FolderUploadConfirmDialog)
+);
+const NewMarkdownFileDialog = dynamic(() =>
+    import('./_components/data-hub-dialogs').then((module) => module.NewMarkdownFileDialog)
+);
 
 export default function DataHubPage({
     params,
@@ -1067,9 +1085,7 @@ export default function DataHubPage({
             mode={usesWorkbenchLayout ? 'workbench' : 'ledger'}
             className={usesWorkbenchLayout ? 'data-workspace-shell' : undefined}
         >
-            <ResourceIndexHeader
-                className="mb-4"
-                productIconTone={showingFiles ? 'docs' : 'data'}
+            <ResourceHeader
                 title={showingFiles ? (
                     <FolderTitleSelector
                         selectedFilePath={selectedFilePath}
@@ -1212,7 +1228,7 @@ export default function DataHubPage({
                                         {!loadingFiles && !refreshingFiles && filteredEntries.length === 0 && (
                                             <EmptyState
                                                 variant="compact"
-                                                icon={<ProductIcon tone="files" size="sm" />}
+                                                icon={<ProductIcon kind="files" size="sm" />}
                                                 title={searchQuery ? 'No files or folders match this search' : 'This folder is empty'}
                                                 description={searchQuery ? 'Try another search term.' : 'Upload files or create a folder when this pod needs source material.'}
                                             />
@@ -1301,26 +1317,30 @@ export default function DataHubPage({
                 onConfirm={() => void handleDeleteEntry()}
             />
 
-            <FolderUploadConfirmDialog
-                pendingFolderUploadConfirmation={pendingFolderUploadConfirmation}
-                isFolderUploading={isFolderUploading}
-                isUploading={isUploading}
-                onOpenChange={(open) => {
-                    if (!open) setPendingFolderUploadConfirmation(null);
-                }}
-                onConfirm={() => void handleConfirmFolderUpload()}
-                onCancel={() => setPendingFolderUploadConfirmation(null)}
-            />
+            {pendingFolderUploadConfirmation && (
+                <FolderUploadConfirmDialog
+                    pendingFolderUploadConfirmation={pendingFolderUploadConfirmation}
+                    isFolderUploading={isFolderUploading}
+                    isUploading={isUploading}
+                    onOpenChange={(open) => {
+                        if (!open) setPendingFolderUploadConfirmation(null);
+                    }}
+                    onConfirm={() => void handleConfirmFolderUpload()}
+                    onCancel={() => setPendingFolderUploadConfirmation(null)}
+                />
+            )}
 
-            <NewMarkdownFileDialog
-                open={isNewFileOpen}
-                onOpenChange={setIsNewFileOpen}
-                newFileName={newFileName}
-                onNewFileNameChange={setNewFileName}
-                isUploading={isUploading}
-                onCreate={() => void handleCreateMarkdownFile()}
-                onCancel={() => setIsNewFileOpen(false)}
-            />
+            {isNewFileOpen && (
+                <NewMarkdownFileDialog
+                    open={isNewFileOpen}
+                    onOpenChange={setIsNewFileOpen}
+                    newFileName={newFileName}
+                    onNewFileNameChange={setNewFileName}
+                    isUploading={isUploading}
+                    onCreate={() => void handleCreateMarkdownFile()}
+                    onCancel={() => setIsNewFileOpen(false)}
+                />
+            )}
 
             {canCreateTable && isTableBuilderOpen && (
                 <TableBuilder

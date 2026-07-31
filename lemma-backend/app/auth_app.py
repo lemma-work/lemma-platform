@@ -8,12 +8,16 @@ from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origin
 from app.modules.identity.infrastructure.supertokens_auth.initialization import (
     initialize_supertokens,
 )
+from app.modules.identity.infrastructure.supertokens_auth.abuse_middleware import (
+    AuthAbuseMiddleware,
+)
 
 
 def get_auth_app():
     fastapi_app = FastAPI()
     initialize_supertokens()
     fastapi_app.add_middleware(get_middleware())
+    fastapi_app.add_middleware(AuthAbuseMiddleware)
 
     fastapi_app.add_middleware(
         CORSMiddleware,
@@ -21,10 +25,11 @@ def get_auth_app():
         allow_origin_regex=get_allowed_cors_origin_regex(),
         allow_credentials=True,
         allow_methods=["GET", "PUT", "POST", "DELETE", "OPTIONS", "PATCH"],
-        allow_headers=["Content-Type"] + get_all_cors_headers(),
+        allow_headers=["Content-Type", "x-altcha-payload"] + get_all_cors_headers(),
         # SuperTokens sets these as expose headers per-response; list them
         # explicitly so this stays correct regardless of middleware layering.
         expose_headers=[
+            "Retry-After",
             "front-token",
             "anti-csrf",
             "st-access-token",

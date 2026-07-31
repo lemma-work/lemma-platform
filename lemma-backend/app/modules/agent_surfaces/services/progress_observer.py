@@ -8,6 +8,7 @@ from typing import Any
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.modules.agent.contracts import Conversation
 from app.modules.agent.contracts import (
     AgentEvent,
@@ -103,6 +104,8 @@ class SurfaceAgentRunProgressObserver:
         # handles display_resource at all — it only buffers text + progress.
         self._email_reply_tool_called = False
         self._run_errored = False
+        self._run_error_text: str | None = None
+        self._error_delivered = False
         # Opaque handle for the live progress message on streaming platforms
         # (Telegram/Teams), threaded across edits and cleared on finish.
         self._progress_handle: dict[str, Any] | None = None
@@ -115,13 +118,15 @@ class SurfaceAgentRunProgressObserver:
     ) -> None:
         del ctx
         platform = _surface_platform(conversation)
+        if platform is None:
+            return
         interval = _TYPING_REFRESH_INTERVAL_SECONDS.get(platform)
         if interval is None:
             return
         sent = await self._send_indicator(conversation_id=conversation.id)
         if not sent:
             return
-        self._typing_task = asyncio.create_task(
+        self._typing_task = create_inherited_task(
             self._refresh_typing_loop(
                 conversation_id=conversation.id,
                 interval=interval,
@@ -137,10 +142,18 @@ class SurfaceAgentRunProgressObserver:
         del ctx
         if event.type in {AgentEventType.ERROR, AgentEventType.REJECTED}:
             self._run_errored = True
+            self._run_error_text = _safe_run_error_text(event)
             return
 
         if event.type == AgentEventType.WAITING:
             await self._handle_waiting_event(event, conversation)
+            return
+
+        if _is_agent_host_permission_event(event):
+            # An Agent Host pauses for permission *mid-run*: render the prompt
+            # like any other approval, but leave the run's delivery state alone
+            # so the answer that follows still arrives as its final message.
+            await self._handle_waiting_event(event, conversation, ends_run=False)
             return
 
         platform = _surface_platform(conversation)
@@ -175,6 +188,8 @@ class SurfaceAgentRunProgressObserver:
         self,
         event: AgentEvent,
         conversation: Conversation,
+        *,
+        ends_run: bool = True,
     ) -> None:
         """Render a paused ``ask_user`` or ``request_approval`` on the surface.
 
@@ -182,6 +197,9 @@ class SurfaceAgentRunProgressObserver:
         buffered narration first (so the lead-in to the question still reaches the
         user), mark the final answer delivered so ``on_run_finished`` doesn't
         re-send it, then render the questions / approval prompt.
+
+        ``ends_run`` is False for an Agent Host permission pause, which happens
+        inside a run that keeps going; see the reset at the end.
         """
         data = event.data if isinstance(event.data, dict) else {}
         kind = data.get("kind")
@@ -192,13 +210,6 @@ class SurfaceAgentRunProgressObserver:
         if tool_call_id:
             rendered_key = (str(kind), tool_call_id)
             if rendered_key in self._rendered_waiting_tool_calls:
-                logger.info(
-                    "Surface %s render skipped because tool call was already "
-                    "rendered conversation=%s tool_call_id=%s",
-                    kind,
-                    conversation.id,
-                    tool_call_id,
-                )
                 return
             self._rendered_waiting_tool_calls.add(rendered_key)
         await self._clear_progress(conversation.id)
@@ -206,44 +217,56 @@ class SurfaceAgentRunProgressObserver:
         if not self._final_delivered:
             self._final_delivered = True
             if not self._run_errored:
-                message = (
-                    self._final_answer_text or self._buffered_text or ""
-                ).strip()
+                message = (self._final_answer_text or self._buffered_text or "").strip()
                 if message:
                     try:
                         await self._send_agent_message(
                             conversation_id=conversation.id,
                             message=message,
                         )
-                    except Exception as exc:
-                        logger.warning(
-                            "Surface pre-question narration failed "
-                            "conversation=%s error=%s",
-                            conversation.id,
-                            exc,
+                    except Exception:
+                        logger.debug(
+                            'agent_surfaces.progress_observer.surface_pre_question_narration_conversation.diagnostic'
                         )
         async with self.uow_factory() as uow:
             service = self.service_factory(uow)
             try:
                 if kind == "ask_user":
-                    await service.send_questions_for_conversation(
+                    delivered = await service.send_questions_for_conversation(
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
                     )
                 else:
-                    await service.send_approval_prompt_for_conversation(
+                    delivered = await service.send_approval_prompt_for_conversation(
                         conversation_id=conversation.id,
                         tool_call_id=tool_call_id or None,
                     )
-            except Exception as exc:
+                if not delivered:
+                    # Nothing reached the user (the send method logs the precise
+                    # reason). Drop the rendered-key so a later WAITING event for
+                    # this same tool call can retry instead of being deduped away,
+                    # and surface it loudly — a stuck WAITING run must never be
+                    # silent (this is the swallow class that hid the ask_user bug).
+                    if rendered_key is not None:
+                        self._rendered_waiting_tool_calls.discard(rendered_key)
+                    logger.debug(
+                        'agent_surfaces.progress_observer.surface_s_waiting_but_nothing.diagnostic',
+                        tool_call_id=tool_call_id,
+                    )
+            except Exception:
                 if rendered_key is not None:
                     self._rendered_waiting_tool_calls.discard(rendered_key)
-                logger.warning(
-                    "Surface %s render failed conversation=%s error=%s",
-                    kind,
-                    conversation.id,
-                    exc,
+                logger.debug(
+                    'agent_surfaces.progress_observer.surface_s_render_conversation_s.diagnostic'
                 )
+        if not ends_run:
+            # Nothing about this run's final answer is settled yet: the narration
+            # above was the lead-in to the prompt, and the real answer only comes
+            # after the decision. Unlatch delivery so on_run_finished still sends
+            # it, and drop what was already delivered so it is not repeated.
+            self._final_delivered = False
+            self._final_answer_text = None
+            self._buffered_text = None
 
     async def _maybe_send_text_progress(
         self,
@@ -314,9 +337,33 @@ class SurfaceAgentRunProgressObserver:
             try:
                 await task
             except asyncio.CancelledError:
+                # Expected after task.cancel(); delivery cleanup must continue.
                 pass
         await self._clear_progress(conversation.id)
         await self._deliver_final_answer(conversation)
+
+    async def on_run_failed(
+        self,
+        conversation: Conversation,
+        error: Exception,
+    ) -> None:
+        """Deliver failures raised before the harness can emit an error event."""
+        del error
+        self._run_errored = True
+        self._run_error_text = (
+            "I couldn’t finish that request. "
+            "Try it again without resending your message."
+        )
+        task = self._typing_task
+        self._typing_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        await self._clear_progress(conversation.id)
+        await self._deliver_run_error(conversation)
 
     async def _deliver_final_answer(self, conversation: Conversation) -> None:
         """Deliver the single final answer once the run has finished.
@@ -330,6 +377,7 @@ class SurfaceAgentRunProgressObserver:
             return
         self._final_delivered = True
         if self._run_errored:
+            await self._deliver_run_error(conversation)
             return
         platform = _surface_platform(conversation)
         if platform in _EMAIL_PLATFORMS and self._email_reply_tool_called:
@@ -342,11 +390,30 @@ class SurfaceAgentRunProgressObserver:
                 conversation_id=conversation.id,
                 message=message,
             )
-        except Exception as exc:
-            logger.warning(
-                "Surface final answer delivery failed conversation=%s error=%s",
-                conversation.id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_final_answer_delivery_conversation.diagnostic'
+            )
+
+    async def _deliver_run_error(self, conversation: Conversation) -> None:
+        if self._error_delivered:
+            return
+        if _surface_platform(conversation) in _EMAIL_PLATFORMS:
+            self._error_delivered = True
+            return
+        try:
+            await self._send_agent_message(
+                conversation_id=conversation.id,
+                message=(
+                    self._run_error_text
+                    or "I couldn’t finish that request. You can try it again."
+                ),
+                metadata={"retry_action": True},
+            )
+            self._error_delivered = True
+        except Exception:
+            logger.debug(
+                "agent_surfaces.progress_observer.surface_error_delivery.diagnostic"
             )
 
     async def _refresh_typing_loop(
@@ -364,11 +431,10 @@ class SurfaceAgentRunProgressObserver:
                     return
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.warning(
-                "Surface progress typing loop stopped conversation=%s error=%s",
-                conversation_id,
-                exc,
+        except Exception:
+            logger.debug(
+                'agent_surfaces.progress_observer.surface_progress_typing_loop_stopped.diagnostic',
+                conversation_id=conversation_id,
             )
 
     async def _send_indicator(
@@ -406,6 +472,11 @@ def _surface_platform(conversation: Conversation) -> str | None:
     metadata = conversation.metadata or {}
     platform = metadata.get("surface_platform") if isinstance(metadata, dict) else None
     return str(platform).upper() if platform else None
+
+
+def _safe_run_error_text(event: AgentEvent) -> str:
+    del event
+    return "I couldn’t finish that request. Try it again without resending your message."
 
 
 def _email_reply_tool_called(event: AgentEvent) -> bool:
@@ -452,6 +523,16 @@ def _is_final_answer_event(event: AgentEvent) -> bool:
         return False
     metadata = data.metadata or {}
     return metadata.get("is_final_answer") is True
+
+
+def _is_agent_host_permission_event(event: AgentEvent) -> bool:
+    """An Agent Host permission pause, carried as STATUS rather than WAITING."""
+    return (
+        event.type == AgentEventType.STATUS
+        and isinstance(event.data, dict)
+        and event.data.get("status") == "permission_request"
+        and bool(event.data.get("tool_call_id"))
+    )
 
 
 def _is_tool_activity_event(event: AgentEvent) -> bool:

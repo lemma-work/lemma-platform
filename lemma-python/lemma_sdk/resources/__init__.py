@@ -11,6 +11,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 _NAME_TO_MODULE = {
+    "AgentHosts": "agent_hosts",
     "PodAgents": "agents",
     "PodConversations": "conversations",
     "PodQueries": "data",
@@ -25,7 +26,6 @@ _NAME_TO_MODULE = {
     "BoundOrg": "orgs",
     "Orgs": "orgs",
     "BoundOrgRuntime": "runtime",
-    "Runtime": "runtime",
     "BoundPods": "pods",
     "PodSchedules": "schedules",
     "PodSurfaces": "surfaces",
@@ -36,6 +36,7 @@ _NAME_TO_MODULE = {
 }
 
 if TYPE_CHECKING:
+    from .agent_hosts import AgentHosts
     from .agents import PodAgents
     from .conversations import PodConversations
     from .data import PodQueries, PodRecords, PodTables, Table
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
     from .members import PodMembers
     from .orgs import BoundOrg, Orgs
     from .pods import BoundPods
-    from .runtime import BoundOrgRuntime, Runtime
+    from .runtime import BoundOrgRuntime
     from .schedules import PodSchedules
     from .surfaces import PodSurfaces, UserSurfaces
     from .tools import Tools
@@ -68,11 +69,11 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "AgentHosts",
     "BoundConnectors",
     "BoundOrg",
     "BoundPods",
     "Orgs",
-    "Runtime",
     "BoundOrgRuntime",
     "PodAgents",
     "PodConversations",

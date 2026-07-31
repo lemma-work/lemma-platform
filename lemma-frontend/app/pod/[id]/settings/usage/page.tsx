@@ -1,7 +1,7 @@
 'use client';
 
 import { use } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2 } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
@@ -35,7 +35,6 @@ function PodUsagePageContent({ params }: { params: Promise<{ id: string }> }) {
         <PodSettingsShell
             podId={podId}
             title="Pod Settings"
-            description="Track spend, tokens, and recent model activity inside this pod."
         >
             <div className="w-full max-w-5xl">
                 {organizationId ? (

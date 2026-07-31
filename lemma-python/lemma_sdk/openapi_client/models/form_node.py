@@ -112,7 +112,7 @@ class FormNode:
                 position_type_0 = FormNodePositionType0.from_dict(data)
 
                 return position_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(FormNodePositionType0 | None | Unset, data)
 

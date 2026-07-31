@@ -11,7 +11,11 @@ from app.modules.workflow.domain.context import LoopScope, RunContextReader
 from app.modules.workflow.domain.errors import WorkflowDomainError
 from app.modules.workflow.domain.workflow import WorkflowEntity
 from app.modules.workflow.domain.ports import AgentPort, FunctionPort, SchedulePort
-from app.modules.workflow.domain.run import WorkflowRunEntity, WorkflowRunStatus, LoopFrame
+from app.modules.workflow.domain.run import (
+    WorkflowRunEntity,
+    WorkflowRunStatus,
+    LoopFrame,
+)
 from app.modules.workflow.domain.wait import WaitRequest
 from app.modules.workflow.domain.wait import WorkflowRunWaitType
 from app.modules.workflow.execution.executors import EXECUTOR_REGISTRY, NodeExecutor
@@ -80,13 +84,12 @@ class RunStepper:
 
             executor = self._registry[node.type]
             step = run.begin_step(node.id)
-            logger.info(
+            logger.debug(
                 "workflow.step.started",
                 run_id=str(run.id),
                 flow_id=str(flow.id),
                 node_id=node.id,
                 node_type=node.type.value,
-                step_index=step.step_index,
             )
             try:
                 outcome = await executor.execute(node, self._step_context(run, flow))
@@ -103,7 +106,7 @@ class RunStepper:
                     outcome.output or None,
                     human_wait=outcome.wait.wait_type == WorkflowRunWaitType.HUMAN,
                 )
-                logger.info(
+                logger.debug(
                     "workflow.step.suspended",
                     run_id=str(run.id),
                     node_id=node.id,
@@ -224,7 +227,9 @@ class RunStepper:
             )
         )
 
-    def _step_context(self, run: WorkflowRunEntity, flow: WorkflowEntity) -> StepContext:
+    def _step_context(
+        self, run: WorkflowRunEntity, flow: WorkflowEntity
+    ) -> StepContext:
         return StepContext(
             run_id=run.id,
             flow_id=flow.id,
@@ -239,11 +244,10 @@ class RunStepper:
 
     def _log_outcome(self, run: WorkflowRunEntity) -> None:
         if run.status == WorkflowRunStatus.COMPLETED:
-            logger.info("workflow.run.completed", run_id=str(run.id))
+            logger.debug("workflow.run.completed", run_id=str(run.id))
         elif run.status == WorkflowRunStatus.FAILED:
             logger.warning(
                 "workflow.run.failed",
                 run_id=str(run.id),
                 failed_node_id=run.failed_node_id,
-                error=run.error,
             )

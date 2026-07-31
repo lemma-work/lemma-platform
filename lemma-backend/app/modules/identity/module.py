@@ -11,8 +11,11 @@ def _routers():
         router as organization,
     )
     from app.modules.identity.api.controllers.auth_controller import router as auth
+    from app.modules.identity.api.controllers.email_bounce_controller import (
+        router as email_bounce,
+    )
 
-    return [user, organization, auth]
+    return [user, organization, auth, email_bounce]
 
 
 def _event_routers():
@@ -31,9 +34,19 @@ async def _close_user_cache(app):
         from app.modules.identity.services.desktop_auth_handoff import (
             get_desktop_auth_handoff_store,
         )
+        from app.modules.identity.services.auth_abuse import close_auth_abuse_store
+        from app.modules.identity.services.telegram_oidc import (
+            close_telegram_oidc_store,
+        )
+        from app.modules.identity.services.whatsapp_mobile_verification import (
+            close_whatsapp_mobile_verification_service,
+        )
 
         await close_user_cache()
         await get_desktop_auth_handoff_store().close()
+        await close_auth_abuse_store()
+        await close_telegram_oidc_store()
+        await close_whatsapp_mobile_verification_service()
 
 
 module = LemmaModule(
@@ -41,5 +54,8 @@ module = LemmaModule(
     routers=_routers,
     event_routers=_event_routers,
     api_lifespans=(_close_user_cache,),
-    stream_groups=(("identity_events", "identity-email-events"),),
+    stream_groups=(
+        ("identity_events", "identity-email-events"),
+        ("identity_events", "identity-mobile-verification-events"),
+    ),
 )

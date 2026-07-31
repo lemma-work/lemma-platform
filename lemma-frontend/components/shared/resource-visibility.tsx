@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Copy, Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LucideIcon } from 'lucide-react';
+import { Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
 import type { PodMemberResponse, ResourceAccessGrantResponse, ResourceAccessResponse } from 'lemma-sdk';
 
 import { ConceptHint } from '@/components/education/concept-hint';
+import { ShareLinkRow } from '@/components/share/share-link-row';
+import { SocialCardPanel } from '@/components/share/social-card-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,10 +18,14 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { buildShareLink, shareKindForResourceType } from '@/lib/share/share-link';
+import type { SocialCardVariant } from '@/lib/share/social-card';
 import { cn } from '@/lib/utils';
+import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 export type ResourceVisibilityValue = 'PERSONAL' | 'POD' | 'RESTRICTED' | 'PUBLIC';
 export type ShareableResourceType =
@@ -37,12 +43,35 @@ type ResourceVisibilityCopy = {
     label: string;
     shortDescription: string;
     description: string;
-    icon: LucideIcon;
+    icon: LemmaIcon;
     className: string;
 };
 
 const VISIBILITY_VALUES: ResourceVisibilityValue[] = ['PERSONAL', 'POD', 'RESTRICTED', 'PUBLIC'];
 const NO_GRANTEE_VALUE = '__none__';
+
+/**
+ * Only the things a stranger can meaningfully open get a social card. A table
+ * or a folder is shared *into* a team, not out to a timeline, and "Run it on
+ * Lemma" would be a lie on that card.
+ */
+const SOCIAL_CARD_VARIANT_BY_RESOURCE: Partial<Record<ShareableResourceType, SocialCardVariant>> = {
+    agent: 'agent',
+    app: 'app',
+    workflow: 'workflow',
+};
+
+/** Human name for the kind of thing being shared, shown under the dialog title. */
+const RESOURCE_NOUN: Record<ShareableResourceType, string> = {
+    agent: 'Agent',
+    function: 'Function',
+    workflow: 'Workflow',
+    schedule: 'Schedule',
+    datastore_table: 'Table',
+    document: 'Document',
+    folder: 'Folder',
+    app: 'App',
+};
 
 type AccessLevel = {
     value: string;
@@ -133,9 +162,12 @@ export function getResourceVisibilityCopy(
     if (visibility === 'PUBLIC') {
         return {
             value: visibility,
-            label: 'Anyone with link',
-            shortDescription: 'Link access',
-            description: 'Anyone with the link can open it.',
+            // Not anonymous: authorization still runs against a signed-in
+            // principal, so this waives pod scope rather than opening the
+            // resource to the open internet. The copy has to say so.
+            label: 'Anyone signed in',
+            shortDescription: 'Anyone with a Lemma account',
+            description: 'Anyone with a Lemma account can open it using the link.',
             icon: Globe2,
             className: 'state-badge-info',
         };
@@ -269,6 +301,56 @@ export function ResourceVisibilityBadge({
     );
 }
 
+/**
+ * One choice in the general-access list.
+ *
+ * All four options stay on screen instead of hiding behind a dropdown — the
+ * whole point of this dialog is comparing "only me" against "anyone with the
+ * link", and you cannot compare what you cannot see.
+ */
+function VisibilityOption({
+    copy,
+    selected,
+    onSelect,
+}: {
+    copy: ResourceVisibilityCopy;
+    selected: boolean;
+    onSelect: () => void;
+}) {
+    const Icon = copy.icon;
+
+    return (
+        <label
+            className={cn(
+                'flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2.5 transition-gentle',
+                selected
+                    ? 'border-[color:var(--action-primary)] bg-[var(--action-primary-soft)]'
+                    : 'border-[color:var(--border-subtle)] bg-[var(--surface-1)] hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]',
+            )}
+        >
+            <RadioGroupItem value={copy.value} id={`visibility-${copy.value}`} onClick={onSelect} />
+            <span
+                className={cn(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+                    selected
+                        ? 'bg-[var(--action-primary)] text-[var(--text-on-brand)]'
+                        : 'bg-[var(--surface-3)] text-[var(--text-tertiary)]',
+                )}
+            >
+                <Icon className="h-4 w-4" />
+            </span>
+            <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-[var(--text-primary)]">
+                    {copy.label}
+                </span>
+                <span className="block truncate text-xs text-[var(--text-secondary)]">
+                    {copy.description}
+                </span>
+            </span>
+        </label>
+    );
+}
+
 export function ResourceShareButton({
     value,
     onChange,
@@ -301,14 +383,12 @@ export function ResourceShareButton({
     const current = normalizeResourceVisibility(value);
     const queryClient = useQueryClient();
     const [open, setOpen] = useState(false);
-    const [copied, setCopied] = useState(false);
     const [draftVisibility, setDraftVisibility] = useState<ResourceVisibilityValue>(current);
     const [selectedGrantee, setSelectedGrantee] = useState<string>(NO_GRANTEE_VALUE);
     const [selectedAccessLevel, setSelectedAccessLevel] = useState<string>('viewer');
     const [draftGrants, setDraftGrants] = useState<ResourceAccessGrantResponse[]>([]);
     const [saveError, setSaveError] = useState<string | null>(null);
-    const draftCopy = getResourceVisibilityCopy(draftVisibility, resourceLabel);
-    const DraftIcon = draftCopy.icon;
+    const cardSectionRef = useRef<HTMLElement | null>(null);
     const hasVisibilityChange = draftVisibility !== current;
     const canManageSpecificAccess = Boolean(podId && resourceType && resourceId);
     const accessLevels = resourceType ? ACCESS_LEVELS_BY_RESOURCE[resourceType] : [];
@@ -328,9 +408,9 @@ export function ResourceShareButton({
         queryFn: () => getLemmaClient().podMembers.list(podId!) as Promise<{ items: PodMemberResponse[] }>,
         enabled: open && canManageSpecificAccess,
     });
-    const grants = accessData?.grants || [];
+    const grants = useMemo(() => accessData?.grants || [], [accessData]);
     const members = membersData?.items || [];
-    const memberOptions = members.map((member) => ({
+    const granteeOptions = members.map((member) => ({
         value: `POD_MEMBER:${member.pod_member_id}`,
         label: member.user_name || member.email || member.user_email,
         detail: member.email || member.user_email,
@@ -347,11 +427,13 @@ export function ResourceShareButton({
             display_name: member.user_name || member.email || member.user_email || null,
         } as ResourceAccessGrantResponse,
     }));
-    const granteeOptions = memberOptions;
     const directAccessEnabled = draftVisibility !== 'PERSONAL';
-    const effectiveDraftGrants = draftVisibility === 'PERSONAL'
-        ? []
-        : draftGrants.filter((grant) => grant.grantee_type === 'POD_MEMBER');
+    const effectiveDraftGrants = useMemo(
+        () => (draftVisibility === 'PERSONAL'
+            ? []
+            : draftGrants.filter((grant) => grant.grantee_type === 'POD_MEMBER')),
+        [draftVisibility, draftGrants],
+    );
     const removedRoleGrantCount = directAccessEnabled
         ? draftGrants.filter((grant) => grant.grantee_type === 'ROLE').length
         : 0;
@@ -359,11 +441,35 @@ export function ResourceShareButton({
     const hasGrantChanges = canManageSpecificAccess && Boolean(accessData) && !sameGrantLists(grants, effectiveDraftGrants);
     const hasChanges = hasVisibilityChange || hasGrantChanges;
     const accessSectionTitle = draftVisibility === 'RESTRICTED' ? 'People with access' : 'Additional people';
-    const accessEmptyCopy = 'No specific people yet.';
-    const accessSelectCopy = 'Add a person';
     const accessSectionDescription = draftVisibility === 'RESTRICTED'
         ? 'Only these people can open it.'
-        : 'People added here get direct access in addition to workspace access.';
+        : 'Added on top of workspace access.';
+
+    // Granted people already in the list should not be offered again.
+    const grantedKeys = new Set(effectiveDraftGrants.map((grant) => grantKey(grant)));
+    const addableOptions = granteeOptions.filter(
+        (option) => !grantedKeys.has(`${option.granteeType}:${option.granteeId}`),
+    );
+
+    const cardVariant = resourceType ? SOCIAL_CARD_VARIANT_BY_RESOURCE[resourceType] : undefined;
+
+    /**
+     * A `/pod/…` URL is signed-in-only and serves no Open Graph tags, so it
+     * unfurls as nothing. Once the resource is open to anyone signed in, hand
+     * out the `/s/…` wrapper instead: it previews properly, and a teammate who
+     * already has a session is redirected straight through to this same URL.
+     */
+    const publicShareUrl = useMemo(() => {
+        if (!shareUrl || !resourceType || draftVisibility !== 'PUBLIC') return null;
+        return buildShareLink({
+            kind: shareKindForResourceType(resourceType),
+            canonicalUrl: shareUrl,
+            name: resourceName,
+        });
+    }, [shareUrl, resourceType, resourceName, draftVisibility]);
+
+    const linkToShare = publicShareUrl ?? shareUrl;
+    const canShowCard = Boolean(cardVariant && publicShareUrl);
 
     const saveSharing = useMutation({
         mutationFn: async () => {
@@ -408,6 +514,7 @@ export function ResourceShareButton({
         onSuccess: () => {
             setSaveError(null);
             setOpen(false);
+            playSoundFeedback('action-success');
             void queryClient.invalidateQueries({ queryKey: accessQueryKey });
         },
         onError: (error) => {
@@ -420,6 +527,13 @@ export function ResourceShareButton({
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setDraftGrants(accessData.grants || []);
     }, [accessData, open]);
+
+    // Switching to "anyone signed in" reveals the card further up the dialog;
+    // bring it into view so the change is visible wherever the reader is.
+    useEffect(() => {
+        if (!canShowCard) return;
+        cardSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, [canShowCard]);
 
     const addDraftGrant = (granteeValue: string, access = selectedAccess) => {
         if (granteeValue === NO_GRANTEE_VALUE || !access) return;
@@ -469,7 +583,7 @@ export function ResourceShareButton({
             type="button"
             variant="outline"
             size="sm"
-            className={cn('h-8 gap-2 rounded-full px-3 text-sm font-medium', buttonClassName)}
+            className={cn('gap-1.5', buttonClassName)}
             onClick={() => handleOpenChange(true)}
             disabled={disabled}
         >
@@ -486,102 +600,125 @@ export function ResourceShareButton({
         void saveSharing.mutate();
     };
 
-    const copyLink = async () => {
-        if (!shareUrl) return;
-        try {
-            await navigator.clipboard.writeText(shareUrl);
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1600);
-        } catch {
-            setCopied(false);
-        }
-    };
+    const resourceNoun = resourceType ? RESOURCE_NOUN[resourceType] : null;
 
     return (
         <div className={className}>
             {triggerNode}
 
             <Dialog open={open} onOpenChange={handleOpenChange}>
-                <DialogContent className="w-[calc(100vw-2rem)] max-w-[640px] gap-0 overflow-hidden rounded-lg border border-[var(--border-subtle)] bg-[var(--card-bg)] p-0 shadow-[var(--shadow-lg)] duration-0 data-[state=closed]:animate-none data-[state=open]:animate-none">
-                    <DialogHeader className="border-b border-[var(--border-subtle)] px-6 py-5">
-                        <DialogTitle className="text-2xl font-medium leading-8 text-[var(--text-primary)]">Share</DialogTitle>
-                        {resourceName ? (
-                            <DialogDescription className="mt-1.5 truncate text-base leading-6 text-[var(--text-secondary)]">
-                                {resourceName}
-                            </DialogDescription>
-                        ) : null}
+                <DialogContent className="max-w-[560px] gap-0 overflow-hidden p-0">
+                    <DialogHeader className="gap-1 border-b border-[color:var(--border-subtle)] px-5 py-4 pr-12 text-left">
+                        <DialogTitle className="truncate">
+                            {resourceName ? `Share ${resourceName}` : 'Share'}
+                        </DialogTitle>
+                        <DialogDescription className="text-xs">
+                            {resourceNoun
+                                ? `${resourceNoun} · choose who can open it and what they can do.`
+                                : 'Choose who can open it and what they can do.'}
+                        </DialogDescription>
                     </DialogHeader>
 
-                    <div className="space-y-6 px-6 py-5">
-                        <section className="space-y-3">
+                    <div className="max-h-[min(70dvh,34rem)] space-y-5 overflow-y-auto px-5 py-4">
+                        <ShareLinkRow
+                            url={linkToShare}
+                            name={resourceName}
+                            allowNativeShare={draftVisibility === 'PUBLIC'}
+                            emptyHint="A link is available once this is created."
+                        />
+
+                        {/* Once it is open to anyone signed in, the card *is* the
+                            share — so it sits with the link rather than behind a
+                            toggle at the bottom of a scrolling dialog. */}
+                        {canShowCard && cardVariant ? (
+                            <section ref={cardSectionRef}>
+                                <SocialCardPanel
+                                    layout="compact"
+                                    variant={cardVariant}
+                                    name={resourceName}
+                                    url={publicShareUrl}
+                                    unfurls
+                                />
+                            </section>
+                        ) : null}
+
+                        <section className="space-y-2">
                             <div className="flex items-center justify-between gap-3">
-                                <h3 className="flex items-center gap-1.5 text-base font-medium text-[var(--text-primary)]">General access<ConceptHint concept="grant" /></h3>
+                                <h3 className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-primary)]">
+                                    General access
+                                    <ConceptHint concept="grant" />
+                                </h3>
                                 {hasVisibilityChange ? (
-                                    <span className="text-sm text-[var(--state-warning)]">Unsaved</span>
+                                    <span className="text-xs text-[var(--state-warning)]">Unsaved</span>
                                 ) : null}
                             </div>
-                            <div className="flex items-center gap-4 rounded-md bg-[var(--surface-2)] px-4 py-3">
-                                <span className={cn(
-                                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-full',
-                                    draftVisibility === 'RESTRICTED'
-                                        ? 'bg-[var(--bg-muted)] text-[var(--text-secondary)]'
-                                        : 'bg-[var(--action-primary-soft)] text-[var(--action-primary)]',
-                                )}>
-                                    <DraftIcon className="h-5 w-5" />
-                                </span>
-                                <div className="min-w-0 flex-1">
-                                    <Select value={draftVisibility} onValueChange={(next) => setDraftVisibility(next as ResourceVisibilityValue)}>
-                                        <SelectTrigger className="h-10 w-fit min-w-48 rounded-md border border-[var(--field-border)] bg-[var(--field-bg)] px-4 py-0 text-base font-medium shadow-none">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent className="min-w-56 p-1.5">
-                                            {optionCopies.map((option) => (
-                                                <SelectItem key={option.value} value={option.value} className="px-3 py-2.5">
-                                                    {option.label}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    <p className="mt-0.5 text-sm leading-5 text-[var(--text-secondary)]">
-                                        {draftCopy.description}
-                                    </p>
-                                    {draftVisibility === 'PUBLIC' && !shareUrl ? (
-                                        <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
-                                            A link will be available after this resource is created.
-                                        </p>
-                                    ) : null}
-                                </div>
-                            </div>
+                            <RadioGroup
+                                className="gap-1.5"
+                                value={draftVisibility}
+                                onValueChange={(next) => setDraftVisibility(next as ResourceVisibilityValue)}
+                            >
+                                {optionCopies.map((option) => (
+                                    <VisibilityOption
+                                        key={option.value}
+                                        copy={option}
+                                        selected={draftVisibility === option.value}
+                                        onSelect={() => setDraftVisibility(option.value)}
+                                    />
+                                ))}
+                            </RadioGroup>
                         </section>
 
                         {canManageSpecificAccess && directAccessEnabled ? (
-                            <section className="space-y-4">
-                                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
-                                    <Select value={selectedGrantee} onValueChange={handleSelectedGranteeChange}>
-                                        <SelectTrigger className="h-12 min-w-0 rounded-md bg-[var(--surface-1)] px-4 text-left text-base">
-                                            <SelectValue placeholder={accessSelectCopy} />
+                            <section className="space-y-2">
+                                <div className="flex items-baseline justify-between gap-3">
+                                    <h3 className="text-sm font-medium text-[var(--text-primary)]">
+                                        {accessSectionTitle}
+                                    </h3>
+                                    <span className="text-xs text-[var(--text-tertiary)]">
+                                        {isAccessLoading ? 'Loading…' : accessSectionDescription}
+                                    </span>
+                                </div>
+
+                                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                                    <Select
+                                        value={selectedGrantee}
+                                        onValueChange={handleSelectedGranteeChange}
+                                        disabled={addableOptions.length === 0}
+                                    >
+                                        {/* SelectTrigger line-clamps its direct span child, which
+                                            collapses any flex layout nested inside it — so the
+                                            trigger keeps a plain SelectValue and nothing else. */}
+                                        <SelectTrigger className="h-9 min-w-0 text-sm">
+                                            <SelectValue
+                                                placeholder={
+                                                    addableOptions.length === 0
+                                                        ? 'Everyone here already has access'
+                                                        : 'Add a person…'
+                                                }
+                                            />
                                         </SelectTrigger>
-                                        <SelectContent className="min-w-[22rem] p-1.5">
-                                            <SelectItem value={NO_GRANTEE_VALUE} className="px-3 py-2.5">
-                                                {accessSelectCopy}
-                                            </SelectItem>
-                                            {granteeOptions.map((option) => (
-                                                <SelectItem key={option.value} value={option.value} className="px-3 py-2.5">
-                                                    <span className="flex min-w-0 flex-col gap-0.5">
-                                                        <span className="truncate text-sm font-medium text-[var(--text-primary)]">{option.label}</span>
-                                                        <span className="truncate text-xs text-[var(--text-tertiary)]">{option.detail}</span>
+                                        <SelectContent className="min-w-[20rem]">
+                                            {addableOptions.map((option) => (
+                                                <SelectItem key={option.value} value={option.value}>
+                                                    <span className="flex min-w-0 flex-col">
+                                                        <span className="truncate text-sm text-[var(--text-primary)]">
+                                                            {option.label}
+                                                        </span>
+                                                        <span className="truncate text-xs text-[var(--text-tertiary)]">
+                                                            {option.detail}
+                                                        </span>
                                                     </span>
                                                 </SelectItem>
                                             ))}
                                         </SelectContent>
                                     </Select>
                                     <Select value={selectedAccessLevel} onValueChange={setSelectedAccessLevel}>
-                                        <SelectTrigger className="h-12 rounded-md bg-[var(--surface-1)] px-4 text-base">
+                                        <SelectTrigger className="h-9 text-sm">
                                             <SelectValue />
                                         </SelectTrigger>
-                                        <SelectContent className="min-w-44 p-1.5">
+                                        <SelectContent>
                                             {accessLevels.map((level) => (
-                                                <SelectItem key={level.value} value={level.value} className="px-3 py-2.5">
+                                                <SelectItem key={level.value} value={level.value}>
                                                     {level.label}
                                                 </SelectItem>
                                             ))}
@@ -589,103 +726,93 @@ export function ResourceShareButton({
                                     </Select>
                                 </div>
 
-                                <div className="space-y-3">
-                                    <div className="flex items-center justify-between gap-3">
-                                        <div className="min-w-0">
-                                            <h3 className="text-base font-medium text-[var(--text-primary)]">{accessSectionTitle}</h3>
-                                            <p className="mt-0.5 text-sm leading-5 text-[var(--text-secondary)]">
-                                                {accessSectionDescription}
-                                            </p>
-                                        </div>
-                                        {isAccessLoading ? (
-                                            <span className="text-xs text-[var(--text-tertiary)]">Loading</span>
-                                        ) : null}
-                                    </div>
-                                    <div className="space-y-2">
-                                        {effectiveDraftGrants.length === 0 ? (
-                                            <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-4 py-3 text-base leading-6 text-[var(--text-secondary)]">
-                                                {accessEmptyCopy}
-                                            </p>
-                                        ) : (
-                                            effectiveDraftGrants.map((grant) => (
-                                                <div
-                                                    key={`${grant.grantee_type}:${grant.grantee_id}`}
-                                                    className="flex items-center gap-3 rounded-md px-1 py-2"
-                                                >
-                                                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--bg-muted)] text-sm font-semibold text-[var(--text-secondary)]">
-                                                        {grant.grantee_type === 'ROLE' ? <UsersRound className="h-4 w-4" /> : getGrantInitials(grant)}
-                                                    </span>
-                                                    <div className="min-w-0 flex-1">
-                                                        <div className="truncate text-base font-medium text-[var(--text-primary)]">{getGrantLabel(grant)}</div>
-                                                        <div className="truncate text-sm text-[var(--text-tertiary)]">{grant.email || getAccessLabel(resourceType!, grant.permission_ids || [])}</div>
+                                {effectiveDraftGrants.length === 0 ? (
+                                    <p className="rounded-md border border-dashed border-[color:var(--border-subtle)] px-3 py-2.5 text-xs text-[var(--text-tertiary)]">
+                                        {draftVisibility === 'RESTRICTED'
+                                            ? 'No one can open this yet — add the people who need it.'
+                                            : 'No one has been added directly.'}
+                                    </p>
+                                ) : (
+                                    <ul className="divide-y divide-[color:var(--border-subtle)] rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-1)]">
+                                        {effectiveDraftGrants.map((grant) => (
+                                            <li
+                                                key={grantKey(grant)}
+                                                className="flex items-center gap-3 px-3 py-2"
+                                            >
+                                                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--surface-3)] text-xs font-semibold text-[var(--text-secondary)]">
+                                                    {grant.grantee_type === 'ROLE' ? <UsersRound className="h-4 w-4" /> : getGrantInitials(grant)}
+                                                </span>
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="truncate text-sm font-medium text-[var(--text-primary)]">
+                                                        {getGrantLabel(grant)}
                                                     </div>
-                                                    <Select
-                                                        value={accessLevels.find((level) => samePermissions(level.permissionIds, grant.permission_ids || []))?.value || ''}
-                                                        onValueChange={(next) => handleDraftGrantAccessChange(grant, next)}
-                                                    >
-                                                        <SelectTrigger className="h-9 w-28 rounded-md bg-[var(--surface-1)] px-3 text-sm">
-                                                            <SelectValue placeholder={getAccessLabel(resourceType!, grant.permission_ids || [])} />
-                                                        </SelectTrigger>
-                                                        <SelectContent className="min-w-36 p-1.5">
-                                                            {accessLevels.map((level) => (
-                                                                <SelectItem key={level.value} value={level.value} className="px-3 py-2.5">
-                                                                    {level.label}
-                                                                </SelectItem>
-                                                            ))}
-                                                        </SelectContent>
-                                                    </Select>
-                                                    <Button
-                                                        type="button"
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        className="h-9 w-9"
-                                                        onClick={() => handleRemoveDraftGrant(grant)}
-                                                        disabled={saveSharing.isPending}
-                                                        title={`Remove ${getGrantLabel(grant)}`}
-                                                    >
-                                                        <Trash2 className="h-4 w-4" />
-                                                    </Button>
+                                                    <div className="truncate text-xs text-[var(--text-tertiary)]">
+                                                        {grant.email || getAccessLabel(resourceType!, grant.permission_ids || [])}
+                                                    </div>
                                                 </div>
-                                            ))
-                                        )}
-                                        {removedRoleGrantCount > 0 ? (
-                                            <p className="text-xs leading-5 text-[var(--state-warning)]">
-                                                Role-based access is not available here and will be removed when you save.
-                                            </p>
-                                        ) : null}
-                                    </div>
-                                </div>
+                                                <Select
+                                                    value={accessLevels.find((level) => samePermissions(level.permissionIds, grant.permission_ids || []))?.value || ''}
+                                                    onValueChange={(next) => handleDraftGrantAccessChange(grant, next)}
+                                                >
+                                                    <SelectTrigger className="h-8 w-[6.5rem] text-xs">
+                                                        <SelectValue placeholder={getAccessLabel(resourceType!, grant.permission_ids || [])} />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        {accessLevels.map((level) => (
+                                                            <SelectItem key={level.value} value={level.value}>
+                                                                {level.label}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    className="h-8 w-8 shrink-0"
+                                                    onClick={() => handleRemoveDraftGrant(grant)}
+                                                    disabled={saveSharing.isPending}
+                                                    aria-label={`Remove ${getGrantLabel(grant)}`}
+                                                >
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+
+                                {removedRoleGrantCount > 0 ? (
+                                    <p className="text-xs text-[var(--state-warning)]">
+                                        Role-based access is not available here and will be removed when you save.
+                                    </p>
+                                ) : null}
                             </section>
                         ) : null}
+
                         {canManageSpecificAccess && !directAccessEnabled && removedPersonalGrantCount > 0 ? (
-                            <p className="rounded-md bg-[var(--surface-2)] px-4 py-3 text-sm leading-5 text-[var(--state-warning)]">
+                            <p className="rounded-md bg-[var(--surface-2)] px-3 py-2.5 text-xs text-[var(--state-warning)]">
                                 Existing direct access will be removed when you save.
                             </p>
                         ) : null}
+
                         {saveError ? (
-                            <p className="text-sm leading-5 text-[var(--state-error)]">{saveError}</p>
+                            <p className="text-sm text-[var(--state-error)]">{saveError}</p>
                         ) : null}
                     </div>
 
-                    <DialogFooter className="border-t border-[var(--border-subtle)] px-6 py-5 sm:justify-between">
-                        <Button
-                            type="button"
-                            variant="outline"
-                            className="h-11 gap-2 rounded-full px-5 text-base"
-                            onClick={() => void copyLink()}
-                            disabled={!shareUrl}
-                            title={shareUrl ? 'Copy resource link' : 'Create this resource before copying a link'}
-                        >
-                            {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                            {copied ? 'Copied' : 'Copy link'}
+                    <DialogFooter className="items-center border-t border-[color:var(--border-subtle)] px-5 py-3 sm:justify-end">
+                        <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(false)}>
+                            Cancel
                         </Button>
                         <Button
                             type="button"
-                            className="h-11 rounded-full px-7 text-base"
+                            size="sm"
                             onClick={handleDone}
-                            disabled={saveSharing.isPending || (canManageSpecificAccess && isAccessLoading)}
+                            loading={saveSharing.isPending}
+                            loadingLabel="Saving"
+                            disabled={canManageSpecificAccess && isAccessLoading}
                         >
-                            {saveSharing.isPending ? 'Saving' : hasChanges ? 'Save' : 'Done'}
+                            {hasChanges ? 'Save' : 'Done'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

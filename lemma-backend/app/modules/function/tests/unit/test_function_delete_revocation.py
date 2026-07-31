@@ -16,9 +16,7 @@ def _service() -> FunctionService:
     return FunctionService(
         function_repository=AsyncMock(),
         run_repository=AsyncMock(),
-        workspace_service=AsyncMock(),
         storage_factory=AsyncMock(),
-        authorization_service=AsyncMock(),
         icon_service=None,
     )
 

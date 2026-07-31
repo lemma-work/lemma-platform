@@ -7,7 +7,7 @@ reasons:
 * **It must be rebuilt.** A Vite app bakes ``VITE_LEMMA_POD_ID`` (and the API
   URLs) into its bundle at build time, and its ``public_slug`` is unique
   platform-wide — both change when the pod is imported elsewhere, so a prebuilt
-  dist from the source pod is useless. The rebuild runs ``npm install && npm run
+  dist from the source pod is useless. The rebuild runs ``pnpm install && pnpm run
   build`` inside the importing user's AgentBox sandbox with the *target* pod's
   values. (A static/no-``package.json`` app needs no rebuild — the host injects
   ``window.__LEMMA_CONFIG__`` at serve time — so its files are deployed as-is.)
@@ -27,7 +27,6 @@ workspace session and a fake app service.
 
 from __future__ import annotations
 
-import base64
 import contextlib
 import hashlib
 import io
@@ -47,14 +46,24 @@ logger = get_logger(__name__)
 
 # npm install + build for a modest frontend can take a few minutes; give it room
 # but bound it so a hung build fails the step instead of the whole job's timeout.
-_BUILD_TIMEOUT_SECONDS = int(os.getenv("LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS", "600"))
+_BUILD_TIMEOUT_SECONDS = int(
+    os.getenv("LEMMA_POD_BUNDLE_APP_BUILD_TIMEOUT_SECONDS", "600")
+)
 _IO_TIMEOUT_SECONDS = 120
-# base64 payloads are written to the sandbox in chunks to stay well under ARG_MAX.
-_B64_CHUNK = 60_000
 # Source-tree entries never worth shipping/rebuilding from (mirrors the CLI's
 # _should_exclude_source_path so an export→import round-trips cleanly).
 _SOURCE_EXCLUDE_DIRS = frozenset(
-    {"node_modules", ".git", "dist", "build", ".next", ".turbo", ".cache", "coverage", "__pycache__"}
+    {
+        "node_modules",
+        ".git",
+        "dist",
+        "build",
+        ".next",
+        ".turbo",
+        ".cache",
+        "coverage",
+        "__pycache__",
+    }
 )
 
 
@@ -84,7 +93,9 @@ def zip_dir(source_dir: Path, *, exclude_build_dirs: bool = True) -> bytes:
             if not path.is_file():
                 continue
             rel = path.relative_to(source_dir)
-            if exclude_build_dirs and any(part in _SOURCE_EXCLUDE_DIRS for part in rel.parts):
+            if exclude_build_dirs and any(
+                part in _SOURCE_EXCLUDE_DIRS for part in rel.parts
+            ):
                 continue
             archive.write(path, arcname=rel.as_posix())
     return buffer.getvalue()
@@ -97,55 +108,18 @@ def slug_candidates(preferred: str | None, *, pod_id: UUID, app_name: str) -> li
     minting a second app."""
     from app.core.helpers.slug import normalize_public_slug
 
-    base = normalize_public_slug(preferred or "") or normalize_public_slug(app_name) or "app"
+    base = (
+        normalize_public_slug(preferred or "")
+        or normalize_public_slug(app_name)
+        or "app"
+    )
     digest = hashlib.sha256(f"{pod_id}:{app_name}".encode()).hexdigest()[:6]
     candidates = [base, f"{base}-{digest}"]
     candidates.extend(f"{base}-{digest}{i}" for i in range(2, 8))
     return candidates
 
 
-def _chunks(text: str, size: int):
-    for start in range(0, len(text), size):
-        yield text[start : start + size]
-
-
 # --- agentbox build (no DB connection) ---------------------------------------
-
-
-@contextlib.asynccontextmanager
-async def _keep_sandbox_alive(session: Any):
-    """Heartbeat the session's sandbox so the idle reaper does not delete it while
-    a multi-minute build runs. Best-effort; no-ops when the session has no manager
-    client (e.g. in tests). Mirrors ``FunctionRunExecutor._keep_sandbox_alive``."""
-    import asyncio
-
-    sandbox_id = getattr(session, "sandbox_id", None)
-    client = getattr(session, "client", None)
-    heartbeat = getattr(client, "heartbeat_sandbox", None)
-    if not sandbox_id or heartbeat is None:
-        yield
-        return
-
-    interval = int(os.getenv("LEMMA_SANDBOX_HEARTBEAT_INTERVAL_SECONDS", "30"))
-
-    async def _loop() -> None:
-        first = True
-        while True:
-            if not first:
-                await asyncio.sleep(interval)
-            first = False
-            try:
-                await heartbeat(sandbox_id)
-            except Exception as exc:  # noqa: BLE001 - best-effort keepalive
-                logger.debug("app-build sandbox heartbeat failed %s: %s", sandbox_id, exc)
-
-    task = asyncio.create_task(_loop())
-    try:
-        yield
-    finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
 
 
 class AppSandboxBuilder:
@@ -189,35 +163,39 @@ class AppSandboxBuilder:
         build_dir = f"/workspace/.lemma-app-build/{app_slug}"
         src_dir = f"{build_dir}/src"
         async with session:
-            async with _keep_sandbox_alive(session):
-                await self._sh(session, f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}")
-                await self._upload(session, source_zip, f"{build_dir}/source.zip")
-                await self._sh(
-                    session,
-                    f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
+            await self._sh(
+                session,
+                f"rm -rf {shlex.quote(build_dir)} && mkdir -p {shlex.quote(src_dir)}",
+            )
+            await self._upload(session, source_zip, f"{build_dir}/source.zip")
+            await self._sh(
+                session,
+                f"cd {shlex.quote(build_dir)} && unzip -oq source.zip -d src",
+            )
+            await self._run_build(session, src_dir)
+            dist_index = f"{src_dir}/dist/index.html"
+            check = await session.exec_command(
+                cmd=f"test -f {shlex.quote(dist_index)}",
+                timeout=_IO_TIMEOUT_SECONDS,
+            )
+            if not check.get("success"):
+                raise AppBuildFailedError(
+                    f"App '{app_slug}' build produced no dist/index.html."
                 )
-                await self._run_build(session, src_dir)
-                dist_index = f"{src_dir}/dist/index.html"
-                check = await session.exec_command(
-                    cmd=f"test -f {shlex.quote(dist_index)}", timeout=_IO_TIMEOUT_SECONDS
-                )
-                if not check.get("success"):
-                    raise AppBuildFailedError(
-                        f"App '{app_slug}' build produced no dist/index.html."
-                    )
-                await self._sh(
-                    session,
-                    f"cd {shlex.quote(src_dir)}/dist && zip -rq {shlex.quote(build_dir)}/dist.zip .",
-                )
-                return await self._download(session, f"{build_dir}/dist.zip")
+            await self._sh(
+                session,
+                f"cd {shlex.quote(src_dir)}/dist && zip -rq {shlex.quote(build_dir)}/dist.zip .",
+            )
+            return await self._download(session, f"{build_dir}/dist.zip")
 
     async def _run_build(self, session: Any, src_dir: str) -> None:
-        # Honor a checked-in lockfile's package manager, else npm (always present).
+        # pnpm is the canonical JavaScript package manager in workspace images.
         script = (
             f"cd {shlex.quote(src_dir)} && "
-            "if [ -f pnpm-lock.yaml ]; then pnpm install && pnpm run build; "
-            "elif [ -f yarn.lock ]; then yarn install && yarn build; "
-            "else npm install && npm run build; fi"
+            "if [ -f pnpm-lock.yaml ]; then "
+            "pnpm install --frozen-lockfile; "
+            "else pnpm install --no-frozen-lockfile; fi "
+            "&& pnpm run build"
         )
         result = await session.exec_command(cmd=script, timeout=_BUILD_TIMEOUT_SECONDS)
         if not result.get("success"):
@@ -233,33 +211,18 @@ class AppSandboxBuilder:
             )
 
     async def _upload(self, session: Any, data: bytes, remote_path: str) -> None:
-        """Write bytes to a sandbox path via chunked base64 (no ARG_MAX blowups)."""
-        encoded = base64.b64encode(data).decode("ascii")
-        b64_path = f"{remote_path}.b64"
-        await self._sh(session, f": > {shlex.quote(b64_path)}")
-        for chunk in _chunks(encoded, _B64_CHUNK):
-            await self._sh(session, f"printf %s {shlex.quote(chunk)} >> {shlex.quote(b64_path)}")
-        await self._sh(
-            session,
-            f"base64 -d {shlex.quote(b64_path)} > {shlex.quote(remote_path)} "
-            f"&& rm -f {shlex.quote(b64_path)}",
-        )
+        await session.write_file(remote_path, data, timeout=_IO_TIMEOUT_SECONDS)
 
     async def _download(self, session: Any, remote_path: str) -> bytes:
-        # `base64 <file> | tr -d '\n'` encodes portably (GNU + BSD).
-        result = await session.exec_command(
-            cmd=f"base64 {shlex.quote(remote_path)} | tr -d '\\n'",
-            timeout=_IO_TIMEOUT_SECONDS,
-        )
-        if not result.get("success"):
-            raise AppBuildFailedError(
-                "Could not read the built app dist.", details={"log": _tail(result)}
-            )
-        return base64.b64decode(result.get("stdout") or "")
+        return await session.read_file(remote_path, timeout=_IO_TIMEOUT_SECONDS)
 
 
 def _tail(result: dict[str, Any], limit: int = 4000) -> str:
-    text = (result.get("stderr") or "") or (result.get("stdout") or "") or (result.get("error") or "")
+    text = (
+        (result.get("stderr") or "")
+        or (result.get("stdout") or "")
+        or (result.get("error") or "")
+    )
     return text[-limit:]
 
 
@@ -376,7 +339,13 @@ class AppStepRunner:
     # --- phase 2 ---------------------------------------------------------
 
     async def _artifacts(
-        self, resource_dir: Path, name: str, *, app_slug: str, pod_id: UUID, user_id: UUID
+        self,
+        resource_dir: Path,
+        name: str,
+        *,
+        app_slug: str,
+        pod_id: UUID,
+        user_id: UUID,
     ) -> tuple[bytes | None, bytes]:
         """Produce ``(source_bytes, dist_bytes)`` for upload. A Vite source is built
         in the agentbox; a static source is deployed as-is; a bundle carrying only a
@@ -389,7 +358,10 @@ class AppStepRunner:
             tier = classify_source_dir(source_dir)
             if tier == "vite":
                 dist_bytes = await self._sandbox.build(
-                    user_id=user_id, pod_id=pod_id, app_slug=app_slug, source_zip=source_bytes
+                    user_id=user_id,
+                    pod_id=pod_id,
+                    app_slug=app_slug,
+                    source_zip=source_bytes,
                 )
             else:  # static: the source *is* the served site.
                 dist_bytes = source_bytes

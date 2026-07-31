@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from app.modules.pod_bundle.api.schemas import ExportStartRequest
+from uuid import uuid4
+
+import pytest
+from pydantic import ValidationError
+
+from app.modules.pod_bundle.api.schemas import ExportStartRequest, PublishStartRequest
+from app.modules.pod_bundle.domain.state import PublishMode
 
 
 def test_export_defaults_to_resources_only_no_data():
@@ -58,3 +64,17 @@ def test_export_caps_are_conservative_and_shared():
         == MAX_APPS_TOTAL_BYTES
         == 20 * 1024 * 1024
     )
+
+
+def test_publish_requires_account_and_defaults_to_create():
+    request = PublishStartRequest(repo_name="my-pod", account_id=uuid4())
+    assert request.mode is PublishMode.CREATE
+
+    with pytest.raises(ValidationError):
+        PublishStartRequest(repo_name="my-pod")
+
+
+@pytest.mark.parametrize("repo_name", ["space name", "owner/repo", ".", "..", "a" * 101])
+def test_publish_rejects_invalid_repository_names(repo_name: str):
+    with pytest.raises(ValidationError):
+        PublishStartRequest(repo_name=repo_name, account_id=uuid4())

@@ -12,6 +12,7 @@ build/
 
 # Local runtime data (object storage, generated files, model caches)
 /.local/
+/.benchmark-results/
 
 # Coverage reports
 .coverage
@@ -36,3 +37,13 @@ __pycache__/
 *.dev-backend.pid
 *.dev-frontend.pid
 *.dev-infra.pid
+.dev-cloudflared-*.pid
+.dev-logs/
+# Rust build outputs (desktop and local daemon)
+**/target/
+**/.build/
+
+# Local scratch output from screenshot/PDF tooling
+/out/
+/output/
+/tmp/

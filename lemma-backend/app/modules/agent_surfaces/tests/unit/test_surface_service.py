@@ -15,11 +15,15 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAlreadyExistsError,
+    AgentSurfaceCredentialConflictError,
     AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
 )
 from app.modules.agent_surfaces.services.surface_service import (
     AgentSurfaceService,
+)
+from app.modules.agent_surfaces.services.telegram_mini_app_service import (
+    TelegramMiniApp,
 )
 from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountInfo,
@@ -46,6 +50,61 @@ def _surface_entity(**overrides) -> AgentSurfaceEntity:
     if payload.pop("is_active", True) is False:
         payload.setdefault("status", AgentSurfaceStatus.INACTIVE)
     return AgentSurfaceEntity(**payload)
+
+
+async def test_sync_telegram_mini_app_binds_menu_button_without_app_command(
+    monkeypatch,
+):
+    repo = AsyncMock()
+    credential_resolver = AsyncMock()
+    credential_resolver.for_surface.return_value = {"bot_token": "secret"}
+    service = AgentSurfaceService(
+        surface_repository=repo,
+        account_binding_resolver=AsyncMock(),
+        credential_resolver=credential_resolver,
+    )
+    app_id = uuid4()
+    app_name = "pocket-desk"
+    surface = _surface_entity(
+        pod_id=uuid4(),
+        surface_type=SurfacePlatform.TELEGRAM,
+        config=SurfaceConfig(telegram={"app_name": app_name}),
+    )
+    client = AsyncMock()
+    mini_app_resolver = AsyncMock(
+        return_value=TelegramMiniApp(
+            app_id=app_id,
+            name=app_name,
+            url="https://apps.example.test/pocket-desk",
+        )
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_mini_app_service."
+        "resolve_telegram_mini_app",
+        mini_app_resolver,
+    )
+    monkeypatch.setattr(
+        "app.modules.agent_surfaces.services.telegram_mini_app_service."
+        "TelegramClient.from_credentials",
+        lambda *_args, **_kwargs: client,
+    )
+
+    await service.sync_telegram_mini_app(surface)
+
+    mini_app_resolver.assert_awaited_once_with(
+        uow=repo.uow,
+        pod_id=surface.pod_id,
+        app_name=app_name,
+    )
+    calls = {call.args[0]: call.args[1] for call in client.call.await_args_list}
+    assert calls["setChatMenuButton"]["menu_button"] == {
+        "type": "web_app",
+        "text": "Open Pocket Desk",
+        "web_app": {"url": "https://apps.example.test/pocket-desk"},
+    }
+    assert {
+        command["command"] for command in calls["setMyCommands"]["commands"]
+    } == {"help", "retry"}
 
 
 async def test_create_surface(monkeypatch):
@@ -298,18 +357,22 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
 
     config = SurfaceConfig()
     repo.create.side_effect = lambda entity: entity
-    repo.get_system_credential_conflict_in_org.return_value = _surface_entity(
+    holder = _surface_entity(
         surface_type=SurfacePlatform.WHATSAPP,
+        name="whatsapp",
         config=config,
         account_id=None,
     )
+    repo.get_system_credential_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.surface_service.settings.api_url",
         "https://api.example.test",
     )
 
-    with pytest.raises(AgentSurfaceValidationError, match="System WHATSAPP credentials"):
+    with pytest.raises(
+        AgentSurfaceCredentialConflictError, match="System WHATSAPP credentials"
+    ) as raised:
         await service.create_surface(
         platform=SurfacePlatform.WHATSAPP,
             pod_id=uuid4(),
@@ -317,6 +380,12 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
             config=config,
         )
 
+    # The setup UI names and links the pod holding the claim, so the conflict
+    # travels as data, not just prose.
+    assert raised.value.details == {
+        "kind": "SYSTEM",
+        "conflicting_surface": {"pod_id": str(holder.pod_id), "name": "whatsapp"},
+    }
     repo.create.assert_not_awaited()
 
 
@@ -331,18 +400,22 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
     account_id = uuid4()
     config = SurfaceConfig()
     repo.create.side_effect = lambda entity: entity
-    repo.get_account_conflict_in_org.return_value = _surface_entity(
+    holder = _surface_entity(
         surface_type=SurfacePlatform.SLACK,
+        name="slack",
         config=config,
         account_id=account_id,
     )
+    repo.get_account_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.surface_service.settings.api_url",
         "https://api.example.test",
     )
 
-    with pytest.raises(AgentSurfaceValidationError, match="connected account"):
+    with pytest.raises(
+        AgentSurfaceCredentialConflictError, match="connected account"
+    ) as raised:
         await service.create_surface(
         platform=SurfacePlatform.SLACK,
             pod_id=uuid4(),
@@ -351,6 +424,10 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
             account_id=account_id,
         )
 
+    assert raised.value.details == {
+        "kind": "ACCOUNT",
+        "conflicting_surface": {"pod_id": str(holder.pod_id), "name": "slack"},
+    }
     repo.create.assert_not_awaited()
 
 

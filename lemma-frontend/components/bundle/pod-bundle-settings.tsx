@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ArrowUpRight, Github, PackageOpen, Share2, Upload } from 'lucide-react';
+import { ArrowUpRight, Github, PackageOpen, Share2, Upload } from '@/components/ui/icons';
 import type { PodRecipe } from 'lemma-sdk';
 
 import { PodSettingsPanel } from '@/components/pod/pod-settings-shell';
@@ -97,7 +97,13 @@ export function PodBundleSettingsPanel({ podId, podName, canUpdate, recipes }: P
                 ) : null}
             </div>
 
-            <ShareSheet podId={podId} podName={podName} open={shareOpen} onOpenChange={setShareOpen} />
+            <ShareSheet
+                podId={podId}
+                podName={podName}
+                open={shareOpen}
+                onOpenChange={setShareOpen}
+                canPublish={canUpdate}
+            />
             {canUpdate ? (
                 <ImportDialog
                     podId={podId}

@@ -31,8 +31,11 @@ def build_telegram_surface_toolset(
         """Get the current Telegram chat and topic details for this conversation."""
         try:
             return await service.get_current_chat(ctx=ctx, request=request)
-        except Exception as exc:
-            logger.exception("Telegram tool telegram_get_current_chat failed: %s", exc)
+        except Exception:
+            logger.debug(
+                "surface.telegram.history_failed",
+                exc_info=True,
+            )
             return TelegramCurrentChatResult(
                 success=False,
                 error="Could not load current Telegram chat details.",

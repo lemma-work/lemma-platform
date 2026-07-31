@@ -115,7 +115,7 @@ class ScheduleRunOutcomeService:
             ]
         )
         logger.warning(
-            "Circuit breaker deactivated schedule",
+            "schedule.breaker.tripped",
             schedule_id=str(schedule.id),
             consecutive_failures=count,
         )

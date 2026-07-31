@@ -12,8 +12,7 @@ logger = get_logger(__name__)
 async def prune_event_delivery_records_task() -> None:
     deleted = await prune_event_delivery_records(async_session_maker)
     if total := sum(deleted.values()):
-        logger.info(
-            "Pruned durable event delivery records",
+        logger.debug(
+            "infrastructure.tasks.pruned_durable_event_delivery_records.observed",
             deleted_count=total,
-            categories=deleted,
         )

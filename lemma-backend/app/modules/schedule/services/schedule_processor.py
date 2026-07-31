@@ -42,7 +42,6 @@ class ScheduleProcessor:
         if schedule is None:
             raise ValueError("schedule is required")
         if not schedule.is_active:
-            logger.info("Schedule %s is inactive, skipping.", schedule.id)
             return False
 
         llm_output: Optional[Dict[str, Any]] = None
@@ -58,7 +57,7 @@ class ScheduleProcessor:
             )
 
             if not should_proceed:
-                logger.info("Schedule %s filtered out by LLM.", schedule.id)
+                logger.debug("schedule.schedule_processor.s_filtered_out_llm.observed")
                 return False
 
         if not source_event_id:

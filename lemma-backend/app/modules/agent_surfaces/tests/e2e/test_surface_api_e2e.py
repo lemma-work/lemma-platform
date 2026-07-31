@@ -251,9 +251,8 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
     fake_slack,
     monkeypatch,
 ):
-    """The config the API returns mirrors exactly what callers send:
-    {identity, channels, dm_conversation_reset_after_hours} — no derived or
-    internal fields, and partial upserts leave unsent fields untouched."""
+    """The config the API returns mirrors the public editable fields, including
+    platform-specific Telegram settings, and partial updates preserve omissions."""
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
@@ -297,6 +296,7 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "telegram",
     }
     assert config["dm_conversation_reset_after_hours"] == 6
     # Identity values are normalized on write.
@@ -326,12 +326,14 @@ async def test_surface_config_round_trips_and_supports_partial_updates(
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "telegram",
     }
     assert set(schemas["SurfaceBehaviorConfigInput"]["properties"]) == {
         "identity",
         "channels",
         "dm_conversation_reset_after_hours",
         "send_policy",
+        "telegram",
     }
 
 
@@ -540,8 +542,32 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
-    assert duplicate_system.status_code == 422, duplicate_system.text
+    assert duplicate_system.status_code == 409, duplicate_system.text
     assert "System WHATSAPP credentials are already used" in duplicate_system.text
+    # The setup UI names the pod holding the claim and links to it, so the
+    # conflict has to be structured — not just a message.
+    conflict_body = duplicate_system.json()
+    assert conflict_body["code"] == "AGENT_SURFACE_CREDENTIAL_CONFLICT"
+    assert conflict_body["details"]["kind"] == "SYSTEM"
+    assert conflict_body["details"]["conflicting_surface"] == {
+        "pod_id": primary_pod_id,
+        "name": "whatsapp",
+    }
+
+    # And the catalog publishes the same claim up front, so the option can be
+    # disabled before the user commits.
+    catalog = await authenticated_client.get(
+        f"/pods/{sibling_pod_id}/available-surfaces"
+    )
+    assert catalog.status_code == 200, catalog.text
+    whatsapp_row = next(
+        row for row in catalog.json()["surfaces"] if row["platform"] == "WHATSAPP"
+    )
+    assert whatsapp_row["system_claim"] == {
+        "available": False,
+        "claimed_by_pod_id": primary_pod_id,
+        "claimed_by_surface_name": "whatsapp",
+    }
 
     deleted_system = await authenticated_client.delete(
         f"/pods/{primary_pod_id}/surfaces/whatsapp"

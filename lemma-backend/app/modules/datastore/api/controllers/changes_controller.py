@@ -7,10 +7,10 @@ are ignored and only serve to detect disconnects.
 
 Design notes
 ------------
-* **Source.** Record writes already publish ``DatastoreRecordEvent`` to the
-  unified ``datastore.events`` Redis stream. This handler tails that stream
-  directly (per connection) via :class:`RedisStreamReader`, so nothing new is
-  published and there is no dependency on the worker process.
+* **Source.** Record writes transactionally stage ``DatastoreRecordEvent`` in
+  the outbox. The worker publishes those events to the unified
+  ``datastore.events`` Redis stream, which this handler tails directly (per
+  connection) via :class:`RedisStreamReader`.
 * **Auth.** ``verify_auth`` skips this path for websockets (it cannot run the
   session machinery without an HTTP response), so the session is resolved here
   manually — from a bearer ``Authorization`` header (CLI/SDK), the SuperTokens
@@ -42,6 +42,7 @@ from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
+from app.core.request_context import create_inherited_task
 from app.core.pubsub.subscriber import RedisStreamReader
 from app.modules.datastore.api.dependencies import build_table_service
 from app.modules.datastore.domain.errors import DatastoreDomainError
@@ -201,8 +202,8 @@ async def datastore_changes_ws(
         )
         return
     except Exception:
-        logger.warning(
-            "Session resolution failed for datastore changes websocket",
+        logger.debug(
+            'datastore.changes_controller.session_resolution_datastore_changes_websocket.diagnostic',
             exc_info=True,
         )
         await websocket.close(
@@ -231,9 +232,7 @@ async def datastore_changes_ws(
                 await ctx.require(
                     Permissions.DATASTORE_TABLE_READ, ResourceRef.pod(pod_id)
                 )
-                allowed_tables = await _visible_table_names(
-                    table_service, pod_id, ctx
-                )
+                allowed_tables = await _visible_table_names(table_service, pod_id, ctx)
     except DatastoreDomainError as exc:
         await websocket.close(
             code=_close_code_for(exc.status_code),
@@ -241,8 +240,8 @@ async def datastore_changes_ws(
         )
         return
     except Exception:
-        logger.warning(
-            "Rejected datastore changes websocket",
+        logger.debug(
+            'datastore.changes_controller.rejected_datastore_changes_websocket.diagnostic',
             pod_id=str(pod_id),
             user_id=str(user_id),
             exc_info=True,
@@ -259,7 +258,7 @@ async def datastore_changes_ws(
         # Client disconnected before we could accept (race on connect).
         return
 
-    forwarder = asyncio.create_task(
+    forwarder = create_inherited_task(
         _forward_changes(
             websocket,
             pod_id=pod_id,
@@ -268,11 +267,11 @@ async def datastore_changes_ws(
             since=since,
         )
     )
-    disconnect = asyncio.create_task(_wait_for_disconnect(websocket))
+    disconnect = create_inherited_task(
+        _wait_for_disconnect(websocket), name="datastore-changes-disconnect"
+    )
     try:
-        await asyncio.wait(
-            {forwarder, disconnect}, return_when=asyncio.FIRST_COMPLETED
-        )
+        await asyncio.wait({forwarder, disconnect}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         for task in (forwarder, disconnect):
             task.cancel()

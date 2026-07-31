@@ -10,19 +10,25 @@ from app.core.infrastructure.events.inbox import (
 from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
+from app.core.log.log import get_logger
 from app.modules.identity.domain.events import (
     IdentityEvents,
     OrganizationInvitationAcceptedEvent,
     OrganizationInvitationCreatedEvent,
     UserSignedUpEvent,
+    WhatsAppMobileVerificationReceivedEvent,
 )
 from app.modules.identity.domain.organization_entities import OrganizationRole
 from app.modules.identity.domain.ports import IdentityEmailPort
 from app.modules.identity.infrastructure.adapters.email_adapter import (
     SmtpIdentityEmailAdapter,
 )
+from app.modules.identity.services.whatsapp_mobile_verification import (
+    get_whatsapp_mobile_verification_service,
+)
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 def provide_identity_email_port() -> IdentityEmailPort:
@@ -42,6 +48,7 @@ async def handle_identity_event(
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ):
     """Dispatch identity events to email adapter."""
+
     async def dispatch() -> None:
         await _dispatch_identity_event(event, fs_logger, email_port)
 
@@ -66,9 +73,6 @@ async def _dispatch_identity_event(
             pod_name=parsed.pod_name,
             pod_description=parsed.pod_description,
         )
-        fs_logger.info(
-            f"Processed invitation email event for invitation {parsed.invitation_id}"
-        )
         return
 
     if event_type == UserSignedUpEvent.get_event_type():
@@ -77,7 +81,6 @@ async def _dispatch_identity_event(
             to_email=parsed.email,
             first_name=parsed.first_name,
         )
-        fs_logger.info(f"Processed welcome email event for user {parsed.user_id}")
         return
 
     if event_type == OrganizationInvitationAcceptedEvent.get_event_type():
@@ -87,6 +90,31 @@ async def _dispatch_identity_event(
             organization_name=parsed.organization_name,
             role=OrganizationRole(parsed.role),
         )
-        fs_logger.info(
-            f"Processed invitation accepted email event for invitation {parsed.invitation_id}"
+
+
+@reliable_redis_stream_subscriber(
+    router,
+    IdentityEvents.STREAM,
+    group="identity-mobile-verification-events",
+    consumer="identity-mobile-verification-events-consumer",
+)
+async def handle_mobile_verification_event(
+    event: dict,
+    inbox: EventInboxPort = Depends(provide_domain_event_inbox),
+) -> None:
+    if (
+        event.get("event_type")
+        != WhatsAppMobileVerificationReceivedEvent.get_event_type()
+    ):
+        return
+
+    async def dispatch() -> None:
+        parsed = WhatsAppMobileVerificationReceivedEvent.model_validate(event)
+        await get_whatsapp_mobile_verification_service().consume_message(
+            code=parsed.code,
+            sender_wa_id=parsed.sender_wa_id,
+            destination_phone_number_id=parsed.destination_phone_number_id,
+            whatsapp_message_id=parsed.whatsapp_message_id,
         )
+
+    await inbox.process("identity-mobile-verification-events", event, dispatch)

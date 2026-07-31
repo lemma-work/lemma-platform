@@ -81,6 +81,9 @@ export {
   isUserInteractionToolName,
   isRenderableUserInteractionInvocation,
   userApprovalResolvedDecision,
+  isPlanToolName,
+  parsePlanSteps,
+  planStepsFromToolInvocation,
   latestPlanSummary,
   latestUserIndex,
   messageTextContent,
@@ -223,7 +226,10 @@ export type {
   JoinedRecordsSource,
 } from "./datastore-query.js";
 
+export { POD_DEFAULT_AGENT_SELECTOR } from "./namespaces/conversations.js";
+
 // Namespace types (for advanced usage)
+export type { AgentHostNamespace } from "./namespaces/agent-host.js";
 export type { AgentRuntimeNamespace } from "./namespaces/agent-runtime.js";
 export type { AgentsNamespace } from "./namespaces/agents.js";
 export type { DatastoreNamespace } from "./namespaces/datastore.js";

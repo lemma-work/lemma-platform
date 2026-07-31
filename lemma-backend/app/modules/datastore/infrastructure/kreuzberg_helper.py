@@ -318,7 +318,7 @@ class KreuzbergHelper:
                 pages_sampled, total_chars = await anyio.to_thread.run_sync(probe, path)
             except Exception:
                 logger.debug(
-                    "pdfium OCR probe failed; defaulting to native extraction path",
+                    "datastore.kreuzberg_helper.pdfium_ocr_probe_defaulting_native.observed",
                     exc_info=True,
                 )
                 return False
@@ -488,17 +488,14 @@ class KreuzbergHelper:
             except KreuzbergCompatibilityError as exc:
                 last_error = exc
                 if candidate == config:
-                    logger.warning(
-                        "Kreuzberg enhanced extraction failed for %s; "
-                        "retrying with compatible config",
-                        filename,
+                    logger.debug(
+                        'datastore.kreuzberg_helper.kreuzberg_enhanced_extraction_s_retrying.diagnostic'
                     )
                 continue
 
         if last_error is not None:
-            logger.warning(
-                "Kreuzberg compatible extraction also failed for %s",
-                filename,
+            logger.debug(
+                'datastore.kreuzberg_helper.kreuzberg_compatible_extraction_also_s.diagnostic'
             )
             raise last_error
         raise RuntimeError("Kreuzberg extraction failed before sending a request")
@@ -598,13 +595,9 @@ class KreuzbergHelper:
                 circuit.record_failure()
                 if attempt < max_attempts - 1:
                     delay = base_delay * (2**attempt)
-                    logger.warning(
-                        "Kreuzberg extract connection failed for %s (attempt %d/%d); "
-                        "retrying in %.1fs",
-                        filename,
-                        attempt + 1,
-                        max_attempts,
-                        delay,
+                    logger.debug(
+                        'datastore.kreuzberg_helper.kreuzberg_extract_connection_s_attempt.diagnostic',
+                        max_attempts=max_attempts,
                     )
                     await asyncio.sleep(delay)
                     continue
@@ -646,11 +639,9 @@ class KreuzbergHelper:
                 await self._raise_for_status(response)
                 data = await response.json()
         except Exception:
-            logger.warning(
-                "Chunking request failed for text (chunker=%s, max_chars=%s); "
-                "proceeding without chunks",
-                chunker_type,
-                max_chars,
+            logger.debug(
+                'datastore.kreuzberg_helper.chunking_request_text_chunker_s.diagnostic',
+                chunker_type=chunker_type,
                 exc_info=True,
             )
             return []

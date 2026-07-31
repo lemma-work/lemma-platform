@@ -28,6 +28,7 @@ def test_storage_settings_use_one_backend_and_bucket(
 def test_legacy_gcs_bucket_environment_alias_is_preserved(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
     monkeypatch.delenv("STORAGE_BUCKET", raising=False)
     monkeypatch.setenv("GCS_STORAGE_BUCKET", "legacy-documents")
 

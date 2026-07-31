@@ -90,7 +90,7 @@ class UpdateTableRequest:
                 config_type_0 = UpdateTableRequestConfigType0.from_dict(data)
 
                 return config_type_0
-            except (TypeError, ValueError, AttributeError, KeyError):
+            except TypeError, ValueError, AttributeError, KeyError:
                 pass
             return cast(None | Unset | UpdateTableRequestConfigType0, data)
 

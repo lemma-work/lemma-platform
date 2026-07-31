@@ -1,7 +1,5 @@
 import type {
   AgentRuntimeConfig,
-  AgentHarnessInfo,
-  AgentHarnessListResponse,
   AgentDetailResponse,
   AgentSummaryResponse,
   AgentRuntimeProfileListResponse,
@@ -64,8 +62,6 @@ export interface AvailableModelInfo {
 
 export type AvailableModels = ConversationModel;
 export type AgentRuntime = AgentRuntimeConfig;
-export type AgentRuntimeAvailability = AgentHarnessInfo;
-export type AgentRuntimeAvailabilityList = AgentHarnessListResponse;
 export type AgentRuntimeListResponse = AgentRuntimeProfileListResponse;
 export type AgentRuntimeResponse = AgentRuntimeProfileResponse;
 

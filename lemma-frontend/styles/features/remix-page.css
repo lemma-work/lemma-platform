@@ -1,0 +1,245 @@
+.remix-header-identity {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.remix-header-identity > a {
+  color: var(--import-ink);
+  text-decoration: none;
+}
+
+.remix-header-identity > span {
+  display: inline-flex;
+  border-left: 1px solid var(--import-rule);
+  padding-left: var(--space-3);
+  gap: var(--space-1-5);
+  align-items: center;
+  color: var(--import-muted);
+  font-family: var(--font-mono-family);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.remix-header-source-mobile {
+  display: none;
+}
+
+.remix-page .github-import-header-source {
+  min-width: 0;
+  max-width: min(50vw, 24rem);
+}
+
+.remix-header-source-desktop {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remix-stage {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: min(100% - 2rem, 1180px);
+  min-height: calc(100vh - 60px);
+  margin: 0 auto;
+  padding: var(--space-12) 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.remix-command-wrap {
+  width: 460px;
+  max-width: 100%;
+}
+
+.remix-command {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.remix-command-icon {
+  display: flex;
+  width: 2.15rem;
+  height: 2.15rem;
+  border: 1px solid var(--import-rule);
+  border-radius: var(--radius-lg);
+  background: var(--import-soft);
+  align-items: center;
+  justify-content: center;
+  color: var(--import-muted);
+}
+
+.remix-command .github-import-installer-copy {
+  min-width: 0;
+}
+
+.remix-command .github-import-installer-copy h1 {
+  margin: 0.42rem 0 0;
+  color: var(--import-ink);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.remix-command .github-import-installer-copy > p:last-child {
+  margin: 0.5rem 0 0;
+  color: var(--import-muted);
+  font-family: var(--font-document-sans);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.remix-source-link {
+  display: flex;
+  min-width: 0;
+  border: 1px solid var(--import-rule);
+  border-radius: var(--radius-lg);
+  background: var(--import-soft);
+  padding: var(--space-3) var(--space-3);
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  color: var(--import-muted);
+  text-decoration: none;
+  transition: border-color 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.remix-source-link:hover {
+  border-color: #b9bdc4;
+  background: var(--import-card);
+  color: var(--import-ink);
+}
+
+.remix-source-link > span {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.remix-source-link small {
+  color: var(--import-faint);
+  font-family: var(--font-mono-family);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.remix-source-link strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--import-ink);
+  font-family: var(--font-mono-family);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remix-source-link > svg {
+  flex: 0 0 auto;
+}
+
+.remix-command-target {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.remix-command-target label {
+  color: var(--import-muted);
+  font-family: var(--font-mono-family);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.remix-command-target > button[role="combobox"] {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border-color: var(--import-rule);
+  background: var(--import-card);
+}
+
+.remix-command-target > button[role="combobox"] > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remix-command-target > button[role="combobox"] > svg {
+  flex: 0 0 auto;
+}
+
+.remix-command-action {
+  width: 100%;
+  min-width: 0;
+  height: 2.55rem;
+  margin-top: 0.3rem;
+  justify-content: space-between;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--import-ink);
+  padding-inline: 0.85rem;
+  color: #fff;
+}
+
+.remix-command-action:hover {
+  background: #111216;
+}
+
+.remix-command-empty {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.remix-command-empty > p {
+  margin: 0;
+  color: var(--import-muted);
+  font-family: var(--font-document-sans);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.remix-command .github-import-assurance {
+  min-width: 0;
+  margin-top: -0.2rem;
+}
+
+@media (max-width: 560px) {
+  .remix-header-identity > span,
+  .remix-header-source-desktop {
+    display: none;
+  }
+
+  .remix-header-source-mobile {
+    display: inline;
+  }
+
+  .remix-stage {
+    width: min(100% - 1.25rem, 1180px);
+    min-height: calc(100vh - 56px);
+    padding: var(--space-5) 0;
+  }
+
+  .remix-command-wrap {
+    width: 100%;
+  }
+
+  .remix-command {
+    padding: var(--space-5);
+  }
+}

@@ -10,10 +10,12 @@ from app.core.infrastructure.events.inbox import (
 from app.core.infrastructure.events.stream_subscriber import (
     reliable_redis_stream_subscriber,
 )
+from app.core.log.log import get_logger
 from app.modules.datastore.infrastructure.schema_manager import SchemaManager
 from app.modules.pod.domain.events import PodCreatedEvent, PodEvents
 
 router = RedisRouter()
+logger = get_logger(__name__)
 
 
 @reliable_redis_stream_subscriber(
@@ -32,8 +34,6 @@ async def on_pod_created(
 
     async def process() -> None:
         parsed = PodCreatedEvent.model_validate(event)
-        fs_logger.info(f"Processing PodCreatedEvent for pod {parsed.pod_id}")
         await SchemaManager().create_datastore_schema(parsed.pod_id)
-        fs_logger.info(f"Created pod data schema for pod {parsed.pod_id}")
 
     await inbox.process("datastore.pod-schema-bootstrap", event, process)

@@ -1,12 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useLayoutEffect } from 'react';
 
-import type { ProductIconTone } from '@/components/pod/product-icon';
-import { usePodTopbar } from '@/components/pod/pod-topbar-context';
+import { ResourceHeader } from '@/components/pod/resource-layout';
 import { cn } from '@/lib/utils';
 
 interface PodHeaderMetric {
@@ -25,172 +22,47 @@ interface PodHeaderStepItem {
 interface PodPageHeaderProps {
     podId: string;
     title: string;
-    description?: string;
     eyebrow?: string;
     backHref?: string;
     backLabel?: string;
     showBack?: boolean;
-    productIconTone?: ProductIconTone;
     icon?: ReactNode;
     actions?: ReactNode;
     switcher?: ReactNode;
     meta?: ReactNode;
     tabs?: ReactNode;
-    footer?: ReactNode;
-    variant?: 'page' | 'bar';
-    className?: string;
 }
 
+/**
+ * Builder-route chrome (the guided create flows and pod settings). A thin
+ * default over `ResourceHeader`: back defaults to pod home rather than being
+ * required, and `showBack` turns it off for routes reached from the nav.
+ */
 export function PodPageHeader({
     podId,
     title,
-    description,
     eyebrow,
     backHref,
     backLabel = 'Pod home',
     showBack = true,
-    productIconTone,
     icon,
     actions,
     switcher,
     meta,
     tabs,
-    footer,
-    variant = 'page',
-    className,
 }: PodPageHeaderProps) {
-    const resolvedBackHref = backHref || `/pod/${podId}`;
-    const topbar = usePodTopbar();
-    const resolvedBackLabel = showBack ? backLabel : undefined;
-    const resolvedTopbarBackHref = showBack ? resolvedBackHref : undefined;
-
-    useLayoutEffect(() => {
-        topbar?.setTopbar({
-            title,
-            backHref: resolvedTopbarBackHref,
-            backLabel: resolvedBackLabel,
-            eyebrow,
-            switcher,
-            meta,
-            tabs,
-            actions,
-        });
-        return () => topbar?.setTopbar({});
-    }, [actions, eyebrow, meta, resolvedBackLabel, resolvedTopbarBackHref, switcher, tabs, title, topbar]);
-
-    void icon;
-    void productIconTone;
-
-    if (topbar) return null;
-
-    if (variant === 'bar') {
-        return (
-            <header
-                className={cn(
-                    'flex h-12 shrink-0 items-center justify-between gap-3 bg-[color:color-mix(in_srgb,var(--bg-canvas)_90%,transparent)] px-3 backdrop-blur-sm',
-                    className
-                )}
-            >
-                <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-                    {showBack ? (
-                        <>
-	                            <Link
-	                                href={resolvedBackHref}
-	                                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--button-secondary-border)] bg-[var(--button-secondary-bg)] px-2 text-xs font-medium text-[var(--button-secondary-fg)] transition-gentle hover:border-[var(--field-border-hover)] hover:bg-[var(--button-secondary-bg-hover)]"
-	                            >
-                                <ArrowLeft className="h-3.5 w-3.5" />
-                                {backLabel}
-                            </Link>
-                            <span className="hidden h-4 w-px shrink-0 bg-[color:var(--border-subtle)] sm:block" />
-                        </>
-                    ) : null}
-                    <div className="flex min-w-0 shrink items-center gap-2">
-                        <span className="flex min-w-0 flex-col">
-                            {eyebrow ? (
-                                <span className="font-mono truncate type-eyebrow-medium">
-                                    {eyebrow}
-                                </span>
-                            ) : null}
-                            <span className="max-w-[18rem] truncate text-sm font-medium text-[var(--text-primary)]">
-                                {title}
-                            </span>
-                        </span>
-                        {switcher ? <div className="shrink-0">{switcher}</div> : null}
-                    </div>
-                    {tabs ? <div className="min-w-0 flex-1 overflow-hidden">{tabs}</div> : null}
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                    {meta ? <div className="hidden items-center gap-1.5 lg:flex">{meta}</div> : null}
-                    {actions ? (
-                        <div className="flex items-center gap-2 [&_button]:h-8 [&_button]:px-3 [&_button]:text-xs">
-                            {actions}
-                        </div>
-                    ) : null}
-                </div>
-            </header>
-        );
-    }
-
     return (
-        <section
-            className={cn(
-                'mb-5 bg-transparent px-0 pb-3 pt-0',
-                className
-            )}
-        >
-            <div className="flex min-h-8 flex-wrap items-start justify-between gap-4">
-                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                        <div className="flex min-w-0 items-center gap-2">
-                            {showBack ? (
-                                <>
-	                                    <Link
-	                                        href={resolvedBackHref}
-	                                        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--button-secondary-border)] bg-[var(--button-secondary-bg)] px-2 text-xs font-medium text-[var(--button-secondary-fg)] transition-gentle hover:border-[var(--field-border-hover)] hover:bg-[var(--button-secondary-bg-hover)]"
-	                                    >
-                                        <ArrowLeft className="h-3.5 w-3.5" />
-                                        {backLabel}
-                                    </Link>
-                                    <span className="hidden h-4 w-px shrink-0 bg-[color:var(--border-subtle)] sm:block" />
-                                </>
-                            ) : null}
-                            <div className="flex min-w-0 flex-col">
-                                {eyebrow ? (
-                                    <span className="truncate type-eyebrow-medium">
-                                        {eyebrow}
-                                    </span>
-                                ) : null}
-	                                <h1 className="truncate font-display text-xl font-medium tracking-normal text-[var(--text-primary)]">
-                                    {title}
-                                </h1>
-                            </div>
-                            {switcher ? <div className="shrink-0">{switcher}</div> : null}
-                        </div>
-                        {meta ? <div className="min-w-0">{meta}</div> : null}
-                        {tabs ? (
-                            <>
-                                <span className="hidden h-4 w-px bg-[color:var(--border-subtle)] lg:block" />
-                                <div className="min-w-0 overflow-x-auto">{tabs}</div>
-                            </>
-                        ) : null}
-                        {footer ? (
-                            <>
-                                <span className="hidden h-4 w-px bg-[color:var(--border-subtle)] lg:block" />
-                                <div className="min-w-0">{footer}</div>
-                            </>
-                        ) : null}
-                    </div>
-                    {description ? (
-                        <p className="max-w-3xl text-sm leading-6 text-[var(--text-tertiary)]">
-                            {description}
-                        </p>
-                    ) : null}
-                </div>
-                <div className="flex shrink-0 flex-wrap items-center gap-2 [&_button]:h-8 [&_button]:px-3 [&_button]:text-xs">
-                    {actions}
-                </div>
-            </div>
-        </section>
+        <ResourceHeader
+            title={title}
+            icon={icon}
+            backHref={showBack ? backHref || `/pod/${podId}` : undefined}
+            backLabel={showBack ? backLabel : undefined}
+            eyebrow={eyebrow}
+            switcher={switcher}
+            meta={meta}
+            tabs={tabs}
+            actions={actions}
+        />
     );
 }
 

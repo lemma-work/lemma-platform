@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Sparkles } from '@/components/ui/icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -83,7 +83,7 @@ export function AddColumnDialog({ podId, datastoreName, tableName, onClose, avai
         mutationFn: (data: AddColumnPayload) =>
             getLemmaClient(podId).tables.columns.add(tableName, data as unknown as never),
         onSuccess: () => {
-            queryClient.invalidateQueries({ queryKey: ['table', podId, datastoreName, tableName] });
+            queryClient.invalidateQueries({ queryKey: ['table', podId, tableName] });
             queryClient.invalidateQueries({ queryKey: ['records', podId, datastoreName, tableName] });
             onClose();
         },

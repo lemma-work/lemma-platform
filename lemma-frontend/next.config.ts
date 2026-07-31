@@ -41,6 +41,20 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: devOrigins,
   output: "standalone",
   transpilePackages: ["lemma-sdk"],
+  async redirects() {
+    return [
+      {
+        source: "/verify-email",
+        destination: "/auth/verify-email",
+        permanent: false,
+      },
+      {
+        source: "/reset-password",
+        destination: "/auth/reset-password",
+        permanent: false,
+      },
+    ];
+  },
   serverExternalPackages: ["esbuild"],
   turbopack: {
     root: path.resolve(process.cwd(), ".."),

@@ -149,6 +149,7 @@ class Conversation(Entity):
     last_run_status: AgentRunStatus | None = None
     last_run_error: str | None = None
     last_run_finished_at: datetime | None = None
+    last_run_retryable: bool = False
     messages: list[Message] = Field(default_factory=list)
     agent_runs: list["AgentRun"] = Field(default_factory=list)
 
@@ -188,6 +189,12 @@ class AgentRun(Entity):
             AgentRunStatus.RUNNING,
             AgentRunStatus.STOP_REQUESTED,
         }
+
+    @property
+    def is_safely_retryable(self) -> bool:
+        return self.status == AgentRunStatus.FAILED and bool(self.messages) and all(
+            message.role == MessageRole.USER.value for message in self.messages
+        )
 
     def ordered_messages(self) -> list[Message]:
         return sorted(self.messages, key=lambda message: message.sequence)

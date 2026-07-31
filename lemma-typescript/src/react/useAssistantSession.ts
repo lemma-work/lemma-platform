@@ -126,6 +126,7 @@ export interface UseAssistantSessionResult {
     pageToken?: string;
   }) => Promise<CursorPage<ConversationMessage>>;
   sendMessage: (content: string, options?: SendAssistantMessageOptions) => Promise<Conversation>;
+  retryFailedRun: (conversationId?: string | null) => Promise<Conversation>;
   resume: (conversationId?: string | null | ResumeAssistantOptions) => Promise<void>;
   resumeIfRunning: (conversationId?: string | null) => Promise<boolean>;
   stop: (conversationId?: string | null) => Promise<void>;
@@ -180,6 +181,24 @@ function isConversationRunningStatus(status: unknown): boolean {
   const normalized = normalizeConversationStatus(status);
   if (!normalized) return false;
   return normalized === "RUNNING" || normalized === "IN_PROGRESS" || normalized === "PROCESSING";
+}
+
+function waitForStreamReconnect(attempt: number, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+
+  const delayMs = Math.min(2 ** Math.min(Math.max(attempt - 1, 0), 4) * 1000, 10_000);
+  return new Promise((resolve) => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const handleAbort = () => {
+      clearTimeout(timeoutId);
+      resolve(false);
+    };
+    timeoutId = setTimeout(() => {
+      signal.removeEventListener("abort", handleAbort);
+      resolve(true);
+    }, delayMs);
+    signal.addEventListener("abort", handleAbort, { once: true });
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -589,17 +608,20 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     stream,
     controller,
     streamConversationId,
+    agentRunId,
     syncAfterStream,
   }: {
     stream: ReadableStream<Uint8Array>;
     controller: AbortController;
     streamConversationId?: string | null;
+    agentRunId?: string | null;
     syncAfterStream?: boolean;
   }): Promise<void> => {
     setIsStreaming(true);
     setError(null);
     clearStreamingText();
     let sawTerminalStatus = false;
+    let streamFailure: unknown = null;
 
     try {
       for await (const event of readSSE(stream)) {
@@ -664,48 +686,74 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
         }
       }
 
+    } catch (streamError) {
+      if (!(streamError instanceof Error && streamError.name === "AbortError")) {
+        streamFailure = streamError;
+      }
+    }
+
+    try {
       if (!controller.signal.aborted) {
-        if (!sawTerminalStatus && isConversationRunningStatus(statusRef.current)) {
-          const reconId = streamConversationId ?? conversationId;
-          if (reconId && streamReconnectCountRef.current < 3) {
+        const syncConversationId = streamConversationId ?? conversationId;
+        if (!sawTerminalStatus && syncConversationId) {
+          while (!controller.signal.aborted) {
+            const latestConversation = await refreshConversation(syncConversationId);
+            await loadMessages({ conversationId: syncConversationId, limit: 100 });
+            if (controller.signal.aborted) break;
+
+            const latestStatus = latestConversation?.status ?? statusRef.current;
+            if (!isConversationRunningStatus(latestStatus)) {
+              streamReconnectCountRef.current = 0;
+              streamFailure = null;
+              break;
+            }
+
             streamReconnectCountRef.current += 1;
-            const delay = Math.pow(2, streamReconnectCountRef.current - 1) * 1000;
-            await new Promise<void>((r) => setTimeout(r, delay));
-            if (!controller.signal.aborted && isConversationRunningStatus(statusRef.current)) {
-              try {
-                const scope = normalizeScope(client, defaultScope);
-                const scopedClient = applyPodScope(client, scope.podId);
-                const newStream = await scopedClient.conversations.resumeStream(reconId, {
-                  pod_id: scope.podId ?? undefined,
-                  signal: controller.signal,
-                });
-                // Sync any messages delivered while the stream was dropped
-                await loadMessages({ conversationId: reconId, limit: 100 });
-                streamReconnectCountRef.current = 0;
-                return consumeRef.current({ stream: newStream, controller, streamConversationId: reconId, syncAfterStream });
-              } catch { /* fall through to WAITING */ }
+            const shouldReconnect = await waitForStreamReconnect(
+              streamReconnectCountRef.current,
+              controller.signal,
+            );
+            if (!shouldReconnect) break;
+
+            try {
+              const scope = normalizeScope(client, defaultScope);
+              const scopedClient = applyPodScope(client, scope.podId);
+              const newStream = await scopedClient.conversations.resumeStream(syncConversationId, {
+                pod_id: scope.podId ?? undefined,
+                signal: controller.signal,
+                agent_run_id: agentRunId,
+              });
+              streamReconnectCountRef.current = 0;
+              return await consumeRef.current({
+                stream: newStream,
+                controller,
+                streamConversationId: syncConversationId,
+                agentRunId,
+                syncAfterStream,
+              });
+            } catch (reconnectError) {
+              if (reconnectError instanceof Error && reconnectError.name === "AbortError") break;
+              streamFailure = reconnectError;
             }
           }
-          streamReconnectCountRef.current = 0;
-          setConversationStatus("WAITING");
-        }
-        clearStreamingText();
-        clearStreamingTool();
-
-        const shouldSync = syncAfterStream ?? syncOnTurnEnd;
-        const syncConversationId = streamConversationId ?? conversationId;
-        if (shouldSync && syncConversationId) {
+        } else if (
+          syncConversationId
+          && (sawTerminalStatus || (syncAfterStream ?? syncOnTurnEnd))
+        ) {
           await refreshConversation(syncConversationId);
           await loadMessages({ conversationId: syncConversationId, limit: 100 });
         }
-      }
-    } catch (streamError) {
-      if (!(streamError instanceof Error && streamError.name === "AbortError")) {
-        const normalized = normalizeError(streamError, "Failed to stream conversation.");
-        setError(normalized);
-        onErrorRef.current?.(streamError);
+
+        if (!controller.signal.aborted && streamFailure) {
+          const normalized = normalizeError(streamFailure, "Failed to stream conversation.");
+          setError(normalized);
+          onErrorRef.current?.(streamFailure);
+        }
       }
     } finally {
+      clearStreamingText();
+      clearStreamingTool();
+      if (controller.signal.aborted) streamReconnectCountRef.current = 0;
       if (abortRef.current === controller) {
         abortRef.current = null;
       }
@@ -786,6 +834,67 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       throw normalized;
     }
   }, [cancel, client, consume, defaultScope, ensureConversation, setConversationStatus]);
+
+  const retryFailedRun = useCallback(async (
+    explicitConversationId?: string | null,
+  ): Promise<Conversation> => {
+    setError(null);
+    try {
+      const resolvedConversation = await ensureConversation(explicitConversationId);
+      const resolvedConversationId = requireConversationId(resolvedConversation.id);
+
+      cancel();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      const scope = normalizeScope(client, defaultScope);
+      const scopedClient = applyPodScope(client, scope.podId);
+      const start = await scopedClient.conversations.retryFailedRun(
+        resolvedConversationId,
+        {
+          pod_id: scope.podId ?? undefined,
+          signal: controller.signal,
+        },
+      );
+
+      setConversationStatus("RUNNING");
+      let stream: ReadableStream<Uint8Array>;
+      try {
+        stream = await scopedClient.conversations.resumeStream(
+          resolvedConversationId,
+          {
+            pod_id: scope.podId ?? undefined,
+            signal: controller.signal,
+            agent_run_id: start.agent_run_id,
+          },
+        );
+      } catch (attachError) {
+        const latestConversation = await refreshConversation(resolvedConversationId);
+        if (!latestConversation) throw attachError;
+        stream = await scopedClient.conversations.resumeStream(
+          resolvedConversationId,
+          {
+            pod_id: scope.podId ?? undefined,
+            signal: controller.signal,
+            agent_run_id: start.agent_run_id,
+          },
+        );
+      }
+      await consume({
+        stream,
+        controller,
+        streamConversationId: resolvedConversationId,
+        agentRunId: start.agent_run_id,
+        syncAfterStream: syncOnTurnEnd,
+      });
+      return resolvedConversation;
+    } catch (retryError) {
+      const normalized = normalizeError(retryError, "Failed to retry agent message.");
+      setError(normalized);
+      onErrorRef.current?.(retryError);
+      throw normalized;
+    }
+  }, [cancel, client, consume, defaultScope, ensureConversation, refreshConversation, setConversationStatus, syncOnTurnEnd]);
 
   const resume = useCallback(async (input?: string | null | ResumeAssistantOptions): Promise<void> => {
     setError(null);
@@ -975,6 +1084,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     refreshConversation,
     loadMessages,
     sendMessage,
+    retryFailedRun,
     resume,
     resumeIfRunning,
     stop,

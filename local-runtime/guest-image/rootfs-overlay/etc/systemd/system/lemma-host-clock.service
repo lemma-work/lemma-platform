@@ -1,0 +1,13 @@
+[Unit]
+Description=Initialize guest time from Lemma's trusted host control share
+After=mnt-lemma\x2dcontrol.mount
+Requires=mnt-lemma\x2dcontrol.mount
+Before=lemma-guestd.service systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lemma-set-host-time
+RemainAfterExit=yes
+
+[Install]
+WantedBy=lemma-runtime.target

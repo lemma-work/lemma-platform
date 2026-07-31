@@ -1,0 +1,170 @@
+"""How long an Agent Host run may live, and who gets to decide.
+
+Three ceilings used to disagree by a factor of four: the worker task drove the
+run for 30 minutes, the credential in its START_RUN lasted an hour, and the
+deadline advertised to the machine on the user's desk was two hours. The first
+to bite decided the outcome, and both of the ones that bit did so silently --
+the worker's cancellation left the remote agent running for another 90 minutes,
+and the credential's expiry left it running with every Lemma tool 401ing.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+from datetime import datetime, timedelta, timezone
+from uuid import uuid7
+
+import pytest
+
+from app.core.infrastructure.jobs.streaq_runtime import (
+    AGENT_RUN_JOB_TIMEOUT_SECONDS,
+)
+from app.modules.agent.events.handlers import _ORPHANED_RUN_CUTOFF_SECONDS
+from app.modules.agent.infrastructure.agent_host_repository_common import (
+    DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host_run_window import (
+    CREDENTIAL_DEADLINE_MESSAGE,
+    DEADLINE_MESSAGE,
+    DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
+    DispatchedRun,
+    credential_bounded_timeout,
+)
+from app.modules.agent.infrastructure.harnesses.remote_payload import token_expires_at
+
+
+# The window the host holds an ACP permission request open for, in Rust
+# (PERMISSION_DECISION_TIMEOUT in agent-host/src/runtime.rs). Mirrored here so a
+# change on either side breaks this, rather than quietly making every
+# mid-run approval unanswerable.
+HOST_PERMISSION_WINDOW_SECONDS = 30 * 60
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class TestTheCeilingsAgree:
+    def test_the_worker_outlives_the_deadline_we_advertise(self) -> None:
+        """Otherwise streaq kills the job while the host is still working, and
+        the remote agent keeps running a turn Lemma has reported as failed."""
+        assert AGENT_RUN_JOB_TIMEOUT_SECONDS > DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+
+    def test_the_worker_has_room_to_cancel_and_finalize(self) -> None:
+        headroom = AGENT_RUN_JOB_TIMEOUT_SECONDS - DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+        assert headroom >= 120
+
+    def test_the_orphan_sweep_never_reaps_a_healthy_run(self) -> None:
+        assert _ORPHANED_RUN_CUTOFF_SECONDS > AGENT_RUN_JOB_TIMEOUT_SECONDS
+
+    def test_a_permission_parked_mid_run_can_still_be_answered(self) -> None:
+        """When the run is shorter than the host's permission window, every
+        permission raised past that point is guaranteed to go unanswered."""
+        assert DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS > HOST_PERMISSION_WINDOW_SECONDS
+
+    def test_a_queued_decision_outlives_the_window_it_answers(self) -> None:
+        """At the default five-minute command TTL, a decision made at minute six
+        expired before a sleeping laptop could ever collect it."""
+        assert DEFAULT_PERMISSION_COMMAND_TTL_SECONDS >= HOST_PERMISSION_WINDOW_SECONDS
+
+
+class TestCredentialBoundedTimeout:
+    def test_a_fresh_credential_leaves_the_configured_window_alone(self) -> None:
+        seconds, bounded = credential_bounded_timeout(
+            configured_seconds=DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
+            credential_expires_at=_now() + timedelta(hours=1),
+            now=_now(),
+            agent_run_id=uuid7(),
+        )
+
+        assert seconds == DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+        assert bounded is False
+
+    def test_a_short_credential_shortens_the_run(self) -> None:
+        """The bridge sends this token verbatim for the run's whole life with no
+        refresh, so outliving it means every lemma_* call 401s in silence."""
+        seconds, bounded = credential_bounded_timeout(
+            configured_seconds=DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
+            credential_expires_at=_now() + timedelta(minutes=20),
+            now=_now(),
+            agent_run_id=uuid7(),
+        )
+
+        assert bounded is True
+        assert seconds < DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS
+        # Stops short of the expiry, so the last tool call still has a live token.
+        assert seconds < 20 * 60
+
+    def test_an_almost_expired_credential_refuses_to_dispatch(self) -> None:
+        with pytest.raises(RuntimeError, match="expires too soon"):
+            credential_bounded_timeout(
+                configured_seconds=DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
+                credential_expires_at=_now() + timedelta(seconds=30),
+                now=_now(),
+                agent_run_id=uuid7(),
+            )
+
+    def test_an_unreadable_credential_falls_back_to_the_configured_window(self) -> None:
+        seconds, bounded = credential_bounded_timeout(
+            configured_seconds=DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS,
+            credential_expires_at=None,
+            now=_now(),
+            agent_run_id=uuid7(),
+        )
+
+        assert (seconds, bounded) == (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS, False)
+
+    def test_the_failure_says_which_ceiling_ended_the_run(self) -> None:
+        """A run cut short by its credential must not be reported as the host
+        failing to terminalize; that sends debugging to the wrong machine."""
+        capped = DispatchedRun(
+            harness_key="codex",
+            event_timeout_seconds=600.0,
+            credential_bounded=True,
+        )
+        ordinary = DispatchedRun(
+            harness_key="codex",
+            event_timeout_seconds=600.0,
+            credential_bounded=False,
+        )
+
+        assert capped.deadline_message == CREDENTIAL_DEADLINE_MESSAGE
+        assert ordinary.deadline_message == DEADLINE_MESSAGE
+
+
+def _jwt(claims: dict) -> str:
+    def segment(payload: dict) -> str:
+        raw = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        return raw.rstrip("=")
+
+    return f"{segment({'alg': 'RS256'})}.{segment(claims)}.signature"
+
+
+class TestTokenExpiryIsPublished:
+    def test_the_expiry_round_trips_through_the_mcp_payload(self) -> None:
+        expires = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _token_expiry_iso,
+        )
+
+        published = _token_expiry_iso(_jwt({"exp": int(expires.timestamp())}))
+
+        assert token_expires_at({"token_expires_at": published}) == expires
+
+    def test_a_token_with_no_exp_publishes_nothing(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _token_expiry_iso,
+        )
+
+        assert _token_expiry_iso(_jwt({"sub": "someone"})) is None
+
+    def test_an_opaque_token_publishes_nothing(self) -> None:
+        from app.modules.agent.infrastructure.harnesses.remote_payload import (
+            _token_expiry_iso,
+        )
+
+        assert _token_expiry_iso("not-a-jwt") is None
+
+    def test_a_payload_without_the_field_reads_as_unbounded(self) -> None:
+        assert token_expires_at({}) is None

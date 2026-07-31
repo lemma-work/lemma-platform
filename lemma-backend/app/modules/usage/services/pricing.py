@@ -42,9 +42,10 @@ class UsagePricing:
                 )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             logger.error(
-                "Invalid system model usage metadata configuration",
+                "usage.pricing.invalid_system_model_usage_metadata.failed",
                 error_type=type(exc).__name__,
-            )
+            exc_info=True,
+        )
             cls._ENV_METADATA_SOURCE = raw
             return
         cls._SYSTEM_MODEL_PRICING.update(pricing)
@@ -63,7 +64,9 @@ class UsagePricing:
     ) -> tuple[float | None, bool]:
         if not self._is_system_scope(profile_scope):
             return None, False
-        pricing, pricing_missing = self._resolve_pricing(model_name, provider_model_name)
+        pricing, pricing_missing = self._resolve_pricing(
+            model_name, provider_model_name
+        )
         if pricing is None:
             return None, True
         total_input = max(0, input_tokens)
@@ -90,18 +93,14 @@ class UsagePricing:
         for candidate in (model_name, provider_model_name):
             if candidate and candidate.strip() in self._SYSTEM_MODEL_PRICING:
                 return self._SYSTEM_MODEL_PRICING[candidate.strip()], False
-        logger.debug(
-            "Usage pricing is not registered; recording without cost",
-            model_name=model_name,
-            provider_model_name=provider_model_name,
-        )
+        logger.debug("usage.pricing.usage_pricing_not_registered_recording.observed")
         return None, True
 
     @staticmethod
     def _coerce_token_count(value: object) -> int:
         try:
             return max(0, int(value))  # type: ignore[arg-type]
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return 0
 
     @staticmethod
@@ -130,6 +129,6 @@ class UsagePricing:
                 continue
             try:
                 return max(0, int(value))
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
         return 0

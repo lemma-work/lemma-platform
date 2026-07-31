@@ -63,17 +63,23 @@ class KreuzbergCircuitBreaker:
             return
         if (self._clock() - self._opened_at) < self._reset_seconds:
             raise KreuzbergCircuitOpen(
-                "Kreuzberg circuit open; skipping extraction (extractor "
-                "appears down)"
+                "Kreuzberg circuit open; skipping extraction (extractor appears down)"
             )
         # Cooldown elapsed → allow a half-open trial; state stays open until the
         # trial's outcome is recorded.
 
     def record_success(self) -> None:
+        failure_count = self._consecutive_failures
+        opened_at = self._opened_at
         self._consecutive_failures = 0
-        if self._opened_at is not None:
-            logger.info("Kreuzberg circuit closed after a successful extraction")
         self._opened_at = None
+        if opened_at is not None:
+            logger.info(
+                "dependency.recovered",
+                dependency="kreuzberg",
+                failure_count=failure_count,
+                incident_duration_ms=round((self._clock() - opened_at) * 1000, 1),
+            )
 
     def record_failure(self) -> None:
         self._consecutive_failures += 1
@@ -84,10 +90,11 @@ class KreuzbergCircuitBreaker:
         if self._consecutive_failures >= self._failure_threshold:
             self._opened_at = self._clock()
             logger.warning(
-                "Kreuzberg circuit opened after %d consecutive connection "
-                "failures; extractions will fail fast for %.0fs",
-                self._consecutive_failures,
-                self._reset_seconds,
+                "dependency.degraded",
+                dependency="kreuzberg",
+                error_type="KreuzbergFailure",
+                failure_count=self._consecutive_failures,
+                incident_duration_ms=0.0,
             )
 
 

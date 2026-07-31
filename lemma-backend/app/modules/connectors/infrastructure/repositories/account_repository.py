@@ -13,7 +13,10 @@ from app.modules.connectors.domain.errors import (
     AccountAlreadyConnectedError,
     AccountNotFoundError,
 )
-from app.modules.connectors.domain.ports import AccountRepositoryPort, SecretEncryptionPort
+from app.modules.connectors.domain.ports import (
+    AccountRepositoryPort,
+    SecretEncryptionPort,
+)
 from app.modules.connectors.infrastructure.models import Account
 
 
@@ -46,7 +49,11 @@ class AccountRepository(
         return None
 
     async def _to_model(self, entity: AccountEntity) -> Account:
-        data = entity.model_dump(exclude_unset=True)
+        # ``connector`` is a read-side domain projection, not a relationship
+        # assignment for writes. Passing an explicit ``connector=None`` to the
+        # ORM model makes SQLAlchemy synchronize the relationship by clearing
+        # ``connector_id``, even when the entity contains a valid connector id.
+        data = entity.model_dump(exclude_unset=True, exclude={"connector"})
         data["credentials"] = await self.encryption.encrypt_json_async(
             self._serialize_credentials(entity.credentials)
         )
@@ -123,7 +130,11 @@ class AccountRepository(
         instance.provider_account_id = entity.provider_account_id
         instance.email = entity.email
         instance.display_name = entity.display_name
-        instance.status = entity.status.value if hasattr(entity.status, "value") else str(entity.status)
+        instance.status = (
+            entity.status.value
+            if hasattr(entity.status, "value")
+            else str(entity.status)
+        )
 
         try:
             await self.session.flush()
@@ -306,7 +317,9 @@ class AccountRepository(
     ) -> tuple[Sequence[AccountEntity], UUID | None]:
         stmt = (
             select(Account)
-            .where(Account.user_id == user_id, Account.organization_id == organization_id)
+            .where(
+                Account.user_id == user_id, Account.organization_id == organization_id
+            )
             .options(selectinload(Account.connector))
         )
         if connector_id:

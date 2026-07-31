@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -163,6 +164,9 @@ class SystemSkillFileProvider:
     def _skills_root(self) -> Path:
         if self.skills_root is not None:
             return self.skills_root
+        configured_root = os.environ.get("LEMMA_SKILLS_ROOT", "").strip()
+        if configured_root:
+            return Path(configured_root).expanduser()
         repo_root = _repo_root_for_system_skills()
         if repo_root is not None:
             return repo_root / "lemma-skills"

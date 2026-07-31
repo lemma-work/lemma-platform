@@ -4,7 +4,11 @@ import { ApiError as GeneratedApiError } from "./openapi_client/core/ApiError.js
 import { CancelablePromise } from "./openapi_client/core/CancelablePromise.js";
 import { OpenAPI } from "./openapi_client/core/OpenAPI.js";
 import { retryDelayForStatus, sleep } from "./run-utils.js";
-import { CLIENT_HEADER_NAME, CLIENT_HEADER_VALUE } from "./version.js";
+import {
+  CLIENT_HEADER_NAME,
+  CLIENT_HEADER_VALUE,
+  shouldSendClientHeader,
+} from "./version.js";
 
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -48,7 +52,12 @@ export class GeneratedClientAdapter {
     OpenAPI.WITH_CREDENTIALS = true;
     OpenAPI.CREDENTIALS = this.auth.isTokenMode ? "omit" : "include";
     OpenAPI.TOKEN = this.auth.getBearerToken() ?? undefined;
-    OpenAPI.HEADERS = { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+    OpenAPI.HEADERS = async (options): Promise<Record<string, string>> => {
+      if (shouldSendClientHeader(this.apiUrl, options.method)) {
+        return { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+      }
+      return {};
+    };
   }
 
   async request<T>(operation: () => PromiseLike<T>): Promise<T> {

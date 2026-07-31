@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { X } from 'lucide-react';
+import { X } from '@/components/ui/icons';
 
 import { ProductIcon } from '@/components/pod/product-icon';
 import { getConcept, type ConceptId } from '@/lib/education/concepts';
@@ -31,7 +31,7 @@ export function SectionPrimer({ concept, className }: SectionPrimerProps) {
             aria-label={`About ${entry.term.toLowerCase()}s`}
             className={cn('surface-panel flex items-center gap-2.5 px-3.5 py-2', className)}
         >
-            <ProductIcon tone={entry.tone} size="xs" />
+            <ProductIcon kind={entry.iconKind} size="xs" />
             <p className="min-w-0 flex-1 text-xs leading-5 text-[var(--text-secondary)]">
                 <span className="font-medium text-[var(--text-primary)]">{entry.term}s: </span>
                 {entry.oneLiner}

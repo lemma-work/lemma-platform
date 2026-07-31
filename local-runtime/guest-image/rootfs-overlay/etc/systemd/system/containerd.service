@@ -1,0 +1,18 @@
+[Unit]
+Description=Lemmas private containerd service
+After=network-online.target lemma-data.service
+Wants=network-online.target
+Requires=lemma-data.service
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/containerd
+Delegate=yes
+KillMode=process
+Restart=always
+RestartSec=2
+LimitNOFILE=1048576
+TasksMax=infinity
+
+[Install]
+WantedBy=lemma-runtime.target

@@ -49,9 +49,16 @@ def script_ask_user(
     tool_call_id: str = "tool-ask-1",
     text: str | None = None,
 ) -> ScriptTurn:
+    # Match how pydantic-ai actually persists an `ask_user(ctx, request:
+    # AskUserRequest)` call: it FLATTENS the single pydantic-model parameter, so
+    # the stored tool args are the model's fields — `{"questions": [...]}` — NOT
+    # `{"request": {"questions": [...]}}`. Emitting the wrapped shape here (as this
+    # helper used to) hid a production swallow where the surface read
+    # tool_args["request"] and found nothing. Keep this flat so the e2e matrix
+    # exercises the real shape.
     return script_tool_call(
         "ask_user",
-        {"request": {"questions": questions}},
+        {"questions": questions},
         tool_call_id=tool_call_id,
         text=text,
     )

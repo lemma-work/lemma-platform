@@ -135,12 +135,8 @@ class ConnectorService:
             profile_dict = self._profile_to_dict(profile)
             if profile_dict is not None:
                 return profile_dict
-        except Exception as exc:
-            logger.warning(
-                "Failed to enrich native account profile for %s: %s",
-                connector.id,
-                exc,
-            )
+        except Exception:
+            logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
         return None
 
     async def _load_slack_account_profile(
@@ -177,26 +173,20 @@ class ConnectorService:
                     )
                     if user_info:
                         profile["user_info"] = user_info
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to enrich Slack user profile for %s: %s",
-                        user_id,
-                        exc,
-                    )
+                except Exception:
+                    logger.debug('connectors.connector_service.enrich_slack_user_profile_s.diagnostic', user_id=user_id)
             return profile
-        except Exception as exc:
-            logger.warning(
-                "Failed to enrich native account profile for %s: %s",
-                connector.id,
-                exc,
-            )
+        except Exception:
+            logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
         return None
 
     def _profile_to_dict(self, profile: object) -> dict | None:
         if isinstance(profile, dict):
             return profile
         if hasattr(profile, "model_dump"):
-            data = profile.model_dump(exclude_none=True, exclude_unset=True, mode="json")
+            data = profile.model_dump(
+                exclude_none=True, exclude_unset=True, mode="json"
+            )
             return data if isinstance(data, dict) else None
         return None
 
@@ -278,20 +268,18 @@ class ConnectorService:
                     third_party_credentials=credentials.model_dump(exclude_none=True),
                     provider=provider,
                 )
-            except Exception as exc:
-                logger.warning(
-                    "Profile operation %s failed for %s: %s",
-                    operation_name,
-                    connector_id,
-                    exc,
-                )
+            except Exception:
+                logger.debug('connectors.connector_service.profile_operation_s_s_s.diagnostic', operation_name=operation_name, connector_id=connector_id)
                 continue
             profile = self._profile_to_dict(result)
             # Composio wraps every tool execution result in
             # {"data": ..., "successful": ..., "error": ...} (composio.tools.execute's
             # ToolExecutionResponse); the toolkit's actual fields (email, name, ...)
             # live one level down in `data`, not at the top level.
-            if isinstance(profile, dict) and provider.upper() == AuthProvider.COMPOSIO.value:
+            if (
+                isinstance(profile, dict)
+                and provider.upper() == AuthProvider.COMPOSIO.value
+            ):
                 unwrapped = profile.get("data")
                 if isinstance(unwrapped, dict):
                     profile = unwrapped
@@ -722,8 +710,12 @@ class ConnectorService:
                     "name": c.name,
                     "connector_id": c.connector_id,
                     "title": app_titles.get(c.connector_id),
-                    "status": c.status.value if hasattr(c.status, "value") else str(c.status),
-                    "provider": c.provider.value if hasattr(c.provider, "value") else str(c.provider),
+                    "status": c.status.value
+                    if hasattr(c.status, "value")
+                    else str(c.status),
+                    "provider": c.provider.value
+                    if hasattr(c.provider, "value")
+                    else str(c.provider),
                 }
                 for c in configs
             ],
@@ -733,7 +725,9 @@ class ConnectorService:
                     "connector_id": a.connector_id,
                     "title": app_titles.get(a.connector_id),
                     "email": a.email,
-                    "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+                    "status": a.status.value
+                    if hasattr(a.status, "value")
+                    else str(a.status),
                 }
                 for a in accounts
             ],
@@ -771,7 +765,9 @@ class ConnectorService:
         # re-authing an existing identity updates it, a new identity is created.
 
         effective_connector = self._build_effective_connector(connector, auth_config)
-        auth_provider = self._get_auth_provider_by_name(self._provider_value(auth_config))
+        auth_provider = self._get_auth_provider_by_name(
+            self._provider_value(auth_config)
+        )
         state = secrets.token_urlsafe(32)
         redirect_uri = self.redirect_uri_builder.build()
 
@@ -788,10 +784,7 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.exception(
-                "Failed to get connector authorization URL",
-                error_type=type(exc).__name__,
-            )
+            logger.debug('connectors.connector_service.get_connector_authorization_url.propagated', error_type=type(exc).__name__, exc_info=True)
             raise OAuthWorkflowError(
                 "Unable to initiate the OAuth flow.",
                 details=self._exception_details(exc),
@@ -935,8 +928,10 @@ class ConnectorService:
         identity couldn't be derived (``provider_account_id`` is None)."""
         if not provider_account_id:
             return
-        existing = await self.account_repository.get_by_user_auth_config_and_provider_account(
-            user_id, auth_config_id, provider_account_id
+        existing = (
+            await self.account_repository.get_by_user_auth_config_and_provider_account(
+                user_id, auth_config_id, provider_account_id
+            )
         )
         if existing is None:
             return
@@ -964,7 +959,9 @@ class ConnectorService:
         )
         connector = await self.get_connector(pending_request.connector_id)
         effective_connector = self._build_effective_connector(connector, auth_config)
-        auth_provider = self._get_auth_provider_by_name(self._provider_value(auth_config))
+        auth_provider = self._get_auth_provider_by_name(
+            self._provider_value(auth_config)
+        )
 
         try:
             credentials = await auth_provider.exchange_code_for_credentials(
@@ -976,10 +973,7 @@ class ConnectorService:
         except DomainError:
             raise
         except Exception as exc:
-            logger.exception(
-                "Failed to exchange connector authorization code",
-                error_type=type(exc).__name__,
-            )
+            logger.debug('connectors.connector_service.exchange_connector_authorization_code.propagated', error_type=type(exc).__name__, exc_info=True)
             pending_request.status = ConnectRequestStatus.ERROR
             await self.connect_request_repository.update(pending_request)
             await self.uow.commit()
@@ -990,7 +984,9 @@ class ConnectorService:
         provider_account_id = self._extract_provider_account_id(
             connector.id, credentials
         )
-        native_profile = await self._load_native_account_profile(effective_connector, credentials)
+        native_profile = await self._load_native_account_profile(
+            effective_connector, credentials
+        )
         if native_profile:
             credentials = credentials.model_copy(
                 update={
@@ -1000,8 +996,11 @@ class ConnectorService:
                     }
                 }
             )
-        provider_account_id = provider_account_id or self._extract_provider_account_id_from_profile(
-            connector.id, native_profile
+        provider_account_id = (
+            provider_account_id
+            or self._extract_provider_account_id_from_profile(
+                connector.id, native_profile
+            )
         )
         email_profile = await self._fetch_account_profile(
             connector,
@@ -1010,9 +1009,7 @@ class ConnectorService:
         )
         email = self._extract_account_email(
             connector.id, credentials, email_profile
-        ) or self._extract_account_email(
-            connector.id, credentials, native_profile
-        )
+        ) or self._extract_account_email(connector.id, credentials, native_profile)
 
         # Human-friendly label for the account list (team name / mailbox / …),
         # falling back to the email when the app has no better label. Prefer
@@ -1169,7 +1166,9 @@ class ConnectorService:
         should_refresh = force_refresh or is_expired
 
         if should_refresh:
-            auth_provider = self._get_auth_provider_by_name(self._provider_value(auth_config))
+            auth_provider = self._get_auth_provider_by_name(
+                self._provider_value(auth_config)
+            )
             can_refresh = bool(
                 oauth_credentials.refresh_token or oauth_credentials.connection_id
             )
@@ -1196,11 +1195,7 @@ class ConnectorService:
                         ) from exc
                     if isinstance(exc, DomainError):
                         raise
-                    logger.warning(
-                        "Credential refresh failed; using the unexpired stored token",
-                        account_id=str(account_id),
-                        error_type=type(exc).__name__,
-                    )
+                    logger.debug('connectors.connector_service.credential_refresh_using_unexpired_stored.diagnostic', account_id=str(account_id), error_type=type(exc).__name__)
                 else:
                     account.credentials = new_credentials
                     # A successful refresh restores a previously-degraded account.
@@ -1278,8 +1273,8 @@ class ConnectorService:
                     credentials=self._to_oauth_credentials(account.credentials),
                     user_id=user_id,
                 )
-            except Exception as exc:
-                logger.warning(f"Failed to revoke connection: {exc}")
+            except Exception:
+                logger.debug('connectors.connector_service.revoke_connection.diagnostic')
 
         await self.account_repository.delete(account_id)
         # Keep the "exactly one default per (user, auth_config)" invariant: if the
@@ -1318,7 +1313,9 @@ class ConnectorService:
             if connector
             else None
         )
-        auth_provider = self._get_auth_provider_by_name(self._provider_value(auth_config))
+        auth_provider = self._get_auth_provider_by_name(
+            self._provider_value(auth_config)
+        )
 
         for account in accounts:
             if account.credentials and self._should_revoke_account(
@@ -1331,13 +1328,8 @@ class ConnectorService:
                         credentials=self._to_oauth_credentials(account.credentials),
                         user_id=account.user_id,
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "Failed to revoke account %s while deleting auth config %s: %s",
-                        account.id,
-                        auth_config.id,
-                        exc,
-                    )
+                except Exception:
+                    logger.debug('connectors.connector_service.revoke_account_s_while_deleting.diagnostic')
             await self.account_repository.delete(account.id)
 
         await self.auth_config_repository.delete(auth_config.id)

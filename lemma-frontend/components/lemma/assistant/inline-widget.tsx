@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Maximize2 } from "lucide-react";
+import { Loader2, Maximize2 } from "@/components/ui/icons";
 import { useTheme } from "next-themes";
 
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
@@ -204,7 +204,7 @@ export function InlineWidget({
     // no chrome. Inline: height-capped with a fade + Expand when it overflows.
     if (!isInline) {
         return (
-            <div className="relative h-full min-h-[360px]">
+            <div className="relative h-full min-h-0 overflow-hidden">
                 <iframe
                     key={iframeSrc}
                     ref={iframeRef}
@@ -215,7 +215,7 @@ export function InlineWidget({
                     sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-downloads allow-modals allow-top-navigation-by-user-activation"
                     onLoad={handleIframeLoad}
                     className={cn(
-                        "block h-full w-full border-0 bg-transparent transition-opacity",
+                        "absolute inset-0 block h-full min-h-0 w-full border-0 bg-transparent transition-opacity",
                         loading && "opacity-0",
                     )}
                 />

@@ -136,8 +136,7 @@ class FilePageRenderer:
             return None
         except Exception:
             logger.debug(
-                "Failed to load cached page image; will re-render",
-                exc_info=True,
+                "datastore.renderer.load_cached_page_image_will.observed", exc_info=True
             )
             return None
 
@@ -146,13 +145,8 @@ class FilePageRenderer:
     ) -> None:
         try:
             await self.storage.upload_file(key, jpeg)
-        except Exception as exc:
-            logger.warning(
-                "Failed caching rendered page %s of %s: %s",
-                page_number,
-                path,
-                exc,
-            )
+        except Exception:
+            logger.debug('datastore.renderer.caching_rendered_page_s_s.diagnostic')
 
     async def _render_missing(
         self, entity: DatastoreFileEntity, page_numbers: list[int]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -49,14 +48,8 @@ class FunctionFileManager:
         except UnicodeDecodeError:
             return bytes_data
 
-    async def write_file(self, path: str, content: bytes | str):
+    async def write_file(self, path: str, content: bytes | str) -> None:
         if isinstance(content, str):
             content = content.encode("utf-8")
 
         await obs.put_async(self.store, path, content)
-        return {
-            "name": path.split("/")[-1],
-            "path": path,
-            "size": len(content),
-            "last_modified": datetime.now().isoformat(),
-        }

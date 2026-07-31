@@ -10,20 +10,25 @@ def humanize_name(value: str | None) -> str:
 
     ``"abc_def"`` -> ``"Abc Def"``, ``"my-cool-pod"`` -> ``"My Cool Pod"``.
 
-    Only slug-like names (no whitespace) are transformed. A value that already
-    contains a space is treated as a human-entered display name and returned
+    Human-entered display names without machine separators are returned
     unchanged, so intentional capitalization like ``"Acme Support AI"`` is
-    preserved. Tokens that are already mixed case (``iOS``, ``OpenAI``) are also
-    left intact.
+    preserved. When a value contains machine separators, they are normalized
+    even if another layer has already added spaces or capitalization. Tokens
+    that are already mixed case (``iOS``, ``OpenAI``) are left intact.
     """
     if not value:
         return value or ""
 
     stripped = value.strip()
-    if not stripped or " " in stripped or "\t" in stripped or "\n" in stripped:
+    if not stripped:
         return stripped
 
-    tokens = [token for token in _SEPARATORS.split(stripped) if token]
+    has_machine_separator = _SEPARATORS.search(stripped) is not None
+    if not has_machine_separator and any(character.isspace() for character in stripped):
+        return stripped
+
+    normalized = _SEPARATORS.sub(" ", stripped) if has_machine_separator else stripped
+    tokens = normalized.split()
     if not tokens:
         return stripped
 

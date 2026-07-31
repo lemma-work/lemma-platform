@@ -23,9 +23,9 @@ def test_upper_snake_keys_route_to_backend_env(paths):
 def test_dotted_keys_route_to_sections_and_coerce(paths):
     doc = store.load_or_create(paths)
     store.set_value(doc, "ports.backend", "9000")
-    store.set_value(doc, "features.kreuzberg", "true")
+    store.set_value(doc, "features.observability", "true")
     assert store.port(doc, "backend") == 9000
-    assert store.feature(doc, "kreuzberg") is True
+    assert store.feature(doc, "observability") is True
 
 
 def test_env_values_stay_verbatim_strings(paths):

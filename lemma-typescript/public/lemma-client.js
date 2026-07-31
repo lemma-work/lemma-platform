@@ -9094,13 +9094,19 @@ var LemmaClient = (() => {
   __export(browser_exports, {
     ApiError: () => ApiError,
     AuthManager: () => AuthManager,
+    LEMMA_APP_THEME_MESSAGE_TYPE: () => LEMMA_APP_THEME_MESSAGE_TYPE,
+    LEMMA_THEME_EVENT: () => LEMMA_THEME_EVENT,
     LemmaClient: () => LemmaClient,
+    POD_DEFAULT_AGENT_SELECTOR: () => POD_DEFAULT_AGENT_SELECTOR,
+    applyLemmaHostTheme: () => applyLemmaHostTheme,
     buildAuthUrl: () => buildAuthUrl,
     buildFederatedLogoutUrl: () => buildFederatedLogoutUrl,
     clearTestingToken: () => clearTestingToken,
+    getLemmaHostTheme: () => getLemmaHostTheme,
     getTestingToken: () => getTestingToken,
     resolveSafeRedirectUri: () => resolveSafeRedirectUri,
-    setTestingToken: () => setTestingToken
+    setTestingToken: () => setTestingToken,
+    subscribeLemmaHostTheme: () => subscribeLemmaHostTheme
   });
 
   // src/config.ts
@@ -9409,6 +9415,27 @@ var LemmaClient = (() => {
       return fallback;
     }
   }
+  function toHeaderRecord(headers) {
+    if (!headers) return {};
+    if (typeof Headers !== "undefined" && headers instanceof Headers) {
+      const result = {};
+      headers.forEach((value, key) => {
+        result[key] = value;
+      });
+      return result;
+    }
+    if (Array.isArray(headers)) {
+      return Object.fromEntries(headers);
+    }
+    return { ...headers };
+  }
+  function setHeader(headers, name, value) {
+    const existingName = Object.keys(headers).find((key) => key.toLowerCase() === name.toLowerCase());
+    headers[existingName != null ? existingName : name] = value;
+  }
+  function hasHeader(headers, name) {
+    return Object.keys(headers).some((key) => key.toLowerCase() === name.toLowerCase());
+  }
   var AuthManager = class {
     constructor(apiUrl, authUrl) {
       __publicField(this, "apiUrl");
@@ -9416,6 +9443,7 @@ var LemmaClient = (() => {
       __publicField(this, "injectedToken");
       __publicField(this, "state", { status: "loading", user: null });
       __publicField(this, "listeners", /* @__PURE__ */ new Set());
+      __publicField(this, "authCheckPromise", null);
       this.apiUrl = apiUrl;
       this.authUrl = authUrl;
       this.injectedToken = detectInjectedToken();
@@ -9599,13 +9627,16 @@ var LemmaClient = (() => {
      * and lets cookies carry the session.
      */
     getRequestInit(init = {}) {
-      const headers = {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...init.headers
-      };
+      const headers = toHeaderRecord(init.headers);
+      if (!hasHeader(headers, "Accept")) {
+        setHeader(headers, "Accept", "application/json");
+      }
+      const isFormData2 = typeof FormData !== "undefined" && init.body instanceof FormData;
+      if (init.body !== void 0 && !isFormData2 && !hasHeader(headers, "Content-Type")) {
+        setHeader(headers, "Content-Type", "application/json");
+      }
       if (this.injectedToken) {
-        headers["Authorization"] = `Bearer ${this.injectedToken}`;
+        setHeader(headers, "Authorization", `Bearer ${this.injectedToken}`);
       }
       return {
         ...init,
@@ -9617,7 +9648,16 @@ var LemmaClient = (() => {
      * Call GET /users/me to determine auth state.
      * Sets internal state and notifies listeners.
      */
-    async checkAuth() {
+    checkAuth() {
+      if (this.authCheckPromise) {
+        return this.authCheckPromise;
+      }
+      this.authCheckPromise = this.performAuthCheck().finally(() => {
+        this.authCheckPromise = null;
+      });
+      return this.authCheckPromise;
+    }
+    async performAuthCheck() {
       this.setState({ status: "loading", user: null });
       if (!this.injectedToken && typeof window !== "undefined") {
         ensureCookieSessionSupport(this.apiUrl, () => this.markUnauthenticated());
@@ -9795,9 +9835,23 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.6.3";
+  var SDK_VERSION = "0.6.4";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
+  function shouldSendClientHeader(apiUrl, method) {
+    const normalizedMethod = method.toUpperCase();
+    if (normalizedMethod !== "GET" && normalizedMethod !== "HEAD") {
+      return true;
+    }
+    if (typeof window === "undefined") {
+      return true;
+    }
+    try {
+      return new URL(apiUrl, window.location.origin).origin === window.location.origin;
+    } catch {
+      return true;
+    }
+  }
 
   // src/http.ts
   var DEFAULT_TIMEOUT_MS = 3e4;
@@ -9979,21 +10033,13 @@ var LemmaClient = (() => {
       return JSON.stringify(options.body);
     }
     buildRequestInit(method, options) {
-      var _a;
       const initBase = {
         method,
         body: this.getRequestBody(options),
         signal: options.signal
       };
-      const withAuth = options.isFormData ? {
-        ...this.auth.getRequestInit(initBase),
-        headers: Object.fromEntries(
-          Object.entries(
-            (_a = this.auth.getRequestInit(initBase).headers) != null ? _a : {}
-          ).filter(([key]) => key.toLowerCase() !== "content-type")
-        )
-      } : this.auth.getRequestInit(initBase);
-      const withClient = this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE });
+      const withAuth = this.auth.getRequestInit(initBase);
+      const withClient = shouldSendClientHeader(this.apiUrl, method) ? this.mergeHeaders(withAuth, { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE }) : withAuth;
       return this.mergeHeaders(withClient, options.headers);
     }
     async request(method, path, options = {}) {
@@ -10197,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "4.0.2",
+    VERSION: "0.6.10",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10244,7 +10290,12 @@ var LemmaClient = (() => {
       OpenAPI.WITH_CREDENTIALS = true;
       OpenAPI.CREDENTIALS = this.auth.isTokenMode ? "omit" : "include";
       OpenAPI.TOKEN = (_a = this.auth.getBearerToken()) != null ? _a : void 0;
-      OpenAPI.HEADERS = { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+      OpenAPI.HEADERS = async (options) => {
+        if (shouldSendClientHeader(this.apiUrl, options.method)) {
+          return { [CLIENT_HEADER_NAME]: CLIENT_HEADER_VALUE };
+        }
+        return {};
+      };
     }
     async request(operation) {
       this.configure();
@@ -10547,19 +10598,207 @@ var LemmaClient = (() => {
     });
   };
 
-  // src/openapi_client/services/AgentRuntimeService.ts
-  var AgentRuntimeService = class {
+  // src/openapi_client/services/AgentHostService.ts
+  var AgentHostService = class {
     /**
-     * List Available Agent Harnesses
-     * @returns AgentHarnessListResponse Successful Response
+     * Append Agent Host Events
+     * Append one ordered batch to the run's stream.
+     *
+     * There is no second lane to publish on: every event type travels the one
+     * ordered stream, and the ack watermark is the stream's last entry.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostEventAck Successful Response
      * @throws ApiError
      */
-    static agentRuntimeHarnessesList() {
+    static agentHostEventsAppend(requestBody, authorization) {
       return request(OpenAPI, {
-        method: "GET",
-        url: "/agent-runtime/harnesses"
+        method: "POST",
+        url: "/agent-host/events:append",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
       });
     }
+    /**
+     * Publish Agent Host Harnesses
+     * Replace this host's harness snapshots with the reported set.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostHarnessPublishResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostHarnessesPublish(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/agent-host/harnesses",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Complete Agent Host Pairing
+     * Consume a pairing code and issue the host secret, shown exactly once.
+     * @param requestBody
+     * @returns AgentHostPairingCompleted Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingComplete(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/pairings:complete",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Poll Agent Host Commands
+     * Long-poll for commands, carrying the host's control updates up.
+     *
+     * This owns its own units of work rather than the request-scoped one: the
+     * idle wait below can hold the connection open for 25 seconds, and a
+     * transaction must not stay open across it.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostPollResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostPoll(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/poll",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Self Revoke Agent Host
+     * Let a host retire its own credential, e.g. on uninstall.
+     * @param authorization
+     * @returns AgentHostResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostSelfRevoke(authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/revoke",
+        headers: {
+          "authorization": authorization
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Agent Host Pairing
+     * Mint a short-lived pairing code for a machine this user controls.
+     * @param requestBody
+     * @returns AgentHostPairingCreated Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingCreate(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/me/runtime/agent-host-pairings",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Hosts
+     * @returns AgentHostListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostList() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/runtime/agent-hosts"
+      });
+    }
+    /**
+     * Revoke Agent Host
+     * Revoke a host, invalidating its secret immediately.
+     * @param hostId
+     * @returns AgentHostResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostRevoke(hostId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/me/runtime/agent-hosts/{host_id}",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Host Harnesses
+     * @param hostId
+     * @returns AgentHostHarnessListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostHarnessesList(hostId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/runtime/agent-hosts/{host_id}/harnesses",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/agent-host.ts
+  var AgentHostNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    list() {
+      return this.client.request(() => AgentHostService.agentHostList());
+    }
+    createPairing(request2) {
+      return this.client.request(() => AgentHostService.agentHostPairingCreate(request2));
+    }
+    listHarnesses(hostId) {
+      return this.client.request(() => AgentHostService.agentHostHarnessesList(hostId));
+    }
+    revoke(hostId) {
+      return this.client.request(() => AgentHostService.agentHostRevoke(hostId));
+    }
+  };
+
+  // src/openapi_client/services/AgentRuntimeService.ts
+  var AgentRuntimeService = class {
     /**
      * List Available Agent Runtime Profiles
      * @param orgId
@@ -10605,12 +10844,6 @@ var LemmaClient = (() => {
   var AgentRuntimeNamespace = class {
     constructor(client) {
       __publicField(this, "client", client);
-    }
-    listHarnesses() {
-      return this.client.request(() => AgentRuntimeService.agentRuntimeHarnessesList());
-    }
-    listAvailableHarnesses() {
-      return this.listHarnesses();
     }
     listRuntimes(orgId) {
       return this.listProfiles(orgId);
@@ -10861,6 +11094,7 @@ var LemmaClient = (() => {
   };
 
   // src/namespaces/conversations.ts
+  var POD_DEFAULT_AGENT_SELECTOR = "POD_DEFAULT";
   function normalizeConversation(conversation) {
     var _a, _b, _c, _d, _e;
     if (!conversation) return conversation;
@@ -10886,7 +11120,6 @@ var LemmaClient = (() => {
     constructor(http, podId) {
       __publicField(this, "http", http);
       __publicField(this, "podId", podId);
-      __publicField(this, "runtimeCatalogPromise");
       __publicField(this, "profileCatalogPromises", /* @__PURE__ */ new Map());
       __publicField(this, "messages", {
         list: (conversationId, options = {}) => {
@@ -10957,14 +11190,6 @@ var LemmaClient = (() => {
       }
       return podId;
     }
-    listRuntimeCatalog() {
-      var _a;
-      (_a = this.runtimeCatalogPromise) != null ? _a : this.runtimeCatalogPromise = this.http.request(
-        "GET",
-        "/agent-runtime/harnesses"
-      );
-      return this.runtimeCatalogPromise;
-    }
     listProfileCatalog(orgId) {
       const key = orgId.trim();
       const existing = this.profileCatalogPromises.get(key);
@@ -11025,7 +11250,7 @@ var LemmaClient = (() => {
       const podId = this.requirePodId(options.pod_id);
       return this.http.request("GET", `/pods/${podId}/conversations`, {
         params: {
-          agent_name: options.agent_name,
+          agent_name: options.agent_name === null ? POD_DEFAULT_AGENT_SELECTOR : options.agent_name,
           parent_id: options.parent_id,
           type: options.type,
           limit: (_a = options.limit) != null ? _a : 20,
@@ -11036,35 +11261,22 @@ var LemmaClient = (() => {
     listByAgent(agentName, options = {}) {
       return this.list({ ...options, agent_name: agentName });
     }
+    listDefault(options = {}) {
+      return this.list({ ...options, agent_name: POD_DEFAULT_AGENT_SELECTOR });
+    }
     async listModels(options = {}) {
       var _a;
       const orgId = (_a = options.orgId) == null ? void 0 : _a.trim();
       if (orgId) {
-        const catalog2 = await this.listProfileCatalog(orgId);
-        const items2 = this.modelOptionsFromProfiles(catalog2);
+        const catalog = await this.listProfileCatalog(orgId);
+        const items = this.modelOptionsFromProfiles(catalog);
         return {
-          items: items2,
-          limit: items2.length,
+          items,
+          limit: items.length,
           next_page_token: null
         };
       }
-      const catalog = await this.listRuntimeCatalog();
-      const items = catalog.items.flatMap(
-        (harness) => {
-          var _a2;
-          return ((_a2 = harness.models) != null ? _a2 : []).map((model) => ({
-            id: model,
-            name: model,
-            harness_kind: harness.harness_kind,
-            description: harness.daemon_display_name
-          }));
-        }
-      );
-      return {
-        items,
-        limit: items.length,
-        next_page_token: null
-      };
+      return { items: [], limit: 0, next_page_token: null };
     }
     async create(payload = {}) {
       const podId = this.requirePodId(payload.pod_id);
@@ -11124,10 +11336,21 @@ var LemmaClient = (() => {
         }
       });
     }
+    retryFailedRun(conversationId, options = {}) {
+      const podId = this.requirePodId(options.pod_id);
+      return this.http.request(
+        "POST",
+        `/pods/${podId}/conversations/${conversationId}/retry`,
+        {
+          signal: options.signal
+        }
+      );
+    }
     resumeStream(conversationId, options = {}) {
       const podId = this.requirePodId(options.pod_id);
       return this.http.stream(`/pods/${podId}/conversations/${conversationId}/stream`, {
         signal: options.signal,
+        params: { agent_run_id: options.agent_run_id },
         headers: {
           Accept: "text/event-stream"
         }
@@ -12213,7 +12436,9 @@ var LemmaClient = (() => {
       });
       __publicField(this, "runs", {
         create: (name, options = {}) => this.client.request(() => {
-          const payload = { input_data: options.input };
+          const payload = {
+            input_data: options.input
+          };
           return FunctionsService.functionRun(this.podId(), name, payload);
         }),
         list: (name, params = {}) => this.client.request(() => {
@@ -14294,12 +14519,64 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Start Telegram Managed Bot Setup
+     * @param podId
+     * @param requestBody
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceTelegramManagedStart(podId, requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/pods/{pod_id}/telegram-bot-setups",
+        path: {
+          "pod_id": podId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Telegram Managed Bot Setup
+     * @param podId
+     * @param setupId
+     * @returns TelegramManagedBotSetupResponse Successful Response
+     * @throws ApiError
+     */
+    static agentSurfaceTelegramManagedGet(podId, setupId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/telegram-bot-setups/{setup_id}",
+        path: {
+          "pod_id": podId,
+          "setup_id": setupId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/pod-surfaces.ts
   var PodSurfacesNamespace = class {
     constructor(client) {
       __publicField(this, "client", client);
+    }
+    /**
+     * The connectable-surface catalog for a pod: every platform with its
+     * connector, supported credential modes, the schema to connect an account,
+     * and whether the org can still claim the platform's Lemma-managed
+     * bot/number. Platform-level — no surface need exist.
+     */
+    available(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceAvailable(podId)
+      );
     }
     list(podId, options = {}) {
       return this.client.request(
@@ -14318,6 +14595,16 @@ var LemmaClient = (() => {
     create(podId, payload) {
       return this.client.request(
         () => AgentSurfacesService.agentSurfaceCreate(podId, payload)
+      );
+    }
+    startTelegramBotSetup(podId, payload) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceTelegramManagedStart(podId, payload)
+      );
+    }
+    getTelegramBotSetup(podId, setupId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceTelegramManagedGet(podId, setupId)
       );
     }
     update(podId, surfaceName, payload) {
@@ -15887,6 +16174,7 @@ var LemmaClient = (() => {
       __publicField(this, "functions");
       __publicField(this, "agents");
       __publicField(this, "agentRuntime");
+      __publicField(this, "agentHost");
       __publicField(this, "conversations");
       __publicField(this, "workflows");
       __publicField(this, "apps");
@@ -15935,6 +16223,7 @@ var LemmaClient = (() => {
       this.functions = new FunctionsNamespace(this._generated, podIdFn);
       this.agents = new AgentsNamespace(this._generated, podIdFn, () => this.conversations);
       this.agentRuntime = new AgentRuntimeNamespace(this._generated);
+      this.agentHost = new AgentHostNamespace(this._generated);
       this.conversations = new ConversationsNamespace(this._http, podIdFn);
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);
@@ -16000,6 +16289,50 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/browser-theme.ts
+  var LEMMA_APP_THEME_MESSAGE_TYPE = "lemma-app-theme";
+  var LEMMA_THEME_EVENT = "lemma:theme";
+  var currentHostTheme = null;
+  function isHostThemeMessage(value) {
+    if (!value || typeof value !== "object") return false;
+    const candidate = value;
+    return candidate.type === LEMMA_APP_THEME_MESSAGE_TYPE && (candidate.theme === "light" || candidate.theme === "dark") && Boolean(candidate.tokens && typeof candidate.tokens === "object");
+  }
+  function applyLemmaHostTheme(message) {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    Object.entries(message.tokens).forEach(([name, value]) => {
+      if (!name.startsWith("--lemma-app-") || typeof value !== "string" || value.length > 512) return;
+      root.style.setProperty(name, value);
+    });
+    root.dataset.lemmaTheme = message.theme;
+    root.dataset.lemmaDensity = message.density || "compact";
+    root.classList.toggle("dark", message.theme === "dark");
+    root.style.colorScheme = message.theme;
+    currentHostTheme = message;
+    if (typeof window !== "undefined" && typeof CustomEvent !== "undefined") {
+      window.dispatchEvent(new CustomEvent(LEMMA_THEME_EVENT, { detail: message }));
+    }
+  }
+  function getLemmaHostTheme() {
+    return currentHostTheme;
+  }
+  function subscribeLemmaHostTheme(listener) {
+    if (typeof window === "undefined") return () => void 0;
+    const handleTheme = (event) => {
+      listener(event.detail);
+    };
+    window.addEventListener(LEMMA_THEME_EVENT, handleTheme);
+    if (currentHostTheme) listener(currentHostTheme);
+    return () => window.removeEventListener(LEMMA_THEME_EVENT, handleTheme);
+  }
+  if (typeof window !== "undefined" && window.parent !== window) {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent || !isHostThemeMessage(event.data)) return;
+      applyLemmaHostTheme(event.data);
+    });
+  }
+
   // src/browser.ts
   if (typeof globalThis !== "undefined") {
     const scope = globalThis;
@@ -16012,7 +16345,13 @@ var LemmaClient = (() => {
       getTestingToken,
       resolveSafeRedirectUri,
       setTestingToken,
-      ApiError
+      ApiError,
+      POD_DEFAULT_AGENT_SELECTOR,
+      LEMMA_APP_THEME_MESSAGE_TYPE,
+      LEMMA_THEME_EVENT,
+      applyLemmaHostTheme,
+      getLemmaHostTheme,
+      subscribeLemmaHostTheme
     };
     if (!scope.LemmaClient) {
       scope.LemmaClient = surface;

@@ -61,6 +61,7 @@ def test_system_role_permissions_are_explicit_unions():
     assert POD_VIEWER_PERMISSIONS < POD_USER_PERMISSIONS
     assert POD_USER_PERMISSIONS < POD_EDITOR_PERMISSIONS
     assert POD_EDITOR_PERMISSIONS < POD_ADMIN_PERMISSIONS
+    assert Permissions.POD_UPDATE in POD_EDITOR_PERMISSIONS
     assert Permissions.POD_ROLE_MANAGE in POD_ADMIN_PERMISSIONS
     assert Permissions.POD_ROLE_MANAGE not in POD_EDITOR_PERMISSIONS
     assert Permissions.CONNECTOR_USE in POD_USER_PERMISSIONS
