@@ -5,7 +5,9 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
+from apscheduler.triggers.date import DateTrigger
 from httpx import AsyncClient
+from pytz import utc
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -868,10 +870,11 @@ async def test_wait_until_resumes_from_a_timer_persisted_without_an_owner(
     APScheduler's job store is durable across deployments, so timers scheduled
     by an older build deserialize with kwargs that carry no ``user_id``, and
     ``reconcile_time_schedule_jobs`` deliberately leaves wait timers alone. This
-    fires exactly those kwargs: the run row supplies the owner, so the workflow
-    resumes instead of hanging until someone notices.
+    registers a job with exactly those kwargs and lets the real scheduler fire
+    it: the run row supplies the owner, so the workflow resumes instead of
+    hanging until someone notices.
     """
-    from app.modules.schedule.scheduler.scheduler_service import execute_scheduled_job
+    from app.modules.schedule.scheduler.scheduler_service import get_scheduler_service
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     workflow = await _create_workflow(
@@ -899,14 +902,27 @@ async def test_wait_until_resumes_from_a_timer_persisted_without_an_owner(
     assert waiting["active_wait"]["wait_type"] == "TIME"
     wait_ref = waiting["active_wait"]["external_ref"]
 
-    # Exactly what a pre-ownership job row deserializes to: no user_id kwarg.
-    await execute_scheduled_job(
-        wait_ref,
-        payload={
-            "workflow_run_id": waiting["id"],
-            "wait_ref": wait_ref,
-            "source": "workflow_wait_until",
+    # Replace the timer with one whose kwargs are exactly what a pre-ownership
+    # job row deserializes to: schedule_id and payload, no user_id.
+    scheduler = get_scheduler_service()
+    scheduler.scheduler.add_job(
+        func=(
+            "app.modules.schedule.scheduler.scheduler_service:execute_scheduled_job"
+        ),
+        trigger=DateTrigger(
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=1),
+            timezone=utc,
+        ),
+        id=wait_ref,
+        kwargs={
+            "schedule_id": wait_ref,
+            "payload": {
+                "workflow_run_id": waiting["id"],
+                "wait_ref": wait_ref,
+                "source": "workflow_wait_until",
+            },
         },
+        replace_existing=True,
     )
 
     completed = await _wait_for_run_status(

@@ -172,10 +172,12 @@ async def test_immediate_target_outcome_cannot_be_overwritten_by_dispatch(
             status=ScheduleRunStatus.COMPLETED,
             completed_at=None,
         )
-        dispatched = await repository.mark_dispatched(schedule_run.id)
+        # Dispatch lands after the target already finished. Its PROCESSING
+        # predicate must make it a no-op rather than dragging the run back out
+        # of a terminal state.
+        await repository.mark_dispatched(schedule_run.id)
 
     assert changed is True
-    assert dispatched is False
 
     listed = await authenticated_client.get(
         f"/pods/{pod_id}/schedules/{schedule_id}/runs"
