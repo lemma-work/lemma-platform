@@ -421,6 +421,10 @@
 .tiptap-editor {
   min-height: inherit;
   line-height: 1.7;
+  /* Prose is written by agents and pasted from terminals: a path, a URL, or a
+     token with no spaces in it has to break rather than set the width of
+     whatever card the editor sits in. */
+  overflow-wrap: anywhere;
 }
 
 .tiptap-editor>*+* {
@@ -473,6 +477,14 @@
 .tiptap-editor pre code {
   background: transparent;
   padding: 0;
+}
+
+/* ProseMirror's own wrapper around a table. A table is the one block here that
+   cannot wrap, so it scrolls on its own — otherwise a wide one pushes past the
+   page it is written on. */
+.tiptap-editor .tableWrapper {
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 /* Pod badge — a compact, solid fallback when a pod has no uploaded identity. */
