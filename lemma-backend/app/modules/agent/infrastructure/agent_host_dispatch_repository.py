@@ -504,6 +504,44 @@ class AgentHostDispatchRepository:
     # Recovery and retention live in agent_host_recovery as plain functions;
     # these keep a single entry point for callers.
 
+    async def enqueue_permission_decision(
+        self,
+        *,
+        run_id: UUID,
+        request_id: str,
+        option_id: str | None,
+        now: datetime | None = None,
+    ) -> AgentHostCommandModel | None:
+        """Answer a permission request the host is holding open.
+
+        ``option_id`` selects one of the options the agent offered; ``None``
+        denies. Returns None when the run already ended, in which case there is
+        nothing left holding the request and the host's own timeout applies.
+        """
+        timestamp = now or utcnow()
+        lease = await self.session.get(
+            AgentHostRunLeaseModel,
+            run_id,
+            with_for_update=True,
+        )
+        if (
+            lease is None
+            or AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
+        ):
+            return None
+        command = AgentHostCommandModel(
+            host_id=lease.host_id,
+            run_id=run_id,
+            kind=AgentHostCommandKind.RESOLVE_PERMISSION.value,
+            lease_epoch=lease.lease_epoch,
+            payload={"request_id": request_id, "option_id": option_id},
+            state=AgentHostCommandState.QUEUED.value,
+            expires_at=timestamp + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
+        )
+        self.session.add(command)
+        await self.session.flush()
+        return command
+
     async def expire_unaccepted_run(
         self,
         *,
