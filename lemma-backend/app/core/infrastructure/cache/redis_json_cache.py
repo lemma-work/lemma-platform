@@ -8,6 +8,8 @@ from weakref import WeakSet
 
 from redis.asyncio import Redis
 
+from app.core.infrastructure.redis.client import get_redis
+
 
 T = TypeVar("T")
 _live_caches: WeakSet["RedisJsonCache[Any]"] = WeakSet()
@@ -34,10 +36,7 @@ class RedisJsonCache(Generic[T]):
 
         async with self._lock:
             if self._redis is None:
-                self._redis = Redis.from_url(
-                    self._redis_url,
-                    decode_responses=True,
-                )
+                self._redis = get_redis(url=self._redis_url)
         return self._redis
 
     def build_key(self, suffix: str) -> str:
@@ -124,16 +123,14 @@ class RedisJsonCache(Generic[T]):
         await self.delete_prefix("")
 
     async def close(self) -> None:
-        async with self._lock:
-            redis = self._redis
-            self._redis = None
-        if redis is None:
-            return
-        if hasattr(redis, "aclose"):
-            await redis.aclose()
-        else:
-            await redis.close()
+        """Drop this cache's reference to the shared client.
 
+        The client is shared process-wide, so closing it here would break
+        every other component still using it; teardown belongs to
+        close_redis_clients().
+        """
+        async with self._lock:
+            self._redis = None
 
 async def close_redis_json_caches() -> None:
     """Close every live process-local cache client during service teardown."""

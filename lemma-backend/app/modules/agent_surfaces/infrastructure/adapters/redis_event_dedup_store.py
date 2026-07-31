@@ -5,6 +5,8 @@ from uuid import UUID
 
 from redis.asyncio import Redis
 
+from app.core.infrastructure.redis.client import get_redis
+
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 
@@ -29,10 +31,7 @@ class RedisSurfaceEventDedupStore:
 
         async with self._lock:
             if self._redis is None:
-                self._redis = Redis.from_url(
-                    self._redis_url,
-                    decode_responses=True,
-                )
+                self._redis = get_redis(url=self._redis_url)
         return self._redis
 
     def _key(
@@ -80,14 +79,10 @@ class RedisSurfaceEventDedupStore:
         return bool(claimed)
 
     async def close(self) -> None:
-        if self._redis is None:
-            return
-        redis = self._redis
+        # The client is shared process-wide; closing it here would break
+        # every other component still using the same pool. Disposal is
+        # close_redis_clients()'s job at lifespan shutdown.
         self._redis = None
-        if hasattr(redis, "aclose"):
-            await redis.aclose()
-        else:
-            await redis.close()
 
 
 _event_dedup_store: RedisSurfaceEventDedupStore | None = None

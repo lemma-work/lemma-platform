@@ -16,25 +16,45 @@ class _Redis:
         return None
 
 
-async def test_process_cache_registry_closes_each_live_client_once(monkeypatch) -> None:
-    first = RedisJsonCache[str]("redis://first", "first", 60)
-    second = RedisJsonCache[str]("redis://second", "second", 60)
-    first_client = _Redis()
-    second_client = _Redis()
-    clients = {
-        "redis://first": first_client,
-        "redis://second": second_client,
-    }
-    monkeypatch.setattr(
-        redis_json_cache.Redis,
-        "from_url",
-        lambda url, **_kwargs: clients[url],
-    )
+async def test_caches_reuse_the_shared_client_per_url(monkeypatch) -> None:
+    """Two caches on one URL must not open two pools."""
+    clients: dict[str, _Redis] = {}
+
+    def fake_get_redis(*, url=None, decode_responses=True):
+        return clients.setdefault(url, _Redis())
+
+    monkeypatch.setattr(redis_json_cache, "get_redis", fake_get_redis)
+
+    first = RedisJsonCache[str]("redis://shared", "first", 60)
+    second = RedisJsonCache[str]("redis://shared", "second", 60)
     await first.set_raw("key", "value")
     await second.set_raw("key", "value")
 
+    assert len(clients) == 1
+    assert await first._get_redis() is await second._get_redis()
+
+
+async def test_teardown_releases_clients_without_closing_the_shared_pool(
+    monkeypatch,
+) -> None:
+    """A cache borrows the process-wide client; it must not close it.
+
+    Closing here would break every other component still holding the same
+    pool. Disposing of it is close_redis_clients()'s job.
+    """
+    client = _Redis()
+
+    def fake_get_redis(*, url=None, decode_responses=True):
+        return client
+
+    monkeypatch.setattr(redis_json_cache, "get_redis", fake_get_redis)
+
+    cache = RedisJsonCache[str]("redis://first", "first", 60)
+    await cache.set_raw("key", "value")
+    assert cache._redis is not None
+
     await close_redis_json_caches()
     await close_redis_json_caches()
 
-    assert first_client.close_count == 1
-    assert second_client.close_count == 1
+    assert client.close_count == 0
+    assert cache._redis is None
