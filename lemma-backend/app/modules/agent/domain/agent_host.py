@@ -164,6 +164,9 @@ class AgentHostPairingCompleted(BaseModel):
 class AgentHostCommandKind(str, Enum):
     START_RUN = "START_RUN"
     CANCEL_RUN = "CANCEL_RUN"
+    # Carries a human's answer back to a permission request the host is
+    # holding open for a running agent.
+    RESOLVE_PERMISSION = "RESOLVE_PERMISSION"
 
 
 class AgentHostCommandState(str, Enum):
@@ -323,6 +326,7 @@ class AgentHostCommand(BaseModel):
         if self.kind in {
             AgentHostCommandKind.START_RUN,
             AgentHostCommandKind.CANCEL_RUN,
+            AgentHostCommandKind.RESOLVE_PERMISSION,
         } and (self.run_id is None or self.lease_epoch is None):
             raise ValueError(f"{self.kind.value} requires run_id and lease_epoch")
         return self
