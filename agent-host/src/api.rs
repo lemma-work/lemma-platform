@@ -56,6 +56,25 @@ impl ApiError {
             }
         )
     }
+
+    /// Whether Lemma rejected this request on its own merits rather than
+    /// because the host cannot reach or authenticate with the target.
+    ///
+    /// Only a rejection of the request itself is attributable to the one run it
+    /// carried. Everything else -- transport failures, credentials, throttling,
+    /// server faults -- is the target's problem and retrying it is the right
+    /// response.
+    #[must_use]
+    pub fn is_request_rejected(&self) -> bool {
+        matches!(
+            self,
+            Self::Status { status, .. }
+                if status.is_client_error()
+                    && *status != StatusCode::UNAUTHORIZED
+                    && *status != StatusCode::TOO_MANY_REQUESTS
+                    && *status != StatusCode::REQUEST_TIMEOUT
+        )
+    }
 }
 
 impl TargetClient {
@@ -252,5 +271,27 @@ mod tests {
     fn insecure_network_target_is_rejected() {
         assert!(validate_target_url(&Url::parse("http://example.com").unwrap(), true).is_err());
         validate_target_url(&Url::parse("http://127.0.0.1:8000").unwrap(), true).unwrap();
+    }
+
+    fn status(status: StatusCode) -> ApiError {
+        ApiError::Status {
+            status,
+            body: String::new(),
+        }
+    }
+
+    #[test]
+    fn only_a_rejected_request_is_attributable_to_its_run() {
+        // A sequence conflict or a missing lease belongs to one run.
+        assert!(status(StatusCode::CONFLICT).is_request_rejected());
+        assert!(status(StatusCode::NOT_FOUND).is_request_rejected());
+        assert!(status(StatusCode::UNPROCESSABLE_ENTITY).is_request_rejected());
+        // These say nothing about the run, so the whole target retries.
+        assert!(!status(StatusCode::UNAUTHORIZED).is_request_rejected());
+        assert!(!status(StatusCode::TOO_MANY_REQUESTS).is_request_rejected());
+        assert!(!status(StatusCode::REQUEST_TIMEOUT).is_request_rejected());
+        assert!(!status(StatusCode::INTERNAL_SERVER_ERROR).is_request_rejected());
+        assert!(!status(StatusCode::BAD_GATEWAY).is_request_rejected());
+        assert!(!ApiError::Protocol(2).is_request_rejected());
     }
 }

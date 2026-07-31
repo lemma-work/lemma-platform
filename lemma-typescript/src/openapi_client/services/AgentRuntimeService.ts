@@ -2,27 +2,15 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { AgentHarnessListResponse } from '../models/AgentHarnessListResponse.js';
 import type { AgentRuntimeProfileListResponse } from '../models/AgentRuntimeProfileListResponse.js';
 import type { AgentRuntimeProfileResponse } from '../models/AgentRuntimeProfileResponse.js';
+import type { CreateAgentHostRuntimeProfileRequest } from '../models/CreateAgentHostRuntimeProfileRequest.js';
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from '../models/CreateAnthropicCompatibleRuntimeProfileRequest.js';
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from '../models/CreateOpenAICompatibleRuntimeProfileRequest.js';
-import type { CreateUserDaemonRuntimeProfileRequest } from '../models/CreateUserDaemonRuntimeProfileRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
 import { OpenAPI } from '../core/OpenAPI.js';
 import { request as __request } from '../core/request.js';
 export class AgentRuntimeService {
-    /**
-     * List Available Agent Harnesses
-     * @returns AgentHarnessListResponse Successful Response
-     * @throws ApiError
-     */
-    public static agentRuntimeHarnessesList(): CancelablePromise<AgentHarnessListResponse> {
-        return __request(OpenAPI, {
-            method: 'GET',
-            url: '/agent-runtime/harnesses',
-        });
-    }
     /**
      * List Available Agent Runtime Profiles
      * @param orgId
@@ -52,7 +40,7 @@ export class AgentRuntimeService {
      */
     public static agentRuntimeProfilesCreate(
         orgId: string,
-        requestBody: (CreateUserDaemonRuntimeProfileRequest | CreateOpenAICompatibleRuntimeProfileRequest | CreateAnthropicCompatibleRuntimeProfileRequest),
+        requestBody: (CreateAgentHostRuntimeProfileRequest | CreateOpenAICompatibleRuntimeProfileRequest | CreateAnthropicCompatibleRuntimeProfileRequest),
     ): CancelablePromise<AgentRuntimeProfileResponse> {
         return __request(OpenAPI, {
             method: 'POST',

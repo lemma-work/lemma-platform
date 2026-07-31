@@ -46,7 +46,6 @@ import {
   useCreateAgentRuntime,
   useUpdatePodDefaultAgentRuntime,
 } from "@/lib/hooks/use-agent-runtime";
-import { RuntimeProfileScope } from "lemma-sdk";
 import {
   OrganizationInvitationStatus,
   OrganizationJoinPolicy,
@@ -606,53 +605,34 @@ function SetupAssistant({
         return;
       }
 
-      let runtimeProfileId: string | null = null;
-      if (choice.kind === "daemon") {
-        const profile = await createAgentRuntime.mutateAsync({
-          organizationId: organization.id,
-          request: {
-            source: "USER_DAEMON",
-            daemon_id: choice.daemonId,
-            harness_kind: choice.harnessKind,
-            scope: RuntimeProfileScope.PERSONAL,
-            name: `${choice.displayName} daemon`,
-            default_model_name: choice.modelName || undefined,
-          },
-        });
-        runtimeProfileId = profile.id;
-        setConnectedProfileId(profile.id);
-        toast.success(`${choice.displayName} connected`);
-      } else {
-        const profile = await createAgentRuntime.mutateAsync({
-          organizationId: organization.id,
-          request:
-            choice.providerKind === "openai"
-              ? {
-                  source: "OPENAI_COMPATIBLE",
-                  name: choice.name,
-                  base_url: choice.baseUrl,
-                  api_key: choice.apiKey || null,
-                  default_model_name: choice.defaultModelName,
-                  model_names: choice.modelNames,
-                }
-              : {
-                  source: "ANTHROPIC_COMPATIBLE",
-                  name: choice.name,
-                  base_url: choice.baseUrl || null,
-                  api_key: choice.apiKey,
-                  default_model_name: choice.defaultModelName,
-                  model_names: choice.modelNames,
-                },
-        });
-        runtimeProfileId = profile.id;
-        setConnectedProfileId(profile.id);
-        toast.success(`${choice.name} saved`);
-      }
+      const profile = await createAgentRuntime.mutateAsync({
+        organizationId: organization.id,
+        request:
+          choice.providerKind === "openai"
+            ? {
+                source: "OPENAI_COMPATIBLE",
+                name: choice.name,
+                base_url: choice.baseUrl,
+                api_key: choice.apiKey || null,
+                default_model_name: choice.defaultModelName,
+                model_names: choice.modelNames,
+              }
+            : {
+                source: "ANTHROPIC_COMPATIBLE",
+                name: choice.name,
+                base_url: choice.baseUrl || null,
+                api_key: choice.apiKey,
+                default_model_name: choice.defaultModelName,
+                model_names: choice.modelNames,
+              },
+      });
+      setConnectedProfileId(profile.id);
+      toast.success(`${choice.name} saved`);
 
-      if (basePod && runtimeProfileId) {
+      if (basePod) {
         await updatePodDefaultRuntime.mutateAsync({
           podId: basePod.id,
-          runtime: { profile_id: runtimeProfileId, model_name: null },
+          runtime: { profile_id: profile.id, model_name: null },
         });
       }
       goTo("start");

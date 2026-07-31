@@ -21,6 +21,10 @@ _MAX_CHECKSUM_BYTES = 4096
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
+class _MissingRelease(RuntimeError):
+    """A release asset this CLI version expects is not published."""
+
+
 def _target_triple() -> str:
     machine = platform.machine().lower()
     if machine in {"amd64", "x64"}:
@@ -90,11 +94,39 @@ def _download(url: str, *, limit: int) -> bytes:
             if content_length and int(content_length) > limit:
                 raise RuntimeError(f"download exceeds the {limit}-byte limit")
             data = response.read(limit + 1)
+    except urllib.error.HTTPError as exc:
+        # 404 means the release or this platform's asset was never published, which
+        # needs different advice from a transport failure. HTTPError is an OSError,
+        # so this must stay ahead of the generic handler.
+        if exc.code == 404:
+            raise _MissingRelease(url) from exc
+        raise RuntimeError(f"could not download {url}: {exc}") from exc
     except (OSError, ValueError, urllib.error.URLError) as exc:
         raise RuntimeError(f"could not download {url}: {exc}") from exc
     if len(data) > limit:
         raise RuntimeError(f"download exceeds the {limit}-byte limit")
     return data
+
+
+def _unavailable_message(*, target: str, asset_name: str, base_url: str) -> str:
+    """Explain a 404 in terms of what the user can actually do next."""
+    return (
+        f"Lemma {__version__} has no Agent Host build for {target}.\n"
+        f"Looked for {asset_name} under {base_url}\n"
+        "\n"
+        "Fix it with any of:\n"
+        "  * Upgrade the CLI, which points at a newer release:\n"
+        "      uv tool upgrade lemma-terminal\n"
+        "  * Point at a binary you already have:\n"
+        "      export LEMMA_AGENT_HOST_BIN=/path/to/lemma-agent-host\n"
+        "  * Build it from the repository checkout:\n"
+        "      cargo build --release --manifest-path agent-host/Cargo.toml\n"
+        "  * Point at a different download location:\n"
+        "      export LEMMA_AGENT_HOST_RELEASE_BASE_URL=https://.../download/vX.Y.Z\n"
+        "\n"
+        "If this platform should be supported, report it at\n"
+        "https://github.com/lemma-work/lemma-platform/issues"
+    )
 
 
 def install_agent_host(*, force: bool = False) -> Path:
@@ -110,6 +142,11 @@ def install_agent_host(*, force: bool = False) -> Path:
     asset_url = f"{base_url}/{urllib.parse.quote(asset_name)}"
     checksum_url = f"{asset_url}.sha256"
 
+    unavailable = _unavailable_message(
+        target=target,
+        asset_name=asset_name,
+        base_url=base_url,
+    )
     try:
         checksum_text = _download(
             checksum_url,
@@ -117,16 +154,25 @@ def install_agent_host(*, force: bool = False) -> Path:
         ).decode("ascii", errors="strict")
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"release checksum is invalid: {checksum_url}") from exc
+    except _MissingRelease as exc:
+        raise RuntimeError(unavailable) from exc
     checksum_fields = checksum_text.split(maxsplit=1)
     expected_checksum = checksum_fields[0] if checksum_fields else ""
     if not _SHA256_RE.fullmatch(expected_checksum):
         raise RuntimeError(f"release checksum is invalid: {checksum_url}")
 
-    binary = _download(asset_url, limit=_MAX_BINARY_BYTES)
+    try:
+        binary = _download(asset_url, limit=_MAX_BINARY_BYTES)
+    except _MissingRelease as exc:
+        raise RuntimeError(unavailable) from exc
     actual_checksum = hashlib.sha256(binary).hexdigest()
     if actual_checksum.lower() != expected_checksum.lower():
         raise RuntimeError(
-            "Agent Host checksum mismatch; the downloaded binary was not installed"
+            f"Agent Host checksum mismatch for {asset_name}: the release records "
+            f"{expected_checksum.lower()} but the download hashed to "
+            f"{actual_checksum}. Nothing was installed. Retry in case the download "
+            "was truncated; if it keeps failing, do not run the binary and report "
+            "it at https://github.com/lemma-work/lemma-platform/issues"
         )
 
     destination.parent.mkdir(parents=True, exist_ok=True)

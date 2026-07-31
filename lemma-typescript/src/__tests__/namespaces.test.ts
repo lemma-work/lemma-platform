@@ -1,14 +1,60 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GeneratedClientAdapter } from "../generated.js";
+import { AgentHostNamespace } from "../namespaces/agent-host.js";
 import { AgentsNamespace } from "../namespaces/agents.js";
 import { FunctionsNamespace } from "../namespaces/functions.js";
 import type { ConversationsNamespace } from "../namespaces/conversations.js";
+import { AgentHostService } from "../openapi_client/services/AgentHostService.js";
 import { FunctionsService } from "../openapi_client/services/FunctionsService.js";
 
 // A pass-through adapter: invoke the thunk and return its result (no retry/timeout needed here).
 const passthroughAdapter = { request: (op: () => unknown) => op() } as unknown as GeneratedClientAdapter;
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("AgentHostNamespace", () => {
+  it("exposes only authenticated management operations", async () => {
+    const listSpy = vi
+      .spyOn(AgentHostService, "agentHostList")
+      .mockResolvedValue({ items: [] } as never);
+    const harnessSpy = vi
+      .spyOn(AgentHostService, "agentHostHarnessesList")
+      .mockResolvedValue({ items: [] } as never);
+    const hosts = new AgentHostNamespace(passthroughAdapter);
+
+    await expect(hosts.list()).resolves.toEqual({ items: [] });
+    await expect(hosts.listHarnesses("host-1")).resolves.toEqual({ items: [] });
+    expect(listSpy).toHaveBeenCalledOnce();
+    expect(harnessSpy).toHaveBeenCalledWith("host-1");
+    expect("poll" in hosts).toBe(false);
+  });
+
+  it("delegates pairing and revocation", async () => {
+    const pairingSpy = vi
+      .spyOn(AgentHostService, "agentHostPairingCreate")
+      .mockResolvedValue({
+        pairing_id: "pair-1",
+        pairing_code: "ABCD-EFGH",
+        expires_at: "2026-07-27T00:00:00Z",
+      } as never);
+    const revokeSpy = vi
+      .spyOn(AgentHostService, "agentHostRevoke")
+      .mockResolvedValue({ id: "host-1" } as never);
+    const hosts = new AgentHostNamespace(passthroughAdapter);
+
+    await hosts.createPairing({
+      display_name: "My computer",
+      organization_id: "org-1",
+    });
+    await hosts.revoke("host-1");
+
+    expect(pairingSpy).toHaveBeenCalledWith({
+      display_name: "My computer",
+      organization_id: "org-1",
+    });
+    expect(revokeSpy).toHaveBeenCalledWith("host-1");
+  });
+});
 
 describe("FunctionsNamespace.run", () => {
   it("delegates to runs.create with input wrapped as input_data", async () => {

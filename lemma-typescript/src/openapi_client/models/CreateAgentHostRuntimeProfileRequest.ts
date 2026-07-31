@@ -2,13 +2,12 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { HarnessKind } from './HarnessKind.js';
 import type { RuntimeProfileScope } from './RuntimeProfileScope.js';
-export type CreateUserDaemonRuntimeProfileRequest = {
-    daemon_id: string;
+export type CreateAgentHostRuntimeProfileRequest = {
+    config_selections?: Record<string, any>;
     default_model_name?: (string | null);
     description?: (string | null);
-    harness_kind: HarnessKind;
+    harness_id: string;
     name: string;
     scope?: RuntimeProfileScope;
     source?: string;

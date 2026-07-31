@@ -29,18 +29,6 @@ async def _report_system_model_pricing(
     yield
 
 
-@asynccontextmanager
-async def _close_agent_runtime_redis(_context: object) -> AsyncIterator[None]:
-    try:
-        yield
-    finally:
-        from app.modules.agent.infrastructure.daemon_hub import (
-            close_agent_runtime_resources,
-        )
-
-        await close_agent_runtime_resources()
-
-
 def _routers():
     from app.modules.agent.api.controllers.agent_controller import router as agent
     from app.modules.agent.api.controllers.agent_host_controller import (
@@ -81,10 +69,6 @@ module = LemmaModule(
     name="agent",
     routers=_routers,
     event_routers=_event_routers,
-    api_lifespans=(
-        _report_system_model_pricing,
-        _close_agent_runtime_redis,
-    ),
-    worker_lifespans=(_close_agent_runtime_redis,),
+    api_lifespans=(_report_system_model_pricing,),
     stream_groups=(("agent_events", "agent-events"),),
 )

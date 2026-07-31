@@ -1,5 +1,4 @@
 import type { HttpClient } from "../http.js";
-import type { AgentHarnessListResponse } from "../openapi_client/models/AgentHarnessListResponse.js";
 import type { ApprovalDecisionResponse } from "../openapi_client/models/ApprovalDecisionResponse.js";
 import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeConfig.js";
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
@@ -70,7 +69,6 @@ function normalizeMessage(message: ConversationMessage): ConversationMessage {
 }
 
 export class ConversationsNamespace {
-  private runtimeCatalogPromise: Promise<AgentHarnessListResponse> | undefined;
   private profileCatalogPromises = new Map<string, Promise<AgentRuntimeProfileListResponse>>();
 
   constructor(
@@ -96,14 +94,6 @@ export class ConversationsNamespace {
       throw new Error("pod_id is required for this conversation operation.");
     }
     return podId;
-  }
-
-  private listRuntimeCatalog(): Promise<AgentHarnessListResponse> {
-    this.runtimeCatalogPromise ??= this.http.request<AgentHarnessListResponse>(
-      "GET",
-      "/agent-runtime/harnesses",
-    );
-    return this.runtimeCatalogPromise;
   }
 
   private listProfileCatalog(orgId: string): Promise<AgentRuntimeProfileListResponse> {
@@ -231,20 +221,9 @@ export class ConversationsNamespace {
       };
     }
 
-    const catalog = await this.listRuntimeCatalog();
-    const items = catalog.items.flatMap((harness) =>
-      (harness.models ?? []).map((model) => ({
-        id: model as ConversationModel,
-        name: model,
-        harness_kind: harness.harness_kind,
-        description: harness.daemon_display_name,
-      })),
-    );
-    return {
-      items,
-      limit: items.length,
-      next_page_token: null,
-    };
+    // Models are org-scoped: they come from runtime profiles, including the
+    // harness profiles that replaced the local daemon's global catalog.
+    return { items: [], limit: 0, next_page_token: null };
   }
 
   async create(payload: ConversationCreateInput = {}): Promise<Conversation> {

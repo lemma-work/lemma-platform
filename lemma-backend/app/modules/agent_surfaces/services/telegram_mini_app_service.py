@@ -33,7 +33,7 @@ def telegram_mini_app_url(*, public_slug: str) -> str | None:
     """Return the canonical HTTPS app origin Telegram may open.
 
     Local app hosts are not publicly reachable HTTPS origins. Publishing those
-    origins for Telegram is a daemon/tunnel concern, not an alternate app
+    origins for Telegram is a tunnel concern, not an alternate app
     serving path in the backend.
     """
 

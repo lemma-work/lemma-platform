@@ -776,6 +776,7 @@ class ConversationService:
         decision: AgentRunApprovalDecision,
         response: dict[str, object],
         paused_agent_run_id: UUID,
+        deliver_to_host: bool = True,
     ) -> tuple[str, object]:
         """Return ``(tool_name, tool_result)`` for the synthesized resume message."""
         from app.modules.agent.tools.user_interaction.models import (
@@ -804,7 +805,7 @@ class ConversationService:
             return "ask_user", content.model_dump(mode="json")
 
         host_permission = agent_host_permission_request(tool_args)
-        if host_permission is not None:
+        if host_permission is not None and deliver_to_host:
             # Checked before the denial branch below: a denial must reach the
             # host too, or its ACP agent sits blocked until the request times
             # out half an hour later.
@@ -814,6 +815,20 @@ class ConversationService:
                 decision=decision,
                 response=response,
             )
+        if host_permission is not None:
+            # Superseding rides the caller's uncommitted transaction. Handing
+            # the decision to the host from here would commit a command in a
+            # separate transaction that the caller's rollback could not take
+            # back. The run this belonged to is over, so there is nothing to
+            # unblock; a host still executing an orphaned run is stopped by
+            # reconcile_agent_host_dispatch, which cancels it outright.
+            return "request_approval", RequestApprovalResponse(
+                success=False,
+                message="The request was superseded before it was answered.",
+                decision=decision,
+                executed=False,
+                response=response,
+            ).model_dump(mode="json")
 
         inner_tool = str(tool_args.get("tool_name") or "")
         inner_args = tool_args.get("args")
@@ -974,7 +989,9 @@ class ConversationService:
         must never auto-execute here. Writes ride the caller's transaction (no
         commit here) so they land atomically with the new run/message it creates;
         the caller is responsible for publishing the returned messages once that
-        transaction actually commits.
+        transaction actually commits. That also rules out side effects Lemma
+        could not take back on a rollback, which is why an Agent Host permission
+        is not delivered from here.
         """
         resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
             conversation_id=conversation.id
@@ -1043,6 +1060,7 @@ class ConversationService:
             decision=AgentRunApprovalDecision.DENY,
             response=response,
             paused_agent_run_id=message.agent_run_id,
+            deliver_to_host=False,
         )
         return await self.conversation_repository.append_message(
             conversation_id=conversation.id,

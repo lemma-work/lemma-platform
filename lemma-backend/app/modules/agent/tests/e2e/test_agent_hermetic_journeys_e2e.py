@@ -446,17 +446,16 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     assert unsafe_url.json()["message"] == "base_url must be a public http(s) URL"
     assert "CANARY_SSRF_KEY" not in unsafe_url.text
 
-    unavailable_daemon = await authenticated_client.post(
+    unavailable_harness = await authenticated_client.post(
         f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
         json={
-            "source": "USER_DAEMON",
-            "daemon_id": str(uuid4()),
-            "harness_kind": "CODEX",
+            "source": "AGENT_HOST",
+            "harness_id": str(uuid4()),
             "name": "Unavailable laptop",
         },
     )
-    assert unavailable_daemon.status_code == status.HTTP_400_BAD_REQUEST
-    assert "not available" in unavailable_daemon.json()["message"]
+    assert unavailable_harness.status_code == status.HTTP_400_BAD_REQUEST
+    assert "not available" in unavailable_harness.json()["message"]
 
 
 @pytest.mark.asyncio

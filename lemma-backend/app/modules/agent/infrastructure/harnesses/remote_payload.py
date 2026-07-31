@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from uuid import UUID
 
 from pydantic_ai.tools import RunContext
@@ -78,6 +81,15 @@ async def mcp_payload(
     options: HarnessOptions,
     prompt: str | None = None,
 ) -> JsonObject:
+    """Build the MCP endpoint the host's bridge will call back on.
+
+    ``token_expires_at`` is part of the payload because the credential inside it
+    is minted once, encrypted into START_RUN once, and then used verbatim by a
+    remote process for the whole run. Nothing refreshes it. A run allowed to
+    outlive it does not fail -- it keeps going with every Lemma tool call
+    returning 401, which the agent experiences as its tools quietly vanishing.
+    Publishing the real expiry lets the dispatcher bound the run by it instead.
+    """
     workspace_service = WorkspaceSandboxService()
     try:
         workspace_env = await workspace_service.get_env_vars(
@@ -101,6 +113,7 @@ async def mcp_payload(
         ),
         "authorization": f"Bearer {token}",
         "token": token,
+        "token_expires_at": _token_expiry_iso(token),
         "run_id": str(agent_run_id),
         "conversation_id": str(conversation_id),
         "workspace": {
@@ -114,6 +127,41 @@ async def mcp_payload(
             prompt=prompt,
         ),
     }
+
+
+def token_expires_at(mcp: JsonObject) -> datetime | None:
+    """Read back the expiry :func:`mcp_payload` published, if it has one."""
+    raw = mcp.get("token_expires_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _token_expiry_iso(token: str) -> str | None:
+    """Decode the JWT ``exp`` claim without verifying the signature.
+
+    We minted this token moments ago, so there is nothing to authenticate here;
+    we only need the issuer's own idea of when it dies. Returns None for a token
+    that is not a JWT or carries no usable ``exp``, and the caller then falls
+    back to its configured ceiling.
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    payload = parts[1]
+    try:
+        decoded = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+        claims = json.loads(decoded)
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return None
+    expiry = claims.get("exp") if isinstance(claims, dict) else None
+    if not isinstance(expiry, (int, float)) or isinstance(expiry, bool):
+        return None
+    return datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()
 
 
 async def _exported_tool_names(

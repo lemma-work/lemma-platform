@@ -122,10 +122,16 @@ async def dispatch_agent_host_permission(
 ) -> bool:
     """Answer a permission request the Agent Host is holding open.
 
-    Returns whether the decision reached a live run. ``False`` means the run
-    already ended — the host's own request timeout has taken over and there is
-    nothing left to answer — which the caller reports back to the agent instead
-    of pretending the action happened.
+    Returns whether the decision was *queued for* a live run. ``False`` means
+    the run already ended — the host's own request timeout has taken over and
+    there is nothing left to answer — which the caller reports back to the agent
+    instead of pretending the action happened.
+
+    ``True`` is deliberately weaker than "the host applied it". Delivery is a
+    poll away and can still be missed if the machine never comes back, so the
+    command carries a TTL sized to the host's own permission window rather than
+    the default five minutes; nothing here waits for confirmation, and the
+    wording the agent sees must not claim any.
     """
     # Lazy: the dispatch repository pulls in the Agent Host infrastructure,
     # which imports back through the harnesses.
@@ -217,9 +223,14 @@ async def agent_host_permission_tool_return(
     """Send the decision to the host and describe the outcome to the agent.
 
     Shaped as a ``request_approval`` return like every other approval, so the
-    conversation transcript reads the same however the pause arose. ``executed``
-    means "the host received this decision", not "Lemma ran something" — Lemma
-    runs nothing here; the ACP agent proceeds (or does not) on its own.
+    conversation transcript reads the same however the pause arose.
+
+    ``executed`` stays False even for an approval, unlike the ordinary
+    request_approval path. It means "the wrapped tool ran", and on this path
+    Lemma runs nothing: it queues a decision for a machine that will collect it
+    on its next poll, and the ACP agent then proceeds, or does not, on its own.
+    Reporting True here would tell the agent an action completed at a moment
+    when the decision had not even been delivered.
     """
     # Lazy: the tool models import the tool registry, which imports back here.
     from app.modules.agent.tools.user_interaction.models import RequestApprovalResponse
@@ -245,12 +256,15 @@ async def agent_host_permission_tool_return(
         content = RequestApprovalResponse(
             success=True,
             message=(
-                "Approved; the local agent may use the tool."
+                "Approved. The decision is queued for the local agent, which "
+                "will pick it up on its next poll and decide what to do; "
+                "Lemma has not run anything."
                 if approved
-                else "Denied; the local agent was told not to use the tool."
+                else "Denied. The decision is queued for the local agent, "
+                "which was told not to use the tool."
             ),
             decision=decision,
-            executed=approved,
+            executed=False,
             response=response,
         )
     return content.model_dump(mode="json")

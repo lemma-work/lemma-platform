@@ -9,7 +9,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/me/runtime/agent-hosts/{host_id}` | `agent.host.revoke` | Revoke Agent Host |
 | DELETE | `/pods/{pod_id}/agents/{agent_name}` | `agent.delete` | Delete Agent |
-| GET | `/agent-runtime/harnesses` | `agent.runtime.harnesses.list` | List Available Agent Harnesses |
 | GET | `/me/runtime/agent-hosts` | `agent.host.list` | List Agent Hosts |
 | GET | `/me/runtime/agent-hosts/{host_id}/harnesses` | `agent.host.harnesses.list` | List Agent Host Harnesses |
 | GET | `/organizations/{org_id}/agent-runtime/profiles` | `agent.runtime.profiles.list` | List Available Agent Runtime Profiles |

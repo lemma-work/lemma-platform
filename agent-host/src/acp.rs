@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
@@ -122,6 +123,7 @@ impl AgentDriver for AcpDriver {
         let notification_callbacks = Arc::clone(&callbacks);
         let permission_callbacks = Arc::clone(&callbacks);
         let permission_gate = request.permissions.clone();
+        let permission_sequence = Arc::new(AtomicU64::new(0));
         let permission_timeout = request.permission_timeout;
         let permission_run_id = request.run_spec.agent_run_id;
         let run_spec = request.run_spec;
@@ -162,8 +164,19 @@ impl AgentDriver for AcpDriver {
                         return responder.respond(RequestPermissionResponse::new(outcome));
                     }
                     let payload = permission_payload(&request);
-                    let request_id =
-                        tool_call_id(&payload).unwrap_or_else(|| request.session_id.to_string());
+                    // Without a toolCallId every request in a session would
+                    // collapse onto one gate key, so concurrent prompts would
+                    // deny each other and overwrite each other's approval card
+                    // in Lemma. The counter makes the fallback unique per
+                    // request; the id round-trips as the event's object_id and
+                    // comes back verbatim in RESOLVE_PERMISSION.
+                    let request_id = tool_call_id(&payload).unwrap_or_else(|| {
+                        format!(
+                            "{}:{}",
+                            request.session_id,
+                            permission_sequence.fetch_add(1, Ordering::Relaxed)
+                        )
+                    });
                     let _ = permission_callbacks.event(
                         EventType::PermissionRequest,
                         Some(request_id.clone()),
@@ -468,9 +481,21 @@ fn flatten_content_text(object: &mut Map<String, Value>) {
     }
 }
 
+/// A blank value counts as absent.
+///
+/// An adapter may send `toolCallId: ""`. Treating that as a real id collapses
+/// every permission request in a run onto one gate key, so concurrent prompts
+/// merge into one approval card and only one of them can ever be answered -
+/// the other blocks until its timeout and the run never terminalises.
 fn find_string(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_str).map(str::to_owned))
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
 }
 
 fn convert_config_option(adapter_key: &str, option: &SessionConfigOption) -> Option<ConfigOption> {

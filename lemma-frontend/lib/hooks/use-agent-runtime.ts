@@ -1,98 +1,30 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AgentRuntimeConfig } from 'lemma-sdk';
+import type {
+    AgentHostHarnessResponse,
+    AgentHostPairingCreated,
+    AgentHostResponse,
+    AgentRuntimeConfig,
+} from 'lemma-sdk';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
 export const agentRuntimeQueryKey = (organizationId?: string | null) =>
     ['agent-runtime', 'runtimes', organizationId ?? null] as const;
-
-export const availableAgentRuntimeHarnessesQueryKey = () =>
-    ['agent-runtime', 'available-harnesses'] as const;
 
 export const agentHostsQueryKey = () => ['agent-hosts'] as const;
 
 export const agentHostHarnessesQueryKey = (hostId?: string | null) =>
     ['agent-hosts', hostId ?? null, 'harnesses'] as const;
 
-export type AgentHostStatus = 'ONLINE' | 'OFFLINE' | 'DRAINING' | 'UPGRADE_REQUIRED' | 'REVOKED';
+// Agent Host wire shapes come straight from the SDK's generated models; these
+// aliases keep the shorter names the components already read.
+export type AgentHost = AgentHostResponse;
+export type AgentHostHarness = AgentHostHarnessResponse;
+export type AgentHostPairing = AgentHostPairingCreated;
 
-export type AgentHostHarnessHealth =
-    | 'READY'
-    | 'AUTH_REQUIRED'
-    | 'UNSUPPORTED_VERSION'
-    | 'CONFIG_INVALID'
-    | 'PROBE_FAILED'
-    | 'INSTALLING'
-    | 'DISABLED';
-
-export interface AgentHostCapacity {
-    active_runs?: number;
-    available_runs?: number;
-    max_runs?: number;
-}
-
-export interface AgentHost {
-    capacity: AgentHostCapacity;
-    created_at: string;
-    display_name: string;
-    host_release: string;
-    id: string;
-    installation_id: string;
-    last_seen_at: string | null;
-    organization_id: string | null;
-    protocol_version: number | null;
-    revoked_at: string | null;
-    status: AgentHostStatus;
-    updated_at: string;
-    user_id: string;
-}
-
-export interface AgentHostConfigOption {
-    category: string;
-    current_value?: unknown;
-    description?: string | null;
-    id: string;
-    metadata?: Record<string, unknown>;
-    name: string;
-    options?: Array<Record<string, unknown>>;
-}
-
-export interface AgentHostHarness {
-    adapter_version: string;
-    capabilities: Record<string, unknown>;
-    config_options: AgentHostConfigOption[];
-    config_revision: string;
-    display_name: string;
-    harness_key: string;
-    // Open string on the wire, so a health value a newer server adds still
-    // renders here. Anything outside AgentHostHarnessHealth reads as unusable.
-    health: string;
-    host_id: string;
-    id: string;
-    stale_after: string;
-    stale_reason: string | null;
-    upstream_version: string | null;
-}
-
-interface AgentHostListResponse {
-    items: AgentHost[];
-}
-
-interface AgentHostHarnessListResponse {
-    items: AgentHostHarness[];
-}
-
-export interface AgentHostPairing {
-    expires_at: string;
-    pairing_code: string;
-    pairing_id: string;
-}
-
-// Agent Host has generated OpenAPI operations but no typed SDK namespace yet,
-// so these go through the client's documented raw-request escape hatch.
 export const useAgentHosts = () => {
     return useQuery({
         queryKey: agentHostsQueryKey(),
-        queryFn: () => getLemmaClient().request<AgentHostListResponse>('GET', '/me/runtime/agent-hosts'),
+        queryFn: () => getLemmaClient().agentHost.list(),
         staleTime: 15000,
         refetchOnWindowFocus: true,
     });
@@ -101,11 +33,7 @@ export const useAgentHosts = () => {
 export const useAgentHostHarnesses = (hostId?: string | null) => {
     return useQuery({
         queryKey: agentHostHarnessesQueryKey(hostId),
-        queryFn: () =>
-            getLemmaClient().request<AgentHostHarnessListResponse>(
-                'GET',
-                `/me/runtime/agent-hosts/${encodeURIComponent(hostId!)}/harnesses`
-            ),
+        queryFn: () => getLemmaClient().agentHost.listHarnesses(hostId!),
         enabled: Boolean(hostId),
         staleTime: 15000,
         refetchOnWindowFocus: true,
@@ -115,8 +43,9 @@ export const useAgentHostHarnesses = (hostId?: string | null) => {
 export const useCreateAgentHostPairing = () => {
     return useMutation({
         mutationFn: ({ organizationId, displayName }: { organizationId?: string | null; displayName: string }) =>
-            getLemmaClient().request<AgentHostPairing>('POST', '/me/runtime/agent-host-pairings', {
-                body: { display_name: displayName, organization_id: organizationId ?? null },
+            getLemmaClient().agentHost.createPairing({
+                display_name: displayName,
+                organization_id: organizationId ?? null,
             }),
     });
 };
@@ -125,23 +54,10 @@ export const useRevokeAgentHost = () => {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: (hostId: string) =>
-            getLemmaClient().request<AgentHost>(
-                'DELETE',
-                `/me/runtime/agent-hosts/${encodeURIComponent(hostId)}`
-            ),
+        mutationFn: (hostId: string) => getLemmaClient().agentHost.revoke(hostId),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: agentHostsQueryKey() });
         },
-    });
-};
-
-export const useAvailableAgentRuntimeHarnesses = () => {
-    return useQuery({
-        queryKey: availableAgentRuntimeHarnessesQueryKey(),
-        queryFn: () => getLemmaClient().agentRuntime.listAvailableHarnesses(),
-        staleTime: 30000,
-        refetchOnWindowFocus: true,
     });
 };
 

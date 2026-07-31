@@ -288,8 +288,9 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         nullable=False,
         index=True,
     )
-    # Nullable during the Agent Host rollout: legacy daemon profiles predate
-    # runtime_type and are filtered out in code rather than backfilled.
+    # Nullable because rows written before the Agent Host rollout predate the
+    # column. Nothing writes NULL any more: ``kind`` is mirrored here so the
+    # harness-binding check constraint holds.
     runtime_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     harness_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("agent_host_harnesses.id", ondelete="RESTRICT"),
@@ -298,11 +299,6 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
     )
     user_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    daemon_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runtime_daemons.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -328,17 +324,13 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
         foreign_keys=[organization_id],
     )
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-    daemon: Mapped[Any] = relationship(
-        "AgentRuntimeDaemonModel",
-        foreign_keys=[daemon_id],
-    )
 
     def to_entity(self) -> AgentRuntimeProfile:
         return AgentRuntimeProfile(
             id=str(self.id),
             organization_id=self.organization_id,
             user_id=self.user_id,
-            daemon_id=self.daemon_id,
+            harness_id=self.harness_id,
             scope=RuntimeProfileScope(self.scope),
             kind=RuntimeProfileKind(self.kind),
             protocol=RuntimeProfileProtocol(self.protocol),

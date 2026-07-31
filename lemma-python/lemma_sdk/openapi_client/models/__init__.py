@@ -24,8 +24,6 @@ _NAME_TO_MODULE = {
     'AgentDetailResponseInputSchemaType0': 'agent_detail_response_input_schema_type_0',
     'AgentDetailResponseMetadataType0': 'agent_detail_response_metadata_type_0',
     'AgentDetailResponseOutputSchemaType0': 'agent_detail_response_output_schema_type_0',
-    'AgentHarnessInfo': 'agent_harness_info',
-    'AgentHarnessListResponse': 'agent_harness_list_response',
     'AgentHostCapacity': 'agent_host_capacity',
     'AgentHostCommand': 'agent_host_command',
     'AgentHostCommandKind': 'agent_host_command_kind',
@@ -141,6 +139,8 @@ _NAME_TO_MODULE = {
     'ConversationResponseMetadataType0': 'conversation_response_metadata_type_0',
     'ConversationStatus': 'conversation_status',
     'ConversationType': 'conversation_type',
+    'CreateAgentHostRuntimeProfileRequest': 'create_agent_host_runtime_profile_request',
+    'CreateAgentHostRuntimeProfileRequestConfigSelections': 'create_agent_host_runtime_profile_request_config_selections',
     'CreateAgentRequest': 'create_agent_request',
     'CreateAgentRequestInputSchemaType0': 'create_agent_request_input_schema_type_0',
     'CreateAgentRequestMetadataType0': 'create_agent_request_metadata_type_0',
@@ -164,7 +164,6 @@ _NAME_TO_MODULE = {
     'CreateScheduleRequestFilterOutputSchemaType0': 'create_schedule_request_filter_output_schema_type_0',
     'CreateTableRequest': 'create_table_request',
     'CreateTableRequestConfigType0': 'create_table_request_config_type_0',
-    'CreateUserDaemonRuntimeProfileRequest': 'create_user_daemon_runtime_profile_request',
     'DataStoreWorkflowStartConfigInput': 'data_store_workflow_start_config_input',
     'DataStoreWorkflowStartConfigOutput': 'data_store_workflow_start_config_output',
     'DataStoreWorkflowStartInput': 'data_store_workflow_start_input',
@@ -508,8 +507,6 @@ if TYPE_CHECKING:
     from .agent_detail_response_input_schema_type_0 import AgentDetailResponseInputSchemaType0
     from .agent_detail_response_metadata_type_0 import AgentDetailResponseMetadataType0
     from .agent_detail_response_output_schema_type_0 import AgentDetailResponseOutputSchemaType0
-    from .agent_harness_info import AgentHarnessInfo
-    from .agent_harness_list_response import AgentHarnessListResponse
     from .agent_host_capacity import AgentHostCapacity
     from .agent_host_command import AgentHostCommand
     from .agent_host_command_kind import AgentHostCommandKind
@@ -625,6 +622,8 @@ if TYPE_CHECKING:
     from .conversation_response_metadata_type_0 import ConversationResponseMetadataType0
     from .conversation_status import ConversationStatus
     from .conversation_type import ConversationType
+    from .create_agent_host_runtime_profile_request import CreateAgentHostRuntimeProfileRequest
+    from .create_agent_host_runtime_profile_request_config_selections import CreateAgentHostRuntimeProfileRequestConfigSelections
     from .create_agent_request import CreateAgentRequest
     from .create_agent_request_input_schema_type_0 import CreateAgentRequestInputSchemaType0
     from .create_agent_request_metadata_type_0 import CreateAgentRequestMetadataType0
@@ -648,7 +647,6 @@ if TYPE_CHECKING:
     from .create_schedule_request_filter_output_schema_type_0 import CreateScheduleRequestFilterOutputSchemaType0
     from .create_table_request import CreateTableRequest
     from .create_table_request_config_type_0 import CreateTableRequestConfigType0
-    from .create_user_daemon_runtime_profile_request import CreateUserDaemonRuntimeProfileRequest
     from .data_store_workflow_start_config_input import DataStoreWorkflowStartConfigInput
     from .data_store_workflow_start_config_output import DataStoreWorkflowStartConfigOutput
     from .data_store_workflow_start_input import DataStoreWorkflowStartInput
@@ -1005,8 +1003,6 @@ __all__ = [
     'AgentDetailResponseInputSchemaType0',
     'AgentDetailResponseMetadataType0',
     'AgentDetailResponseOutputSchemaType0',
-    'AgentHarnessInfo',
-    'AgentHarnessListResponse',
     'AgentHostCapacity',
     'AgentHostCommand',
     'AgentHostCommandKind',
@@ -1122,6 +1118,8 @@ __all__ = [
     'ConversationResponseMetadataType0',
     'ConversationStatus',
     'ConversationType',
+    'CreateAgentHostRuntimeProfileRequest',
+    'CreateAgentHostRuntimeProfileRequestConfigSelections',
     'CreateAgentRequest',
     'CreateAgentRequestInputSchemaType0',
     'CreateAgentRequestMetadataType0',
@@ -1145,7 +1143,6 @@ __all__ = [
     'CreateScheduleRequestFilterOutputSchemaType0',
     'CreateTableRequest',
     'CreateTableRequestConfigType0',
-    'CreateUserDaemonRuntimeProfileRequest',
     'DataStoreWorkflowStartConfigInput',
     'DataStoreWorkflowStartConfigOutput',
     'DataStoreWorkflowStartInput',

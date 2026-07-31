@@ -102,50 +102,6 @@ class AgentModel(UUIDAuditBase):
 
 
 
-class AgentRuntimeDaemonModel(UUIDAuditBase):
-    """User-owned host daemon connection/catalog state."""
-
-    __tablename__ = "agent_runtime_daemons"
-    __table_args__ = (
-        UniqueConstraint(
-            "user_id",
-            "device_key",
-            name="uq_agent_runtime_daemon_user_device",
-        ),
-        Index("ix_agent_runtime_daemons_user_status", "user_id", "status"),
-    )
-
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"),
-        index=True,
-        nullable=False,
-    )
-    device_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default="OFFLINE",
-        index=True,
-    )
-    device_info: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    harness_catalog: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    connected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-    disconnected_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-
-
 class ConversationModel(UUIDAuditBase):
     """Conversation shared by the pod assistant and pod agents."""
 

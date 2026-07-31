@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import (
+    TYPE_CHECKING,
     Any,
     Literal,
     TypeVar,
@@ -12,41 +13,50 @@ from uuid import UUID
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-from ..models.harness_kind import HarnessKind
 from ..models.runtime_profile_scope import RuntimeProfileScope
 from ..types import UNSET, Unset
 
-T = TypeVar("T", bound="CreateUserDaemonRuntimeProfileRequest")
+if TYPE_CHECKING:
+    from ..models.create_agent_host_runtime_profile_request_config_selections import (
+        CreateAgentHostRuntimeProfileRequestConfigSelections,
+    )
+
+
+T = TypeVar("T", bound="CreateAgentHostRuntimeProfileRequest")
 
 
 @_attrs_define
-class CreateUserDaemonRuntimeProfileRequest:
+class CreateAgentHostRuntimeProfileRequest:
     """
     Attributes:
-        daemon_id (UUID):
-        harness_kind (HarnessKind): Runtime framework used to execute an agent.
+        harness_id (UUID):
         name (str):
+        config_selections (CreateAgentHostRuntimeProfileRequestConfigSelections | Unset):
         default_model_name (None | str | Unset):
         description (None | str | Unset):
         scope (RuntimeProfileScope | Unset):
-        source (Literal['USER_DAEMON'] | Unset):  Default: 'USER_DAEMON'.
+        source (Literal['AGENT_HOST'] | Unset):  Default: 'AGENT_HOST'.
     """
 
-    daemon_id: UUID
-    harness_kind: HarnessKind
+    harness_id: UUID
     name: str
+    config_selections: CreateAgentHostRuntimeProfileRequestConfigSelections | Unset = (
+        UNSET
+    )
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
     scope: RuntimeProfileScope | Unset = UNSET
-    source: Literal["USER_DAEMON"] | Unset = "USER_DAEMON"
+    source: Literal["AGENT_HOST"] | Unset = "AGENT_HOST"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        daemon_id = str(self.daemon_id)
-
-        harness_kind = self.harness_kind.value
+        harness_id = str(self.harness_id)
 
         name = self.name
+
+        config_selections: dict[str, Any] | Unset = UNSET
+        if not isinstance(self.config_selections, Unset):
+            config_selections = self.config_selections.to_dict()
 
         default_model_name: None | str | Unset
         if isinstance(self.default_model_name, Unset):
@@ -70,11 +80,12 @@ class CreateUserDaemonRuntimeProfileRequest:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "daemon_id": daemon_id,
-                "harness_kind": harness_kind,
+                "harness_id": harness_id,
                 "name": name,
             }
         )
+        if config_selections is not UNSET:
+            field_dict["config_selections"] = config_selections
         if default_model_name is not UNSET:
             field_dict["default_model_name"] = default_model_name
         if description is not UNSET:
@@ -88,12 +99,25 @@ class CreateUserDaemonRuntimeProfileRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        d = dict(src_dict)
-        daemon_id = UUID(d.pop("daemon_id"))
+        from ..models.create_agent_host_runtime_profile_request_config_selections import (
+            CreateAgentHostRuntimeProfileRequestConfigSelections,
+        )
 
-        harness_kind = HarnessKind(d.pop("harness_kind"))
+        d = dict(src_dict)
+        harness_id = UUID(d.pop("harness_id"))
 
         name = d.pop("name")
+
+        _config_selections = d.pop("config_selections", UNSET)
+        config_selections: CreateAgentHostRuntimeProfileRequestConfigSelections | Unset
+        if isinstance(_config_selections, Unset):
+            config_selections = UNSET
+        else:
+            config_selections = (
+                CreateAgentHostRuntimeProfileRequestConfigSelections.from_dict(
+                    _config_selections
+                )
+            )
 
         def _parse_default_model_name(data: object) -> None | str | Unset:
             if data is None:
@@ -122,22 +146,22 @@ class CreateUserDaemonRuntimeProfileRequest:
         else:
             scope = RuntimeProfileScope(_scope)
 
-        source = cast(Literal["USER_DAEMON"] | Unset, d.pop("source", UNSET))
-        if source != "USER_DAEMON" and not isinstance(source, Unset):
-            raise ValueError(f"source must match const 'USER_DAEMON', got '{source}'")
+        source = cast(Literal["AGENT_HOST"] | Unset, d.pop("source", UNSET))
+        if source != "AGENT_HOST" and not isinstance(source, Unset):
+            raise ValueError(f"source must match const 'AGENT_HOST', got '{source}'")
 
-        create_user_daemon_runtime_profile_request = cls(
-            daemon_id=daemon_id,
-            harness_kind=harness_kind,
+        create_agent_host_runtime_profile_request = cls(
+            harness_id=harness_id,
             name=name,
+            config_selections=config_selections,
             default_model_name=default_model_name,
             description=description,
             scope=scope,
             source=source,
         )
 
-        create_user_daemon_runtime_profile_request.additional_properties = d
-        return create_user_daemon_runtime_profile_request
+        create_agent_host_runtime_profile_request.additional_properties = d
+        return create_agent_host_runtime_profile_request
 
     @property
     def additional_keys(self) -> list[str]:

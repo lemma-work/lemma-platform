@@ -31,7 +31,7 @@ class LemmaMCPAuthProvider(AuthProvider):
             return None
         return AccessToken(
             token=token,
-            client_id="lemma-daemon",
+            client_id="lemma-agent-host",
             subject="conversation-mcp",
             scopes=[],
         )

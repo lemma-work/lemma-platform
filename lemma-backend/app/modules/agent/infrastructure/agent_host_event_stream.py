@@ -12,10 +12,17 @@ to reconcile two sources. It also keeps a chatty run's write volume off the
 main database entirely.
 
 Durability: the stream is transient transport, not history. Final messages,
-artifacts, and usage persist in Lemma's own run storage exactly as before. If
-Redis loses the stream the host simply resends from its own local journal --
-the ack watermark is the stream's last entry, so a resend is deduplicated by
-sequence rather than double-applied.
+artifacts, and usage persist in Lemma's own run storage exactly as before. The
+ack watermark is the stream's last entry, so a resend of events the stream
+still holds is deduplicated by sequence rather than double-applied.
+
+Losing the stream is *not* fully recoverable, and the intake path is written
+accordingly. The host deletes an event from its local outbox once we ack it, so
+after a Redis flush its oldest surviving event is whatever it had not yet sent
+-- typically far above sequence 1. ``append_events`` therefore treats an empty
+stream as "we lost it" and adopts the host's oldest surviving sequence instead
+of demanding 1; the events between are gone. Gap detection stays strict for a
+stream that still has entries, where a gap really does mean loss in flight.
 
 The key is per-run and therefore dynamic, so it deliberately does not use the
 core message-bus consumer-group machinery (``redis_stream_sub`` /
@@ -50,6 +57,16 @@ _STREAM_TTL_SECONDS = 24 * 60 * 60
 
 _START_ID = "0-0"
 
+# Every command on this client is bounded so a black-holed Redis cannot hang a
+# caller indefinitely. ``append_events`` runs its stream calls while holding a
+# row lock on the lease, so an unbounded wait there pins a PostgreSQL lock for
+# as long as TCP keepalive takes to notice (tens of minutes).
+_SOCKET_TIMEOUT_SECONDS = 15.0
+# The blocking read is a normal command as far as the socket is concerned, so
+# its server-side block must stay well inside the socket timeout above.
+_MAX_BLOCK_MS = 5_000
+
+
 def run_events_stream_key(run_id: UUID) -> str:
     return f"agent-host:run:{run_id}:events"
 
@@ -65,6 +82,28 @@ class StreamedEvent:
     payload: JsonObject
 
 
+class StreamBatch(list[StreamedEvent]):
+    """The events one read produced, plus the id to resume reading from.
+
+    The cursor is deliberately not ``events[-1].stream_id``. An entry that
+    cannot be parsed is dropped from the batch but still has to advance the
+    cursor: leaving it behind means the next ``XREAD`` returns it again,
+    returns nothing after the drop, and the caller's loop spins on it with no
+    block and no progress. Tracking the cursor separately is what makes the
+    drop a drop rather than a stall.
+
+    It is a list so every consumer can keep iterating the events directly; the
+    cursor rides along for the one consumer that also has to remember where it
+    got to.
+    """
+
+    __slots__ = ("cursor",)
+
+    def __init__(self, events: list[StreamedEvent], *, cursor: str) -> None:
+        super().__init__(events)
+        self.cursor = cursor
+
+
 class AgentHostEventStream:
     """Append and tail one run's events."""
 
@@ -73,7 +112,10 @@ class AgentHostEventStream:
 
     def _client(self):
         """The process-wide pooled client; disposal is the lifespan's job."""
-        return get_redis(url=self._redis_url)
+        return get_redis(
+            url=self._redis_url,
+            socket_timeout=_SOCKET_TIMEOUT_SECONDS,
+        )
 
     async def append(
         self,
@@ -99,33 +141,34 @@ class AgentHostEventStream:
         after_id: str = _START_ID,
         block_ms: int = 1000,
         count: int = 256,
-    ) -> list[StreamedEvent]:
+    ) -> StreamBatch:
         """Read entries after ``after_id``, blocking briefly when idle.
 
-        Returns an empty list on timeout so the caller keeps control of its own
-        deadlines rather than blocking indefinitely here.
+        Returns an empty batch on timeout so the caller keeps control of its own
+        deadlines rather than blocking indefinitely here. A Redis failure is
+        raised, not swallowed: a caller that cannot read is producing no output
+        at all, and silently returning "nothing yet" for the rest of the run
+        turns an outage into a run that reports no error and no result.
         """
         redis = self._client()
         key = run_events_stream_key(run_id)
-        try:
-            streams = await redis.xread({key: after_id}, count=count, block=block_ms)
-        except RedisError:
-            logger.debug(
-                "agent.infrastructure.agent_host_event_stream.read_failed",
-                agent_run_id=str(run_id),
-                exc_info=True,
-            )
-            return []
+        streams = await redis.xread(
+            {key: after_id},
+            count=count,
+            block=min(block_ms, _MAX_BLOCK_MS),
+        )
+        cursor = after_id
         if not streams:
-            return []
+            return StreamBatch([], cursor=cursor)
 
         events: list[StreamedEvent] = []
         for _key, entries in streams:
             for stream_id, fields in entries:
+                # Advance past every entry we consumed, including the ones we
+                # drop, or the next read starts before the poison entry again.
+                cursor = stream_id
                 parsed = _decode(fields)
                 if parsed is None:
-                    # A malformed entry is dropped rather than stalling the run;
-                    # the sequence gap is visible to the consumer.
                     logger.warning(
                         "agent.infrastructure.agent_host_event_stream.entry_dropped",
                         agent_run_id=str(run_id),
@@ -148,7 +191,7 @@ class AgentHostEventStream:
                         ),
                     )
                 )
-        return events
+        return StreamBatch(events, cursor=cursor)
 
     async def last_sequence(self, *, run_id: UUID) -> int:
         """Highest sequence currently in the stream, or 0 when empty.
@@ -156,18 +199,15 @@ class AgentHostEventStream:
         This is the ack watermark handed back to the host. It lives in the
         stream rather than on the lease row so that acknowledging a batch costs
         no database write.
+
+        A Redis failure raises rather than reading as 0. Zero is load-bearing —
+        the intake path reads it as "the stream is empty, adopt whatever the
+        host still has" — so reporting it for an unreachable server would let a
+        blip rewrite the run's accepted sequence range.
         """
         redis = self._client()
         key = run_events_stream_key(run_id)
-        try:
-            entries = await redis.xrevrange(key, count=1)
-        except RedisError:
-            logger.debug(
-                "agent.infrastructure.agent_host_event_stream.watermark_failed",
-                agent_run_id=str(run_id),
-                exc_info=True,
-            )
-            return 0
+        entries = await redis.xrevrange(key, count=1)
         if not entries:
             return 0
         parsed = _decode(entries[0][1])

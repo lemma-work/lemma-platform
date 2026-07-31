@@ -14,6 +14,15 @@ Run *events* are not stored here at all. They go to the run's Redis Stream, so
 appending a batch performs no row write: the lease is read under a row lock
 purely to serialize concurrent batches and validate the epoch, and the ack
 watermark comes from the stream's last entry.
+
+One consequence of at-least-once delivery shapes everything the host reports
+up: a control update the backend rejects is a control update the host resends
+forever, because it only clears its outbox once we accept it. Anything that
+travels on the poll — acknowledgements, checkpoints, rejections — must
+therefore be a no-op when it is stale rather than an error, and a single bad
+one must not fail the poll that carries the rest. A poll that 409s delivers no
+commands at all, so one un-appliable checkpoint would otherwise stop CANCEL_RUN
+and RESOLVE_PERMISSION reaching that host for every run it is executing.
 """
 
 from __future__ import annotations
@@ -25,6 +34,7 @@ from sqlalchemy import select
 
 from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
     TERMINAL_AGENT_HOST_RUN_STATES,
     AgentHostCommand,
@@ -33,27 +43,27 @@ from app.modules.agent.domain.agent_host import (
     AgentHostCommandState,
     AgentHostEventAck,
     AgentHostEventBatch,
-    AgentHostHarnessHealth,
     AgentHostRunCheckpoint,
     AgentHostRunSpec,
     AgentHostRunState,
     run_state_progresses,
-    validate_agent_host_selections,
 )
 from app.modules.agent.infrastructure.agent_host_event_stream import (
     AgentHostEventStream,
     agent_host_event_stream,
 )
-from app.modules.agent.infrastructure import agent_host_recovery
-from app.modules.agent.infrastructure.agent_host_repository import (
-    AgentHostRepository,
+from app.modules.agent.infrastructure import (
+    agent_host_admission,
+    agent_host_event_intake,
+    agent_host_recovery,
 )
 from app.modules.agent.infrastructure.agent_host_repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
+    DEFAULT_PERMISSION_COMMAND_TTL_SECONDS,
     DEFAULT_RUN_LEASE_SECONDS,
     AgentHostNotFound,
     AgentHostProtocolViolation,
-    AgentHostRunConflict,
+    AgentHostRepositoryError,
     utcnow,
 )
 from app.modules.agent.infrastructure.runtime_models import (
@@ -61,6 +71,25 @@ from app.modules.agent.infrastructure.runtime_models import (
     AgentHostRunLeaseModel,
 )
 
+
+logger = get_logger(__name__)
+
+
+def _log_unappliable_update(
+    *,
+    kind: str,
+    host_id: UUID,
+    run_id: UUID | None,
+    exc: Exception,
+) -> None:
+    """Record a control update we dropped so it is never silently discarded."""
+    logger.warning(
+        "agent.infrastructure.agent_host_dispatch_repository.control_update_dropped",
+        host_id=str(host_id),
+        agent_run_id=str(run_id) if run_id is not None else None,
+        update_kind=kind,
+        error_type=type(exc).__name__,
+    )
 
 
 class AgentHostDispatchRepository:
@@ -87,87 +116,17 @@ class AgentHostDispatchRepository:
         now: datetime | None = None,
         command_ttl_seconds: int = DEFAULT_COMMAND_TTL_SECONDS,
     ) -> AgentHostCommandModel:
-        timestamp = now or utcnow()
-        existing_lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            run_spec.agent_run_id,
-            with_for_update=True,
-        )
-        if existing_lease is not None:
-            existing = (
-                await self.session.execute(
-                    select(AgentHostCommandModel)
-                    .where(
-                        AgentHostCommandModel.run_id == run_spec.agent_run_id,
-                        AgentHostCommandModel.kind
-                        == AgentHostCommandKind.START_RUN.value,
-                        AgentHostCommandModel.lease_epoch == existing_lease.lease_epoch,
-                    )
-                    .order_by(AgentHostCommandModel.created_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if (
-                existing is None
-                or existing.host_id != host_id
-                or existing_lease.harness_id != harness_id
-                or existing_lease.runtime_profile_id != runtime_profile_id
-            ):
-                raise AgentHostRunConflict(
-                    "agent run already has a different Agent Host dispatch"
-                )
-            return existing
-
-        host_repository = AgentHostRepository(self.uow)
-        host = await host_repository.require(host_id, for_update=True)
-        if host.revoked_at is not None:
-            raise AgentHostRunConflict("Agent Host is revoked")
-        harness = await host_repository.get_harness(harness_id=harness_id)
-        if harness is None or harness.host_id != host_id:
-            raise AgentHostNotFound("Agent Host harness was not found")
-        if harness.health != AgentHostHarnessHealth.READY.value:
-            raise AgentHostRunConflict(f"harness is not ready: {harness.health}")
-        if harness.config_revision != run_spec.profile_revision:
-            raise AgentHostRunConflict(
-                "harness configuration changed after profile validation"
-            )
-        try:
-            validate_agent_host_selections(
-                config_options=harness.config_options or [],
-                selections=run_spec.config_selections,
-            )
-        except ValueError as exc:
-            raise AgentHostRunConflict(str(exc)) from exc
-
-        lease = AgentHostRunLeaseModel(
-            run_id=run_spec.agent_run_id,
+        """Admit one run onto a host; see agent_host_admission."""
+        return await agent_host_admission.enqueue_run(
+            self.uow,
             host_id=host_id,
             harness_id=harness_id,
             runtime_profile_id=runtime_profile_id,
-            lease_epoch=1,
-            state=AgentHostRunState.QUEUED_FOR_HOST.value,
-            accepted_at=None,
-            lease_expires_at=timestamp + timedelta(seconds=command_ttl_seconds),
-            created_at=timestamp,
-            updated_at=timestamp,
+            run_spec=run_spec,
+            encrypted_mcp_payload=encrypted_mcp_payload,
+            now=now,
+            command_ttl_seconds=command_ttl_seconds,
         )
-        payload = run_spec.model_dump(mode="json")
-        # The MCP configuration carries run-scoped credentials, so it rests
-        # encrypted inside the command and is decrypted only when the command
-        # is delivered to the host.
-        payload["encrypted_mcp"] = encrypted_mcp_payload
-        command = AgentHostCommandModel(
-            host_id=host_id,
-            run_id=run_spec.agent_run_id,
-            kind=AgentHostCommandKind.START_RUN.value,
-            lease_epoch=lease.lease_epoch,
-            payload=payload,
-            state=AgentHostCommandState.QUEUED.value,
-            expires_at=timestamp + timedelta(seconds=command_ttl_seconds),
-        )
-        self.session.add_all([lease, command])
-        await self.session.flush()
-        return command
 
     async def poll_commands(
         self,
@@ -187,19 +146,13 @@ class AgentHostDispatchRepository:
             command_ids=acknowledged_command_ids,
             now=timestamp,
         )
-        for checkpoint in checkpoints:
-            await self.apply_checkpoint(
-                host_id=host_id,
-                checkpoint=checkpoint,
-                now=timestamp,
-                lease_seconds=lease_seconds,
-            )
-        for rejection in rejections:
-            await self.apply_rejection(
-                host_id=host_id,
-                rejection=rejection,
-                now=timestamp,
-            )
+        await self._apply_control_updates(
+            host_id=host_id,
+            checkpoints=checkpoints,
+            rejections=rejections,
+            now=timestamp,
+            lease_seconds=lease_seconds,
+        )
 
         result = await self.session.execute(
             select(AgentHostCommandModel)
@@ -254,6 +207,57 @@ class AgentHostDispatchRepository:
             wire_commands.append(await self._wire_command(command))
         await self.session.flush()
         return wire_commands
+
+    async def _apply_control_updates(
+        self,
+        *,
+        host_id: UUID,
+        checkpoints: list[AgentHostRunCheckpoint],
+        rejections: list[AgentHostCommandRejection],
+        now: datetime,
+        lease_seconds: int,
+    ) -> None:
+        """Apply the host's reported updates, isolating each one.
+
+        A failure here is one run's problem and must never become this host's:
+        the poll that carries these updates is also the only way commands reach
+        the host, so raising would stop CANCEL_RUN and RESOLVE_PERMISSION
+        reaching every other run it is executing. The host would then resend the
+        same update on its next poll and wedge itself permanently.
+
+        ValueError is caught alongside the typed failures because a lease row
+        carrying a state this build no longer parses would otherwise raise out
+        of the enum conversion and wedge the host just as effectively.
+        """
+        for checkpoint in checkpoints:
+            try:
+                await self.apply_checkpoint(
+                    host_id=host_id,
+                    checkpoint=checkpoint,
+                    now=now,
+                    lease_seconds=lease_seconds,
+                )
+            except (AgentHostRepositoryError, ValueError) as exc:
+                _log_unappliable_update(
+                    kind="checkpoint",
+                    host_id=host_id,
+                    run_id=checkpoint.run_id,
+                    exc=exc,
+                )
+        for rejection in rejections:
+            try:
+                await self.apply_rejection(
+                    host_id=host_id,
+                    rejection=rejection,
+                    now=now,
+                )
+            except (AgentHostRepositoryError, ValueError) as exc:
+                _log_unappliable_update(
+                    kind="rejection",
+                    host_id=host_id,
+                    run_id=rejection.run_id,
+                    exc=exc,
+                )
 
     async def apply_rejection(
         self,
@@ -345,9 +349,17 @@ class AgentHostDispatchRepository:
         for command_id in command_ids:
             command = found.get(command_id)
             if command is None:
-                raise AgentHostProtocolViolation(
-                    f"command {command_id} does not belong to this host"
+                # Nothing to mark: the command was swept by retention, or it
+                # was never ours. Either way the host has already stopped
+                # executing it, and refusing the poll would only make it resend
+                # the same acknowledgement forever.
+                _log_unappliable_update(
+                    kind="acknowledgement",
+                    host_id=host_id,
+                    run_id=None,
+                    exc=AgentHostNotFound(f"command {command_id} is unknown"),
                 )
+                continue
             if command.state in {
                 AgentHostCommandState.CANCELLED.value,
                 AgentHostCommandState.EXPIRED.value,
@@ -363,12 +375,25 @@ class AgentHostDispatchRepository:
         checkpoint: AgentHostRunCheckpoint,
         now: datetime | None = None,
         lease_seconds: int = DEFAULT_RUN_LEASE_SECONDS,
-    ) -> AgentHostRunLeaseModel:
+    ) -> AgentHostRunLeaseModel | None:
         """Advance a run's state and extend its lease.
 
         This is the lease heartbeat. Event batches deliberately do not extend
         it, so an active run is kept alive by its poll cycle rather than by a
         row write per batch of output.
+
+        Idempotent in exactly the way :meth:`apply_rejection` is, and for the
+        same reason: a checkpoint the host cannot get us to accept is one it
+        resends every poll forever. A checkpoint for a lease we no longer have,
+        for a superseded epoch, for an already-terminal run, or reporting a
+        state behind the one we hold is *information we have already acted on*,
+        not a protocol breach. All four return ``None`` and change nothing.
+
+        The realistic case is not a buggy host: a laptop sleeps, we reconcile
+        the run to RECOVERING and then to the terminal DISPATCH_UNKNOWN, and the
+        laptop wakes up still believing it is RUNNING. Its next checkpoint is
+        both terminal-violating and regressive, and it will resend it until we
+        stop refusing it.
         """
         timestamp = now or utcnow()
         lease = await self.session.get(
@@ -377,17 +402,15 @@ class AgentHostDispatchRepository:
             with_for_update=True,
         )
         if lease is None or lease.host_id != host_id:
-            raise AgentHostNotFound("run lease does not belong to this host")
+            return None
         if lease.lease_epoch != checkpoint.lease_epoch:
-            raise AgentHostProtocolViolation("stale run lease epoch")
+            return None
         current_state = AgentHostRunState(lease.state)
         reported = checkpoint.state
         if current_state in TERMINAL_AGENT_HOST_RUN_STATES:
-            if reported is not current_state:
-                raise AgentHostProtocolViolation("terminal run state cannot change")
-            return lease
+            return lease if reported is current_state else None
         if not run_state_progresses(current_state, reported):
-            raise AgentHostProtocolViolation("run state regressed")
+            return None
         # accepted_at is the single fence between pre-dispatch (safe to retry
         # or fall back) and accepted (never repeated).
         if lease.accepted_at is None:
@@ -408,58 +431,12 @@ class AgentHostDispatchRepository:
         host_id: UUID,
         batch: AgentHostEventBatch,
     ) -> AgentHostEventAck:
-        """Append one ordered batch to the run's stream.
-
-        Deliberately performs no row write. The lease is read under a row lock
-        only to serialize concurrent batches for the same run and to validate
-        the epoch; the watermark that fences replays lives in the stream, so a
-        chatty run costs the database nothing.
-        """
-        first = batch.events[0]
-        lease = await self.session.get(
-            AgentHostRunLeaseModel,
-            first.run_id,
-            with_for_update=True,
-        )
-        if lease is None or lease.host_id != host_id:
-            raise AgentHostNotFound("run lease does not belong to this host")
-        if lease.lease_epoch != first.lease_epoch:
-            raise AgentHostProtocolViolation("stale run lease epoch")
-
-        acked_through = await self._events.last_sequence(run_id=first.run_id)
-        expected = acked_through + 1
-        terminal = AgentHostRunState(lease.state) in TERMINAL_AGENT_HOST_RUN_STATES
-
-        pending = []
-        for event in batch.events:
-            # A resend after a lost acknowledgement replays events the stream
-            # already holds; first write wins.
-            if event.sequence < expected:
-                continue
-            if terminal:
-                raise AgentHostProtocolViolation("terminal run cannot accept events")
-            if event.sequence != expected:
-                raise AgentHostProtocolViolation(
-                    f"event sequence gap: expected {expected}, got {event.sequence}"
-                )
-            pending.append(
-                {
-                    "sequence": event.sequence,
-                    "type": event.type.value,
-                    "object_id": event.object_id,
-                    "payload": event.payload,
-                }
-            )
-            expected += 1
-
-        if pending:
-            await self._events.append(run_id=first.run_id, events=pending)
-            acked_through = expected - 1
-
-        return AgentHostEventAck(
-            run_id=first.run_id,
-            lease_epoch=first.lease_epoch,
-            acked_through=acked_through,
+        """Accept one ordered batch of run events; see agent_host_event_intake."""
+        return await agent_host_event_intake.append_events(
+            self.session,
+            self._events,
+            host_id=host_id,
+            batch=batch,
         )
 
     async def delete_run_events(self, *, run_id: UUID) -> None:
@@ -536,7 +513,8 @@ class AgentHostDispatchRepository:
             lease_epoch=lease.lease_epoch,
             payload={"request_id": request_id, "option_id": option_id},
             state=AgentHostCommandState.QUEUED.value,
-            expires_at=timestamp + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
+            expires_at=timestamp
+            + timedelta(seconds=DEFAULT_PERMISSION_COMMAND_TTL_SECONDS),
         )
         self.session.add(command)
         await self.session.flush()

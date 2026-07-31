@@ -127,7 +127,8 @@ def build_todo_toolset(
     """Build the todo FunctionToolset persisting to conversation metadata.
 
     Shared by both harness families: RunToolAssembler includes it directly (so it
-    reaches daemons over MCP), and the LEMMA assembler wraps it in TodoCapability.
+    reaches remote harnesses over MCP), and the LEMMA assembler wraps it in
+    TodoCapability.
     """
     store = ConversationTodoStore(
         uow_factory=uow_factory, conversation_id=conversation_id

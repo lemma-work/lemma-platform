@@ -17,7 +17,7 @@ import { useLaunchRecipe } from '@/lib/recipes/use-launch-recipe';
 import { useAgents } from '@/lib/hooks/use-agents';
 import { useAppPages } from '@/lib/hooks/use-app';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
-import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import {
     normalizeWorkflowRunStatus,
     useFlows,
@@ -67,7 +67,6 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const { data: pod } = usePod(podId);
     const { launchRecipe } = useLaunchRecipe(podId, { podName: pod?.name });
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const canWriteConversations = podAccess.can('conversation.write');
     const canReadAgents = podAccess.can('agent.read');
     const canReadWorkflows = podAccess.can('workflow.read');
@@ -100,7 +99,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     const isBusy = isSending || isBlankingHome || assistant.isLoading || assistant.isOpenedConversationRunning || assistant.isUploadingFiles;
     const canSend = canWriteConversations && draft.trim().length > 0 && !isBusy;
     const podDefaultRuntime = pod?.config?.default_runtime
-        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
     const selectedCommandRuntime = assistant.conversationRuntime ?? null;
     const isLoadingHomeState =
         isLoadingHomeAgents ||
@@ -364,7 +363,6 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                         />
                         <RuntimeModelPicker
                             catalog={runtimeCatalog}
-                            availableHarnesses={availableHarnesses}
                             defaultRuntime={podDefaultRuntime}
                             value={selectedCommandRuntime}
                             onChange={handleCommandRuntimeChange}

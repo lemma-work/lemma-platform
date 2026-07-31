@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 import typer
 
@@ -18,6 +19,19 @@ app = typer.Typer(
     help="Manage the durable local Agent Host.",
     no_args_is_help=True,
 )
+
+
+def _fail(message: str) -> NoReturn:
+    """Report an operational failure the way every other lemma command does.
+
+    Not BadParameter: a missing release asset, an unreachable download, or a
+    checksum mismatch is not a bad argument, and click's "Invalid value" banner
+    both mislabels it and mangles the multi-line guidance bootstrap produces.
+    """
+    from lemma_cli.cli_core.state import fail  # noqa: PLC0415
+
+    fail(message)
+    raise typer.Exit(1)  # `fail` always exits; this keeps the NoReturn honest.
 
 
 def _binary() -> str:
@@ -63,7 +77,7 @@ def _run(*arguments: str) -> None:
     try:
         result = subprocess.run([_binary(), *arguments], check=False)
     except (OSError, RuntimeError) as exc:
-        raise typer.BadParameter(f"could not start Agent Host: {exc}") from exc
+        _fail(str(exc))
     if result.returncode:
         raise typer.Exit(result.returncode)
 
@@ -156,7 +170,12 @@ def _locald_response(output: str, request_id: str) -> str:
 
 
 def _run_standalone_lifecycle(command: str) -> None:
-    binary = _binary()
+    try:
+        binary = _binary()
+    except (OSError, RuntimeError) as exc:
+        # `lemma agent-host start` reaches here on a clean machine, so a failed
+        # install must report itself rather than surface as a traceback.
+        _fail(str(exc))
     status = subprocess.run(
         [binary, "status", "--json"],
         check=False,
@@ -200,7 +219,7 @@ def install(
     try:
         path = install_agent_host(force=force)
     except (OSError, RuntimeError) as exc:
-        raise typer.BadParameter(f"could not install Agent Host: {exc}") from exc
+        _fail(str(exc))
     typer.echo(f"Agent Host {path}")
 
 

@@ -85,7 +85,14 @@ impl AgentHostSupervisor {
         if self.executable.is_none() {
             return Ok(());
         }
+        // A healthy Agent Host is spawned once and never again, so rotating
+        // only at spawn means it never rotates at all. This tick is the only
+        // thing that bounds the log of a host that simply keeps running.
+        let rotation = rotate_log(&self.log_path);
         let mut state = self.state.lock().expect("Agent Host state lock poisoned");
+        if let Err(error) = rotation {
+            state.last_error = Some(format!("could not rotate the Agent Host log: {error}"));
+        }
         if child_running(&mut state) || !state.desired_running {
             return Ok(());
         }
@@ -222,13 +229,20 @@ fn append_log(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
+/// Roll an oversized log aside, keeping the file a running host holds open.
+///
+/// The host inherits its stdout as an append-mode descriptor, and a descriptor
+/// follows the inode rather than the path: renaming the file would quietly
+/// redirect every subsequent line into the rotated copy and leave the live log
+/// empty forever. Copying the contents aside and truncating in place keeps that
+/// descriptor pointed at the live file, and append mode resolves the write
+/// offset against the current end, so the next line lands at zero.
 fn rotate_log(path: &Path) -> io::Result<()> {
     if path.metadata().map(|metadata| metadata.len()).unwrap_or(0) < LOG_LIMIT_BYTES {
         return Ok(());
     }
-    let previous = path.with_extension("log.previous");
-    let _ = std::fs::remove_file(&previous);
-    std::fs::rename(path, previous)
+    std::fs::copy(path, path.with_extension("log.previous"))?;
+    OpenOptions::new().write(true).open(path)?.set_len(0)
 }
 
 #[cfg(unix)]
@@ -309,6 +323,55 @@ mod tests {
 
         assert_eq!(supervisor.status()["available"], false);
         assert!(!home.path().join("agent-host").exists());
+    }
+
+    #[test]
+    fn rotation_keeps_the_running_hosts_own_log_descriptor_live() {
+        use std::io::Write;
+
+        let home = tempdir().unwrap();
+        let log = home.path().join("agent-host.log");
+        // The descriptor the host inherited as its stdout.
+        let mut inherited = append_log(&log).unwrap();
+        inherited
+            .write_all(&vec![b'x'; LOG_LIMIT_BYTES as usize])
+            .unwrap();
+        inherited.flush().unwrap();
+
+        rotate_log(&log).unwrap();
+        inherited.write_all(b"after rotation").unwrap();
+        inherited.flush().unwrap();
+
+        assert_eq!(
+            std::fs::read(&log).unwrap(),
+            b"after rotation",
+            "the host's inherited descriptor must keep writing to the live log"
+        );
+        assert_eq!(
+            std::fs::metadata(home.path().join("agent-host.log.previous"))
+                .unwrap()
+                .len(),
+            LOG_LIMIT_BYTES,
+            "the rotated copy keeps what was there before"
+        );
+    }
+
+    #[test]
+    fn a_long_lived_host_gets_its_log_rotated_without_respawning() {
+        let home = tempdir().unwrap();
+        let mut supervisor = AgentHostSupervisor::discover(&home.path().join("locald"));
+        // Pinned so the test does not depend on a sidecar being installed.
+        supervisor.executable = Some(home.path().join("lemma-agent-host"));
+        std::fs::create_dir_all(&supervisor.data_dir).unwrap();
+        std::fs::write(&supervisor.log_path, vec![b'x'; LOG_LIMIT_BYTES as usize]).unwrap();
+        // Nothing to spawn: this is the tick a healthy, already-running host
+        // takes, which used to leave the log untouched forever.
+        supervisor.state.lock().unwrap().desired_running = false;
+
+        supervisor.reconcile().unwrap();
+
+        assert_eq!(std::fs::metadata(&supervisor.log_path).unwrap().len(), 0);
+        assert!(supervisor.log_path.with_extension("log.previous").is_file());
     }
 
     #[test]

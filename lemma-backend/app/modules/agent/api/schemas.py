@@ -252,30 +252,11 @@ class AgentMessageResponse(BaseModel):
     message: str
 
 
-class AgentHarnessInfo(BaseModel):
-    harness_kind: HarnessKind
-    display_name: str
-    models: list[str] = Field(default_factory=list)
-    # Structured model entries (display name, provider model id, context
-    # metadata) so the picker can advertise detected models nicely — not just
-    # the flat ``models`` aliases.
-    model_catalog: list[RuntimeModelCatalogEntry] = Field(default_factory=list)
-    available: bool = True
-    availability_status: str | None = None
-    daemon_id: UUID | None = None
-    daemon_display_name: str | None = None
-    daemon_status: str | None = None
-
-
-class AgentHarnessListResponse(BaseModel):
-    items: list[AgentHarnessInfo]
-
-
 class AgentRuntimeProfileResponse(BaseModel):
     id: str
     organization_id: UUID | None = None
     user_id: UUID | None = None
-    daemon_id: UUID | None = None
+    harness_id: UUID | None = None
     scope: RuntimeProfileScope
     kind: RuntimeProfileKind
     protocol: RuntimeProfileProtocol
@@ -288,9 +269,6 @@ class AgentRuntimeProfileResponse(BaseModel):
     metadata: JsonObject = Field(default_factory=dict)
     has_credentials: bool = False
     derived_harness_kind: HarnessKind
-    daemon_display_name: str | None = None
-    daemon_status: str | None = None
-    daemon_harness_available: bool | None = None
     availability_status: str | None = None
 
 
@@ -299,14 +277,16 @@ class AgentRuntimeProfileListResponse(BaseModel):
     default_runtime: AgentRuntimeConfig
 
 
-class CreateUserDaemonRuntimeProfileRequest(BaseModel):
-    source: Literal["USER_DAEMON"] = "USER_DAEMON"
-    daemon_id: UUID
-    harness_kind: HarnessKind
+class CreateAgentHostRuntimeProfileRequest(BaseModel):
+    source: Literal["AGENT_HOST"] = "AGENT_HOST"
+    # From `lemma agent-host harnesses` (or GET
+    # /me/runtime/agent-hosts/{id}/harnesses).
+    harness_id: UUID
     scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION
     name: str = Field(min_length=1, max_length=255)
     description: str | None = None
     default_model_name: str | None = Field(default=None, min_length=1)
+    config_selections: JsonObject = Field(default_factory=dict)
 
 
 class CreateOpenAICompatibleRuntimeProfileRequest(BaseModel):
@@ -334,7 +314,7 @@ class CreateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
 
 
 CreateAgentRuntimeProfileRequest = Annotated[
-    CreateUserDaemonRuntimeProfileRequest
+    CreateAgentHostRuntimeProfileRequest
     | CreateOpenAICompatibleRuntimeProfileRequest
     | CreateAnthropicCompatibleRuntimeProfileRequest,
     Field(discriminator="source"),

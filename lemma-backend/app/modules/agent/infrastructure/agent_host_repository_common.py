@@ -7,6 +7,13 @@ DEFAULT_PAIRING_TTL_SECONDS = 600
 DEFAULT_COMMAND_TTL_SECONDS = 300
 DEFAULT_RUN_LEASE_SECONDS = 90
 
+# A permission decision has to outlive the window the agent will wait in, not
+# the window a host is normally offline for. The host holds an ACP permission
+# request open for 30 minutes; a decision the user makes at minute six is
+# useless if the command carrying it expired at minute five while their laptop
+# was asleep, because the agent then times the request out as unanswered.
+DEFAULT_PERMISSION_COMMAND_TTL_SECONDS = 1800
+
 
 class AgentHostRepositoryError(RuntimeError):
     """Base typed failure for the Agent Host persistence contract."""
