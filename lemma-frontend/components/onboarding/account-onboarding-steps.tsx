@@ -12,10 +12,8 @@ import {
   Mail,
   PackageOpen,
   Pencil,
-  RefreshCw,
   ShieldCheck,
   Sparkles,
-  Terminal,
   UserRound,
   UsersRound,
 } from "@/components/ui/icons";
@@ -25,7 +23,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { HarnessKind } from "lemma-sdk";
 import {
   type Organization,
   type OrganizationInvitation,
@@ -42,13 +39,8 @@ import { renderRecipeIcon } from "@/components/recipes/recipe-icon";
 import { RECIPE_OUTPUT_LABEL, type Recipe } from "@/lib/recipes/recipes";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { useAvailableAgentRuntimeHarnesses } from "@/lib/hooks/use-agent-runtime";
 import {
-  availableHarnessKey,
   CUSTOM_PROVIDER_OPTIONS,
-  firstHarnessModelName,
-  HARNESS_LOGOS,
-  isHarnessAvailable,
   splitModelNames,
   type CustomProviderKind,
 } from "@/components/agents/agent-runtime-helpers";
@@ -69,7 +61,6 @@ import {
 import {
   AUDIENCE_OPTIONS,
   BUILD_PATHS,
-  DAEMON_SETUP_STEPS,
   INTENT_EXAMPLE_LABELS,
   INTENT_EXAMPLES,
   SETUP_GREETINGS,
@@ -520,29 +511,14 @@ export function ConnectStep({
   onBack?: () => void;
   steps?: SetupStep[];
 }) {
-  const [selectedOption, setSelectedOption] = useState<
-    "lemma" | "daemon" | "provider"
-  >("lemma");
+  const [selectedOption, setSelectedOption] = useState<"lemma" | "provider">(
+    "lemma",
+  );
   // Hovering a card previews it on the right without expanding its form —
   // clicking still does that (and selects it) separately.
   const [hoveredOption, setHoveredOption] = useState<
-    "lemma" | "daemon" | "provider" | null
+    "lemma" | "provider" | null
   >(null);
-  const {
-    data: harnessesData,
-    isLoading: isLoadingHarnesses,
-    refetch: refetchHarnesses,
-    isRefetching: isRefetchingHarnesses,
-  } = useAvailableAgentRuntimeHarnesses();
-  const harnesses = harnessesData?.items ?? [];
-  const availableLocalHarnesses = harnesses.filter(
-    (h) => h.harness_kind !== HarnessKind.LEMMA && isHarnessAvailable(h),
-  );
-
-  const [selectedHarnessKey, setSelectedHarnessKey] = useState<string | null>(
-    null,
-  );
-  const [selectedModel, setSelectedModel] = useState<string | null>(null);
 
   const [providerKind, setProviderKind] = useState<CustomProviderKind>("openai");
   const [providerName, setProviderName] = useState("");
@@ -554,21 +530,6 @@ export function ConnectStep({
   const handleContinue = () => {
     if (selectedOption === "lemma") {
       onContinue({ kind: "lemma" });
-      return;
-    }
-
-    if (selectedOption === "daemon") {
-      const harness = availableLocalHarnesses.find(
-        (h) => availableHarnessKey(h) === selectedHarnessKey,
-      );
-      if (!harness || !harness.daemon_id) return;
-      onContinue({
-        kind: "daemon",
-        daemonId: harness.daemon_id,
-        harnessKind: harness.harness_kind,
-        displayName: harness.display_name,
-        modelName: selectedModel ?? firstHarnessModelName(harness) ?? null,
-      });
       return;
     }
 
@@ -589,36 +550,18 @@ export function ConnectStep({
     });
   };
 
-  const daemonCanContinue =
-    selectedOption !== "daemon" ||
-    Boolean(
-      availableLocalHarnesses.find(
-        (h) => availableHarnessKey(h) === selectedHarnessKey,
-      )?.daemon_id,
-    );
   const providerCanContinue =
     selectedOption !== "provider" ||
     (Boolean(providerName.trim()) &&
       Boolean(apiKey.trim()) &&
       (providerKind === "anthropic" || Boolean(baseUrl.trim())));
-  const continueDisabled = isSaving || !daemonCanContinue || !providerCanContinue;
+  const continueDisabled = isSaving || !providerCanContinue;
 
-  const selectedHarness = availableLocalHarnesses.find(
-    (h) => availableHarnessKey(h) === selectedHarnessKey,
-  );
   const previewOption = hoveredOption ?? selectedOption;
   const previewModelName =
-    previewOption === "daemon"
-      ? (selectedModel ??
-          (selectedHarness ? firstHarnessModelName(selectedHarness) : null) ??
-          null)
-      : previewOption === "provider"
-        ? defaultModelName.trim() || splitModelNames(modelNames)[0] || null
-        : null;
-  const previewHarnesses = harnesses.map((h) => ({
-    kind: h.harness_kind,
-    detected: isHarnessAvailable(h),
-  }));
+    previewOption === "provider"
+      ? defaultModelName.trim() || splitModelNames(modelNames)[0] || null
+      : null;
 
   return (
     <SetupSplitPanel
@@ -627,8 +570,6 @@ export function ConnectStep({
       preview={
         <ConnectPreviewBody
           selectedOption={previewOption}
-          harnesses={previewHarnesses}
-          selectedHarnessKind={selectedHarness?.harness_kind}
           providerName={providerName}
           modelName={previewModelName}
         />
@@ -638,131 +579,6 @@ export function ConnectStep({
       steps={steps}
     >
       <div className="w-full max-w-2xl space-y-3 text-left">
-        <ConnectOptionCard
-          selected={selectedOption === "daemon"}
-          onClick={() => setSelectedOption("daemon")}
-          onHoverChange={(hovering) => setHoveredOption(hovering ? "daemon" : null)}
-          icon={<Terminal className="h-4 w-4" />}
-          title="Connect a local harness"
-          subtitle="Codex, Claude Code, or OpenCode via the Lemma daemon."
-        />
-
-        {selectedOption === "daemon" ? (
-          <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-4 py-4">
-            {availableLocalHarnesses.length > 0 ? (
-              <div className="space-y-2">
-                <p className="text-sm font-semibold text-[var(--text-primary)]">
-                  Detected harnesses
-                </p>
-                {availableLocalHarnesses.map((harness) => {
-                  const key = availableHarnessKey(harness);
-                  const isSelected = selectedHarnessKey === key;
-                  const models = harness.models ?? [];
-                  return (
-                    <div key={key}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedHarnessKey(key);
-                          setSelectedModel(models[0] ?? null);
-                        }}
-                        className={cn(
-                          "agent-runtime-harness-button flex w-full items-center gap-2 rounded-md border px-3 py-2.5 text-left transition",
-                          isSelected
-                            ? "border-[var(--action-primary)] bg-[var(--action-primary-soft)]"
-                            : "border-[var(--border-subtle)] hover:bg-[var(--surface-1)]",
-                        )}
-                      >
-                        {HARNESS_LOGOS[harness.harness_kind] ? (
-                          <Image
-                            src={HARNESS_LOGOS[harness.harness_kind]!}
-                            alt=""
-                            width={16}
-                            height={16}
-                            className="h-4 w-4 object-contain"
-                          />
-                        ) : null}
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-[var(--text-primary)]">
-                            {harness.display_name}
-                          </span>
-                          {models.length > 0 ? (
-                            <span className="block truncate font-mono text-xs text-[var(--text-tertiary)]">
-                              {models.length} model{models.length > 1 ? "s" : ""}
-                            </span>
-                          ) : null}
-                        </span>
-                        {isSelected ? (
-                          <Check className="h-4 w-4 shrink-0 text-[var(--action-primary)]" />
-                        ) : null}
-                      </button>
-                      {isSelected && models.length > 1 ? (
-                        <div className="mt-1.5 flex flex-wrap gap-1.5 px-1">
-                          {models.map((model) => (
-                            <button
-                              key={model}
-                              type="button"
-                              onClick={() => setSelectedModel(model)}
-                              className={cn(
-                                "chip rounded-full border px-2.5 py-1 text-xs transition",
-                                selectedModel === model
-                                  ? "border-[var(--action-primary)] bg-[var(--action-primary-soft)] text-[var(--action-primary)]"
-                                  : "border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
-                              )}
-                            >
-                              {model}
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div>
-                <div className="flex items-start gap-3">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-tertiary)]">
-                    <Terminal className="h-4 w-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-[var(--text-primary)]">
-                      {isLoadingHarnesses
-                        ? "Checking for local harnesses…"
-                        : "No harness detected yet"}
-                    </p>
-                    <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
-                      Install a harness and it shows up here automatically —
-                      full setup steps are in the panel on the right.
-                    </p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className="h-7 shrink-0 gap-1.5 px-2"
-                    onClick={() => void refetchHarnesses()}
-                    disabled={isRefetchingHarnesses}
-                  >
-                    {isRefetchingHarnesses ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RefreshCw className="h-3.5 w-3.5" />
-                    )}
-                    Recheck
-                  </Button>
-                </div>
-                {/* lg+ screens get the full step-by-step in the preview pane
-                    on the right; below that breakpoint the pane is hidden, so
-                    this is the only copy of the setup command. */}
-                <code className="mt-4 block rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2 font-mono text-xs leading-5 text-[var(--text-primary)] lg:hidden">
-                  {DAEMON_SETUP_STEPS.map((step) => step.command).join(" && ")}
-                </code>
-              </div>
-            )}
-          </div>
-        ) : null}
-
         <ConnectOptionCard
           selected={selectedOption === "provider"}
           onClick={() => {

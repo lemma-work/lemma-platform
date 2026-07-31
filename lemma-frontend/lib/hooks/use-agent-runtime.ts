@@ -10,9 +10,6 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
 export const agentRuntimeQueryKey = (organizationId?: string | null) =>
     ['agent-runtime', 'runtimes', organizationId ?? null] as const;
 
-export const availableAgentRuntimeHarnessesQueryKey = () =>
-    ['agent-runtime', 'available-harnesses'] as const;
-
 export const agentHostsQueryKey = () => ['agent-hosts'] as const;
 
 export const agentHostHarnessesQueryKey = (hostId?: string | null) =>
@@ -61,15 +58,6 @@ export const useRevokeAgentHost = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: agentHostsQueryKey() });
         },
-    });
-};
-
-export const useAvailableAgentRuntimeHarnesses = () => {
-    return useQuery({
-        queryKey: availableAgentRuntimeHarnessesQueryKey(),
-        queryFn: () => getLemmaClient().agentRuntime.listAvailableHarnesses(),
-        staleTime: 30000,
-        refetchOnWindowFocus: true,
     });
 };
 

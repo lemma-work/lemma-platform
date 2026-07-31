@@ -1,15 +1,12 @@
 import type { GeneratedClientAdapter } from "../generated.js";
 import type { AgentRuntimeConfig } from "../openapi_client/models/AgentRuntimeConfig.js";
-import type { AgentHarnessListResponse } from "../openapi_client/models/AgentHarnessListResponse.js";
 import type { AgentRuntimeProfileListResponse } from "../openapi_client/models/AgentRuntimeProfileListResponse.js";
 import type { AgentRuntimeProfileResponse } from "../openapi_client/models/AgentRuntimeProfileResponse.js";
 import type { CreateAnthropicCompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateAnthropicCompatibleRuntimeProfileRequest.js";
 import type { CreateOpenAICompatibleRuntimeProfileRequest } from "../openapi_client/models/CreateOpenAICompatibleRuntimeProfileRequest.js";
-import type { CreateUserDaemonRuntimeProfileRequest } from "../openapi_client/models/CreateUserDaemonRuntimeProfileRequest.js";
 import { AgentRuntimeService } from "../openapi_client/services/AgentRuntimeService.js";
 
 export type CreateAgentRuntimeProfileRequest =
-  | CreateUserDaemonRuntimeProfileRequest
   | CreateOpenAICompatibleRuntimeProfileRequest
   | CreateAnthropicCompatibleRuntimeProfileRequest;
 
@@ -19,14 +16,6 @@ export type AgentRuntimeResponse = AgentRuntimeProfileResponse;
 
 export class AgentRuntimeNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
-
-  listHarnesses(): Promise<AgentHarnessListResponse> {
-    return this.client.request(() => AgentRuntimeService.agentRuntimeHarnessesList());
-  }
-
-  listAvailableHarnesses(): Promise<AgentHarnessListResponse> {
-    return this.listHarnesses();
-  }
 
   listRuntimes(orgId: string): Promise<AgentRuntimeListResponse> {
     return this.listProfiles(orgId);

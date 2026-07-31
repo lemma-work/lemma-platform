@@ -38,7 +38,7 @@ import { useTheme } from 'next-themes';
 import { AgentAvatarPicker } from '@/components/agents/agent-avatar-picker';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
-import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { usePod } from '@/lib/hooks/use-pods';
 import { ResourceVisibilitySelect, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 
@@ -139,8 +139,7 @@ export function AgentEditor({
     const { resolvedTheme } = useTheme();
     const { data: pod } = usePod(podId);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
-    const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+    const defaultRuntime = resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
     const mounted = useSyncExternalStore(
         () => () => { },
         () => true,
@@ -254,7 +253,6 @@ export function AgentEditor({
                             </div>
                             <RuntimeModelPicker
                                 catalog={runtimeCatalog}
-                                availableHarnesses={availableHarnesses}
                                 defaultRuntime={defaultRuntime}
                                 value={agent.agent_runtime ?? null}
                                 onChange={(agentRuntime) => onUpdate({ agent_runtime: agentRuntime })}

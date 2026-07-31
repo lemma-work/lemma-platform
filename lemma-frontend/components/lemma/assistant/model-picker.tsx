@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import type {
-  AgentHarnessListResponse,
   AgentRuntimeConfig,
   AgentRuntimeProfileListResponse,
   AvailableModelInfo,
@@ -25,9 +24,10 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
-  HARNESS_LOGOS,
-  isCodingAgentKind,
+  harnessLogo,
+  isLocalAgentKind,
   modelPathHint,
+  profileHarnessKey,
   runtimeCatalogToModelOptions,
   runtimeKey,
   shortModelName,
@@ -65,7 +65,8 @@ function recordRecentKey(key: string): string[] {
 
 interface ProviderGroup {
   key: string;
-  harnessKind: string | null;
+  /** Which coding agent this group runs, when it is one — e.g. "claude-code". */
+  harnessKey: string | null;
   displayName: string;
   isCodingAgent: boolean;
   options: AvailableModelInfo[];
@@ -77,10 +78,10 @@ function modelRuntime(option: AvailableModelInfo): AgentRuntimeConfig | null {
   return null;
 }
 
-function providerName(harnessKind?: string | null): string {
-  if (!harnessKind) return "Models";
-  return harnessKind
-    .split("_")
+function providerName(harnessKey?: string | null): string {
+  if (!harnessKey) return "Models";
+  return harnessKey
+    .split(/[-_]/)
     .filter(Boolean)
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1).toLowerCase())
     .join(" ");
@@ -194,6 +195,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
     options.forEach((option) => {
       const optionRuntime = modelRuntime(option);
       const harnessKind = option.harness_kind ?? null;
+      const harnessKey = profileHarnessKey(option.profile);
       const key = optionRuntime?.profile_id ?? option.profile_id ?? harnessKind ?? "MODELS";
       const existing = byKey.get(key);
       if (existing) {
@@ -202,9 +204,9 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
       }
       byKey.set(key, {
         key,
-        harnessKind,
-        displayName: option.agentRuntime?.name ?? option.profile?.name ?? providerName(harnessKind),
-        isCodingAgent: isCodingAgentKind(harnessKind),
+        harnessKey,
+        displayName: option.agentRuntime?.name ?? option.profile?.name ?? providerName(harnessKey),
+        isCodingAgent: isLocalAgentKind(harnessKind),
         options: [option],
       });
     });
@@ -216,7 +218,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
     if (!q) return groups;
     return groups
       .map((group) => {
-        const groupMatches = `${group.displayName} ${group.harnessKind ?? ""}`.toLowerCase().includes(q);
+        const groupMatches = `${group.displayName} ${group.harnessKey ?? ""}`.toLowerCase().includes(q);
         if (groupMatches) return group;
         const matchingOptions = group.options.filter((option) => {
           const optionRuntime = modelRuntime(option);
@@ -402,7 +404,7 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
                 <ProviderHeader icon={<TerminalSquare className="size-3.5" />} label="Local agents" />
                 <div className="mt-1 flex flex-col gap-2">
                   {codingGroups.map((group) => {
-                    const logo = group.harnessKind ? HARNESS_LOGOS[group.harnessKind] : undefined;
+                    const logo = harnessLogo(group.harnessKey);
                     return (
                       <ProviderCard
                         key={group.key}
@@ -478,7 +480,6 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
 
 export interface RuntimeModelPickerProps {
   catalog?: AgentRuntimeProfileListResponse;
-  availableHarnesses?: AgentHarnessListResponse;
   /** The default the "Auto" choice falls back to — shown under the Auto row. */
   defaultRuntime?: AgentRuntimeConfig | null;
   /** Current selection. null = inherit the default (Auto). */
@@ -515,7 +516,6 @@ export interface RuntimeModelPickerProps {
  */
 export function RuntimeModelPicker({
   catalog,
-  availableHarnesses,
   defaultRuntime,
   value,
   onChange,
@@ -533,10 +533,7 @@ export function RuntimeModelPicker({
   autoTriggerLabel,
   allowAuto,
 }: RuntimeModelPickerProps) {
-  const options = useMemo(
-    () => runtimeCatalogToModelOptions(catalog, availableHarnesses),
-    [catalog, availableHarnesses],
-  );
+  const options = useMemo(() => runtimeCatalogToModelOptions(catalog), [catalog]);
   const defaultModelLabel = defaultRuntime?.model_name ? shortModelName(defaultRuntime.model_name) : undefined;
   // "Currently <model>" signals this tracks the default — it'll move if the
   // default changes, unlike pinning a specific model below. Callers that *are*

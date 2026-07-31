@@ -12,8 +12,6 @@ import {
   UsersRound,
 } from "@/components/ui/icons";
 
-import { HarnessKind } from "lemma-sdk";
-
 import {
   buildKitAssistantOpeningMessage,
   type KitDefinition,
@@ -184,17 +182,12 @@ export function teamLabelForKind(kind: TeamKind | null, customName = "") {
 }
 
 // The AI connection a user picks during onboarding. "lemma" keeps the built-in
-// system profile; "daemon" saves a discovered local harness; "provider" stores
-// a pasted API key against an OpenAI- or Anthropic-compatible route.
+// system profile; "provider" stores a pasted API key against an OpenAI- or
+// Anthropic-compatible route. Local coding agents are not offered here: they
+// belong to a paired computer, which is set up from Models settings once the
+// workspace exists.
 export type ConnectChoice =
   | { kind: "lemma" }
-  | {
-      kind: "daemon";
-      daemonId: string;
-      harnessKind: HarnessKind;
-      displayName: string;
-      modelName?: string | null;
-    }
   | {
       kind: "provider";
       providerKind: CustomProviderKind;
@@ -204,15 +197,6 @@ export type ConnectChoice =
       modelNames: string[];
       defaultModelName?: string;
     };
-
-// Shared between ConnectStep (the mobile-safe fallback, since the preview
-// pane is hidden below lg) and ConnectPreviewBody (the full walkthrough on
-// large screens) so the two copies of these commands can't drift apart.
-export const DAEMON_SETUP_STEPS: Array<{ label: string; command: string }> = [
-  { label: "Install the Lemma terminal", command: "uv tool install lemma-terminal" },
-  { label: "Sign in", command: "lemma auth login" },
-  { label: "Start the daemon", command: "lemma daemon start --background" },
-];
 
 export const AUDIENCE_OPTIONS: Array<{
   id: Audience;

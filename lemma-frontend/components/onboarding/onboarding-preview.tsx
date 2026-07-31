@@ -1,10 +1,8 @@
-import Image from "next/image";
 import {
   Bot,
   BookOpen,
   Boxes,
   Bug,
-  Check,
   Database,
   FolderOpen,
   Handshake,
@@ -15,17 +13,15 @@ import {
   Plug,
   Receipt,
   Sparkles,
-  Terminal,
   UsersRound,
   Workflow,
   type LemmaIcon,
 } from "@/components/ui/icons";
 
 import { ConfettiBurst } from "@/components/shared/resource-feedback";
-import { HARNESS_LOGOS } from "@/components/agents/agent-runtime-helpers";
 import { cn } from "@/lib/utils";
 
-import { DAEMON_SETUP_STEPS, type Audience } from "./account-onboarding-helpers";
+import { type Audience } from "./account-onboarding-helpers";
 
 function getInitials(name: string, fallback = "?") {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -230,103 +226,15 @@ export function WorkspacePreviewBody({
   );
 }
 
-// Canonical list of local coding-agent harnesses Lemma can drive — same set
-// and titles as LOCAL_RUNTIME_SETUP_OPTIONS in agent-runtime-helpers.ts, kept
-// as plain strings here so this preview doesn't need the SDK's HarnessKind
-// enum just to render a status row.
-const LOCAL_HARNESS_ORDER: Array<{ kind: string; title: string }> = [
-  { kind: "CLAUDE_CODE", title: "Claude Code" },
-  { kind: "CODEX", title: "Codex" },
-  { kind: "OPENCODE", title: "OpenCode" },
-  { kind: "CURSOR", title: "Cursor" },
-  { kind: "ANTIGRAVITY", title: "Antigravity" },
-];
-
 export function ConnectPreviewBody({
   selectedOption,
-  harnesses = [],
-  selectedHarnessKind,
   providerName,
   modelName,
 }: {
-  selectedOption: "lemma" | "daemon" | "provider";
-  harnesses?: Array<{ kind: string; detected: boolean }>;
-  selectedHarnessKind?: string | null;
+  selectedOption: "lemma" | "provider";
   providerName?: string;
   modelName?: string | null;
 }) {
-  if (selectedOption === "daemon") {
-    const anyDetected = harnesses.some((h) => h.detected);
-
-    return (
-      <OnboardingPreviewChrome orgLabel="AI Runtime" activeSidebarItems={2}>
-        <div className="setup-preview-card">
-          <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
-              <Terminal className="h-3.5 w-3.5" />
-            </span>
-            <p className="setup-preview-card-title">Local harnesses</p>
-          </div>
-          <div className="mt-3 space-y-2">
-            {LOCAL_HARNESS_ORDER.map(({ kind, title }) => {
-              const info = harnesses.find((h) => h.kind === kind);
-              const detected = info?.detected ?? false;
-              const isSelected = detected && selectedHarnessKind === kind;
-              const logo = HARNESS_LOGOS[kind];
-              return (
-                <div key={kind} className="flex items-center gap-2.5">
-                  {logo ? (
-                    <Image
-                      src={logo}
-                      alt=""
-                      width={16}
-                      height={16}
-                      className="h-4 w-4 shrink-0 rounded-sm object-contain"
-                    />
-                  ) : (
-                    <span className="h-4 w-4 shrink-0" />
-                  )}
-                  <span className="flex-1 truncate text-xs font-medium text-[var(--text-primary)]">
-                    {title}
-                  </span>
-                  <span
-                    className={cn(
-                      "chip chip-sm",
-                      (detected || isSelected) && "state-badge-success",
-                    )}
-                  >
-                    {isSelected ? <Check className="h-3 w-3" /> : null}
-                    {isSelected ? "Selected" : detected ? "Detected" : "Not detected"}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        {!anyDetected ? (
-          <div className="setup-preview-card mt-3">
-            <p className="setup-preview-card-title">Get one connected</p>
-            <p className="mt-1 text-xs leading-5 text-[var(--text-tertiary)]">
-              Run these from a terminal, then it appears above automatically.
-            </p>
-            <div className="mt-3 space-y-2.5">
-              {DAEMON_SETUP_STEPS.map((step, index) => (
-                <div key={step.command}>
-                  <p className="text-xs font-medium text-[var(--text-tertiary)]">
-                    {index + 1}. {step.label}
-                  </p>
-                  <code className="mt-1 block truncate rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] px-2.5 py-1.5 font-mono text-xs leading-4 text-[var(--text-primary)]">
-                    {step.command}
-                  </code>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-      </OnboardingPreviewChrome>
-    );
-  }
-
   if (selectedOption === "provider") {
     const title = providerName?.trim() || "Your provider";
     const ready = Boolean(providerName?.trim());
@@ -360,7 +268,7 @@ export function ConnectPreviewBody({
           <p className="setup-preview-card-title">Lemma</p>
         </div>
         <p className="mt-2 text-xs leading-5 text-[var(--text-tertiary)]">
-          Built-in models, ready immediately — no key, no daemon.
+          Built-in models, ready immediately — no key, no setup.
         </p>
         <span className="setup-preview-badge is-visible mt-3 w-fit">
           Includes starter usage credits

@@ -10845,12 +10845,6 @@ var LemmaClient = (() => {
     constructor(client) {
       __publicField(this, "client", client);
     }
-    listHarnesses() {
-      return this.client.request(() => AgentRuntimeService.agentRuntimeHarnessesList());
-    }
-    listAvailableHarnesses() {
-      return this.listHarnesses();
-    }
     listRuntimes(orgId) {
       return this.listProfiles(orgId);
     }
@@ -11126,7 +11120,6 @@ var LemmaClient = (() => {
     constructor(http, podId) {
       __publicField(this, "http", http);
       __publicField(this, "podId", podId);
-      __publicField(this, "runtimeCatalogPromise");
       __publicField(this, "profileCatalogPromises", /* @__PURE__ */ new Map());
       __publicField(this, "messages", {
         list: (conversationId, options = {}) => {
@@ -11196,14 +11189,6 @@ var LemmaClient = (() => {
         throw new Error("pod_id is required for this conversation operation.");
       }
       return podId;
-    }
-    listRuntimeCatalog() {
-      var _a;
-      (_a = this.runtimeCatalogPromise) != null ? _a : this.runtimeCatalogPromise = this.http.request(
-        "GET",
-        "/agent-runtime/harnesses"
-      );
-      return this.runtimeCatalogPromise;
     }
     listProfileCatalog(orgId) {
       const key = orgId.trim();
@@ -11283,31 +11268,15 @@ var LemmaClient = (() => {
       var _a;
       const orgId = (_a = options.orgId) == null ? void 0 : _a.trim();
       if (orgId) {
-        const catalog2 = await this.listProfileCatalog(orgId);
-        const items2 = this.modelOptionsFromProfiles(catalog2);
+        const catalog = await this.listProfileCatalog(orgId);
+        const items = this.modelOptionsFromProfiles(catalog);
         return {
-          items: items2,
-          limit: items2.length,
+          items,
+          limit: items.length,
           next_page_token: null
         };
       }
-      const catalog = await this.listRuntimeCatalog();
-      const items = catalog.items.flatMap(
-        (harness) => {
-          var _a2;
-          return ((_a2 = harness.models) != null ? _a2 : []).map((model) => ({
-            id: model,
-            name: model,
-            harness_kind: harness.harness_kind,
-            description: harness.daemon_display_name
-          }));
-        }
-      );
-      return {
-        items,
-        limit: items.length,
-        next_page_token: null
-      };
+      return { items: [], limit: 0, next_page_token: null };
     }
     async create(payload = {}) {
       const podId = this.requirePodId(payload.pod_id);
