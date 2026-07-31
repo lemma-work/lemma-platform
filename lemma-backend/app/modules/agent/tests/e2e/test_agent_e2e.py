@@ -2633,7 +2633,11 @@ class TestAgentOpenApi:
         schemas = openapi["components"]["schemas"]
 
         assert "/pods/{pod_id}/conversations" in paths
-        assert "/agent-runtime/harnesses" in paths
+        # Harness listing moved under the paired host when the Agent Host
+        # replaced the standalone agent-runtime surface; the flat
+        # /agent-runtime/harnesses route no longer exists.
+        assert "/me/runtime/agent-hosts/{host_id}/harnesses" in paths
+        assert "/agent-runtime/harnesses" not in paths
         assert "/organizations/{org_id}/agent-runtime/profiles" in paths
         assert "/agent-runtime/profiles" not in paths
         assert "/agent-runtime/default" not in paths
@@ -2649,20 +2653,16 @@ class TestAgentOpenApi:
             not in paths
         )
         assert "/agent/global/conversations" not in paths
-        assert schemas["HarnessKind"]["enum"] == [
-            "LEMMA",
-            "CODEX",
-            "CLAUDE_CODE",
-            "OPENCODE",
-            "CURSOR",
-            "ANTIGRAVITY",
-        ]
+        # Two kinds, not one per coding tool: the per-tool values retired with
+        # the local daemon, and which tool Agent Host runs is now carried by
+        # harness_id on the runtime profile.
+        assert schemas["HarnessKind"]["enum"] == ["LEMMA", "HARNESS"]
         assert "model_name" not in schemas["SendMessageRequest"]["properties"]
         assert "model_name" in schemas["AgentRuntimeConfig"]["properties"]
-        assert "default_runtime" not in schemas["AgentHarnessListResponse"][
+        assert "default_runtime" not in schemas["AgentHostHarnessListResponse"][
             "properties"
         ]
-        assert schemas["AgentHarnessListResponse"]["required"] == ["items"]
+        assert schemas["AgentHostHarnessListResponse"]["required"] == ["items"]
         assert "metadata" in schemas["SendMessageRequest"]["properties"]
         assert "instructions" in schemas["CreateConversationRequest"]["properties"]
         assert "instructions" in schemas["UpdateConversationRequest"]["properties"]
@@ -2683,8 +2683,8 @@ class TestAgentOpenApi:
             == "agent.conversation.message.send"
         )
         assert (
-            paths["/agent-runtime/harnesses"]["get"]["operationId"]
-            == "agent.runtime.harnesses.list"
+            paths["/me/runtime/agent-hosts/{host_id}/harnesses"]["get"]["operationId"]
+            == "agent.host.harnesses.list"
         )
         assert (
             paths["/organizations/{org_id}/agent-runtime/profiles"]["get"][
