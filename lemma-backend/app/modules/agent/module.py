@@ -43,6 +43,9 @@ async def _close_agent_runtime_redis(_context: object) -> AsyncIterator[None]:
 
 def _routers():
     from app.modules.agent.api.controllers.agent_controller import router as agent
+    from app.modules.agent.api.controllers.agent_host_controller import (
+        router as agent_host,
+    )
     from app.modules.agent.api.controllers.runtime_config_controller import (
         router as runtime_config,
     )
@@ -57,7 +60,15 @@ def _routers():
         serve_router as widget_serve,
     )
 
-    return [agent, runtime_config, tool, conversation, widget_serve, widget]
+    return [
+        agent,
+        agent_host,
+        runtime_config,
+        tool,
+        conversation,
+        widget_serve,
+        widget,
+    ]
 
 
 def _event_routers():

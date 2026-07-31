@@ -21,6 +21,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
+
+# Imported for its side effect: Agent Host tables must be registered on the
+# shared metadata for migrations and create_all to see them.
+from app.modules.agent.infrastructure import runtime_models as _runtime_models  # noqa: F401
 from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
     AgentRun as AgentRunEntity,
