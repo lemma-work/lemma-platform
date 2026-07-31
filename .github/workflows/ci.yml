@@ -25,6 +25,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      locald: ${{ steps.filter.outputs.locald }}
       agentbox: ${{ steps.filter.outputs.agentbox }}
       agent_host: ${{ steps.filter.outputs.agent_host }}
     steps:
@@ -73,6 +74,10 @@ jobs:
               - 'agent-host/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-agent-host.yml'
+            locald:
+              - 'locald/**'
+              - 'local-runtime/manager/**'
+              - '.github/workflows/ci.yml'
             agentbox:
               - 'agentbox/**'
               - 'agentbox-client/**'
@@ -505,6 +510,49 @@ jobs:
         working-directory: agent-host
         run: cargo test --locked
 
+  locald:
+    name: locald crate
+    needs: changes
+    if: needs.changes.outputs.locald == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            locald/target
+          key: locald-cargo-${{ runner.os }}-${{ hashFiles('locald/Cargo.lock') }}
+          restore-keys: locald-cargo-${{ runner.os }}-
+
+      # reqwest is built with native-tls, so the crate links against the system
+      # OpenSSL rather than vendoring one.
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Check formatting
+        working-directory: locald
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: locald
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # locald ships with the macOS and Windows desktop, but its logic - the
+      # process ledger, operator config, sharing state, Agent Host supervision -
+      # is platform-agnostic and has explicit non-macOS arms, so Linux gives the
+      # same signal far faster than a macOS runner.
+      - name: Test
+        working-directory: locald
+        run: cargo test --locked
+
   desktop:
     name: macOS desktop build + codesign
     needs: changes
@@ -689,6 +737,7 @@ jobs:
       - desktop
       - agentbox
       - agent-host
+      - locald
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed
