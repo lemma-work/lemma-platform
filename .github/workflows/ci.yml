@@ -26,6 +26,7 @@ jobs:
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
       agentbox: ${{ steps.filter.outputs.agentbox }}
+      agent_host: ${{ steps.filter.outputs.agent_host }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -68,9 +69,18 @@ jobs:
               - '.github/actions/setup-apple-signing/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-desktop.yml'
+            agent_host:
+              - 'agent-host/**'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/release-agent-host.yml'
             agentbox:
               - 'agentbox/**'
               - 'agentbox-client/**'
+              # agentbox/uv.lock pins lemma-sdk as an editable path dependency on
+              # ../lemma-python, so a version bump there makes the lock stale and
+              # `uv sync --locked` fail. Without this the job would not run on
+              # that change and the rot would surface on some later, unrelated PR.
+              - 'lemma-python/**'
               - '.github/workflows/ci.yml'
 
   agentbox:
@@ -456,6 +466,45 @@ jobs:
           if ($content -notmatch "ErrorActionPreference") { Write-Error "install.ps1 missing error handling"; exit 1 }
           Write-Host "install.ps1 validation passed"
 
+  agent-host:
+    name: Agent Host crate
+    needs: changes
+    if: needs.changes.outputs.agent_host == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            agent-host/target
+          key: agent-host-cargo-${{ runner.os }}-${{ hashFiles('agent-host/Cargo.lock') }}
+          restore-keys: agent-host-cargo-${{ runner.os }}-
+
+      # reqwest is built with native-tls, so the crate links against the system
+      # OpenSSL rather than vendoring one.
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Check formatting
+        working-directory: agent-host
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: agent-host
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: agent-host
+        run: cargo test --locked
+
   desktop:
     name: macOS desktop build + codesign
     needs: changes
@@ -639,6 +688,7 @@ jobs:
       - windows-cli
       - desktop
       - agentbox
+      - agent-host
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed

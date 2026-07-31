@@ -2,6 +2,7 @@
   "bundle": {
     "externalBin": [
       "binaries/lemma-locald",
+      "binaries/lemma-agent-host",
       "binaries/lemma-runtime"
     ],
     "resources": {

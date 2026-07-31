@@ -106,6 +106,7 @@ fn client_event_finishes(command: &str, event: &str) -> bool {
         "sharing.snapshot" => event == "sharing.snapshot",
         "sharing.preflight" => event == "sharing.preflight",
         "sharing.enable" | "sharing.disable" => event == "sharing.changed",
+        "agent-host.status" => event == "agent-host.status",
         "config.apply" => event == "config.applied",
         "runtime.prepare" => event == "done",
         _ => event == "done",

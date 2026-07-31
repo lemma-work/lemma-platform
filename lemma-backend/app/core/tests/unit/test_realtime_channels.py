@@ -141,15 +141,21 @@ async def test_realtime_adapter_propagates_second_subscribe_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_realtime_adapter_closes_owned_pool(monkeypatch) -> None:
+async def test_realtime_adapter_releases_shared_pool_without_closing_it(
+    monkeypatch,
+) -> None:
+    """The adapter borrows the process-wide pool; closing it here would break
+    every other component sharing it. Disposal belongs to
+    close_redis_clients() at lifespan shutdown."""
     redis = _FakeRedis()
-    monkeypatch.setattr(channel_module.Redis, "from_url", lambda *args, **kwargs: redis)
+    monkeypatch.setattr(channel_module, "get_redis", lambda **_kwargs: redis)
     adapter = RedisChannelAdapter("redis://test")
 
     await adapter.connect()
     await adapter.disconnect()
 
-    assert redis.closed is True
+    assert redis.closed is False
+    assert adapter._redis is None
 
 
 @pytest.mark.asyncio

@@ -356,7 +356,6 @@ function mapToolInvocations(msg: AssistantApiConversationMessage): AssistantTool
 
 function mapConversationMessage(
   msg: AssistantApiConversationMessage,
-  options?: { thinkingDurationMs?: number },
 ): AssistantRenderableMessage {
   const toolInvocations = mapToolInvocations(msg);
   const createdAtMs = parseTimestampMs(msg.created_at) ?? undefined;
@@ -373,7 +372,7 @@ function mapConversationMessage(
       type: "reasoning",
       text: thinkingPart.text,
       state: thinkingPart.state,
-      durationMs: thinkingPart.durationMs ?? options?.thinkingDurationMs,
+      durationMs: thinkingPart.durationMs,
       startedAtMs: createdAtMs,
     });
   } else if (msg.kind === "TEXT" || msg.kind === "NOTIFICATION") {
@@ -419,31 +418,8 @@ function mapConversationMessages(messages: AssistantApiConversationMessage[]): A
   const mappedMessages: AssistantRenderableMessage[] = [];
   const pendingToolCalls = new Map<string, AssistantToolInvocation>();
 
-  const estimateThinkingDurationMs = (index: number): number | undefined => {
-    const message = messages[index];
-    if (!message || !extractThinkingPart(message)) return undefined;
-
-    const startedAtMs = parseTimestampMs(message.created_at);
-    if (!startedAtMs) return undefined;
-
-    for (let i = index + 1; i < messages.length; i += 1) {
-      const nextCreatedAtMs = parseTimestampMs(messages[i]?.created_at);
-      if (!nextCreatedAtMs || nextCreatedAtMs <= startedAtMs) continue;
-
-      const durationMs = nextCreatedAtMs - startedAtMs;
-      if (durationMs > 0 && durationMs <= 30 * 60 * 1000) {
-        return durationMs;
-      }
-      break;
-    }
-
-    return undefined;
-  };
-
-  messages.forEach((rawMessage, index) => {
-    const mappedMessage = mapConversationMessage(rawMessage, {
-      thinkingDurationMs: estimateThinkingDurationMs(index),
-    });
+  messages.forEach((rawMessage) => {
+    const mappedMessage = mapConversationMessage(rawMessage);
 
     mappedMessage.toolInvocations?.forEach((invocation) => {
       if (invocation.state === "call") {

@@ -22,14 +22,22 @@ ResolvedConversationAgentValue = TypeVar("ResolvedConversationAgentValue")
 
 
 class HarnessKind(str, Enum):
-    """Runtime framework used to execute an agent."""
+    """Runtime framework used to execute an agent.
+
+    Two kinds, not one per coding tool: ``LEMMA`` runs in-process, ``HARNESS``
+    dispatches through Agent Host. Which tool Agent Host runs is identified by
+    ``harness_id`` on the runtime profile, so the retired per-tool values
+    (``CODEX``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``, ``ANTIGRAVITY``) went
+    away with the local daemon that needed them.
+
+    No stored row is read back through this enum — a persisted runtime profile
+    names a ``RuntimeProfileProtocol``, and the kind is derived from that — so
+    dropping those values cannot fail a history read. Back-compat for retired
+    *protocols* is handled where it belongs, in the profile repository.
+    """
 
     LEMMA = "LEMMA"
-    CODEX = "CODEX"
-    CLAUDE_CODE = "CLAUDE_CODE"
-    OPENCODE = "OPENCODE"
-    CURSOR = "CURSOR"
-    ANTIGRAVITY = "ANTIGRAVITY"
+    HARNESS = "HARNESS"
 
     @classmethod
     def _missing_(cls, value: object) -> "HarnessKind | None":
@@ -40,13 +48,7 @@ class HarnessKind(str, Enum):
             "pydantic_ai": cls.LEMMA,
             "PYDANTIC_AI": cls.LEMMA,
             "lemma": cls.LEMMA,
-            "codex": cls.CODEX,
-            "claude_code": cls.CLAUDE_CODE,
-            "opencode": cls.OPENCODE,
-            "cursor": cls.CURSOR,
-            "cursor_agent": cls.CURSOR,
-            "antigravity": cls.ANTIGRAVITY,
-            "agy": cls.ANTIGRAVITY,
+            "harness": cls.HARNESS,
         }
         if normalized in aliases:
             return aliases[normalized]
@@ -281,8 +283,8 @@ class MessageKind(str, Enum):
 
     @classmethod
     def _missing_(cls, value: object) -> "MessageKind | None":
-        # Case-insensitive so a lowercase kind from an older daemon payload or
-        # a pre-migration row still resolves to the CAPS member.
+        # Case-insensitive so a lowercase kind from a harness payload or a
+        # pre-migration row still resolves to the CAPS member.
         if not isinstance(value, str):
             return None
         normalized = value.strip().upper()
@@ -389,8 +391,7 @@ class AgentEventType(str, Enum):
     """Event type emitted by a harness while running an agent.
 
     Internal only: the SSE wire ``type`` strings are hardcoded in
-    ``services/realtime.py`` and the daemon protocol is parsed case-insensitively
-    via ``_missing_`` below, so these values are never compared raw on the wire.
+    ``services/realtime.py``; these values are never compared raw on the wire.
     """
 
     TOKEN = "TOKEN"
@@ -403,24 +404,15 @@ class AgentEventType(str, Enum):
     # The run paused waiting for the user (ask_user / request_approval). Terminal
     # for this run; the user's submission starts a fresh run that resumes.
     WAITING = "WAITING"
-    # Internal only -- never sent by the daemon. Synthesized by
-    # AgentRuntimeDaemonHub when a daemon's websocket drops, so a
-    # DaemonHarness.run() consumer blocked on its run's queue wakes up
-    # immediately instead of waiting out the (much longer)
-    # DEFAULT_DAEMON_EVENT_TIMEOUT_SECONDS silence budget. Not terminal: the
-    # harness intercepts it, starts a bounded reconnect-grace window, and
-    # either resumes normally or fails the run once the grace window elapses.
-    RECONNECTING = "RECONNECTING"
-    # The daemon explicitly refused a run.start because it's already running
-    # max_concurrent_runs turns. Terminal, like ERROR, but kept as its own
-    # member (not folded into ERROR) so callers can distinguish "busy, retry"
-    # from "the provider crashed" and surface a more actionable message.
+    # A remote harness explicitly refused a command before dispatch. Terminal,
+    # like ERROR, but kept as its own member (not folded into ERROR) so callers
+    # can distinguish "busy, retry" from "the provider crashed" and surface a
+    # more actionable message.
     REJECTED = "REJECTED"
 
     @classmethod
     def _missing_(cls, value: object) -> "AgentEventType | None":
-        # The daemon hub builds events from wire payloads that historically used
-        # lowercase type strings ("completed", "message", ...); accept any case.
+        # Remote transports may use lowercase values; accept any case.
         if not isinstance(value, str):
             return None
         normalized = value.upper()
@@ -515,7 +507,7 @@ class HarnessOptions:
     toolsets: list[object] = field(default_factory=list)
     # Pydantic AI capabilities (current-time, prompt-caching, tool-search, todo,
     # deferred extra-tools-over-MCP). Built only for the in-process LEMMA harness;
-    # ignored by daemon harnesses (Codex/Claude-Code), which use the MCP server.
+    # ignored by remote harnesses (Codex/Claude-Code), which use the MCP server.
     capabilities: list[object] = field(default_factory=list)
     usage_limits: object | None = None
     output_type: object | None = None

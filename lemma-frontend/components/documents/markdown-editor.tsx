@@ -1,6 +1,7 @@
 'use client';
 
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+import { BubbleMenu } from '@tiptap/react/menus';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
@@ -25,7 +26,24 @@ interface MarkdownEditorProps {
     placeholder?: string;
     onSubmitShortcut?: () => void;
     readableProse?: boolean;
+    /**
+     * Show formatting controls over a selection. Off by default: markdown
+     * shortcuts are enough where the writer already knows them, and a floating
+     * toolbar in a dense pane is noise.
+     */
+    showSelectionToolbar?: boolean;
 }
+
+const SELECTION_MARKS = [
+    { name: 'bold', label: 'B', title: 'Bold', className: 'font-semibold' },
+    { name: 'italic', label: 'I', title: 'Italic', className: 'italic' },
+    { name: 'code', label: '<>', title: 'Code', className: 'font-mono text-xs' },
+] as const;
+
+const SELECTION_BLOCKS = [
+    { level: 1 as const, label: 'H1', title: 'Heading 1' },
+    { level: 2 as const, label: 'H2', title: 'Heading 2' },
+];
 
 export function MarkdownEditor({
     content,
@@ -36,6 +54,7 @@ export function MarkdownEditor({
     placeholder = 'Start writing...',
     onSubmitShortcut,
     readableProse = false,
+    showSelectionToolbar = false,
 }: MarkdownEditorProps) {
     const lastEmittedMarkdownRef = useRef(content);
 
@@ -127,6 +146,47 @@ export function MarkdownEditor({
 
     return (
         <div className={cn("relative min-h-[200px]", className)}>
+            {showSelectionToolbar && editable ? (
+                <BubbleMenu editor={editor} className="markdown-selection-toolbar">
+                    {SELECTION_MARKS.map((mark) => (
+                        <button
+                            key={mark.name}
+                            type="button"
+                            className={cn('markdown-selection-item', mark.className)}
+                            data-active={editor.isActive(mark.name)}
+                            title={mark.title}
+                            aria-label={mark.title}
+                            onClick={() => editor.chain().focus().toggleMark(mark.name).run()}
+                        >
+                            {mark.label}
+                        </button>
+                    ))}
+                    <span className="markdown-selection-divider" aria-hidden />
+                    {SELECTION_BLOCKS.map((block) => (
+                        <button
+                            key={block.level}
+                            type="button"
+                            className="markdown-selection-item"
+                            data-active={editor.isActive('heading', { level: block.level })}
+                            title={block.title}
+                            aria-label={block.title}
+                            onClick={() => editor.chain().focus().toggleHeading({ level: block.level }).run()}
+                        >
+                            {block.label}
+                        </button>
+                    ))}
+                    <button
+                        type="button"
+                        className="markdown-selection-item"
+                        data-active={editor.isActive('bulletList')}
+                        title="Bulleted list"
+                        aria-label="Bulleted list"
+                        onClick={() => editor.chain().focus().toggleBulletList().run()}
+                    >
+                        •
+                    </button>
+                </BubbleMenu>
+            ) : null}
             <EditorContent editor={editor} />
         </div>
     );

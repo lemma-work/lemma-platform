@@ -889,13 +889,15 @@ export function DocumentViewer({
                                 {pdfPreview.pages.map((page, index) => (
                                     <div
                                         key={`pdf-page-${index + 1}`}
-                                        className="embedded-canvas rounded-md border border-[color:var(--card-border)] p-1.5"
+                                        className="embedded-canvas flex justify-center rounded-md border border-[color:var(--card-border)] p-1.5"
                                     >
                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                         <img
-                                            src={page}
+                                            src={page.src}
                                             alt={`PDF page ${index + 1}`}
-                                            className="w-full h-auto rounded-sm"
+                                            width={page.displayWidth}
+                                            height={page.displayHeight}
+                                            className="h-auto max-w-full rounded-sm"
                                         />
                                     </div>
                                 ))}

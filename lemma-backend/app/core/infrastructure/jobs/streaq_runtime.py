@@ -20,6 +20,7 @@ from streaq import Worker
 from app.core.config import settings
 from app.core.infrastructure.channels.channel_service import channel_service
 from app.core.infrastructure.cache.redis_json_cache import close_redis_json_caches
+from app.core.infrastructure.redis.client import close_redis_clients, get_redis
 from app.core.infrastructure.db.session import (
     async_session_maker,
     get_engine,
@@ -64,6 +65,15 @@ job_counter = meter.create_counter("lemma.worker.jobs")
 job_duration = meter.create_histogram("lemma.worker.job.duration", unit="ms")
 
 JOB_TIMEOUT_SECONDS = 1800
+# An agent run is the one task whose ceiling is not ours to pick freely: it
+# advertises a deadline to something outside this process (an Agent Host on a
+# user's machine) and hands it a credential that expires. If the task dies
+# first, Lemma reports the run failed while the remote agent keeps executing
+# tools for it. This must therefore stay strictly above the Agent Host run
+# window (DEFAULT_AGENT_HOST_EVENT_TIMEOUT_SECONDS, 50 min) with enough margin
+# for the harness to cancel the host run and finalize, and strictly below the
+# one-hour validity of the MCP credential minted at dispatch.
+AGENT_RUN_JOB_TIMEOUT_SECONDS = 3300
 JOB_MAX_RETRIES = 3
 # Keep completed task metadata around long enough for the UI to be useful.
 JOB_RESULT_TTL_SECONDS = 60 * 60 * 24
@@ -182,14 +192,14 @@ async def _ensure_consumer_groups_once() -> None:
     group, gets NOGROUP, and stops permanently. Idempotent (BUSYGROUP is a
     no-op) and never raises — group plumbing must not block worker startup.
     """
-    import redis.asyncio as redis
-
     from app.core.infrastructure.events.stream_subscriber import (
         ensure_consumer_groups,
         registered_stream_groups,
     )
 
-    client = redis.from_url(settings.redis_url, decode_responses=False)
+    # FastStream and streaq speak raw bytes, so this shares the
+    # decode_responses=False pool rather than the application one.
+    client = get_redis(decode_responses=False)
     try:
         len(registered_stream_groups())
         await ensure_consumer_groups(client, warn_on_create=False)
@@ -197,8 +207,6 @@ async def _ensure_consumer_groups_once() -> None:
         logger.debug(
             "infrastructure.streaq_runtime.initial_consumer_group_ensure.diagnostic"
         )
-    finally:
-        await client.aclose()
 
 
 async def _consumer_group_reconcile_loop() -> None:
@@ -210,13 +218,11 @@ async def _consumer_group_reconcile_loop() -> None:
     subscriber resume — no manual restart. Cheap (one Redis connection, a handful
     of idempotent XGROUP CREATE calls per tick).
     """
-    import redis.asyncio as redis
-
     from app.core.infrastructure.events.config import event_transport_settings
     from app.core.infrastructure.events.stream_subscriber import ensure_consumer_groups
 
     interval = event_transport_settings.consumer_group_reconcile_interval_seconds
-    client = redis.from_url(settings.redis_url, decode_responses=False)
+    client = get_redis(decode_responses=False)
     try:
         while True:
             try:
@@ -354,6 +360,7 @@ async def worker_lifespan() -> AsyncGenerator[AppWorkerContext]:
         await _safe_shutdown_step("close_streaq_job_queue", close_streaq_job_queue)
         await _safe_shutdown_step("close_message_bus", close_message_bus)
         await _safe_shutdown_step("close_redis_json_caches", close_redis_json_caches)
+        await _safe_shutdown_step("close_redis_clients", close_redis_clients)
         await _safe_shutdown_step("close_engine", close_engine)
         await _safe_shutdown_step(
             "channel_service.disconnect", channel_service.disconnect

@@ -15,6 +15,7 @@ export default defineConfig({
     test: {
         environment: 'node',
         include: [
+            'components/agents/agent-runtime-helpers.{test,spec}.ts',
             'components/auth/portal/auth/**/*.{test,spec}.ts',
             'lib/**/*.{test,spec}.ts',
         ],

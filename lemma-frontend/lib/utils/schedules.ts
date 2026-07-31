@@ -34,11 +34,67 @@ export function buildCronExpression({
     return `${minute} ${hour} ${Math.min(31, Math.max(1, monthDay))} * *`;
 }
 
+/**
+ * The inverse of `buildCronExpression` — rehydrate the compact cadence controls
+ * from a stored expression so editing a trigger starts from what it actually
+ * does, not from the defaults. Anything the controls cannot express round-trips
+ * as `custom`, which is lossless.
+ */
+export function parseCronExpression(cron: string): {
+    cadence: TimeCadence;
+    timeOfDay: string;
+    weeklyDays: string[];
+    monthDay: number;
+    customCron: string;
+} {
+    const fallback = {
+        cadence: 'custom' as TimeCadence,
+        timeOfDay: '09:00',
+        weeklyDays: ['1'],
+        monthDay: 1,
+        customCron: cron.trim(),
+    };
+
+    const parts = cron.trim().split(/\s+/);
+    if (parts.length !== 5) return fallback;
+
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+    if (month !== '*') return fallback;
+
+    if (hour === '*' && minute === '0' && dayOfMonth === '*' && dayOfWeek === '*') {
+        return { ...fallback, cadence: 'hourly' };
+    }
+
+    // Every other cadence pins a wall-clock time; a wildcard or step in either
+    // field is something only the raw expression can say.
+    if (!/^\d{1,2}$/.test(hour) || !/^\d{1,2}$/.test(minute)) return fallback;
+    const timeOfDay = `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;
+
+    if (dayOfMonth === '*' && dayOfWeek === '*') {
+        return { ...fallback, cadence: 'daily', timeOfDay };
+    }
+    if (dayOfMonth === '*' && dayOfWeek === '1-5') {
+        return { ...fallback, cadence: 'weekdays', timeOfDay };
+    }
+    if (dayOfMonth === '*' && /^[0-6](,[0-6])*$/.test(dayOfWeek)) {
+        return { ...fallback, cadence: 'weekly', timeOfDay, weeklyDays: dayOfWeek.split(',') };
+    }
+    if (dayOfWeek === '*' && /^\d{1,2}$/.test(dayOfMonth)) {
+        const day = Number(dayOfMonth);
+        if (day >= 1 && day <= 31) {
+            return { ...fallback, cadence: 'monthly', timeOfDay, monthDay: day };
+        }
+    }
+
+    return fallback;
+}
+
 export type ScheduleTargetKind = 'workflow' | 'agent' | 'unknown';
 export type ScheduleConfigDetail = {
     label: string;
     value: string;
 };
+export type DataOperation = 'INSERT' | 'UPDATE' | 'DELETE';
 
 export function getScheduleTargetKind(schedule: Schedule): ScheduleTargetKind {
     if (schedule.workflow_name || schedule.workflow_id) return 'workflow';
@@ -239,6 +295,47 @@ export function describeScheduleConfig(schedule: Schedule): string {
     }
 
     return 'Configured schedule';
+}
+
+const CRON_KEYS = ['cron_expression', 'cronExpression', 'cron', 'expression', 'schedule_cron', 'scheduleCron'];
+const DATA_OPERATIONS: DataOperation[] = ['INSERT', 'UPDATE', 'DELETE'];
+
+/** What a TIME trigger fires on, in the shape the cadence controls speak. */
+export function getScheduleTimeConfig(schedule: Schedule): { cron: string; timezone: string } {
+    const config = getScheduleConfig(schedule);
+    return {
+        cron: firstConfigValue(config, CRON_KEYS),
+        timezone: firstConfigValue(config, ['timezone', 'time_zone', 'timeZone', 'tz']) || 'UTC',
+    };
+}
+
+/** What a DATASTORE trigger watches. */
+export function getScheduleDatastoreConfig(schedule: Schedule): {
+    tableName: string;
+    operations: DataOperation[];
+} {
+    const config = getScheduleConfig(schedule);
+    const operations = Array.isArray(config.operations)
+        ? config.operations
+            .map((operation) => String(operation).toUpperCase())
+            .filter((operation): operation is DataOperation => DATA_OPERATIONS.includes(operation as DataOperation))
+        : [];
+    return {
+        tableName: typeof config.table_name === 'string' ? config.table_name : '',
+        operations,
+    };
+}
+
+/** Which app event a WEBHOOK trigger listens to. Read-only after creation. */
+export function getScheduleWebhookConfig(schedule: Schedule): {
+    connectorId: string;
+    triggerId: string;
+} {
+    const config = getScheduleConfig(schedule);
+    return {
+        connectorId: formatConfigValue(config.connector_id),
+        triggerId: schedule.connector_trigger_id || formatConfigValue(config.connector_trigger_id),
+    };
 }
 
 export function getScheduleConfigDetails(schedule: Schedule): ScheduleConfigDetail[] {

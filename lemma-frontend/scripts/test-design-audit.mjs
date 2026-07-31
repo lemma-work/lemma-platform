@@ -3,7 +3,10 @@ import { readFileSync } from 'node:fs';
 
 const baselinePath = 'scripts/design-audit-baseline.json';
 const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'));
-const focusedPath = 'components/pod/pod-channels-panel.tsx';
+// A stable, zero-drift file used to exercise focused-path scanning. The
+// previous fixture (pod-channels-panel.tsx) was deleted in ce6f75a9 without
+// updating this test, which made every run fail on a target-read error.
+const focusedPath = 'components/pod/resource-layout.tsx';
 
 function runAudit(args) {
   return spawnSync('node', ['scripts/audit-design-system.mjs', ...args], {

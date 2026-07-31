@@ -150,7 +150,6 @@ async def verify_auth(connection: HTTPConnection):
 
     if connection.scope["type"] != "http" and (
         connection.url.path.startswith("/workspace/browser")
-        or connection.url.path == "/me/agent-runtime/daemon/ws"
         or _is_datastore_changes_ws_path(connection.url.path)
     ):
         return

@@ -8,14 +8,14 @@ import httpx
 from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.agent_runtime_profile_response import AgentRuntimeProfileResponse
+from ...models.create_agent_host_runtime_profile_request import (
+    CreateAgentHostRuntimeProfileRequest,
+)
 from ...models.create_anthropic_compatible_runtime_profile_request import (
     CreateAnthropicCompatibleRuntimeProfileRequest,
 )
 from ...models.create_open_ai_compatible_runtime_profile_request import (
     CreateOpenAICompatibleRuntimeProfileRequest,
-)
-from ...models.create_user_daemon_runtime_profile_request import (
-    CreateUserDaemonRuntimeProfileRequest,
 )
 from ...models.error_response import ErrorResponse
 from ...types import Response
@@ -24,9 +24,9 @@ from ...types import Response
 def _get_kwargs(
     org_id: UUID,
     *,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
-    | CreateOpenAICompatibleRuntimeProfileRequest
-    | CreateUserDaemonRuntimeProfileRequest,
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
 
@@ -37,7 +37,7 @@ def _get_kwargs(
         ),
     }
 
-    if isinstance(body, CreateUserDaemonRuntimeProfileRequest):
+    if isinstance(body, CreateAgentHostRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
     elif isinstance(body, CreateOpenAICompatibleRuntimeProfileRequest):
         _kwargs["json"] = body.to_dict()
@@ -84,16 +84,17 @@ def sync_detailed(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
-    | CreateOpenAICompatibleRuntimeProfileRequest
-    | CreateUserDaemonRuntimeProfileRequest,
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
     """Create Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
-            CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -119,16 +120,17 @@ def sync(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
-    | CreateOpenAICompatibleRuntimeProfileRequest
-    | CreateUserDaemonRuntimeProfileRequest,
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
     """Create Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
-            CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -149,16 +151,17 @@ async def asyncio_detailed(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
-    | CreateOpenAICompatibleRuntimeProfileRequest
-    | CreateUserDaemonRuntimeProfileRequest,
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
     """Create Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
-            CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -182,16 +185,17 @@ async def asyncio(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
-    body: CreateAnthropicCompatibleRuntimeProfileRequest
-    | CreateOpenAICompatibleRuntimeProfileRequest
-    | CreateUserDaemonRuntimeProfileRequest,
+    body: CreateAgentHostRuntimeProfileRequest
+    | CreateAnthropicCompatibleRuntimeProfileRequest
+    | CreateOpenAICompatibleRuntimeProfileRequest,
 ) -> AgentRuntimeProfileResponse | ErrorResponse | None:
     """Create Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        body (CreateAnthropicCompatibleRuntimeProfileRequest |
-            CreateOpenAICompatibleRuntimeProfileRequest | CreateUserDaemonRuntimeProfileRequest):
+        body (CreateAgentHostRuntimeProfileRequest |
+            CreateAnthropicCompatibleRuntimeProfileRequest |
+            CreateOpenAICompatibleRuntimeProfileRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

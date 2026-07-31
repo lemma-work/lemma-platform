@@ -376,7 +376,6 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
         <PodSettingsShell
             podId={podId}
             title="Pod Settings"
-            description="Manage who can get into this pod and what kind of access they have."
             action={canManageMembers ? (
                 <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
                     <DialogTrigger asChild>

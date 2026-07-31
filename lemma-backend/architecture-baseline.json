@@ -173,7 +173,6 @@
   "oversized_files": {
     "app/modules/agent/infrastructure/daemon_hub.py": 622,
     "app/modules/agent/infrastructure/harnesses/pydantic_ai.py": 1309,
-    "app/modules/agent/infrastructure/models.py": 632,
     "app/modules/agent/infrastructure/repositories.py": 1161,
     "app/modules/agent/services/agent_runner_service.py": 1137,
     "app/modules/agent/services/conversation_service.py": 1565,
@@ -187,7 +186,7 @@
     "app/modules/agent_surfaces/platforms/whatsapp/service.py": 650,
     "app/modules/agent_surfaces/services/event_receiver_service.py": 639,
     "app/modules/agent_surfaces/services/ingress_service.py": 2416,
-    "app/modules/agent_surfaces/services/surface_service.py": 994,
+    "app/modules/agent_surfaces/services/surface_service.py": 966,
     "app/modules/apps/services/app_service.py": 661,
     "app/modules/connectors/services/connector_operation_service.py": 671,
     "app/modules/connectors/services/connector_service.py": 1413,

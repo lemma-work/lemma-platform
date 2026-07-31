@@ -114,7 +114,7 @@
         },
         "interaction_fallback": {
           "default": false,
-          "description": "True when a daemon runtime could not pause and the model must ask the question conversationally instead.",
+          "description": "True when a remote harness runtime could not pause and the model must ask the question conversationally instead.",
           "type": "boolean"
         }
       },
@@ -2371,7 +2371,7 @@
         },
         "interaction_fallback": {
           "default": false,
-          "description": "True when a daemon runtime could not pause and the model must ask for confirmation conversationally instead.",
+          "description": "True when a remote harness runtime could not pause and the model must ask for confirmation conversationally instead.",
           "type": "boolean"
         }
       },
@@ -2650,11 +2650,11 @@
   {
     "tool_name": "write_todos",
     "toolset": "TODO",
-    "description": "Add or update task-list items from markdown checklist lines.\n\nEach line is upserted by its text: a new line is appended, a line whose\ntext matches an existing task flips that task's done state. Send one line\nto flip one task, or the whole list at once. Returns the full task list.",
+    "description": "Add or update task-list items from markdown checklist lines.\n\nA single line is upserted by its text; multiple lines replace the current\nlist as one authoritative snapshot. Returns the full task list.",
     "input_schema": {
       "properties": {
         "todos": {
-          "description": "One markdown checklist line per task. Use '[ ]' for a task still to do and '[x]' once it's done (e.g. '- [ ] Fetch the Q3 report'); a line with no checkbox is treated as not-done. Send the whole list, or just the single line you want to flip \u2014 lines are matched to existing tasks by their text, so the rest of the list is preserved. The full, updated list is always returned.",
+          "description": "One markdown checklist line per task. Use '[ ]' for a task still to do and '[x]' once it's done (e.g. '- [ ] Fetch the Q3 report'); a line with no checkbox is treated as not-done. Send the whole list, or just the single line you want to flip. Multiple lines replace the current list; a single line is matched by text and preserves the rest. The full, updated list is always returned.",
           "items": {
             "type": "string"
           },

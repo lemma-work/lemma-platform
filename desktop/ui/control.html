@@ -217,6 +217,11 @@
           <div id="service-list"></div>
           <div class="button-row"><button class="btn" data-action="start">Reconcile</button><button class="btn" data-action="restart">Restart application</button></div>
         </article>
+        <article class="panel">
+          <div class="panel-heading"><div><h2>External coding agents</h2><p>Agent Host connects Codex, Claude Code, and OpenCode to Local Lemma or Lemma Cloud. It stays supervised when this window is closed.</p></div></div>
+          <div id="agent-host-status"></div>
+          <div class="button-row"><button class="btn" data-action="agent-host-start">Start Agent Host</button><button class="btn" data-action="agent-host-restart">Restart Agent Host</button><button class="btn danger" data-action="agent-host-stop">Stop Agent Host</button></div>
+        </article>
         <article class="panel danger-zone">
           <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
           <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>

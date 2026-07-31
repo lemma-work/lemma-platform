@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.infrastructure.models import AgentRuntimeProfileModel
+from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.services.runtime_profile_service import _load_runtime_env
 from app.modules.agent.tests.e2e.system_lemma_helpers import (
     SYSTEM_LEMMA_SKIP_REASON,

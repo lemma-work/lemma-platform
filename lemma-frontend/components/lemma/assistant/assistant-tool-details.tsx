@@ -480,7 +480,11 @@ export function ToolActivityRollup({
   ));
   const toolParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "tool" }> => part.type === "tool");
   const reasoningParts = visibleDetailParts.filter((part): part is Extract<AssistantMessagePart, { type: "reasoning" }> => part.type === "reasoning");
-  const totalThoughtDurationMs = reasoningParts.reduce((total, part) => total + (part.durationMs ?? 0), 0);
+  const hasCompleteThoughtDuration = reasoningParts.length > 0
+    && reasoningParts.every((part) => typeof part.durationMs === "number" && part.durationMs > 0);
+  const totalThoughtDurationMs = hasCompleteThoughtDuration
+    ? reasoningParts.reduce((total, part) => total + (part.durationMs ?? 0), 0)
+    : 0;
   const hasRunHeader = Boolean(collapsedLabel);
   const activitySummary = formatToolActivitySummary(toolParts);
   const activityBlocks = groupActivityDetailParts(visibleDetailParts);

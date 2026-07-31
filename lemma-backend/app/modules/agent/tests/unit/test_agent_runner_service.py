@@ -18,23 +18,20 @@ from app.modules.agent.services.agent_runner_service import (
 from app.modules.test_support.fakes import FakeUnitOfWork
 
 
-def test_rejected_run_error_message_uses_structured_capacity_data():
-    message = _rejected_run_error_message(
-        {"reason": "daemon_at_capacity", "active_run_count": 2, "max_concurrent_runs": 2}
+_GENERIC_REJECTION = "The Agent Host rejected this run before dispatch. Try again."
+
+
+def test_rejected_run_error_message_uses_the_harness_supplied_detail():
+    assert (
+        _rejected_run_error_message({"detail": "Harness snapshot is stale; refresh it"})
+        == "Harness snapshot is stale; refresh it"
     )
-    assert message == "Daemon busy: 2/2 runs already active. Try again in a moment."
 
 
 def test_rejected_run_error_message_falls_back_for_malformed_data():
-    assert _rejected_run_error_message("not-a-dict") == (
-        "Daemon rejected this run (at capacity). Try again in a moment."
-    )
-    assert _rejected_run_error_message({"reason": "something_else"}) == (
-        "Daemon rejected this run (at capacity). Try again in a moment."
-    )
-    assert _rejected_run_error_message(
-        {"reason": "daemon_at_capacity", "active_run_count": "two"}
-    ) == "Daemon rejected this run (at capacity). Try again in a moment."
+    assert _rejected_run_error_message("not-a-dict") == _GENERIC_REJECTION
+    assert _rejected_run_error_message({"reason": "something_else"}) == _GENERIC_REJECTION
+    assert _rejected_run_error_message({"detail": "   "}) == _GENERIC_REJECTION
 
 
 class _FailingContextManager:

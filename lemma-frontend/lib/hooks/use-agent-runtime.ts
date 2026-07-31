@@ -1,19 +1,63 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { AgentRuntimeConfig } from 'lemma-sdk';
+import type {
+    AgentHostHarnessResponse,
+    AgentHostPairingCreated,
+    AgentHostResponse,
+    AgentRuntimeConfig,
+} from 'lemma-sdk';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 
 export const agentRuntimeQueryKey = (organizationId?: string | null) =>
     ['agent-runtime', 'runtimes', organizationId ?? null] as const;
 
-export const availableAgentRuntimeHarnessesQueryKey = () =>
-    ['agent-runtime', 'available-harnesses'] as const;
+export const agentHostsQueryKey = () => ['agent-hosts'] as const;
 
-export const useAvailableAgentRuntimeHarnesses = () => {
+export const agentHostHarnessesQueryKey = (hostId?: string | null) =>
+    ['agent-hosts', hostId ?? null, 'harnesses'] as const;
+
+// Agent Host wire shapes come straight from the SDK's generated models; these
+// aliases keep the shorter names the components already read.
+export type AgentHost = AgentHostResponse;
+export type AgentHostHarness = AgentHostHarnessResponse;
+export type AgentHostPairing = AgentHostPairingCreated;
+
+export const useAgentHosts = () => {
     return useQuery({
-        queryKey: availableAgentRuntimeHarnessesQueryKey(),
-        queryFn: () => getLemmaClient().agentRuntime.listAvailableHarnesses(),
-        staleTime: 30000,
+        queryKey: agentHostsQueryKey(),
+        queryFn: () => getLemmaClient().agentHost.list(),
+        staleTime: 15000,
         refetchOnWindowFocus: true,
+    });
+};
+
+export const useAgentHostHarnesses = (hostId?: string | null) => {
+    return useQuery({
+        queryKey: agentHostHarnessesQueryKey(hostId),
+        queryFn: () => getLemmaClient().agentHost.listHarnesses(hostId!),
+        enabled: Boolean(hostId),
+        staleTime: 15000,
+        refetchOnWindowFocus: true,
+    });
+};
+
+export const useCreateAgentHostPairing = () => {
+    return useMutation({
+        mutationFn: ({ organizationId, displayName }: { organizationId?: string | null; displayName: string }) =>
+            getLemmaClient().agentHost.createPairing({
+                display_name: displayName,
+                organization_id: organizationId ?? null,
+            }),
+    });
+};
+
+export const useRevokeAgentHost = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (hostId: string) => getLemmaClient().agentHost.revoke(hostId),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: agentHostsQueryKey() });
+        },
     });
 };
 

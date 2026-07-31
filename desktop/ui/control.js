@@ -298,6 +298,9 @@ async function runDesktopAction(button) {
     }
     if (action === "logs") await invoke("open_logs");
     if (action === "devtools") await invoke("open_developer_tools");
+    if (action === "agent-host-start") await invoke("agent_host_action", { action: "start" });
+    if (action === "agent-host-restart") await invoke("agent_host_action", { action: "restart" });
+    if (action === "agent-host-stop") await invoke("agent_host_action", { action: "stop" });
     if (action === "repair-runtime") {
       if (!window.confirm("Stop Lemma briefly and verify or replace only signed runtime files?")) return;
       document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => {
@@ -399,7 +402,22 @@ function render() {
     $("connector-callback").textContent = `${apiUrl.replace(/\/$/, "")}/api/v1/connectors/oauth/callback`;
   }
   renderLocalAi(localAi);
+  renderAgentHost(snapshot.agent_host || {});
   renderSharing(sharing);
+}
+
+function renderAgentHost(agentHost) {
+  const detail = agentHost.available
+    ? agentHost.running
+      ? `PID ${agentHost.pid || "—"} · ${agentHost.uptime_seconds || 0}s uptime`
+      : agentHost.last_error || "Ready to start"
+    : "Agent Host sidecar is not installed";
+  $("agent-host-status").innerHTML = serviceHtml(
+    "Lemma Agent Host",
+    detail,
+    agentHost.running ? "online" : agentHost.available ? "stopped" : "unavailable",
+    agentHost.running ? "ok" : agentHost.available ? "" : "bad",
+  );
 }
 
 function summaryHtml(title, copy, status, page) {
@@ -845,7 +863,11 @@ function handleLocaldEvent(event) {
     requestSnapshot();
   }
   if (event.event === "sharing.preflight") requestSnapshot();
-  if (["status", "state", "ready", "phase"].includes(event.event)) {
+  if (event.event === "agent-host.status" && event.agent_host && snapshot) {
+    snapshot.agent_host = event.agent_host;
+    renderAgentHost(snapshot.agent_host);
+  }
+  if (["status", "state", "ready", "phase", "done", "agent-host.status"].includes(event.event)) {
     requestSnapshot();
     if (event.event === "ready") loadRuntimeInfo();
   }

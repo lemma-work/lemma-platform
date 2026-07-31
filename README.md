@@ -2,9 +2,7 @@
 
 <img src="docs/Assets/Banner/lemma-brand-loop.gif" alt="Apps, agents, and data connected through Lemma to WhatsApp, Telegram, Slack, and Microsoft Teams" width="100%">
 
-**Build AI around the way your team works.**
-
-Create a custom harness with its own state, agents, workflows, permissions, and screens. Add your teammates and use it wherever the work already happens.
+**Build the AI software your team needs. Run it on Lemma.**
 
 ![License](https://img.shields.io/github/license/lemma-work/lemma-platform)
 ![Release](https://img.shields.io/github/v/release/lemma-work/lemma-platform)
@@ -20,7 +18,11 @@ Website → **[lemma.work](https://lemma.work)**
 
 ---
 
-A Lemma harness is a working system built around one job—not a prompt wrapped in a chatbox. Your team works through purpose-built screens and the tools they already use. Agents work against the same state, follow the same workflows and permissions, and keep the job moving in the background.
+The exact software a team needs usually does not exist. Coding agents can now create it.
+
+But generated code is not yet working team software—it still needs shared state, permissions, workflows, approvals, deployment, and somewhere agents can keep working.
+
+Lemma supplies that missing system. People use the app; agents work through the same state and workflows.
 
 **Open source. Run it on your laptop, your server, or Lemma Cloud. Use Claude Code or Codex through your existing subscription, Lemma-managed models, or any OpenAI- or Anthropic-compatible provider.**
 
@@ -70,12 +72,23 @@ lemma pod create my-team --with-starter
 
 Open the generated `my-team/` directory in Claude Code, Codex, OpenCode, Cursor, or Antigravity and ask it to build the app you want. Antigravity users should first run `lemma skills install --target agents --scope project` from inside that directory. The coding agent authors and verifies the pod through the same CLI.
 
-To let the pod dispatch runs through your local Claude Code, Codex, OpenCode, Cursor, or Antigravity login, start the daemon:
+To let the pod dispatch runs through your local Claude Code, Codex, OpenCode, or Cursor login, pair this machine as an Agent Host and point a runtime profile at one of its harnesses:
 
 ```bash
-lemma daemon start --background
-lemma daemon status
+lemma agent-host connect                 # pairs using your existing CLI login
+lemma agent-host harnesses               # lists harness_id per detected tool
+lemma runtime profiles create AGENT_HOST \
+  --name "Codex on my laptop" --harness-id <harness_id>
 ```
+
+Then select that profile on an agent (`lemma agent update <name> --data
+'{"agent_runtime": {"profile_id": "<profile_id>"}}'`) and chat as usual.
+`lemma agent-host status` shows the paired targets and whether the host service
+is running.
+
+Agent Host drives each tool over the [Agent Client Protocol](https://agentclientprotocol.com).
+Antigravity (`agy`) has no ACP mode yet, so it can install Lemma's skills and
+author pods but cannot serve pod-dispatched runs.
 
 <details>
 <summary>Configure a provider for server-run agents and conversations</summary>
@@ -208,13 +221,21 @@ lemma pod import ./the-pod-your-agent-wrote
 lemma apps deploy my-app ./index.html   # deploy a no-build HTML app (or a Vite project dir)
 ```
 
-**Or run your agent inside Lemma.** `lemma daemon start` connects your local Claude Code, Codex, OpenCode, Cursor, or Antigravity to the pod: it picks up tasks from a shared queue, streams its work back through the pod, and pauses at approval gates before protected actions. Two agents working the same pod share persistent state, a task queue, and run history.
+**Or run your agent inside Lemma.** Agent Host connects your local Claude Code, Codex, OpenCode, or Cursor to the pod: it picks up tasks from a durable queue, streams its work back through the pod, and pauses at approval gates before protected actions. Two agents working the same pod share persistent state, a task queue, and run history.
 
 ```bash
-lemma daemon start --background  # your local agent serves pod-assigned runs
-lemma daemon status              # pid, running state, log path
-lemma daemon stop
+lemma auth login
+lemma agent-host connect         # pair this machine (one command, no code to copy)
+lemma agent-host harnesses       # harness_id for each detected coding agent
+lemma runtime profiles create AGENT_HOST \
+  --name "Codex on my laptop" --harness-id <harness_id>
+lemma agent-host status          # paired targets, service state, queue depth
 ```
+
+Pairing installs Agent Host as a per-user background service, so it survives
+logout and reboot. With Lemma Desktop installed, Desktop supervises it and
+`lemma agent-host start|stop|restart` route through Desktop rather than
+installing a second service.
 
 Any agent operates a pod directly through the CLI:
 
@@ -234,7 +255,7 @@ Python and TypeScript SDKs (with 25+ React hooks) live in [`lemma-python/`](lemm
 
 - **Your machine.** The full stack runs self-contained on your laptop. You choose which external services receive data.
 - **Our cloud, when you want it.** [lemma.work](https://lemma.work) runs the same open-source stack as a hosted option for pods that need to reach teammates and surfaces.
-- **Your subscription, managed models, or your keys.** Pod-assigned runs use your local **Claude Code or Codex login** through the daemon. Server-run agents use Lemma-managed models or an **Anthropic-compatible or OpenAI-compatible** key or endpoint — a cloud provider, a self-hosted gateway, or a local model. Runtime profiles are per pod, so different agents can use different models.
+- **Your subscription, managed models, or your keys.** Pod-assigned runs use your local **Claude Code or Codex login** through Agent Host. Server-run agents use Lemma-managed models or an **Anthropic-compatible or OpenAI-compatible** key or endpoint — a cloud provider, a self-hosted gateway, or a local model. Runtime profiles are per pod, so different agents can use different models.
 - **Your code.** Core is [AGPLv3](LICENSE); SDKs, CLI, and tools are [Apache-2.0](LICENSES/Apache-2.0.txt).
 
 ## Repo layout

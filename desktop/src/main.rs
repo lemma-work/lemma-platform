@@ -872,6 +872,7 @@ fn activate_installed_runtime(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_runtime_install_progress(
     app: &AppHandle,
     stage: &str,
@@ -1934,6 +1935,13 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
         ("vm", "VM helper", vm_log),
         ("guest", "Guest services", guest_log),
         ("locald", "Service manager", root.join("locald.log")),
+        (
+            "agent-host",
+            "Agent Host",
+            root.parent()
+                .unwrap_or(root.as_path())
+                .join("agent-host/agent-host.log"),
+        ),
         ("installer", "Installer", install_log_path()),
     ]
 }
@@ -2237,6 +2245,22 @@ fn control_snapshot(window: Webview, app: AppHandle, id: String) -> Result<(), S
     require_control_window(&window)?;
     ensure_locald(&app)?;
     send_to_locald(&app, json!({"cmd":"control.snapshot", "id": id}))
+}
+
+#[tauri::command]
+fn agent_host_action(window: Webview, app: AppHandle, action: String) -> Result<(), String> {
+    require_control_window(&window)?;
+    if !matches!(action.as_str(), "start" | "stop" | "restart") {
+        return Err(format!("unknown Agent Host action {action:?}"));
+    }
+    ensure_locald(&app)?;
+    send_to_locald(
+        &app,
+        json!({
+            "cmd": format!("agent-host.{action}"),
+            "id": operation_id("agent-host"),
+        }),
+    )
 }
 
 #[tauri::command]
@@ -2920,6 +2944,7 @@ fn main() {
             runtime_info,
             repair_runtime,
             control_snapshot,
+            agent_host_action,
             apply_operator_config,
             local_ai_action,
             sharing_action,

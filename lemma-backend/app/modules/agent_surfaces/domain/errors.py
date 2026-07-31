@@ -1,5 +1,7 @@
 """Agent surface domain/application errors."""
 
+from uuid import UUID
+
 from app.core.domain.errors import DomainError
 
 
@@ -20,6 +22,39 @@ class AgentSurfaceValidationError(AgentSurfaceError):
             code="AGENT_SURFACE_VALIDATION_ERROR",
             status_code=422,
         )
+
+
+class AgentSurfaceCredentialConflictError(AgentSurfaceError):
+    """The credential this surface wants is already spoken for in the org.
+
+    Carries *which* surface holds it in ``details`` so the setup UI can name the
+    pod and link to it, rather than showing a dead-end message. The claim is also
+    published up front by the available-surfaces catalog (``system_claim``); this
+    is the race/stale-cache backstop on the write path.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        pod_id: UUID,
+        surface_name: str,
+        kind: str,
+    ):
+        super().__init__(
+            message=message,
+            code="AGENT_SURFACE_CREDENTIAL_CONFLICT",
+            status_code=409,
+        )
+        self.details = {
+            # "SYSTEM" (the shared Lemma bot/number) or "ACCOUNT" (a connected
+            # account already bound elsewhere) — they read differently in the UI.
+            "kind": kind,
+            "conflicting_surface": {
+                "pod_id": str(pod_id),
+                "name": surface_name,
+            },
+        }
 
 
 class AgentSurfaceNotFoundError(AgentSurfaceError):

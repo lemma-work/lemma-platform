@@ -37,6 +37,7 @@ TAG_MODULES = {
     "Workspace Apps": "workspace",
     "agent-tools": "agent",
     "agent_conversations": "agent",
+    "agent_host": "agent",
     "agent_runtime": "agent",
     "agents": "agent",
     "files": "datastore",

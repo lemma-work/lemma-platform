@@ -1,10 +1,12 @@
 import type { Metadata } from 'next';
 
 import { ImportGithubClient } from './import-github-client';
+import { fetchPublicGitHubReadme } from '@/lib/github/public-repository';
 import { socialCardPath } from '@/lib/share/social-card';
 
 interface ImportGithubPageProps {
     params: Promise<{ owner: string; repo: string }>;
+    searchParams: Promise<{ destination?: string | string[] }>;
 }
 
 function decodeSegment(value: string): string {
@@ -48,12 +50,18 @@ export async function generateMetadata({ params }: ImportGithubPageProps): Promi
     };
 }
 
-export default async function ImportGithubPage({ params }: ImportGithubPageProps) {
-    const raw = await params;
+export default async function ImportGithubPage({ params, searchParams }: ImportGithubPageProps) {
+    const [raw, query] = await Promise.all([params, searchParams]);
+    const owner = decodeSegment(raw.owner);
+    const repo = decodeSegment(raw.repo);
+    const initialReadme = await fetchPublicGitHubReadme(owner, repo);
+
     return (
         <ImportGithubClient
-            owner={decodeSegment(raw.owner)}
-            repo={decodeSegment(raw.repo)}
+            owner={owner}
+            repo={repo}
+            initialDestination={query.destination === 'existing' ? 'existing' : 'new'}
+            initialReadme={initialReadme}
         />
     );
 }

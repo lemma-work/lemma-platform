@@ -65,7 +65,7 @@ def inline_tool_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     ``$ref`` -> ``#/$defs/...`` server-side and reject the request with
     ``Error resolving schema reference ... AttributeError("'NoneType' ... lookup")``.
     The pydantic-ai model path already inlines refs via a model profile, but tool
-    schemas served over MCP to daemon harnesses (Claude Code, Cursor, OpenCode,
+    schemas served over MCP to remote harnesses (Claude Code, Cursor, OpenCode,
     ...) were passed through raw. Inline them here too. Best-effort: a schema the
     transformer can't process falls back to the original.
     """

@@ -124,22 +124,12 @@ async def _finalize_safely(coro: Awaitable[None], *, agent_run_id: UUID) -> None
 
 
 def _rejected_run_error_message(data: object) -> str:
-    """Build a user-facing message for a daemon-capacity REJECTED event.
-
-    Falls back to a generic message if the structured shape the daemon sends
-    (``{"reason", "active_run_count", "max_concurrent_runs"}``) isn't present
-    -- keeps this robust against an older/newer daemon sending a different
-    payload shape.
-    """
-    if isinstance(data, dict) and data.get("reason") == "daemon_at_capacity":
-        active = data.get("active_run_count")
-        cap = data.get("max_concurrent_runs")
-        if isinstance(active, int) and isinstance(cap, int):
-            return (
-                f"Daemon busy: {active}/{cap} runs already active. "
-                "Try again in a moment."
-            )
-    return "Daemon rejected this run (at capacity). Try again in a moment."
+    """Build a user-facing message for a pre-dispatch harness rejection."""
+    if isinstance(data, dict):
+        detail = data.get("detail")
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+    return "The Agent Host rejected this run before dispatch. Try again."
 
 
 def _profile_model_settings(
@@ -268,7 +258,7 @@ class AgentRunnerService:
                 workspace_cwd=workspace_location.cwd,
                 pod_cwd=pod_cwd,
                 # Only the in-process pydantic (LEMMA) harness catches the
-                # ask_user/request_approval pause signal; daemon harnesses run the
+                # ask_user/request_approval pause signal; remote harnesses run the
                 # tools over MCP and own their own session, so they can't be paused
                 # mid tool-call and use the WAITING output contract instead.
                 supports_pause_signal=(
@@ -301,7 +291,7 @@ class AgentRunnerService:
             )
             if supports_vision and view_image_toolset not in full_toolsets:
                 full_toolsets = [*full_toolsets, view_image_toolset]
-            # Daemon harnesses (Codex/Claude-Code) reach every tool through the MCP
+            # Remote harnesses (Codex/Claude-Code) reach every tool through the MCP
             # server, so they keep the full toolset list. The in-process LEMMA
             # harness instead shows core tools directly and defers the heavy "extra"
             # tools over MCP, layering current-time/caching/todo capabilities.
@@ -646,15 +636,6 @@ class AgentRunnerService:
             return False
 
         if event.type == AgentEventType.STATUS:
-            await self._persist_status_event_metadata(
-                conversation_id=conversation_id,
-                data=event.data,
-            )
-            if isinstance(event.data, dict) and event.data.get("status") in {
-                "daemon.session.started",
-                "daemon.session.invalid",
-            }:
-                return False
             await publish_conversation_event(
                 conversation_id,
                 status_payload(
@@ -684,9 +665,9 @@ class AgentRunnerService:
             return True
 
         if event.type == AgentEventType.REJECTED:
-            # The daemon explicitly refused this run (already at
-            # max_concurrent_runs) -- terminal, like ERROR, but with a more
-            # actionable message built from the event's structured data.
+            # The remote harness refused this run before dispatch -- terminal,
+            # like ERROR, but with a more actionable message built from the
+            # event's structured data.
             await self._finish_agent_run(
                 conversation_id=conversation_id,
                 agent_run_id=agent_run_id,
@@ -751,63 +732,6 @@ class AgentRunnerService:
             return True
 
         return False
-
-    async def _persist_status_event_metadata(
-        self,
-        *,
-        conversation_id: UUID,
-        data: object,
-    ) -> None:
-        if not isinstance(data, dict):
-            return
-        status = data.get("status")
-        if status not in {"daemon.session.started", "daemon.session.invalid"}:
-            return
-        local_session = data.get("local_session")
-        if not isinstance(local_session, dict):
-            return
-        harness_kind = str(local_session.get("harness_kind") or "")
-        session_id = str(local_session.get("session_id") or "")
-        if not harness_kind or not session_id:
-            return
-        async with self.uow_factory() as uow:
-            repo = ConversationRepository(uow)
-            conversation = await repo.get_conversation(conversation_id)
-            if conversation is None:
-                return
-            metadata: JsonObject = (
-                dict(conversation.metadata)
-                if isinstance(conversation.metadata, dict)
-                else {}
-            )
-            if status == "daemon.session.invalid":
-                existing = metadata.get("daemon_session")
-                if (
-                    isinstance(existing, dict)
-                    and str(existing.get("harness_kind") or "") == harness_kind
-                    and str(existing.get("session_id") or "") == session_id
-                ):
-                    metadata.pop("daemon_session", None)
-                sessions = metadata.get("daemon_sessions")
-                if isinstance(sessions, dict):
-                    legacy = sessions.get(harness_kind)
-                    if (
-                        isinstance(legacy, dict)
-                        and str(legacy.get("session_id") or "") == session_id
-                    ):
-                        sessions.pop(harness_kind, None)
-                    if sessions:
-                        metadata["daemon_sessions"] = sessions
-                    else:
-                        metadata.pop("daemon_sessions", None)
-            else:
-                metadata["daemon_session"] = {
-                    "session_id": session_id,
-                    "harness_kind": harness_kind,
-                }
-                metadata.pop("daemon_sessions", None)
-            conversation.metadata = metadata
-            await repo.update_conversation(conversation)
 
     async def _finish_agent_run(
         self,

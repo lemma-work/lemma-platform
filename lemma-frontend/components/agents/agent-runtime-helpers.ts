@@ -1,7 +1,5 @@
 import { HarnessKind } from 'lemma-sdk';
 import type {
-    AgentHarnessListResponse,
-    AgentHarnessInfo,
     AgentRuntimeConfig,
     AgentRuntimeProfileListResponse,
     AgentRuntimeProfileResponse,
@@ -9,36 +7,37 @@ import type {
     RuntimeModelCatalogEntry,
 } from 'lemma-sdk';
 
-export const DEFAULT_VALUE = '__default_runtime__';
-
-// Harness kinds that are *local terminal coding agents* (run a model on your
-// machine) rather than plain model providers. Single source of truth shared by
-// the Models settings page and the model picker so the two can't disagree about
-// where, say, Cursor belongs.
-export const CODING_AGENT_KINDS = new Set(['CLAUDE_CODE', 'CODEX', 'OPENCODE', 'ANTIGRAVITY', 'CURSOR']);
-
-export function isCodingAgentKind(kind?: string | null): boolean {
-    return kind ? CODING_AGENT_KINDS.has(kind) : false;
+// There is no longer a HarnessKind per coding tool — Codex, Claude Code and the
+// rest are all HarnessKind.HARNESS, dispatched through a paired machine's Agent
+// Host. So "is this a local coding agent rather than a plain model provider?"
+// is a single comparison, and *which* agent it is comes from `harness_key`.
+export function isLocalAgentKind(kind?: string | null): boolean {
+    return kind === HarnessKind.HARNESS;
 }
 
+// Keyed by the `harness_key` Agent Host publishes for each adapter it ships
+// (see agent-host/agent-adapters.lock.json), which is also what a runtime
+// profile created from a harness records in its metadata.
 export const HARNESS_LOGOS: Partial<Record<string, string>> = {
-    ANTIGRAVITY: '/harnesslogos/antigravity.png',
-    CLAUDE_CODE: '/harnesslogos/claudecode.png',
-    CODEX: '/harnesslogos/codex.png',
-    CURSOR: '/harnesslogos/cursor.png',
-    OPENCODE: '/harnesslogos/opencode.png',
+    'claude-code': '/harnesslogos/claudecode.png',
+    codex: '/harnesslogos/codex.png',
+    cursor: '/harnesslogos/cursor.png',
+    opencode: '/harnesslogos/opencode.png',
 };
-export const LOCAL_RUNTIME_SETUP_COMMANDS = ['lemma auth login', 'lemma daemon start --background'];
-export const LOCAL_RUNTIME_SETUP_OPTIONS: Array<{
-    harnessKind: HarnessKind;
-    title: string;
-}> = [
-    { harnessKind: HarnessKind.CODEX, title: 'Codex' },
-    { harnessKind: HarnessKind.CLAUDE_CODE, title: 'Claude Code' },
-    { harnessKind: HarnessKind.OPENCODE, title: 'OpenCode' },
-    { harnessKind: HarnessKind.CURSOR, title: 'Cursor' },
-    { harnessKind: HarnessKind.ANTIGRAVITY, title: 'Antigravity' },
-];
+
+export function harnessLogo(harnessKey?: string | null): string | undefined {
+    return harnessKey ? HARNESS_LOGOS[harnessKey] : undefined;
+}
+
+// A saved runtime profile keeps the harness it was created from in its
+// metadata, so a profile row can still show the right coding-agent logo without
+// re-fetching the host it belongs to.
+export function profileHarnessKey(
+    profile?: { metadata?: Record<string, unknown> | null } | null,
+): string | null {
+    const key = profile?.metadata?.harness_key;
+    return typeof key === 'string' && key ? key : null;
+}
 
 export function runtimeKey(runtime: AgentRuntimeConfig): string {
     return `${runtime.profile_id}::${runtime.model_name ?? ''}`;
@@ -48,17 +47,7 @@ export type RuntimeModelOption = RuntimeModelCatalogEntry & {
     name: string;
 };
 
-export type AgentRuntimeSelectionMode = 'runtime' | 'model';
-export type AvailableHarnessOption = Omit<AgentHarnessInfo, 'models'> & {
-    models: RuntimeModelOption[];
-};
 export type CustomProviderKind = 'openai' | 'anthropic';
-export type LocalRuntimeSetupOption = {
-    harnessKind: HarnessKind;
-    title: string;
-    statusLabel: string;
-    daemonDisplayName?: string | null;
-};
 
 export const CUSTOM_PROVIDER_OPTIONS: Array<{
     kind: CustomProviderKind;
@@ -80,38 +69,10 @@ export const CUSTOM_PROVIDER_OPTIONS: Array<{
     },
 ];
 
-export function firstRuntime(catalog?: AgentRuntimeProfileListResponse): AgentRuntimeConfig | null {
-    if (catalog?.default_runtime) return catalog.default_runtime;
-    return null;
-}
-
-export function availableHarnessModels(
-    profile: AgentRuntimeProfileResponse | undefined,
-    availableHarnesses?: AgentHarnessListResponse,
-): RuntimeModelOption[] {
-    if (!profile) return [];
-    const harness = availableHarnesses?.items.find((item) =>
-        item.harness_kind === profile.derived_harness_kind && isHarnessAvailable(item)
-    );
-    return (harness?.models ?? []).map((modelName) => ({
-        name: modelName,
-        display_name: null,
-        provider_model_name: modelName,
-        capabilities: [],
-        default_model_settings: {},
-        metadata: {},
-    }));
-}
-
-export function runtimeModels(
-    profile?: AgentRuntimeProfileResponse,
-    availableHarnesses?: AgentHarnessListResponse,
-): RuntimeModelOption[] {
+export function runtimeModels(profile?: AgentRuntimeProfileResponse): RuntimeModelOption[] {
     if (!profile) return [];
     const models = profile.model_catalog ?? [];
     if (models.length > 0) return models as RuntimeModelOption[];
-    const harnessModels = availableHarnessModels(profile, availableHarnesses);
-    if (harnessModels.length > 0) return harnessModels;
     if (profile.default_model_name) {
         return [{
             name: profile.default_model_name,
@@ -132,24 +93,53 @@ export function findProfileByRuntime(catalog: AgentRuntimeProfileListResponse | 
 
 export function defaultAgentRuntimeFromProfile(
     profile?: AgentRuntimeProfileResponse | null,
-    availableHarnesses?: AgentHarnessListResponse,
 ): AgentRuntimeConfig | null {
     if (!profile) return null;
     return {
         profile_id: profile.id,
-        model_name: profile.default_model_name ?? runtimeModels(profile, availableHarnesses)[0]?.name ?? null,
+        model_name: profile.default_model_name ?? runtimeModels(profile)[0]?.name ?? null,
     };
+}
+
+// The model a runtime will actually run on. A stored runtime routinely pins a
+// profile and leaves the model open: the catalog's own `default_runtime` is a
+// bare `{ profile_id: 'system:lemma' }`, a pod that never set a default has no
+// runtime at all, and an agent can inherit its profile's model. The backend
+// fills that gap at dispatch — the profile's default model, else the first
+// catalog entry (`_selected_model` in runtime_profile_service.py) — so resolve
+// it the same way here instead of calling a well-defined model "Default".
+export function resolveRuntimeModelName(
+    runtime?: AgentRuntimeConfig | null,
+    catalog?: AgentRuntimeProfileListResponse,
+): string | null {
+    if (!runtime) return null;
+    if (runtime.model_name) return runtime.model_name;
+    const profile = findProfileByRuntime(catalog, runtime);
+    return profile?.default_model_name ?? runtimeModels(profile)[0]?.name ?? null;
+}
+
+// The same runtime with its model spelled out, for pickers and labels that read
+// `model_name` directly. Returned unchanged when nothing can name the model —
+// while the catalog is still loading, or when its profile has gone away.
+export function hydrateRuntimeModel(
+    runtime?: AgentRuntimeConfig | null,
+    catalog?: AgentRuntimeProfileListResponse,
+): AgentRuntimeConfig | null {
+    if (!runtime) return null;
+    if (runtime.model_name) return runtime;
+    const modelName = resolveRuntimeModelName(runtime, catalog);
+    return modelName ? { ...runtime, model_name: modelName } : runtime;
 }
 
 export function resolveDefaultAgentRuntime(
     catalog?: AgentRuntimeProfileListResponse,
     profileId?: string | null,
-    availableHarnesses?: AgentHarnessListResponse,
 ): AgentRuntimeConfig | null {
     const profile = profileId
         ? catalog?.items.find((item) => item.id === profileId)
         : undefined;
-    return defaultAgentRuntimeFromProfile(profile, availableHarnesses) ?? catalog?.default_runtime ?? null;
+    return defaultAgentRuntimeFromProfile(profile)
+        ?? hydrateRuntimeModel(catalog?.default_runtime, catalog);
 }
 
 export function formatAgentRuntime(
@@ -159,7 +149,9 @@ export function formatAgentRuntime(
 ): string {
     if (!runtime) return includeModel ? 'Default model' : 'Default Agent Runtime';
     const profile = findProfileByRuntime(catalog, runtime);
-    const modelName = runtime.model_name ?? catalog?.default_runtime?.model_name ?? null;
+    // Resolve through this runtime's own profile — borrowing the catalog
+    // default's model would name a model this profile may not even serve.
+    const modelName = resolveRuntimeModelName(runtime, catalog);
     const prefix = profile?.name ?? (runtime.profile_id === catalog?.default_runtime?.profile_id ? 'Default Agent Runtime' : runtime.profile_id);
     return includeModel && modelName ? `${prefix} · ${shortModelName(modelName)}` : prefix;
 }
@@ -198,52 +190,73 @@ export function escapeRegExp(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function harnessLogo(harnessKind?: HarnessKind): string | undefined {
-    return harnessKind ? HARNESS_LOGOS[harnessKind] : undefined;
+// A paired Agent Host reports each harness's health from its own probe, so
+// every non-READY state is fixed on that computer rather than here. Pair the
+// label with the fix so an unusable harness never reads as an opaque code.
+const AGENT_HOST_HARNESS_HEALTH: Record<string, { label: string; detail: string }> = {
+    READY: { label: 'Ready', detail: 'Accepting runs.' },
+    AUTH_REQUIRED: {
+        label: 'Sign-in needed',
+        detail: 'Sign in to this agent on that computer, then let Agent Host re-probe.',
+    },
+    UNSUPPORTED_VERSION: {
+        label: 'Version unsupported',
+        detail: 'Update this agent on that computer to a release Agent Host supports.',
+    },
+    CONFIG_INVALID: {
+        label: 'Configuration invalid',
+        detail: "This agent's settings on that computer were rejected. Fix them, then re-probe.",
+    },
+    PROBE_FAILED: {
+        label: 'Probe failed',
+        detail: 'Agent Host could not start this agent. Check the Agent Host log on that computer.',
+    },
+    INSTALLING: { label: 'Installing', detail: 'Agent Host is still installing the adapter.' },
+    DISABLED: { label: 'Disabled', detail: 'Turned off in the Agent Host configuration on that computer.' },
+};
+
+export function agentHostHarnessHealth(health: string): { label: string; detail: string; ready: boolean } {
+    const known = AGENT_HOST_HARNESS_HEALTH[health];
+    if (known) return { ...known, ready: health === 'READY' };
+    return {
+        label: humanizeAgentHostState(health),
+        detail: 'That computer reported a state this version of Lemma does not recognize yet.',
+        ready: false,
+    };
 }
 
-export function harnessModelOptions(harness: AgentHarnessInfo): RuntimeModelOption[] {
-    // Prefer the structured catalog (nice display names + context metadata);
-    // fall back to the flat model aliases for older daemons.
-    if (harness.model_catalog && harness.model_catalog.length > 0) {
-        return harness.model_catalog as RuntimeModelOption[];
-    }
-    return (harness.models ?? []).map((modelName) => ({
-        name: modelName,
-        display_name: null,
-        provider_model_name: modelName,
-        capabilities: [],
-        default_model_settings: {},
-        metadata: {},
-    }));
+const AGENT_HOST_STATUS_LABELS: Record<string, string> = {
+    ONLINE: 'Online',
+    OFFLINE: 'Offline',
+    DRAINING: 'Draining',
+    UPGRADE_REQUIRED: 'Upgrade required',
+    REVOKED: 'Revoked',
+};
+
+export function agentHostStatusLabel(status: string): string {
+    return AGENT_HOST_STATUS_LABELS[status] ?? humanizeAgentHostState(status);
 }
 
-export function isHarnessAvailable(harness: AgentHarnessInfo): boolean {
-    return harness.available !== false && harness.availability_status !== 'NOT_INSTALLED';
+function humanizeAgentHostState(value: string): string {
+    const words = value.replaceAll('_', ' ').toLowerCase();
+    return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-export function availableHarnessStatusLabel(harness: AgentHarnessInfo): string | null {
-    if (!isHarnessAvailable(harness)) return 'Not installed';
-    if (harness.daemon_status && harness.daemon_status !== 'ONLINE') return harness.daemon_status;
-    return null;
+// Model choices a harness advertises, used only to tell the user how much this
+// harness brings. Config options are an open shape, so count defensively.
+export function agentHostHarnessModelCount(
+    options: Array<{ category: string; options?: Array<Record<string, unknown>> }>,
+): number {
+    return options.reduce(
+        (total, option) => total + (option.category === 'model' ? (option.options?.length ?? 0) : 0),
+        0,
+    );
 }
 
-export function firstHarnessModelName(harness: AgentHarnessInfo | AvailableHarnessOption): string | undefined {
-    const firstModel = harness.models?.[0];
-    return typeof firstModel === 'string' ? firstModel : firstModel?.name;
-}
-
-export function availableHarnessKey(harness: Pick<AgentHarnessInfo, 'daemon_id' | 'harness_kind'>): string {
-    return `${harness.daemon_id ?? 'daemonless'}::${harness.harness_kind}`;
-}
-
-export function runtimeProfileDaemonKey(profile: AgentRuntimeProfileResponse): string | null {
-    const daemonId = typeof profile.daemon_id === 'string' ? profile.daemon_id : null;
-    return daemonId ? `${daemonId}::${profile.derived_harness_kind}` : null;
-}
-
+// Why a harness-backed profile can't take work right now. Provider profiles
+// (a base URL and a key) are always reachable, so they have nothing to report.
 export function runtimeAvailabilityLabel(profile: AgentRuntimeProfileResponse): string | null {
-    if (!profile.daemon_id) return null;
+    if (!profile.harness_id) return null;
     switch (profile.availability_status) {
         case 'READY':
             return null;
@@ -256,25 +269,22 @@ export function runtimeAvailabilityLabel(profile: AgentRuntimeProfileResponse): 
         case 'UNAVAILABLE':
             return 'Unavailable';
         default:
-            return profile.daemon_status && profile.daemon_status !== 'ONLINE'
-                ? profile.daemon_status
-                : null;
+            return null;
     }
 }
 
 // Flatten the runtime-profile catalog into the flat, plain-language model list
 // the ModelPicker consumes. Every pickable model across every saved profile
 // (Lemma built-in, BYO providers, coding agents) becomes one row, tagged with
-// its profile so the picker can group by provider. Provider/daemon *creation*
-// is intentionally not represented here — that lives in the manage surface.
+// its profile so the picker can group by provider. Provider/host *creation* is
+// intentionally not represented here — that lives in the manage surface.
 export function runtimeCatalogToModelOptions(
     catalog?: AgentRuntimeProfileListResponse,
-    availableHarnesses?: AgentHarnessListResponse,
 ): AvailableModelInfo[] {
     if (!catalog?.items?.length) return [];
     const options: AvailableModelInfo[] = [];
     for (const profile of catalog.items) {
-        for (const model of runtimeModels(profile, availableHarnesses)) {
+        for (const model of runtimeModels(profile)) {
             options.push({
                 id: model.name as AvailableModelInfo['id'],
                 name: model.display_name ?? model.name,

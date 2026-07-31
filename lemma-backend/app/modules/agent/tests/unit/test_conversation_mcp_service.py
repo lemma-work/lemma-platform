@@ -103,7 +103,7 @@ async def test_conversation_mcp_includes_surface_toolsets(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_conversation_mcp_exposes_todo_tools_when_agent_has_todo(monkeypatch):
-    # The daemon harnesses (Codex/Claude-Code/OpenCode) reach tools through this
+    # The remote harnesses (Codex/Claude-Code/OpenCode) reach tools through this
     # exact path, so an agent whose toolsets include TODO must get the todo tools
     # over MCP too (the in-process LEMMA harness isn't the only consumer).
     from app.modules.agent.domain.value_objects import AgentToolset

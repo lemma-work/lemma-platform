@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Any
 
-from redis.asyncio import Redis
+
+from app.core.infrastructure.redis.client import get_redis
 from redis.exceptions import RedisError
 
 from app.core.config import reveal_secret, settings
@@ -36,10 +37,7 @@ class AltchaRejected(ValueError):
 
 class AuthAbuseStore:
     def __init__(self, redis_url: str | None = None):
-        self._redis = Redis.from_url(
-            redis_url or settings.redis_url,
-            decode_responses=True,
-        )
+        self._redis = get_redis(url=redis_url or settings.redis_url)
 
     @staticmethod
     def digest(value: str) -> str:
@@ -159,7 +157,10 @@ class AuthAbuseStore:
             raise AltchaRejected("Proof-of-work expired or has the wrong purpose")
 
     async def close(self) -> None:
-        await self._redis.aclose()
+        # The client is shared process-wide; closing it here would break
+        # every other component still using the same pool. Disposal is
+        # close_redis_clients()'s job at lifespan shutdown.
+        self._redis = None
 
 
 def client_ip(scope: Any) -> str:

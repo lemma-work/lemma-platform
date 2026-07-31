@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from redis.asyncio import Redis
+
+from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
 
@@ -16,7 +17,7 @@ class WorkspaceProcessStore:
         redis_url: str | None = None,
         key_prefix: str = "workspace:process:v1",
     ):
-        self._redis = Redis.from_url(redis_url or settings.redis_url, decode_responses=True)
+        self._redis = get_redis(url=redis_url or settings.redis_url)
         self._key_prefix = key_prefix
 
     def _key(self, process_id: str) -> str:
@@ -45,5 +46,8 @@ class WorkspaceProcessStore:
         await self._redis.delete(self._key(process_id))
 
     async def close(self) -> None:
-        await self._redis.aclose()
+        # The client is shared process-wide; closing it here would break
+        # every other component still using the same pool. Disposal is
+        # close_redis_clients()'s job at lifespan shutdown.
+        self._redis = None
 

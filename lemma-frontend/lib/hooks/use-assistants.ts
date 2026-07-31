@@ -47,7 +47,7 @@ function normalizeAgentAssistant(raw: Record<string, unknown>): Assistant {
         tool_sets: toolsets,
         toolsets,
         accessible_tables: (raw.accessible_tables as Assistant['accessible_tables'] | undefined) || [],
-        accessible_folders: (raw.accessible_folders as string[] | undefined) || [],
+        accessible_folders: (raw.accessible_folders as Assistant['accessible_folders'] | undefined) || [],
         accessible_connectors: (raw.accessible_connectors as Assistant['accessible_connectors'] | undefined) || [],
         agent_names: (raw.agent_names as string[] | undefined) || [],
         function_names: (raw.function_names as string[] | undefined) || [],

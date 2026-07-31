@@ -4,7 +4,7 @@ import { use } from 'react';
 
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ConnectorsView } from '@/components/connectors/connectors-view';
-import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { StepLoader } from '@/components/brand/loader';
 import { usePod } from '@/lib/hooks/use-pods';
 
@@ -22,9 +22,8 @@ export default function PodConnectorsPage({ params }: { params: Promise<{ id: st
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title="Connectors"
-                productIconKind="connectors"
                 meta={<span>{pod?.name || 'Pod'}</span>}
             />
             <SectionPrimer concept="connector" className="mb-4" />

@@ -154,9 +154,8 @@ impl ManagedRuntimeController {
             32,
             "booting the app-owned Linux appliance",
         );
-        self.runtime.start().map_err(|error| {
+        let status = self.runtime.start().inspect_err(|_error| {
             let _ = self.runtime.capture_diagnostics();
-            error
         })?;
         let parameters = json!({
             "images": self.spec.images,
@@ -199,11 +198,6 @@ impl ManagedRuntimeController {
                 return Err(error);
             }
         }
-        let status = self.runtime.health().map_err(|error| {
-            let _ = self.runtime.capture_diagnostics();
-            let _ = self.runtime.stop();
-            error
-        })?;
         progress(
             "infrastructure-health",
             "Checking private services",

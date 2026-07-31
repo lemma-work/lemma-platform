@@ -2,19 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import shutil
-import subprocess
-import sys
 from collections.abc import Awaitable, Callable
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from asgiref.testing import ApplicationCommunicator as ConnectorCommunicator
 from fastapi import status
-from sqlalchemy import select
 from streaq.task import TaskStatus
 
 from app.core.infrastructure.channels.channel_service import get_channel_service
@@ -39,8 +32,7 @@ from app.modules.agent.domain.value_objects import (
     MessageRole,
 )
 from app.modules.agent.infrastructure.models import AgentRunModel
-from app.modules.agent.infrastructure.models import AgentRuntimeDaemonModel
-from app.modules.agent.infrastructure.models import AgentRuntimeProfileModel
+from app.modules.agent.infrastructure.runtime_models import AgentRuntimeProfileModel
 from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.services.agent_runner_service import AgentRunnerService
 from app.modules.agent.services.conversation_service import ConversationService
@@ -494,78 +486,6 @@ async def _wait_for_streaq_job_status(job_id: str, status: TaskStatus) -> None:
     raise AssertionError(f"Expected job {job_id} to be {status}, got {last_status}")
 
 
-async def _receive_daemon_ws_message(
-    communicator: ConnectorCommunicator,
-    *,
-    message_type: str,
-    timeout: float = 30,
-) -> dict:
-    async with asyncio.timeout(timeout):
-        while True:
-            output = await communicator.receive_output(timeout=timeout)
-            assert output["type"] == "websocket.send", output
-            raw = output.get("text") or output.get("bytes")
-            if isinstance(raw, bytes):
-                raw = raw.decode()
-            payload = json.loads(raw)
-            if payload.get("type") == message_type:
-                return payload
-
-
-async def _wait_for_daemon_session(
-    authenticated_client,
-    *,
-    pod_id,
-    conversation_id,
-    session_id: str,
-    timeout: float = 15.0,
-) -> None:
-    """Wait until the daemon session id is durably persisted on the conversation.
-
-    The session id is written by the worker while it processes the
-    ``daemon.session.started`` status event; the next (resumption) run reads it
-    cross-process, so the test must let that write land before triggering it.
-    """
-    async with asyncio.timeout(timeout):
-        while True:
-            response = await authenticated_client.get(
-                f"/pods/{pod_id}/conversations/{conversation_id}"
-            )
-            assert response.status_code == 200, response.text
-            metadata = response.json().get("metadata") or {}
-            session = metadata.get("daemon_session") or {}
-            if session.get("session_id") == session_id:
-                return
-            await asyncio.sleep(0.2)
-
-
-async def _wait_for_daemon_harness(
-    authenticated_client,
-    *,
-    harness_kind: str,
-    process: subprocess.Popen[str] | None = None,
-    timeout: float = 30,
-) -> dict:
-    deadline = asyncio.get_running_loop().time() + timeout
-    last_payload: dict | None = None
-    while asyncio.get_running_loop().time() < deadline:
-        if process is not None and process.poll() is not None:
-            stdout, _ = process.communicate(timeout=2)
-            raise AssertionError(
-                f"Daemon process exited before {harness_kind} became available.\n{stdout}"
-            )
-        response = await authenticated_client.get("/agent-runtime/harnesses")
-        assert response.status_code == 200, response.text
-        last_payload = response.json()
-        for item in last_payload["items"]:
-            if item["harness_kind"] == harness_kind and item["daemon_status"] == "ONLINE":
-                return item
-        await asyncio.sleep(0.25)
-    raise AssertionError(
-        f"Timed out waiting for {harness_kind} daemon harness. Last payload: {last_payload}"
-    )
-
-
 class TestPodAgentLifecycle:
     async def test_conversation_list_distinguishes_all_default_and_named_agents(
         self,
@@ -805,7 +725,7 @@ class TestPodAgentLifecycle:
         create_agent = await authenticated_client.post(
             f"/pods/{pod_id}/agents",
             json={
-                "name": "Daemon Message Persistence Agent",
+                "name": "Harness Message Persistence Agent",
                 "instruction": "Test harness message persistence.",
                 "toolsets": ["WORKSPACE_CLI"],
                 "agent_runtime": DEFAULT_AGENT_RUNTIME,
@@ -830,7 +750,7 @@ class TestPodAgentLifecycle:
                 conversation_id=conversation_id,
                 agent_id=UUID(agent["id"]),
                 agent_runtime=AgentRuntimeConfig(profile_id="system:lemma"),
-                metadata={"source": "daemon_message_persistence_test"},
+                metadata={"source": "harness_message_persistence_test"},
             )
             await uow.commit()
         agent_run_id = run.id
@@ -2421,73 +2341,6 @@ class TestAgentRuntimeConfigApis:
         monkeypatch.setenv("LEMMA_OPENAI_MODEL_NAMES", "gpt-4o,gpt-4o-mini")
         monkeypatch.setenv("LEMMA_OPENAI_DEFAULT_MODEL", "gpt-4o")
         monkeypatch.delenv("LEMMA_DEFAULT_MODEL_TYPE", raising=False)
-        harnesses = await authenticated_client.get("/agent-runtime/harnesses")
-        assert harnesses.status_code == 200, harnesses.text
-        harness_payload = harnesses.json()
-        assert harness_payload == {"items": []}
-        assert "default_editable" not in harness_payload
-
-        offline_daemon = AgentRuntimeDaemonModel(
-            user_id=UUID(fixed_test_user["id"]),
-            device_key=f"offline-device-{uuid4().hex[:8]}",
-            display_name="Offline laptop",
-            status="OFFLINE",
-            device_info={"platform": "test"},
-            harness_catalog={
-                "CODEX": {
-                    "available": True,
-                    "display_name": "Offline Codex",
-                    "models": ["gpt-5.5"],
-                }
-            },
-        )
-        db_session.add(offline_daemon)
-        await db_session.commit()
-
-        harnesses_with_offline_daemon = await authenticated_client.get(
-            "/agent-runtime/harnesses"
-        )
-        assert harnesses_with_offline_daemon.status_code == 200
-        assert harnesses_with_offline_daemon.json() == {"items": []}
-
-        missing_tool_daemon = AgentRuntimeDaemonModel(
-            user_id=UUID(fixed_test_user["id"]),
-            device_key=f"missing-tool-device-{uuid4().hex[:8]}",
-            display_name="Missing tool laptop",
-            status="ONLINE",
-            device_info={"platform": "test"},
-            harness_catalog={
-                "CLAUDE_CODE": {
-                    "available": False,
-                    "display_name": "Claude Code",
-                    "models": [],
-                }
-            },
-        )
-        db_session.add(missing_tool_daemon)
-        await db_session.flush()
-        missing_tool_daemon_id = str(missing_tool_daemon.id)
-        await db_session.commit()
-
-        harnesses_with_missing_tool = await authenticated_client.get(
-            "/agent-runtime/harnesses"
-        )
-        assert harnesses_with_missing_tool.status_code == 200
-        assert harnesses_with_missing_tool.json() == {
-            "items": [
-                {
-                    "harness_kind": "CLAUDE_CODE",
-                    "display_name": "Claude Code",
-                    "models": [],
-                    "model_catalog": [],
-                    "available": False,
-                    "availability_status": "NOT_INSTALLED",
-                    "daemon_id": missing_tool_daemon_id,
-                    "daemon_display_name": "Missing tool laptop",
-                    "daemon_status": "ONLINE",
-                }
-            ]
-        }
 
         org_profile = AgentRuntimeProfileModel(
             organization_id=UUID(fixed_test_org["id"]),
@@ -2514,9 +2367,33 @@ class TestAgentRuntimeConfigApis:
         disabled_profile = AgentRuntimeProfileModel(
             organization_id=UUID(fixed_test_org["id"]),
             scope="ORGANIZATION",
+            kind="MODEL_PROVIDER",
+            protocol="OPENAI_COMPATIBLE",
+            name=f"Disabled Runtime {uuid4().hex[:8]}",
+            default_model_name="disabled-model",
+            model_catalog=[
+                {
+                    "name": "disabled-model",
+                    "display_name": "Disabled Model",
+                    "provider_model_name": "disabled-model",
+                    "capabilities": ["TEXT", "TOOLS"],
+                    "default_model_settings": {},
+                    "metadata": {},
+                }
+            ],
+            config={"base_url": "https://disabled-provider.test/v1"},
+            status="DISABLED",
+            profile_metadata={"source": "e2e"},
+        )
+        # A row left behind by the retired local daemon. Its protocol is no
+        # longer in RuntimeProfileProtocol, so listing must skip it rather than
+        # fail the whole organization's request.
+        legacy_daemon_profile = AgentRuntimeProfileModel(
+            organization_id=UUID(fixed_test_org["id"]),
+            scope="ORGANIZATION",
             kind="HARNESS",
             protocol="CODEX_APP_SERVER",
-            name=f"Disabled Runtime {uuid4().hex[:8]}",
+            name=f"Legacy Daemon Runtime {uuid4().hex[:8]}",
             default_model_name="default",
             model_catalog=[
                 {
@@ -2529,13 +2406,14 @@ class TestAgentRuntimeConfigApis:
                 }
             ],
             config={"binary": "codex"},
-            status="DISABLED",
+            status="ACTIVE",
             profile_metadata={"source": "e2e"},
         )
-        db_session.add_all([org_profile, disabled_profile])
+        db_session.add_all([org_profile, disabled_profile, legacy_daemon_profile])
         await db_session.flush()
         org_profile_id = str(org_profile.id)
         disabled_profile_id = str(disabled_profile.id)
+        legacy_daemon_profile_id = str(legacy_daemon_profile.id)
         await db_session.commit()
 
         profiles = await authenticated_client.get(
@@ -2547,6 +2425,7 @@ class TestAgentRuntimeConfigApis:
         profile_ids = {item["id"] for item in profile_payload["items"]}
         assert org_profile_id in profile_ids
         assert disabled_profile_id not in profile_ids
+        assert legacy_daemon_profile_id not in profile_ids
         org_response = next(
             item for item in profile_payload["items"] if item["id"] == org_profile_id
         )
@@ -2623,864 +2502,6 @@ class TestAgentRuntimeConfigApis:
             "profile_id": "system:lemma",
             "model_name": "deepseek-v4-flash",
         }
-
-    async def test_create_user_daemon_profiles_and_resolve_them(
-        self,
-        authenticated_client,
-        fixed_test_org,
-        fixed_test_user,
-        db_session,
-    ):
-        daemon = AgentRuntimeDaemonModel(
-            user_id=UUID(fixed_test_user["id"]),
-            device_key=f"test-device-{uuid4().hex[:8]}",
-            display_name="Test laptop",
-            status="ONLINE",
-            device_info={"platform": "test"},
-            harness_catalog={
-                "CODEX": {
-                    "available": True,
-                    "display_name": "Codex",
-                    "models": ["gpt-5.5"],
-                },
-                "CLAUDE_CODE": {
-                    "available": True,
-                    "display_name": "Claude Code",
-                    "models": ["sonnet"],
-                },
-                "OPENCODE": {
-                    "available": True,
-                    "display_name": "OpenCode",
-                    "models": ["opencode/deepseek-v4-flash-free"],
-                },
-            },
-        )
-        db_session.add(daemon)
-        await db_session.flush()
-        daemon_id = str(daemon.id)
-        await db_session.commit()
-
-        harnesses = await authenticated_client.get("/agent-runtime/harnesses")
-        assert harnesses.status_code == 200, harnesses.text
-        daemon_items = [
-            item
-            for item in harnesses.json()["items"]
-            if item.get("daemon_id") == daemon_id
-        ]
-        assert {(item["harness_kind"], tuple(item["models"])) for item in daemon_items} == {
-            ("CODEX", ("gpt-5.5",)),
-            ("CLAUDE_CODE", ("sonnet",)),
-            ("OPENCODE", ("opencode/deepseek-v4-flash-free",)),
-        }
-
-        requested_profiles = [
-            (HarnessKind.CODEX, "Codex daemon", "gpt-5.5"),
-            (HarnessKind.CLAUDE_CODE, "Claude Code daemon", "sonnet"),
-            (
-                HarnessKind.OPENCODE,
-                "OpenCode daemon",
-                "opencode/deepseek-v4-flash-free",
-            ),
-        ]
-        created_profiles = []
-        for harness_kind, name, model_name in requested_profiles:
-            response = await authenticated_client.post(
-                f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
-                json={
-                    "source": "USER_DAEMON",
-                    "daemon_id": daemon_id,
-                    "harness_kind": harness_kind.value,
-                    "name": f"{name} {uuid4().hex[:8]}",
-                    "default_model_name": model_name,
-                },
-            )
-            assert response.status_code == 201, response.text
-            payload = response.json()
-            assert payload["scope"] == "ORGANIZATION"
-            assert payload["kind"] == "HARNESS"
-            assert payload["user_id"] == fixed_test_user["id"]
-            assert payload["daemon_id"] == daemon_id
-            assert payload["derived_harness_kind"] == harness_kind.value
-            assert payload["default_model_name"] == model_name
-            assert payload["metadata"] == {"source": "USER_DAEMON"}
-            assert {item["name"] for item in payload["model_catalog"]} == {
-                "default",
-                model_name,
-            }
-            assert payload["config"] == {}
-            created_profiles.append((payload["id"], harness_kind, model_name))
-
-        profiles = await authenticated_client.get(
-            f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
-        )
-        assert profiles.status_code == 200, profiles.text
-        listed_profile_ids = {item["id"] for item in profiles.json()["items"]}
-        assert {profile_id for profile_id, _, _ in created_profiles}.issubset(
-            listed_profile_ids
-        )
-
-        runner = AgentRunnerService(
-            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            harness_registry=object(),  # type: ignore[arg-type]
-        )
-        for profile_id, harness_kind, model_name in created_profiles:
-            resolved = await runner._resolve_agent_runtime(
-                AgentRuntimeConfig(profile_id=profile_id),
-                user_id=UUID(fixed_test_user["id"]),
-                organization_id=UUID(fixed_test_org["id"]),
-            )
-            assert resolved.profile.id == profile_id
-            assert resolved.harness_kind is harness_kind
-            assert resolved.model_name_for_harness == model_name
-
-        missing_model = await authenticated_client.post(
-            f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
-            json={
-                "source": "USER_DAEMON",
-                "daemon_id": daemon_id,
-                "harness_kind": "OPENCODE",
-                "name": f"Bad OpenCode {uuid4().hex[:8]}",
-                "default_model_name": "opencode/missing",
-            },
-        )
-        assert missing_model.status_code == 400
-        assert "detected model names" in missing_model.json()["message"]
-
-    async def test_daemon_websocket_materializes_catalog_and_profile_flow(
-        self,
-        authenticated_client,
-        fixed_test_org,
-        fixed_test_user,
-        db_session,
-        test_app,
-    ):
-        device_key = f"real-ws-device-{uuid4().hex[:8]}"
-        communicator = ConnectorCommunicator(
-            test_app,
-            {
-                "type": "websocket",
-                "path": "/me/agent-runtime/daemon/ws",
-                "raw_path": b"/me/agent-runtime/daemon/ws",
-                "query_string": b"",
-                "headers": [
-                    (
-                        b"authorization",
-                        f"Bearer {fixed_test_user['token']}".encode(),
-                    ),
-                    (b"host", b"testserver"),
-                ],
-                "scheme": "ws",
-                "client": ("testclient", 50000),
-                "server": ("testserver", 80),
-                "subprotocols": [],
-            },
-        )
-
-        await communicator.send_input({"type": "websocket.connect"})
-        accepted = await communicator.receive_output(timeout=5)
-        assert accepted["type"] == "websocket.accept"
-
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "daemon.ready",
-                        "payload": {
-                            "device_key": device_key,
-                            "display_name": "Real E2E laptop",
-                            "device_info": {
-                                "platform": "test",
-                                "lemma_cli_version": "e2e",
-                            },
-                            "harness_catalog": {
-                                "CODEX": {
-                                    "available": True,
-                                    "display_name": "Codex E2E",
-                                    "models": ["gpt-5.5"],
-                                }
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-        ready_ack = await communicator.receive_output(timeout=5)
-        assert ready_ack["type"] == "websocket.send"
-        ready_payload = json.loads(ready_ack["text"])
-        assert ready_payload["type"] == "daemon.ready_ack"
-        daemon_id = ready_payload["daemon_id"]
-
-        db_session.expire_all()
-        daemon = await db_session.scalar(
-            select(AgentRuntimeDaemonModel).where(
-                AgentRuntimeDaemonModel.user_id == UUID(fixed_test_user["id"]),
-                AgentRuntimeDaemonModel.device_key == device_key,
-            )
-        )
-        assert daemon is not None
-        assert str(daemon.id) == daemon_id
-        assert daemon.status == "ONLINE"
-
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "daemon.catalog",
-                        "payload": {
-                            "CODEX": {
-                                "available": True,
-                                "display_name": "Codex E2E",
-                                "models": ["gpt-5.5", "gpt-5.5-mini"],
-                            }
-                        },
-                    }
-                ),
-            }
-        )
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps({"type": "daemon.ping"}),
-            }
-        )
-        pong = await communicator.receive_output(timeout=5)
-        assert pong["type"] == "websocket.send"
-        assert json.loads(pong["text"]) == {"type": "daemon.pong"}
-
-        harnesses = await authenticated_client.get("/agent-runtime/harnesses")
-        assert harnesses.status_code == 200, harnesses.text
-        daemon_items = [
-            item
-            for item in harnesses.json()["items"]
-            if item.get("daemon_id") == daemon_id
-        ]
-        assert len(daemon_items) == 1
-        daemon_item = daemon_items[0]
-        # model_catalog is derived from the flat models list (structured entry
-        # serialization); assert it by model name and check the rest exactly.
-        model_catalog = daemon_item.pop("model_catalog")
-        assert [entry["name"] for entry in model_catalog] == ["gpt-5.5", "gpt-5.5-mini"]
-        assert daemon_item == {
-            "harness_kind": "CODEX",
-            "display_name": "Codex E2E",
-            "models": ["gpt-5.5", "gpt-5.5-mini"],
-            "available": True,
-            "availability_status": "READY",
-            "daemon_id": daemon_id,
-            "daemon_display_name": "Real E2E laptop",
-            "daemon_status": "ONLINE",
-        }
-
-        created = await authenticated_client.post(
-            f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
-            json={
-                "source": "USER_DAEMON",
-                "daemon_id": daemon_id,
-                "harness_kind": "CODEX",
-                "name": f"Real WS Codex {uuid4().hex[:8]}",
-                "default_model_name": "gpt-5.5-mini",
-            },
-        )
-        assert created.status_code == 201, created.text
-        profile = created.json()
-        assert profile["user_id"] == fixed_test_user["id"]
-        assert profile["daemon_id"] == daemon_id
-        assert profile["metadata"] == {"source": "USER_DAEMON"}
-        assert profile["config"] == {}
-
-        await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
-        await communicator.wait(timeout=5)
-        db_session.expire_all()
-        offline_daemon = await db_session.get(
-            AgentRuntimeDaemonModel,
-            UUID(daemon_id),
-        )
-        assert offline_daemon is not None
-        assert offline_daemon.status == "OFFLINE"
-
-    async def test_daemon_websocket_rejects_invalid_auth_without_server_error(
-        self,
-        test_app,
-    ):
-        communicator = ConnectorCommunicator(
-            test_app,
-            {
-                "type": "websocket",
-                "path": "/me/agent-runtime/daemon/ws",
-                "raw_path": b"/me/agent-runtime/daemon/ws",
-                "query_string": b"",
-                "headers": [
-                    (b"authorization", b"Bearer invalid-token"),
-                    (b"host", b"testserver"),
-                ],
-                "scheme": "ws",
-                "client": ("testclient", 50000),
-                "server": ("testserver", 80),
-                "subprotocols": [],
-            },
-        )
-
-        await communicator.send_input({"type": "websocket.connect"})
-        rejected = await communicator.receive_output(timeout=5)
-        assert rejected["type"] == "websocket.close"
-        assert rejected["code"] == status.WS_1008_POLICY_VIOLATION
-
-    @pytest.mark.parametrize(
-        ("harness_kind", "model_name"),
-        [
-            ("CODEX", "gpt-5.5"),
-            ("CLAUDE_CODE", "sonnet"),
-            ("OPENCODE", "opencode/deepseek-v4-flash-free"),
-        ],
-    )
-    async def test_user_daemon_run_crosses_worker_and_websocket_via_redis(
-        self,
-        authenticated_client,
-        fixed_test_org,
-        fixed_test_user,
-        test_app,
-        worker,
-        harness_kind,
-        model_name,
-    ):
-        _ = worker
-        device_key = f"run-ws-device-{uuid4().hex[:8]}"
-        communicator = ConnectorCommunicator(
-            test_app,
-            {
-                "type": "websocket",
-                "path": "/me/agent-runtime/daemon/ws",
-                "raw_path": b"/me/agent-runtime/daemon/ws",
-                "query_string": b"",
-                "headers": [
-                    (
-                        b"authorization",
-                        f"Bearer {fixed_test_user['token']}".encode(),
-                    ),
-                    (b"host", b"testserver"),
-                ],
-                "scheme": "ws",
-                "client": ("testclient", 50000),
-                "server": ("testserver", 80),
-                "subprotocols": [],
-            },
-        )
-        await communicator.send_input({"type": "websocket.connect"})
-        accepted = await communicator.receive_output(timeout=5)
-        assert accepted["type"] == "websocket.accept"
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "daemon.ready",
-                        "payload": {
-                            "device_key": device_key,
-                            "display_name": "Worker bridge laptop",
-                            "device_info": {"platform": "test"},
-                            "harness_catalog": {
-                                harness_kind: {
-                                    "available": True,
-                                    "display_name": f"{harness_kind} bridge",
-                                    "models": [model_name],
-                                }
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-        ready_ack = await _receive_daemon_ws_message(
-            communicator,
-            message_type="daemon.ready_ack",
-        )
-        daemon_id = ready_ack["daemon_id"]
-
-        created_profile = await authenticated_client.post(
-            f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
-            json={
-                "source": "USER_DAEMON",
-                "daemon_id": daemon_id,
-                "harness_kind": harness_kind,
-                "name": f"Worker Bridge {harness_kind} {uuid4().hex[:8]}",
-                "default_model_name": model_name,
-            },
-        )
-        assert created_profile.status_code == 201, created_profile.text
-        profile_id = created_profile.json()["id"]
-
-        pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-        create_agent = await authenticated_client.post(
-            f"/pods/{pod_id}/agents",
-            json={
-                "name": "Daemon Worker Agent",
-                "instruction": "Reply through the daemon runtime.",
-                "agent_runtime": {
-                    "profile_id": profile_id,
-                    "model_name": model_name,
-                },
-            },
-        )
-        assert create_agent.status_code == 201, create_agent.text
-        create_conversation = await authenticated_client.post(
-            f"/pods/{pod_id}/conversations",
-            json={
-                "agent_name": "daemon_worker_agent",
-                "title": "Daemon worker bridge",
-            },
-        )
-        assert create_conversation.status_code == 201, create_conversation.text
-        conversation_id = create_conversation.json()["id"]
-
-        post_task = asyncio.create_task(
-            _post_sse(
-                authenticated_client,
-                f"/pods/{pod_id}/conversations/{conversation_id}/messages",
-                {"content": "Say hello from the daemon."},
-            )
-        )
-        run_start = await _receive_daemon_ws_message(
-            communicator,
-            message_type="run.start",
-            timeout=60,
-        )
-        agent_run_id = run_start["agent_run_id"]
-        assert run_start["payload"]["runtime"] == {
-            "profile_id": profile_id,
-            "harness_kind": harness_kind,
-            "model_name": model_name,
-        }
-        assert run_start["payload"]["prompt"]["user_prompt"].startswith(
-            "USER:\nSay hello from the daemon."
-        )
-        assert "Reply through the daemon runtime." in run_start["payload"]["prompt"]["system_prompt"]
-        assert "session_id" not in run_start["payload"]["prompt"]
-        assert "text" not in run_start["payload"]["prompt"]
-        assert "messages" not in run_start["payload"]
-        first_local_session_id = f"local-session-{harness_kind}"
-
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": agent_run_id,
-                        "event": {
-                            "type": "status",
-                            "data": {
-                                "status": "daemon.session.started",
-                                "local_session": {
-                                    "harness_kind": harness_kind,
-                                    "session_id": first_local_session_id,
-                                },
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": agent_run_id,
-                        "event": {
-                            "type": "message",
-                            "data": {
-                                "role": "assistant",
-                                "kind": "text",
-                                "text": f"hello from redis daemon {harness_kind}",
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": agent_run_id,
-                        "event": {"type": "completed", "data": {}},
-                    }
-                ),
-            }
-        )
-        events = await post_task
-        _assert_completed_without_error(events)
-
-        messages = await authenticated_client.get(
-            f"/pods/{pod_id}/conversations/{conversation_id}/messages"
-        )
-        assert messages.status_code == 200, messages.text
-        assistant_messages = [
-            item
-            for item in messages.json()["items"]
-            if item["role"] == MessageRole.ASSISTANT.value
-        ]
-        assert any(
-            item["text"] == f"hello from redis daemon {harness_kind}"
-            for item in assistant_messages
-        )
-
-        # The worker persists the daemon session id while handling the
-        # daemon.session.started event; wait for it to land before the
-        # resumption run reads it cross-process.
-        await _wait_for_daemon_session(
-            authenticated_client,
-            pod_id=pod_id,
-            conversation_id=conversation_id,
-            session_id=first_local_session_id,
-        )
-
-        followup_task = asyncio.create_task(
-            _post_sse(
-                authenticated_client,
-                f"/pods/{pod_id}/conversations/{conversation_id}/messages",
-                {"content": "What did I ask first?"},
-            )
-        )
-        followup_start = await _receive_daemon_ws_message(
-            communicator,
-            message_type="run.start",
-            timeout=60,
-        )
-        followup_run_id = followup_start["agent_run_id"]
-        assert followup_start["payload"]["conversation_id"] == conversation_id
-        assert (
-            followup_start["payload"]["mcp"]["conversation_id"]
-            == conversation_id
-        )
-        assert followup_start["payload"]["prompt"]["user_prompt"].startswith(
-            "USER:\nWhat did I ask first?"
-        )
-        assert followup_start["payload"]["prompt"]["session_id"] == first_local_session_id
-        assert "system_prompt" not in followup_start["payload"]["prompt"]
-        assert (
-            "Reply through the daemon runtime."
-            in followup_start["payload"]["prompt"]["recovery_system_prompt"]
-        )
-        assert "Say hello from the daemon." not in followup_start["payload"]["prompt"]["user_prompt"]
-        assert (
-            f"hello from redis daemon {harness_kind}"
-            not in followup_start["payload"]["prompt"]["user_prompt"]
-        )
-        assert "text" not in followup_start["payload"]["prompt"]
-        assert "messages" not in followup_start["payload"]
-        replacement_local_session_id = f"replacement-local-session-{harness_kind}"
-
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": followup_run_id,
-                        "event": {
-                            "type": "status",
-                            "data": {
-                                "status": "daemon.session.invalid",
-                                "local_session": {
-                                    "harness_kind": harness_kind,
-                                    "session_id": first_local_session_id,
-                                },
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": followup_run_id,
-                        "event": {
-                            "type": "status",
-                            "data": {
-                                "status": "daemon.session.started",
-                                "local_session": {
-                                    "harness_kind": harness_kind,
-                                    "session_id": replacement_local_session_id,
-                                },
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": followup_run_id,
-                        "event": {
-                            "type": "message",
-                            "data": {
-                                "role": "assistant",
-                                "kind": "text",
-                                "text": "you asked me to say hello",
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": followup_run_id,
-                        "event": {"type": "completed", "data": {}},
-                    }
-                ),
-            }
-        )
-        followup_events = await followup_task
-        _assert_completed_without_error(followup_events)
-
-        repaired_task = asyncio.create_task(
-            _post_sse(
-                authenticated_client,
-                f"/pods/{pod_id}/conversations/{conversation_id}/messages",
-                {"content": "Continue after repair."},
-            )
-        )
-        repaired_start = await _receive_daemon_ws_message(
-            communicator,
-            message_type="run.start",
-            timeout=60,
-        )
-        repaired_run_id = repaired_start["agent_run_id"]
-        assert (
-            repaired_start["payload"]["prompt"]["session_id"]
-            == replacement_local_session_id
-        )
-        assert "system_prompt" not in repaired_start["payload"]["prompt"]
-        assert (
-            "Reply through the daemon runtime."
-            in repaired_start["payload"]["prompt"]["recovery_system_prompt"]
-        )
-
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": repaired_run_id,
-                        "event": {
-                            "type": "message",
-                            "data": {
-                                "role": "assistant",
-                                "kind": "text",
-                                "text": "continued after repair",
-                            },
-                        },
-                    }
-                ),
-            }
-        )
-        await communicator.send_input(
-            {
-                "type": "websocket.receive",
-                "text": json.dumps(
-                    {
-                        "type": "run.event",
-                        "agent_run_id": repaired_run_id,
-                        "event": {"type": "completed", "data": {}},
-                    }
-                ),
-            }
-        )
-        repaired_events = await repaired_task
-        _assert_completed_without_error(repaired_events)
-
-        await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
-        await communicator.wait(timeout=5)
-
-    @pytest.mark.skipif(shutil.which("codex") is None, reason="codex CLI is not installed")
-    @pytest.mark.skipif(not system_lemma_available(), reason=SYSTEM_LEMMA_SKIP_REASON)
-    @pytest.mark.local_cli
-    async def test_cli_daemon_process_discovers_models_and_runs_real_harnesses(
-        self,
-        authenticated_client,
-        fixed_test_org,
-        fixed_test_user,
-        backend_server,
-        tmp_path,
-        worker,
-    ):
-        _ = worker
-        config_path = tmp_path / "lemma-config.json"
-        config_path.write_text(
-            json.dumps(
-                {
-                    "active_server": "default",
-                    "servers": {
-                        "default": {
-                            "base_url": backend_server["host_base_url"],
-                            "token": fixed_test_user["token"],
-                            "defaults": {},
-                        }
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-
-        repo_root = Path(__file__).resolve().parents[6]
-        env = os.environ.copy()
-        python_paths = [str(repo_root / "lemma-cli"), str(repo_root / "lemma-python")]
-        if env.get("PYTHONPATH"):
-            python_paths.append(env["PYTHONPATH"])
-        env["PYTHONPATH"] = os.pathsep.join(python_paths)
-        process = subprocess.Popen(  # noqa: S603
-            [
-                sys.executable,
-                "-m",
-                "lemma_cli.cli_core.app",
-                "--config-file",
-                str(config_path),
-                "daemon",
-                "start",
-            ],
-            cwd=repo_root,
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        try:
-            harness = await _wait_for_daemon_harness(
-                authenticated_client,
-                harness_kind="CODEX",
-                process=process,
-                timeout=30,
-            )
-            daemon_id = harness["daemon_id"]
-            catalog_response = await authenticated_client.get("/agent-runtime/harnesses")
-            assert catalog_response.status_code == 200, catalog_response.text
-            daemon_items = [
-                item
-                for item in catalog_response.json()["items"]
-                if item.get("daemon_id") == daemon_id
-            ]
-            assert daemon_items
-            for item in daemon_items:
-                assert item["models"], item
-                assert item["models"] != ["default"], item
-            runnable_harnesses = {
-                harness.strip()
-                for harness in os.getenv(
-                    "LEMMA_REAL_DAEMON_HARNESSES",
-                    "CODEX",
-                ).split(",")
-                if harness.strip()
-            }
-            daemon_items = [
-                item for item in daemon_items if item["harness_kind"] in runnable_harnesses
-            ]
-            assert daemon_items
-            preferred_models = {
-                "CODEX": os.getenv("LEMMA_REAL_DAEMON_CODEX_MODEL", "gpt-5.5"),
-                "CLAUDE_CODE": os.getenv("LEMMA_REAL_DAEMON_CLAUDE_MODEL", "sonnet"),
-                "OPENCODE": os.getenv(
-                    "LEMMA_REAL_DAEMON_OPENCODE_MODEL",
-                    "opencode/deepseek-v4-flash-free",
-                ),
-            }
-            pod_id = await _create_test_pod(authenticated_client, fixed_test_org)
-            for item in daemon_items:
-                harness_kind = item["harness_kind"]
-                requested_model = preferred_models.get(harness_kind)
-                model_name = (
-                    requested_model
-                    if requested_model in item["models"]
-                    else item["models"][0]
-                )
-                created_profile = await authenticated_client.post(
-                    f"/organizations/{fixed_test_org['id']}/agent-runtime/profiles",
-                    json={
-                        "source": "USER_DAEMON",
-                        "daemon_id": daemon_id,
-                        "harness_kind": harness_kind,
-                        "name": f"CLI Daemon {harness_kind} {uuid4().hex[:8]}",
-                        "default_model_name": model_name,
-                    },
-                )
-                assert created_profile.status_code == 201, created_profile.text
-                profile_id = created_profile.json()["id"]
-
-                agent_name = f"CLI Daemon {harness_kind} Agent"
-                create_agent = await authenticated_client.post(
-                    f"/pods/{pod_id}/agents",
-                    json={
-                        "name": agent_name,
-                        "instruction": (
-                            "Reply exactly with the marker requested by the user."
-                        ),
-                        "agent_runtime": {
-                            "profile_id": profile_id,
-                            "model_name": model_name,
-                        },
-                    },
-                )
-                assert create_agent.status_code == 201, create_agent.text
-                create_conversation = await authenticated_client.post(
-                    f"/pods/{pod_id}/conversations",
-                    json={
-                        "agent_name": create_agent.json()["name"],
-                        "title": f"CLI daemon bridge {harness_kind}",
-                    },
-                )
-                assert create_conversation.status_code == 201, create_conversation.text
-                conversation_id = create_conversation.json()["id"]
-                marker = f"REAL_DAEMON_{harness_kind}_E2E_OK"
-
-                events = await _post_sse(
-                    authenticated_client,
-                    f"/pods/{pod_id}/conversations/{conversation_id}/messages",
-                    {"content": f"Reply exactly {marker}."},
-                )
-                _assert_completed_without_error(events)
-
-                messages = await authenticated_client.get(
-                    f"/pods/{pod_id}/conversations/{conversation_id}/messages"
-                )
-                assert messages.status_code == 200, messages.text
-                assistant_messages = [
-                    message
-                    for message in messages.json()["items"]
-                    if message["role"] == MessageRole.ASSISTANT.value
-                ]
-                assert any(
-                    marker in (message["text"] or "")
-                    for message in assistant_messages
-                )
-        finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.communicate(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.communicate(timeout=10)
 
     async def test_create_provider_profiles_and_resolve_them(
         self,
@@ -3573,81 +2594,6 @@ class TestAgentRuntimeConfigApis:
                     else "vendor-secret"
                 )
             }
-
-    @pytest.mark.parametrize(
-        ("protocol", "harness_kind"),
-        [
-            ("CODEX_APP_SERVER", HarnessKind.CODEX),
-            ("CLAUDE_CODE", HarnessKind.CLAUDE_CODE),
-            ("OPENCODE", HarnessKind.OPENCODE),
-        ],
-    )
-    async def test_runner_resolves_org_user_daemon_profile_rows(
-        self,
-        db_session,
-        fixed_test_org,
-        fixed_test_user,
-        protocol,
-        harness_kind,
-    ):
-        daemon = AgentRuntimeDaemonModel(
-            user_id=UUID(fixed_test_user["id"]),
-            device_key=f"resolver-daemon-{uuid4().hex[:8]}",
-            display_name="Resolver daemon",
-            status="ONLINE",
-            device_info={"platform": "test"},
-            harness_catalog={
-                harness_kind.value: {
-                    "available": True,
-                    "display_name": harness_kind.value,
-                    "models": ["default"],
-                }
-            },
-        )
-        db_session.add(daemon)
-        await db_session.flush()
-        profile = AgentRuntimeProfileModel(
-            organization_id=UUID(fixed_test_org["id"]),
-            user_id=UUID(fixed_test_user["id"]),
-            daemon_id=daemon.id,
-            scope="ORGANIZATION",
-            kind="HARNESS",
-            protocol=protocol,
-            name=f"{harness_kind.value.lower()} e2e",
-            default_model_name="default",
-            model_catalog=[
-                {
-                    "name": "default",
-                    "display_name": "Default",
-                    "provider_model_name": "default",
-                    "capabilities": ["TEXT", "TOOLS"],
-                    "default_model_settings": {},
-                    "metadata": {},
-                }
-            ],
-            config={},
-            status="ACTIVE",
-            profile_metadata={"source": "USER_DAEMON"},
-        )
-        db_session.add(profile)
-        await db_session.flush()
-        profile_id = str(profile.id)
-        await db_session.commit()
-
-        runner = AgentRunnerService(
-            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
-            harness_registry=object(),  # type: ignore[arg-type]
-        )
-
-        resolved = await runner._resolve_agent_runtime(
-            AgentRuntimeConfig(profile_id=profile_id),
-            user_id=UUID(fixed_test_user["id"]),
-            organization_id=UUID(fixed_test_org["id"]),
-        )
-
-        assert resolved.profile.id == profile_id
-        assert resolved.harness_kind is harness_kind
-        assert resolved.model_name_for_harness == "default"
 
 
 class TestAgentToolApis:
@@ -3757,7 +2703,7 @@ class TestAgentOpenApi:
         ]["post"]["requestBody"]["content"]["application/json"]["schema"]
         assert create_profile_schema["discriminator"]["propertyName"] == "source"
         assert set(create_profile_schema["discriminator"]["mapping"]) == {
-            "USER_DAEMON",
+            "AGENT_HOST",
             "OPENAI_COMPATIBLE",
             "ANTHROPIC_COMPATIBLE",
         }

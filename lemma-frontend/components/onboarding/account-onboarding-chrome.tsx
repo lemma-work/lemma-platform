@@ -1,6 +1,7 @@
 import { ArrowLeft, Sparkles } from "@/components/ui/icons";
 
 import { Logo } from "@/components/brand/logo";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -30,6 +31,44 @@ export function SetupShell({
         {children}
       </div>
     </main>
+  );
+}
+
+export function SetupStandalonePage({
+  children,
+  onBack,
+  meta,
+}: {
+  children: React.ReactNode;
+  onBack?: () => void;
+  meta?: React.ReactNode;
+}) {
+  return (
+    <div className="relative flex min-h-screen w-full flex-col">
+      <header className="grid min-h-16 grid-cols-[1fr_auto_1fr] items-center gap-4 px-5 py-4 sm:px-8 lg:px-10">
+        <div className="justify-self-start">
+          {onBack ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={onBack}
+              className="h-auto gap-1.5 px-0 text-sm text-[var(--text-tertiary)] hover:bg-transparent hover:text-[var(--text-primary)]"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </Button>
+          ) : null}
+        </div>
+        <Logo size="sm" className="text-[var(--text-primary)]" />
+        <div className="flex min-w-0 items-center gap-3 justify-self-end text-right text-xs text-[var(--text-tertiary)]">
+          {meta}
+          <ThemeToggle variant="icon" />
+        </div>
+      </header>
+      <div className="relative flex flex-1 px-5 pb-10 pt-2 sm:px-8 lg:px-10">
+        {children}
+      </div>
+    </div>
   );
 }
 

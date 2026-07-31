@@ -572,3 +572,88 @@ async def test_progress_observer_renders_waiting_tool_call_once():
             }
         }
     ]
+
+
+class TestAgentHostPermissionPrompt:
+    """An Agent Host pauses for permission without ending its run.
+
+    Every other pause arrives as a terminal WAITING event; this one arrives as a
+    STATUS event mid-run, because the host holds the request open inside a run
+    that keeps going. The observer has to render it all the same, or the prompt
+    reaches nobody on Slack/Teams/Telegram and the agent waits out its 30-minute
+    timeout in silence.
+    """
+
+    @staticmethod
+    def _permission_event() -> AgentEvent:
+        return AgentEvent(
+            type=AgentEventType.STATUS,
+            data={
+                "status": "permission_request",
+                "kind": "request_approval",
+                "tool_call_id": "agent-host-permission:call-9",
+            },
+        )
+
+    async def test_the_approval_prompt_is_rendered(self):
+        service = _SurfaceService()
+        observer = _observer(service)
+        conversation = SimpleNamespace(
+            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        )
+
+        await observer.on_event(
+            self._permission_event(), conversation, SimpleNamespace()
+        )
+
+        assert service.messages == [
+            {
+                "approval": {
+                    "conversation_id": conversation.id,
+                    "tool_call_id": "agent-host-permission:call-9",
+                }
+            }
+        ]
+
+    async def test_the_final_answer_still_arrives_after_the_decision(self):
+        """A normal pause marks the final answer delivered, since the run is
+        over. Doing that here would swallow everything the agent says once it
+        has permission — the whole rest of the turn."""
+        service = _SurfaceService()
+        observer = _observer(service)
+        conversation = SimpleNamespace(
+            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        )
+
+        await observer.on_event(
+            self._permission_event(), conversation, SimpleNamespace()
+        )
+        await observer.on_event(
+            AgentEvent(
+                type=AgentEventType.MESSAGE,
+                data=MessageDraft.of_text("Removed the build directory."),
+            ),
+            conversation,
+            SimpleNamespace(),
+        )
+        await observer.on_run_finished(conversation, SimpleNamespace())
+
+        assert service.messages[-1] == {
+            "conversation_id": conversation.id,
+            "message": "Removed the build directory.",
+        }
+
+    async def test_an_unrelated_status_event_renders_nothing(self):
+        service = _SurfaceService()
+        observer = _observer(service)
+        conversation = SimpleNamespace(
+            id=uuid4(), metadata={"surface_platform": "TELEGRAM"}
+        )
+
+        await observer.on_event(
+            AgentEvent(type=AgentEventType.STATUS, data={"status": "RUN_STATE"}),
+            conversation,
+            SimpleNamespace(),
+        )
+
+        assert service.messages == []

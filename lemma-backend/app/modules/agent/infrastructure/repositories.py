@@ -32,6 +32,7 @@ from app.modules.agent.domain.entities import (
 )
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
+    RuntimeProfileProtocol,
     RuntimeProfileScope,
     RuntimeProfileStatus,
     reveal_credentials,
@@ -56,11 +57,12 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.models import (
     AgentApprovalDecisionModel,
     AgentModel,
-    AgentRuntimeDaemonModel,
-    AgentRuntimeProfileModel,
     AgentRunModel,
     ConversationModel,
     MessageModel,
+)
+from app.modules.agent.infrastructure.runtime_models import (
+    AgentRuntimeProfileModel,
 )
 from app.modules.agent.infrastructure.conversation_origin_store import (
     create_conversation_for_origin,
@@ -75,6 +77,15 @@ from app.modules.connectors.contracts import SecretEncryptionPort
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
 _DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
+
+# Rows written for the retired local daemon still carry its per-tool protocols
+# (CODEX_APP_SERVER, CLAUDE_CODE, …). They can never execute again, and
+# RuntimeProfileProtocol no longer parses them, so every read filters on the
+# protocols still understood rather than letting one stale row fail the query
+# for the whole organization.
+_KNOWN_RUNTIME_PROFILE_PROTOCOLS = [
+    protocol.value for protocol in RuntimeProfileProtocol
+]
 
 
 class AgentRuntimeProfileRepository:
@@ -109,7 +120,10 @@ class AgentRuntimeProfileRepository:
         return AgentRuntimeProfileModel(
             organization_id=entity.organization_id,
             user_id=entity.user_id,
-            daemon_id=entity.daemon_id,
+            harness_id=entity.harness_id,
+            # runtime_type mirrors kind: the harness-binding check constraint
+            # is expressed over runtime_type, not kind.
+            runtime_type=entity.kind.value,
             scope=entity.scope.value,
             kind=entity.kind.value,
             protocol=entity.protocol.value,
@@ -152,6 +166,7 @@ class AgentRuntimeProfileRepository:
     ) -> list[AgentRuntimeProfile]:
         stmt = select(AgentRuntimeProfileModel).where(
             AgentRuntimeProfileModel.organization_id == organization_id,
+            AgentRuntimeProfileModel.protocol.in_(_KNOWN_RUNTIME_PROFILE_PROTOCOLS),
             (
                 AgentRuntimeProfileModel.scope
                 == RuntimeProfileScope.ORGANIZATION.value
@@ -190,6 +205,9 @@ class AgentRuntimeProfileRepository:
             .where(
                 AgentRuntimeProfileModel.id == profile_uuid,
                 AgentRuntimeProfileModel.organization_id == organization_id,
+                AgentRuntimeProfileModel.protocol.in_(
+                    _KNOWN_RUNTIME_PROFILE_PROTOCOLS
+                ),
                 (
                     AgentRuntimeProfileModel.scope
                     == RuntimeProfileScope.ORGANIZATION.value
@@ -208,136 +226,6 @@ class AgentRuntimeProfileRepository:
         result = await self.session.execute(stmt)
         instance = result.scalar_one_or_none()
         return self._to_entity(instance) if instance else None
-
-
-class AgentRuntimeDaemonRepository:
-    """Repository for user-owned daemon catalog rows."""
-
-    def __init__(self, uow: SqlAlchemyUnitOfWork):
-        self.uow = uow
-        self.session = uow.session
-
-    async def upsert_ready(
-        self,
-        *,
-        user_id: UUID,
-        device_key: str,
-        display_name: str,
-        device_info: JsonObject | None = None,
-        harness_catalog: JsonObject | None = None,
-    ) -> AgentRuntimeDaemonModel:
-        now = datetime.now(timezone.utc)
-        normalized_device_key = device_key.strip()
-        normalized_display_name = display_name.strip() or "Lemma daemon"
-        stmt = (
-            select(AgentRuntimeDaemonModel)
-            .where(
-                AgentRuntimeDaemonModel.user_id == user_id,
-                AgentRuntimeDaemonModel.device_key == normalized_device_key,
-            )
-            .limit(1)
-        )
-        result = await self.session.execute(stmt)
-        instance = result.scalar_one_or_none()
-        if instance is None:
-            instance = AgentRuntimeDaemonModel(
-                user_id=user_id,
-                device_key=normalized_device_key,
-                display_name=normalized_display_name,
-                status="ONLINE",
-                device_info=device_info or {},
-                harness_catalog=harness_catalog or {},
-                last_seen_at=now,
-                connected_at=now,
-                disconnected_at=None,
-            )
-            self.session.add(instance)
-        else:
-            instance.display_name = normalized_display_name
-            instance.status = "ONLINE"
-            instance.device_info = device_info or {}
-            instance.harness_catalog = harness_catalog or {}
-            instance.last_seen_at = now
-            instance.connected_at = now
-            instance.disconnected_at = None
-        await self.session.flush()
-        return instance
-
-    async def update_catalog(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-        harness_catalog: JsonObject,
-    ) -> AgentRuntimeDaemonModel | None:
-        instance = await self.get_for_user(daemon_id=daemon_id, user_id=user_id)
-        if instance is None:
-            return None
-        instance.harness_catalog = harness_catalog
-        instance.last_seen_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return instance
-
-    async def mark_seen(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-    ) -> AgentRuntimeDaemonModel | None:
-        instance = await self.get_for_user(daemon_id=daemon_id, user_id=user_id)
-        if instance is None:
-            return None
-        instance.last_seen_at = datetime.now(timezone.utc)
-        await self.session.flush()
-        return instance
-
-    async def mark_offline(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-    ) -> AgentRuntimeDaemonModel | None:
-        instance = await self.get_for_user(daemon_id=daemon_id, user_id=user_id)
-        if instance is None:
-            return None
-        now = datetime.now(timezone.utc)
-        instance.status = "OFFLINE"
-        instance.last_seen_at = now
-        instance.disconnected_at = now
-        await self.session.flush()
-        return instance
-
-    async def get_for_user(
-        self,
-        *,
-        daemon_id: UUID,
-        user_id: UUID,
-    ) -> AgentRuntimeDaemonModel | None:
-        stmt = (
-            select(AgentRuntimeDaemonModel)
-            .where(
-                AgentRuntimeDaemonModel.id == daemon_id,
-                AgentRuntimeDaemonModel.user_id == user_id,
-            )
-            .limit(1)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def list_for_user(
-        self,
-        *,
-        user_id: UUID,
-    ) -> list[AgentRuntimeDaemonModel]:
-        result = await self.session.execute(
-            select(AgentRuntimeDaemonModel)
-            .where(AgentRuntimeDaemonModel.user_id == user_id)
-            .order_by(
-                AgentRuntimeDaemonModel.status.desc(),
-                AgentRuntimeDaemonModel.updated_at.desc(),
-            )
-        )
-        return list(result.scalars())
 
 
 class AgentRepository:

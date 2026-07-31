@@ -101,6 +101,10 @@ export function PlanSummaryStrip({ plan, onHide }: { plan: PlanSummaryState; onH
           <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={plan.activeStep}>
             {plan.running ? "Running:" : "Current:"} {plan.activeStep}
           </span>
+        ) : plan.nextStep ? (
+          <span className="min-w-0 flex-1 truncate text-xs text-[var(--text-secondary)]" title={plan.nextStep}>
+            Next: {plan.nextStep}
+          </span>
         ) : (
           <span className="min-w-0 flex-1" />
         )}

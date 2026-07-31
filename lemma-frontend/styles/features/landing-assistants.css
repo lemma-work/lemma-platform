@@ -1,0 +1,1149 @@
+/**
+ * High-fidelity ChatGPT and Claude surfaces for the landing page.
+ *
+ * These deliberately mimic the real desktop apps — ChatGPT light with its
+ * project sidebar and in-app browser tab strip, Claude dark with its icon rail
+ * and side panel — so the claim "your pod, inside the assistant you already
+ * use" is legible at a glance. Both embed the same Lemma app view.
+ */
+
+@layer components {
+  /* ── Shared: the Lemma app rendered inside either assistant ─────────── */
+
+  .lp-appview {
+    display: grid;
+    align-content: start;
+    gap: 7px;
+    padding: 11px;
+  }
+
+  .lp-appview > header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--lp-av-rule);
+  }
+
+  .lp-appview > header strong {
+    color: var(--lp-av-ink);
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  .lp-appview-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(31, 180, 99, 0.16);
+    color: #1f8a52;
+    font-size: 0.56rem;
+  }
+
+  .lp-appview-live i {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #1f8a52;
+  }
+
+  .lp-appview-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 1px solid var(--lp-av-rule);
+    border-radius: 9px;
+    background: var(--lp-av-card);
+  }
+
+  .lp-appview-row.is-open {
+    border-color: rgba(212, 160, 10, 0.55);
+  }
+
+  .lp-appview-row b {
+    display: block;
+    color: var(--lp-av-ink);
+    font-family: var(--font-mono-family);
+    font-size: 0.66rem;
+    font-weight: 500;
+  }
+
+  .lp-appview-row small {
+    color: var(--lp-av-faint);
+    font-size: 0.58rem;
+  }
+
+  .lp-appview-row em {
+    margin-left: auto;
+    color: var(--lp-av-ink);
+    font-family: var(--font-mono-family);
+    font-size: 0.66rem;
+    font-style: normal;
+  }
+
+  .lp-appview-pill {
+    padding: 2px 7px;
+    border-radius: 999px;
+    font-size: 0.54rem;
+    white-space: nowrap;
+  }
+
+  .lp-appview-pill.is-amber {
+    background: rgba(255, 206, 31, 0.28);
+    color: #8a6400;
+  }
+
+  .lp-appview-pill.is-green {
+    background: rgba(31, 180, 99, 0.18);
+    color: #1f8a52;
+  }
+
+  .lp-appview-approve {
+    display: grid;
+    gap: 8px;
+    padding: 9px;
+    border: 1px solid rgba(212, 160, 10, 0.45);
+    border-radius: 9px;
+    background: var(--lp-av-warn);
+  }
+
+  .lp-appview-approve p {
+    color: #8a6400;
+    font-size: 0.62rem;
+    line-height: 1.4;
+  }
+
+  .lp-appview-approve span {
+    display: flex;
+    gap: 6px;
+  }
+
+  .lp-appview-approve b {
+    padding: 5px 12px;
+    border-radius: 7px;
+    background: #4f46e5;
+    color: #ffffff;
+    font-size: 0.62rem;
+    font-weight: 500;
+  }
+
+  .lp-appview-approve i {
+    padding: 5px 12px;
+    border: 1px solid var(--lp-av-rule);
+    border-radius: 7px;
+    color: var(--lp-av-muted);
+    font-size: 0.62rem;
+    font-style: normal;
+  }
+
+  /* ── ChatGPT (light) ────────────────────────────────────────────────── */
+
+  .lp-gpt {
+    --lp-av-ink: #0d0d0d;
+    --lp-av-muted: #5d5d5d;
+    --lp-av-faint: #8f8f8f;
+    --lp-av-rule: rgba(13, 13, 13, 0.1);
+    --lp-av-card: #ffffff;
+    --lp-av-warn: #fffaeb;
+
+    display: grid;
+    grid-template-columns: 132px minmax(0, 1fr) minmax(0, 0.92fr);
+    height: 100%;
+    background: #ffffff;
+    color: var(--lp-av-ink);
+    font-family: var(--font-body-family);
+  }
+
+  .lp-gpt-side {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 10px 8px;
+    border-right: 1px solid var(--lp-av-rule);
+    background: #f9f9f9;
+  }
+
+  .lp-gpt-side-top {
+    display: flex;
+    align-items: center;
+    margin-bottom: 9px;
+    padding: 0 4px;
+  }
+
+  .lp-gpt-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--lp-av-ink);
+    font-size: 0.72rem;
+    font-weight: 600;
+  }
+
+  .lp-gpt-caret,
+  .lp-cl-caret {
+    width: 0;
+    height: 0;
+    border-top: 4px solid currentcolor;
+    border-right: 3.5px solid transparent;
+    border-left: 3.5px solid transparent;
+    opacity: 0.5;
+  }
+
+  .lp-gpt-search {
+    width: 11px;
+    height: 11px;
+    margin-left: auto;
+    border: 1.5px solid var(--lp-av-faint);
+    border-radius: 50%;
+  }
+
+  .lp-gpt-nav {
+    padding: 5px 8px;
+    border-radius: 7px;
+    color: var(--lp-av-muted);
+    font-size: 0.68rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .lp-gpt-nav.is-new {
+    color: var(--lp-av-ink);
+    font-weight: 500;
+  }
+
+  .lp-gpt-nav.is-folder {
+    color: var(--lp-av-ink);
+    font-weight: 500;
+  }
+
+  .lp-gpt-nav.is-child {
+    padding-left: 16px;
+    font-size: 0.65rem;
+  }
+
+  .lp-gpt-nav.is-current {
+    background: rgba(13, 13, 13, 0.07);
+    color: var(--lp-av-ink);
+  }
+
+  .lp-gpt-side-label {
+    margin: 12px 0 3px;
+    padding: 0 8px;
+    color: var(--lp-av-faint);
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+  }
+
+  .lp-gpt-side-user {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: auto;
+    padding: 7px 6px 0;
+    border-top: 1px solid var(--lp-av-rule);
+    color: var(--lp-av-muted);
+    font-size: 0.66rem;
+  }
+
+  .lp-gpt-side-user span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 19px;
+    height: 19px;
+    border-radius: 50%;
+    background: #c9c2f5;
+    color: #3c2fa8;
+    font-size: 0.52rem;
+    font-weight: 600;
+  }
+
+  .lp-gpt-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid var(--lp-av-rule);
+  }
+
+  .lp-gpt-thread-top {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--lp-av-rule);
+    font-size: 0.72rem;
+    font-weight: 500;
+  }
+
+  .lp-gpt-dots {
+    width: 12px;
+    height: 2px;
+    margin-left: auto;
+    border-radius: 2px;
+    background: var(--lp-av-faint);
+  }
+
+  .lp-gpt-thread {
+    display: grid;
+    align-content: start;
+    gap: 9px;
+    padding: 13px 14px;
+    overflow: hidden;
+  }
+
+  .lp-gpt-user {
+    justify-self: end;
+    max-width: 84%;
+    padding: 7px 12px;
+    border-radius: 16px;
+    background: #f4f4f4;
+    font-size: 0.72rem;
+    line-height: 1.45;
+  }
+
+  .lp-gpt-msg {
+    max-width: 96%;
+    color: #1a1a1a;
+    font-size: 0.72rem;
+    line-height: 1.55;
+  }
+
+  .lp-gpt-msg code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(13, 13, 13, 0.06);
+    font-family: var(--font-mono-family);
+    font-size: 0.66rem;
+  }
+
+  .lp-gpt-tool,
+  .lp-cl-tool {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px;
+    border: 1px solid var(--lp-av-rule);
+    border-radius: 8px;
+    font-family: var(--font-mono-family);
+    font-size: 0.63rem;
+  }
+
+  .lp-gpt-tool span,
+  .lp-cl-tool span {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: #0d0d0d;
+    color: #ffffff;
+    font-size: 0.53rem;
+  }
+
+  .lp-gpt-tool em,
+  .lp-cl-tool em {
+    margin-left: auto;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: #ffe1da;
+    color: #c22f15;
+    font-size: 0.53rem;
+    font-style: normal;
+  }
+
+  .lp-gpt-tool.is-held {
+    border-color: rgba(194, 47, 21, 0.3);
+  }
+
+  .lp-gpt-composer {
+    margin: auto 12px 12px;
+    padding: 9px 11px;
+    border: 1px solid var(--lp-av-rule);
+    border-radius: 18px;
+    background: #ffffff;
+    box-shadow: 0 2px 10px rgba(13, 13, 13, 0.05);
+  }
+
+  .lp-gpt-composer-input {
+    display: block;
+    color: var(--lp-av-faint);
+    font-size: 0.7rem;
+  }
+
+  .lp-gpt-composer-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 9px;
+  }
+
+  .lp-gpt-plus,
+  .lp-cl-plus {
+    width: 12px;
+    height: 12px;
+    background:
+      linear-gradient(currentcolor, currentcolor) center / 100% 1.5px no-repeat,
+      linear-gradient(currentcolor, currentcolor) center / 1.5px 100% no-repeat;
+    color: var(--lp-av-faint);
+  }
+
+  .lp-gpt-composer-row em {
+    color: var(--lp-av-muted);
+    font-size: 0.63rem;
+    font-style: normal;
+  }
+
+  .lp-gpt-composer-row b {
+    margin-left: auto;
+    color: var(--lp-av-muted);
+    font-size: 0.63rem;
+    font-weight: 400;
+  }
+
+  .lp-gpt-send {
+    width: 19px;
+    height: 19px;
+    border-radius: 50%;
+    background: #0d0d0d;
+  }
+
+  /* In-app browser */
+  .lp-gpt-browser {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: #f6f6f6;
+  }
+
+  .lp-gpt-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 9px 0;
+  }
+
+  .lp-gpt-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 9px;
+    border: 1px solid var(--lp-av-rule);
+    border-bottom: 0;
+    border-radius: 7px 7px 0 0;
+    background: #ffffff;
+    color: var(--lp-av-ink);
+    font-size: 0.62rem;
+  }
+
+  .lp-gpt-tab i {
+    width: 9px;
+    height: 9px;
+    border: 1.4px solid var(--lp-av-faint);
+    border-radius: 50%;
+  }
+
+  .lp-gpt-tab em {
+    color: var(--lp-av-faint);
+    font-size: 0.62rem;
+    font-style: normal;
+  }
+
+  .lp-gpt-tab-new {
+    width: 9px;
+    height: 9px;
+    background:
+      linear-gradient(currentcolor, currentcolor) center / 100% 1.4px no-repeat,
+      linear-gradient(currentcolor, currentcolor) center / 1.4px 100% no-repeat;
+    color: var(--lp-av-faint);
+  }
+
+  .lp-gpt-url {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border-top: 1px solid var(--lp-av-rule);
+    border-bottom: 1px solid var(--lp-av-rule);
+    background: #ffffff;
+  }
+
+  .lp-gpt-nav-back,
+  .lp-gpt-nav-fwd {
+    width: 6px;
+    height: 6px;
+    border-top: 1.4px solid var(--lp-av-faint);
+    border-left: 1.4px solid var(--lp-av-faint);
+    transform: rotate(-45deg);
+  }
+
+  .lp-gpt-nav-fwd {
+    transform: rotate(135deg);
+  }
+
+  .lp-gpt-url span {
+    flex: 1;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: #f1f1f1;
+    color: var(--lp-av-muted);
+    font-family: var(--font-mono-family);
+    font-size: 0.6rem;
+  }
+
+  /* ── Claude (dark) ──────────────────────────────────────────────────── */
+
+  .lp-cl {
+    --lp-av-ink: #f5f4ef;
+    --lp-av-muted: rgba(245, 244, 239, 0.72);
+    --lp-av-faint: rgba(245, 244, 239, 0.4);
+    --lp-av-rule: rgba(245, 244, 239, 0.12);
+    --lp-av-card: rgba(245, 244, 239, 0.05);
+    --lp-av-warn: rgba(255, 206, 31, 0.1);
+
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) minmax(0, 0.92fr);
+    height: 100%;
+    background: #262624;
+    color: var(--lp-av-ink);
+    font-family: var(--font-body-family);
+  }
+
+  .lp-cl-rail {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 13px;
+    padding: 11px 0;
+    border-right: 1px solid var(--lp-av-rule);
+    background: #1f1e1d;
+  }
+
+  .lp-cl-rail i {
+    width: 14px;
+    height: 14px;
+    border: 1.4px solid rgba(245, 244, 239, 0.28);
+    border-radius: 4px;
+  }
+
+  .lp-cl-rail-logo {
+    border: 0 !important;
+    border-radius: 50% !important;
+    background: #d97757;
+  }
+
+  .lp-cl-rail-new {
+    border-radius: 50% !important;
+  }
+
+  .lp-cl-rail-user {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 19px;
+    height: 19px;
+    margin-top: auto;
+    border-radius: 50%;
+    background: #4a4744;
+    color: var(--lp-av-ink);
+    font-size: 0.52rem;
+    font-weight: 600;
+  }
+
+  .lp-cl-main {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid var(--lp-av-rule);
+  }
+
+  .lp-cl-top {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 11px 14px;
+    font-size: 0.73rem;
+    font-weight: 500;
+  }
+
+  .lp-cl-thread {
+    display: grid;
+    align-content: start;
+    gap: 10px;
+    padding: 4px 14px 13px;
+    overflow: hidden;
+  }
+
+  .lp-cl-msg {
+    color: var(--lp-av-ink);
+    font-family: var(--font-document-sans);
+    font-size: 0.74rem;
+    line-height: 1.6;
+  }
+
+  .lp-cl-msg b {
+    font-weight: 600;
+  }
+
+  .lp-cl-user {
+    justify-self: end;
+    max-width: 84%;
+    padding: 7px 12px;
+    border-radius: 14px;
+    background: rgba(245, 244, 239, 0.08);
+    font-size: 0.72rem;
+    line-height: 1.45;
+  }
+
+  .lp-cl-tool {
+    border-color: var(--lp-av-rule);
+    background: rgba(245, 244, 239, 0.04);
+    color: var(--lp-av-muted);
+  }
+
+  .lp-cl-tool span {
+    background: #d97757;
+    color: #1f1e1d;
+  }
+
+  .lp-cl-tool.is-held {
+    border-color: rgba(217, 119, 87, 0.4);
+  }
+
+  .lp-cl-tool em {
+    background: rgba(217, 119, 87, 0.2);
+    color: #e8a184;
+  }
+
+  .lp-cl-composer {
+    margin: auto 12px 0;
+    padding: 9px 11px;
+    border: 1px solid var(--lp-av-rule);
+    border-radius: 16px;
+    background: #30302e;
+  }
+
+  .lp-cl-composer-input {
+    display: block;
+    color: var(--lp-av-faint);
+    font-size: 0.7rem;
+  }
+
+  .lp-cl-composer-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 9px;
+    color: var(--lp-av-faint);
+  }
+
+  .lp-cl-composer-row b {
+    margin-left: auto;
+    color: var(--lp-av-muted);
+    font-size: 0.63rem;
+    font-weight: 400;
+  }
+
+  .lp-cl-composer-row em {
+    color: var(--lp-av-faint);
+    font-size: 0.63rem;
+    font-style: normal;
+  }
+
+  .lp-cl-send {
+    width: 19px;
+    height: 19px;
+    border-radius: 7px;
+    background: #d97757;
+  }
+
+  .lp-cl-disclaimer {
+    padding: 8px 12px 11px;
+    color: var(--lp-av-faint);
+    font-size: 0.58rem;
+    text-align: center;
+  }
+
+  .lp-cl-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: #1f1e1d;
+  }
+
+  .lp-cl-panel > header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 11px;
+    border-bottom: 1px solid var(--lp-av-rule);
+  }
+
+  .lp-cl-panel > header span {
+    color: var(--lp-av-ink);
+    font-size: 0.66rem;
+  }
+
+  .lp-cl-panel > header span em {
+    color: var(--lp-av-faint);
+    font-style: normal;
+  }
+
+  .lp-cl-panel > header b {
+    margin-left: auto;
+    padding: 3px 9px;
+    border: 1px solid var(--lp-av-rule);
+    border-radius: 6px;
+    color: var(--lp-av-muted);
+    font-size: 0.6rem;
+    font-weight: 400;
+  }
+
+  .lp-cl-panel-eye,
+  .lp-cl-panel-code,
+  .lp-cl-panel-x {
+    width: 11px;
+    height: 11px;
+    border: 1.4px solid var(--lp-av-faint);
+    border-radius: 3px;
+  }
+
+  .lp-cl-panel-eye {
+    border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+  }
+
+  .lp-cl-panel-x {
+    border: 0;
+    background:
+      linear-gradient(currentcolor, currentcolor) center / 100% 1.4px no-repeat,
+      linear-gradient(currentcolor, currentcolor) center / 1.4px 100% no-repeat;
+    color: var(--lp-av-faint);
+    transform: rotate(45deg);
+  }
+
+  .lp-cl-panel-body {
+    overflow: hidden;
+  }
+
+  /* The app view inherits dark tokens inside Claude, so the status pills need
+     light text — the light-theme amber was unreadable on #1f1e1d. */
+  .lp-cl .lp-appview-pill.is-amber {
+    background: rgba(255, 206, 31, 0.18);
+    color: #f0c85a;
+  }
+
+  .lp-cl .lp-appview-pill.is-green {
+    background: rgba(31, 180, 99, 0.2);
+    color: #6fe6a4;
+  }
+
+  .lp-cl .lp-appview-live {
+    background: rgba(31, 180, 99, 0.18);
+    color: #6fe6a4;
+  }
+
+  .lp-cl .lp-appview-live i {
+    background: #6fe6a4;
+  }
+
+  .lp-cl .lp-appview-approve {
+    border-color: rgba(240, 200, 90, 0.32);
+  }
+
+  .lp-cl .lp-appview-approve p {
+    color: #f0c85a;
+  }
+
+  .lp-cl .lp-appview-approve b {
+    background: #d97757;
+    color: #1f1e1d;
+  }
+
+  .lp-cl-panel-hidden {
+    display: none;
+  }
+
+  /* Between tablet and phone the column still has room for the sidebar but
+     not the browser pane; below 700px the whole mock is scaled instead. */
+  @media (max-width: 900px) and (min-width: 701px) {
+    .lp-gpt {
+      grid-template-columns: 120px minmax(0, 1fr);
+    }
+
+    .lp-gpt-browser,
+    .lp-cl-panel {
+      display: none;
+    }
+
+    .lp-cl {
+      grid-template-columns: 38px minmax(0, 1fr);
+    }
+  }
+}
+
+/**
+ * Telegram and WhatsApp phone surfaces.
+ */
+@layer components {
+  .lp-tg2,
+  .lp-wa2 {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    font-family: var(--font-body-family);
+  }
+
+  /* ── Telegram ───────────────────────────────────────────────────────── */
+
+  .lp-tg2 {
+    background: #ffffff;
+  }
+
+  .lp-tg2-top {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(13, 15, 18, 0.08);
+    background: #ffffff;
+  }
+
+  .lp-tg2-back {
+    width: 7px;
+    height: 7px;
+    border-top: 1.6px solid #707579;
+    border-left: 1.6px solid #707579;
+    transform: rotate(-45deg);
+  }
+
+  .lp-tg2-avatar,
+  .lp-wa2-avatar {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #e7f0f8;
+  }
+
+  .lp-tg2-who strong {
+    display: block;
+    color: #0f0f0f;
+    font-size: 0.74rem;
+    font-weight: 600;
+  }
+
+  .lp-tg2-who em {
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: #e7f0f8;
+    color: #3390ec;
+    font-size: 0.5rem;
+    font-style: normal;
+    vertical-align: middle;
+  }
+
+  .lp-tg2-who small {
+    color: #3390ec;
+    font-size: 0.6rem;
+  }
+
+  .lp-tg2-menu {
+    width: 3px;
+    height: 3px;
+    margin-left: auto;
+    border-radius: 50%;
+    background: #707579;
+    box-shadow: 0 -5px 0 #707579, 0 5px 0 #707579;
+  }
+
+  .lp-tg2-body {
+    flex: 1;
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    padding: 11px;
+    background:
+      radial-gradient(circle at 20% 30%, rgba(51, 144, 236, 0.05) 0 6px, transparent 7px),
+      radial-gradient(circle at 70% 60%, rgba(51, 144, 236, 0.05) 0 5px, transparent 6px),
+      #e7ebf0;
+    background-size: 74px 74px, 96px 96px, auto;
+    overflow: hidden;
+  }
+
+  .lp-tg2-date,
+  .lp-wa2-date {
+    justify-self: center;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: rgba(13, 15, 18, 0.09);
+    color: #4b5a66;
+    font-size: 0.54rem;
+  }
+
+  .lp-tg2-in,
+  .lp-tg2-out {
+    position: relative;
+    max-width: 84%;
+    padding: 6px 10px 4px;
+    border-radius: 11px;
+    font-size: 0.7rem;
+    line-height: 1.42;
+  }
+
+  .lp-tg2-in {
+    justify-self: start;
+    background: #ffffff;
+    color: #0f0f0f;
+    box-shadow: 0 1px 1px rgba(13, 15, 18, 0.08);
+  }
+
+  .lp-tg2-out {
+    justify-self: end;
+    background: #eeffde;
+    color: #0f0f0f;
+    box-shadow: 0 1px 1px rgba(13, 15, 18, 0.08);
+  }
+
+  .lp-tg2-in b,
+  .lp-tg2-out b {
+    font-weight: 600;
+  }
+
+  .lp-tg2-time {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 3px;
+    margin-top: 1px;
+    color: #8fa3b0;
+    font-size: 0.52rem;
+  }
+
+  .lp-tg2-ticks,
+  .lp-wa2-ticks {
+    width: 9px;
+    height: 5px;
+    border-bottom: 1.4px solid #4fae4e;
+    border-left: 1.4px solid #4fae4e;
+    transform: rotate(-45deg) translateY(-1px);
+  }
+
+  /* The inline keyboard is the Telegram-native way an approval arrives. */
+  .lp-tg2-keyboard {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3px;
+    max-width: 84%;
+    justify-self: start;
+  }
+
+  .lp-tg2-keyboard span {
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #3390ec;
+    font-size: 0.64rem;
+    text-align: center;
+  }
+
+  .lp-tg2-keyboard span.is-wide {
+    grid-column: span 2;
+  }
+
+  .lp-tg2-composer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: auto;
+    padding: 9px 12px;
+    border-top: 1px solid rgba(13, 15, 18, 0.08);
+    background: #ffffff;
+  }
+
+  .lp-tg2-composer span {
+    flex: 1;
+    color: #9aa4ac;
+    font-size: 0.68rem;
+  }
+
+  .lp-tg2-clip,
+  .lp-wa2-clip {
+    width: 11px;
+    height: 11px;
+    border: 1.5px solid #9aa4ac;
+    border-radius: 4px 4px 6px 6px;
+  }
+
+  .lp-tg2-mic {
+    width: 9px;
+    height: 13px;
+    border-radius: 5px;
+    background: #9aa4ac;
+  }
+
+  /* ── WhatsApp ───────────────────────────────────────────────────────── */
+
+  .lp-wa2 {
+    background: #efeae2;
+  }
+
+  .lp-wa2-top {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 10px 12px;
+    background: #008069;
+    color: #ffffff;
+  }
+
+  .lp-wa2-back {
+    width: 7px;
+    height: 7px;
+    border-top: 1.6px solid #ffffff;
+    border-left: 1.6px solid #ffffff;
+    transform: rotate(-45deg);
+  }
+
+  .lp-wa2-avatar {
+    background: rgba(255, 255, 255, 0.92);
+  }
+
+  .lp-wa2-who {
+    margin-right: auto;
+  }
+
+  .lp-wa2-who strong {
+    display: block;
+    font-size: 0.74rem;
+    font-weight: 600;
+  }
+
+  .lp-wa2-who small {
+    color: rgba(255, 255, 255, 0.78);
+    font-size: 0.6rem;
+  }
+
+  .lp-wa2-icon {
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid rgba(255, 255, 255, 0.8);
+    border-radius: 3px;
+  }
+
+  .lp-wa2-body {
+    flex: 1;
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    padding: 11px;
+    background:
+      radial-gradient(circle at 25% 20%, rgba(13, 15, 18, 0.035) 0 5px, transparent 6px),
+      radial-gradient(circle at 75% 65%, rgba(13, 15, 18, 0.03) 0 7px, transparent 8px),
+      #efeae2;
+    background-size: 68px 68px, 88px 88px, auto;
+    overflow: hidden;
+  }
+
+  .lp-wa2-in,
+  .lp-wa2-out {
+    position: relative;
+    max-width: 82%;
+    padding: 6px 9px 4px;
+    font-size: 0.7rem;
+    line-height: 1.42;
+    color: #111b21;
+    box-shadow: 0 1px 1px rgba(13, 15, 18, 0.12);
+  }
+
+  .lp-wa2-in {
+    justify-self: start;
+    border-radius: 0 8px 8px 8px;
+    background: #ffffff;
+  }
+
+  .lp-wa2-out {
+    justify-self: end;
+    border-radius: 8px 0 8px 8px;
+    background: #d9fdd3;
+  }
+
+  .lp-wa2-in::before,
+  .lp-wa2-out::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    width: 0;
+    height: 0;
+    border-top: 7px solid #ffffff;
+  }
+
+  .lp-wa2-in::before {
+    left: -6px;
+    border-left: 7px solid transparent;
+  }
+
+  .lp-wa2-out::before {
+    right: -6px;
+    border-right: 7px solid transparent;
+    border-top-color: #d9fdd3;
+  }
+
+  .lp-wa2-in b,
+  .lp-wa2-out b {
+    font-weight: 600;
+  }
+
+  .lp-wa2-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 3px;
+    margin-top: 1px;
+    color: #667781;
+    font-size: 0.52rem;
+  }
+
+  .lp-wa2-ticks {
+    border-color: #53bdeb;
+  }
+
+  .lp-wa2-composer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: auto;
+    padding: 9px 11px;
+    background: #f0f2f5;
+  }
+
+  .lp-wa2-composer > span {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #8696a0;
+    font-size: 0.68rem;
+  }
+
+  .lp-wa2-composer > span .lp-wa2-clip {
+    margin-left: auto;
+  }
+
+  .lp-wa2-emoji {
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid #8696a0;
+    border-radius: 50%;
+  }
+
+  .lp-wa2-send {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #008069;
+  }
+}

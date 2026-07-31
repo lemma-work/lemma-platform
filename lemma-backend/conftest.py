@@ -141,6 +141,26 @@ def pytest_collection_modifyitems(config, items):
             )
 
 
+@pytest.fixture(autouse=True)
+def _isolate_shared_redis_clients():
+    """Keep the process-wide Redis client registry from leaking across tests.
+
+    The registry is deliberately process-wide in production. In tests that
+    makes it shared mutable state: a test that patches ``Redis.from_url`` (a
+    class attribute, so the patch is global) would otherwise have its fake
+    cached in the registry for the rest of the session, because monkeypatch
+    restores the constructor but knows nothing about the cache.
+
+    Clearing rather than closing is intentional - closing real pooled clients
+    between every test would dominate suite runtime for no benefit.
+    """
+    from app.core.infrastructure.redis import client as redis_client
+
+    redis_client._clients.clear()
+    yield
+    redis_client._clients.clear()
+
+
 def pytest_runtest_teardown(item: pytest.Item, nextitem: pytest.Item | None) -> None:
     del nextitem
     if "workspace" not in {marker.name for marker in item.iter_markers()}:

@@ -15,7 +15,9 @@ import pytest
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.session_approvals import exact_command_permission_id
 from app.core.domain.errors import DomainError
-from app.modules.agent.services.conversation_service import ConversationService
+from app.modules.agent.services.approval_reconciliation import (
+    record_session_approvals,
+)
 from app.modules.agent.tools.tool_errors import approval_error_result
 
 
@@ -68,12 +70,12 @@ async def test_approve_for_session_records_each_permission(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    service = ConversationService.__new__(ConversationService)
     conversation = SimpleNamespace(id=uuid4(), agent_id=uuid4())
     user_id = uuid4()
 
-    await service._record_session_approvals(
-        conversation=conversation,
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
         tool_args={
             "tool_name": "pod_delete_table",
             "permission_ids": ["datastore.table.delete", "folder.delete", "", 7],
@@ -107,11 +109,11 @@ async def test_approve_for_session_defaults_to_pod_default_agent(monkeypatch):
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    service = ConversationService.__new__(ConversationService)
     conversation = SimpleNamespace(id=uuid4(), agent_id=None)
 
-    await service._record_session_approvals(
-        conversation=conversation,
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
         tool_args={"permission_ids": ["datastore.table.delete"]},
         user_id=uuid4(),
     )
@@ -134,11 +136,11 @@ async def test_approve_for_session_without_permission_ids_records_only_exact_com
         "app.core.authorization.session_approvals.record_session_approval",
         fake_record,
     )
-    service = ConversationService.__new__(ConversationService)
     conversation = SimpleNamespace(id=uuid4(), agent_id=None)
 
-    await service._record_session_approvals(
-        conversation=conversation,
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
         tool_args={"tool_name": "exec_command", "args": {"cmd": "ls -la"}},
         user_id=uuid4(),
     )
@@ -158,11 +160,11 @@ async def test_approve_for_session_without_tool_name_records_nothing(monkeypatch
         "app.core.authorization.session_approvals.record_session_approval",
         fail_record,
     )
-    service = ConversationService.__new__(ConversationService)
     conversation = SimpleNamespace(id=uuid4(), agent_id=None)
 
-    await service._record_session_approvals(
-        conversation=conversation,
+    await record_session_approvals(
+        conversation_id=conversation.id,
+        agent_id=conversation.agent_id,
         tool_args={},
         user_id=uuid4(),
     )

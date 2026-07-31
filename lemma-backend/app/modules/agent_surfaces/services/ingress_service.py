@@ -708,6 +708,7 @@ class AgentSurfaceIngressService:
                 decision = _parse_approval_decision(text)
                 response = {}
 
+            # Deferred: a webhook deadline is shorter than an approved command.
             await conversation_service.resolve_user_approval_internal(
                 conversation=conversation,
                 approval_id=str(pending.get("tool_call_id") or ""),
@@ -715,6 +716,7 @@ class AgentSurfaceIngressService:
                 pod_id=context.pod_id,
                 decision=decision,
                 response=response,
+                defer_reconciliation=True,
             )
             return True
         except Exception:
@@ -1398,6 +1400,8 @@ class AgentSurfaceIngressService:
                     pod_id=conversation.pod_id,
                     decision=decision,
                     response=response,
+                    # Same webhook deadline as the typed-reply path above.
+                    defer_reconciliation=True,
                 )
             finally:
                 reset_current_context(token)

@@ -13,6 +13,8 @@ from uuid import UUID
 import httpx
 from redis.asyncio import Redis
 
+from app.core.infrastructure.redis.client import get_redis
+
 from app.core.config import settings
 from app.modules.agent_surfaces.config import surface_settings
 from app.core.infrastructure.channels.channel_service import channel_service
@@ -146,13 +148,7 @@ class NativeSurfaceReceiverCoordinator:
         }
 
     async def run(self) -> None:
-        self._redis = Redis.from_url(
-            self._redis_url,
-            decode_responses=True,
-            health_check_interval=30,
-            socket_keepalive=True,
-            max_connections=settings.redis_max_connections,
-        )
+        self._redis = get_redis(url=self._redis_url)
         self._listener_task = create_background_task(
             self._listen_for_wakeups(), name="surface-receiver-wakeups"
         )
@@ -186,9 +182,8 @@ class NativeSurfaceReceiverCoordinator:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        if self._redis is not None:
-            await self._redis.aclose()
-            self._redis = None
+        # Shared client: release the reference, do not close the pool.
+        self._redis = None
 
     async def reconcile(self) -> None:
         desired = {
@@ -585,25 +580,21 @@ def _telegram_offset_key(key: str) -> str:
 
 
 async def _load_telegram_offset(key: str) -> int | None:
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    redis = get_redis(url=settings.redis_url)
     try:
         raw = await redis.get(_telegram_offset_key(key))
         return int(raw) if raw else None
     except Exception:
         logger.debug("agent_surfaces.event_receiver_service.could_not_load_telegram_polling.observed", exc_info=True)
         return None
-    finally:
-        await redis.aclose()
 
 
 async def _store_telegram_offset(key: str, offset: int) -> None:
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    redis = get_redis(url=settings.redis_url)
     try:
         await redis.set(_telegram_offset_key(key), str(offset))
     except Exception:
         logger.debug("agent_surfaces.event_receiver_service.could_not_store_telegram_polling.observed", exc_info=True)
-    finally:
-        await redis.aclose()
 
 
 async def _publish_native_receiver_event(

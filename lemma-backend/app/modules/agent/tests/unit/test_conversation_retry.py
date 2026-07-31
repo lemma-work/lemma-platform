@@ -26,7 +26,7 @@ def _run(
         conversation_id=uuid4(),
         status=status,
         agent_runtime=AgentRuntimeConfig(
-            profile_id="user:daemon",
+            profile_id="user:harness",
             model_name="claude-sonnet-4-5",
         ),
         started_at=datetime.now(timezone.utc),

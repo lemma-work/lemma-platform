@@ -5,7 +5,7 @@ import { PackageOpen, Search } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { EmptyState } from '@/components/shared/empty-state';
-import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { RecipeCard } from '@/components/recipes/recipe-card';
 import { StarterThemePicker } from '@/components/recipes/starter-theme-card';
 import { Input } from '@/components/ui/input';
@@ -55,9 +55,8 @@ export default function PodRecipesPage({ params }: { params: Promise<{ id: strin
     return (
         <ProtectedRoute>
             <ResourceIndexShell>
-                <ResourceIndexHeader
+                <ResourceHeader
                     title="Add capability"
-                    productIconKind="apps"
                     actions={(
                         <div className="relative w-full sm:w-72">
                             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />

@@ -12,7 +12,7 @@ import { DatastoreTableSkeleton } from '@/components/data/datastore-table-skelet
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import {
@@ -1085,9 +1085,7 @@ export default function DataHubPage({
             mode={usesWorkbenchLayout ? 'workbench' : 'ledger'}
             className={usesWorkbenchLayout ? 'data-workspace-shell' : undefined}
         >
-            <ResourceIndexHeader
-                className="mb-4"
-                productIconKind={showingFiles ? 'docs' : 'data'}
+            <ResourceHeader
                 title={showingFiles ? (
                     <FolderTitleSelector
                         selectedFilePath={selectedFilePath}

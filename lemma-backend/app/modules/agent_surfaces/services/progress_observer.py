@@ -149,6 +149,13 @@ class SurfaceAgentRunProgressObserver:
             await self._handle_waiting_event(event, conversation)
             return
 
+        if _is_agent_host_permission_event(event):
+            # An Agent Host pauses for permission *mid-run*: render the prompt
+            # like any other approval, but leave the run's delivery state alone
+            # so the answer that follows still arrives as its final message.
+            await self._handle_waiting_event(event, conversation, ends_run=False)
+            return
+
         platform = _surface_platform(conversation)
 
         # Assistant text is buffered, never sent mid-run, so intermediate
@@ -181,6 +188,8 @@ class SurfaceAgentRunProgressObserver:
         self,
         event: AgentEvent,
         conversation: Conversation,
+        *,
+        ends_run: bool = True,
     ) -> None:
         """Render a paused ``ask_user`` or ``request_approval`` on the surface.
 
@@ -188,6 +197,9 @@ class SurfaceAgentRunProgressObserver:
         buffered narration first (so the lead-in to the question still reaches the
         user), mark the final answer delivered so ``on_run_finished`` doesn't
         re-send it, then render the questions / approval prompt.
+
+        ``ends_run`` is False for an Agent Host permission pause, which happens
+        inside a run that keeps going; see the reset at the end.
         """
         data = event.data if isinstance(event.data, dict) else {}
         kind = data.get("kind")
@@ -247,6 +259,14 @@ class SurfaceAgentRunProgressObserver:
                 logger.debug(
                     'agent_surfaces.progress_observer.surface_s_render_conversation_s.diagnostic'
                 )
+        if not ends_run:
+            # Nothing about this run's final answer is settled yet: the narration
+            # above was the lead-in to the prompt, and the real answer only comes
+            # after the decision. Unlatch delivery so on_run_finished still sends
+            # it, and drop what was already delivered so it is not repeated.
+            self._final_delivered = False
+            self._final_answer_text = None
+            self._buffered_text = None
 
     async def _maybe_send_text_progress(
         self,
@@ -503,6 +523,16 @@ def _is_final_answer_event(event: AgentEvent) -> bool:
         return False
     metadata = data.metadata or {}
     return metadata.get("is_final_answer") is True
+
+
+def _is_agent_host_permission_event(event: AgentEvent) -> bool:
+    """An Agent Host permission pause, carried as STATUS rather than WAITING."""
+    return (
+        event.type == AgentEventType.STATUS
+        and isinstance(event.data, dict)
+        and event.data.get("status") == "permission_request"
+        and bool(event.data.get("tool_call_id"))
+    )
 
 
 def _is_tool_activity_event(event: AgentEvent) -> bool:

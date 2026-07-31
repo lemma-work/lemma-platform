@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from redis.asyncio import Redis
+
+from app.core.infrastructure.redis.client import get_redis
 
 from app.core.config import settings
 from app.core.log.log import get_logger
@@ -36,9 +37,7 @@ class WorkspaceActivityStore:
         redis_url: Optional[str] = None,
         key_prefix: str = "workspace:activity:v1",
     ):
-        self._redis = Redis.from_url(
-            redis_url or settings.redis_url, decode_responses=True
-        )
+        self._redis = get_redis(url=redis_url or settings.redis_url)
         self._key_prefix = key_prefix
 
     def _workspace_key(self, runtime: str, user_id: UUID) -> str:
@@ -174,4 +173,7 @@ class WorkspaceActivityStore:
         await pipe.execute()
 
     async def close(self) -> None:
-        await self._redis.aclose()
+        # The client is shared process-wide; closing it here would break
+        # every other component still using the same pool. Disposal is
+        # close_redis_clients()'s job at lifespan shutdown.
+        self._redis = None

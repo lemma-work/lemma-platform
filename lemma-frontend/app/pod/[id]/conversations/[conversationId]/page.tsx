@@ -20,11 +20,12 @@ import {
     normalizeConversationPresentedResourceHref,
     removeConversationPresentationParam,
 } from '@/lib/assistant/conversation-presentation';
-import { useAgentRuntimes, useAvailableAgentRuntimeHarnesses } from '@/lib/hooks/use-agent-runtime';
+import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
 import { useAgent, useAgents } from '@/lib/hooks/use-agents';
 import { useConversation } from '@/lib/hooks/use-assistants';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
+import { withSettingsReturnPath } from '@/lib/navigation/settings-return';
 import type { AgentRuntimeConfig } from '@/lib/types';
 
 function waitForConversationReset() {
@@ -65,7 +66,6 @@ export default function PodConversationPage({
     const canReadAgents = podAccess.can('agent.read');
     const { data: agentsData } = useAgents(canReadAgents ? podId : undefined);
     const { data: runtimeCatalog } = useAgentRuntimes(pod?.organization_id);
-    const { data: availableHarnesses } = useAvailableAgentRuntimeHarnesses();
     const {
         openedConversationId,
         clearMessages,
@@ -77,6 +77,7 @@ export default function PodConversationPage({
     } = assistant;
     const assistantMessage = searchParams.get('assistantMessage');
     const searchParamsString = searchParams.toString();
+    const conversationRouteHref = `/pod/${podId}/conversations/${encodeURIComponent(conversationId)}${searchParamsString ? `?${searchParamsString}` : ''}`;
     const scopedAgentName = searchParams.get('agent')?.trim() || null;
     const presentedResourceHref = normalizeConversationPresentedResourceHref(
         searchParams.get('presented'),
@@ -124,7 +125,7 @@ export default function PodConversationPage({
     const isSelectingRouteConversation = !isNewConversation && openedConversationId !== conversationId;
     const canWriteConversations = podAccess.can('conversation.write');
     const podDefaultRuntime = pod?.config?.default_runtime
-        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id, availableHarnesses);
+        ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
     const hydratedConversationRuntime = resolveHydratedConversationRuntime({
         isNewConversation,
         hasPersistedConversation: Boolean(activeConversation),
@@ -160,12 +161,16 @@ export default function PodConversationPage({
             selectedRuntime={selectedCommandRuntime}
             defaultRuntime={effectiveDefaultRuntime}
             runtimeCatalog={runtimeCatalog}
-            availableHarnesses={availableHarnesses}
             isNewConversation={isNewConversation}
             canWrite={canWriteConversations}
             onAgentChange={handleAgentChange}
             onRuntimeChange={handleCommandRuntimeChange}
-            manageModelsHref={pod?.organization_id ? `/organizations/${pod.organization_id}/settings/agent-runtimes` : undefined}
+            manageModelsHref={pod?.organization_id
+                ? withSettingsReturnPath(
+                    `/organizations/${pod.organization_id}/settings/agent-runtimes`,
+                    conversationRouteHref,
+                )
+                : undefined}
         />
     ) : undefined;
     const closePresentedResource = () => {

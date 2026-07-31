@@ -16,6 +16,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError, TimeoutError as RedisTimeoutError
 
 from app.core.config import settings
+from app.core.infrastructure.redis.client import get_redis
 from app.core.domain.realtime import RealtimeChannel, RealtimeSlowConsumerError
 from app.core.log.log import get_logger
 from app.core.observability.dependency_incident import DependencyIncident
@@ -46,7 +47,6 @@ class RedisChannelAdapter:
     def __init__(self, redis_url: str | None = None, *, client: Redis | None = None):
         self.redis_url = redis_url
         self._redis = client
-        self._owns_client = client is None
         self._pubsub: PubSub | None = None
         self._listener_task: asyncio.Task[None] | None = None
         self._clients_by_channel: dict[str, set[_ClientSubscription]] = {}
@@ -65,14 +65,7 @@ class RedisChannelAdapter:
             return
         async with self._connect_lock:
             if self._redis is None:
-                self._redis = Redis.from_url(
-                    self.redis_url or settings.redis_url,
-                    decode_responses=True,
-                    health_check_interval=30,
-                    socket_keepalive=True,
-                    max_connections=settings.redis_max_connections,
-                )
-                self._owns_client = True
+                self._redis = get_redis(url=self.redis_url or settings.redis_url)
 
     async def disconnect(self) -> None:
         """Stop the one listener, close its lease, then close the owned pool."""
@@ -94,10 +87,11 @@ class RedisChannelAdapter:
             self._close_client(client, RuntimeError("Realtime service stopped"))
 
         await self._close_pubsub()
-        redis_client = self._redis
+        # The pool is shared process-wide, so this releases the reference
+        # rather than closing it; close_redis_clients() disposes it at
+        # lifespan shutdown. The Pub/Sub lease above is genuinely owned and is
+        # closed by _close_pubsub().
         self._redis = None
-        if redis_client is not None and self._owns_client:
-            await redis_client.aclose()
         self._closing = False
 
     async def _client(self) -> Redis:

@@ -11,18 +11,13 @@ from lemma_cli.cli_core.commands import runtime
 runner = CliRunner()
 
 _PROFILES = [
-    {"id": "prof-1", "name": "Default", "source": "USER_DAEMON"},
+    {"id": "prof-1", "name": "Default", "source": "AGENT_HOST"},
     {"id": "prof-2", "name": "Fireworks", "source": "OPENAI_COMPATIBLE"},
 ]
 
 
 def _make_client_and_captured():
     captured = {}
-
-    class FakeRuntime:
-        def harnesses(self):
-            captured["harnesses_called"] = True
-            return {"items": [{"id": "h-1", "kind": "CLAUDE_CODE"}]}
 
     class FakeOrgRuntime:
         def profiles(self):
@@ -35,7 +30,6 @@ def _make_client_and_captured():
 
     class FakeClient:
         def __init__(self):
-            self.runtime = FakeRuntime()
             self.org_runtime = FakeOrgRuntime()
 
     return FakeClient(), captured
@@ -48,16 +42,6 @@ def _patch(monkeypatch, client):
         full=False,
     )
     monkeypatch.setattr(runtime, "run_with_client", lambda ctx, fn: fn(client, state))
-
-
-def test_runtime_harnesses_dispatches_api(monkeypatch):
-    client, captured = _make_client_and_captured()
-    _patch(monkeypatch, client)
-
-    result = runner.invoke(app, ["runtime", "harnesses"])
-
-    assert result.exit_code == 0, result.stdout
-    assert captured.get("harnesses_called") is True
 
 
 def test_runtime_profiles_list_dispatches_api(monkeypatch):
@@ -130,13 +114,20 @@ def test_runtime_profiles_create_dispatches_api(monkeypatch):
     assert sent["model_names"] == ["m1", "m2"]
 
 
-def test_runtime_profiles_create_uppercases_source(monkeypatch):
+def test_runtime_profiles_create_binds_an_agent_host_harness(monkeypatch):
     client, captured = _make_client_and_captured()
     _patch(monkeypatch, client)
 
     result = runner.invoke(
-        app, ["runtime", "profiles", "create", "user_daemon", "--name", "Daemon"]
+        app,
+        [
+            "runtime", "profiles", "create", "agent_host",
+            "--name", "OpenCode on my laptop",
+            "--harness-id", "0199aa11-2233-7444-8555-666677778888",
+        ],
     )
 
     assert result.exit_code == 0, result.stdout
-    assert captured["create"]["source"] == "USER_DAEMON"
+    sent = captured["create"]
+    assert sent["source"] == "AGENT_HOST"
+    assert sent["harness_id"] == "0199aa11-2233-7444-8555-666677778888"
