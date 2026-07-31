@@ -1,89 +1,145 @@
 import type { Metadata } from 'next';
+import Image from 'next/image';
 import Link from 'next/link';
 
 import { Logo } from '@/components/brand/logo';
-import { ArrowRight } from '@/components/ui/icons';
-import { PUBLIC_TEMPLATES } from '@/lib/templates/catalog';
+import { ArrowRight, Check, Github } from '@/components/ui/icons';
+import {
+    PUBLIC_TEMPLATES,
+    templateCoverPath,
+    templateRunHref,
+} from '@/lib/templates/catalog';
 import { socialCardPath } from '@/lib/share/social-card';
 
 const image = socialCardPath({
     variant: 'run',
-    title: 'Templates that actually run.',
-    detail: 'Start with the job. Make it yours.',
+    title: 'Working software, ready to install.',
+    detail: 'Ten open-source pods. Review the plan, then make one yours.',
     label: 'lemma.work/templates',
 });
 
 export const metadata: Metadata = {
     title: 'Templates',
-    description: 'Start with a complete Lemma setup, then make it yours.',
+    description: 'Install a complete open-source Lemma pod, then remix every part.',
     alternates: { canonical: '/templates' },
     openGraph: {
-        title: 'Templates that actually run.',
-        description: 'Start with the job. Make it yours.',
+        title: 'Working software, ready to install.',
+        description: 'Ten open-source pods. Review the plan, then make one yours.',
         images: [{ url: image, width: 1200, height: 630, alt: 'Lemma templates' }],
     },
     twitter: {
         card: 'summary_large_image',
-        title: 'Templates that actually run.',
-        description: 'Start with the job. Make it yours.',
+        title: 'Working software, ready to install.',
+        description: 'Ten open-source pods. Review the plan, then make one yours.',
         images: [image],
     },
 };
 
 export default function TemplatesPage() {
     return (
-        <main className="min-h-screen bg-[var(--surface-0)] text-[var(--text-primary)]">
-            <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-6">
-                <Link href="/" aria-label="Lemma home">
-                    <Logo size="sm" variant="mark-wordmark" />
-                </Link>
-                <Link
-                    href="/auth"
-                    className="rounded-full bg-[var(--action-primary)] px-4 py-2 text-sm font-medium text-[var(--text-on-brand)]"
-                >
-                    Start building
-                </Link>
+        <main className="github-import-page templates-gallery-page">
+            <header className="github-import-header">
+                <div className="github-import-header-inner">
+                    <Link href="/" aria-label="Lemma home">
+                        <Logo size="sm" variant="mark-wordmark" />
+                    </Link>
+                    <nav className="templates-gallery-nav" aria-label="Template navigation">
+                        <Link href="/">Home</Link>
+                        <Link href="/docs">Docs</Link>
+                        <Link href="/auth" className="templates-gallery-nav-cta">
+                            Start building
+                            <ArrowRight className="h-3.5 w-3.5" />
+                        </Link>
+                    </nav>
+                </div>
             </header>
 
-            <section className="mx-auto max-w-6xl px-6 pb-24 pt-20 sm:pt-28">
-                <p className="type-eyebrow-mono text-[var(--text-tertiary)]">Run it on Lemma</p>
-                <h1 className="mt-5 max-w-3xl text-5xl font-semibold leading-none tracking-tight sm:text-7xl">
-                    Start with the job.
-                    <span className="block text-[var(--text-secondary)]">Make it yours.</span>
-                </h1>
-                <p className="mt-6 max-w-xl text-lg leading-8 text-[var(--text-secondary)]">
-                    Complete starting points for apps, agents, workflows, and data—ready to shape around your team.
-                </p>
+            <div className="templates-gallery-shell">
+                <section className="templates-gallery-hero" aria-labelledby="templates-title">
+                    <div className="templates-gallery-hero-copy">
+                        <p className="templates-gallery-eyebrow">
+                            <Github className="h-4 w-4" />
+                            10 open-source pods
+                        </p>
+                        <h1 id="templates-title">Templates for real work.</h1>
+                        <p className="templates-gallery-hero-description">
+                            Complete software with the interface and operating system behind it.
+                            Pick a job, review the source, and install it into your pod.
+                        </p>
+                    </div>
+                </section>
 
-                <div className="mt-16 grid gap-5 sm:grid-cols-2">
-                    {PUBLIC_TEMPLATES.length === 0 ? (
-                        <div className="surface-panel p-7 sm:col-span-2 sm:p-9">
-                            <p className="type-eyebrow-mono text-[var(--text-tertiary)]">Coming soon</p>
-                            <h2 className="mt-6 text-3xl font-semibold tracking-[-0.035em]">
-                                Verified templates are being prepared.
-                            </h2>
-                            <p className="mt-3 max-w-xl leading-7 text-[var(--text-secondary)]">
-                                Every template listed here will be backed by a public, end-to-end tested GitHub
-                                bundle.
-                            </p>
-                        </div>
-                    ) : PUBLIC_TEMPLATES.map((template) => (
-                        <Link
-                            key={template.slug}
-                            href={`/templates/${template.slug}`}
-                            className="surface-panel group p-7 transition-transform hover:-translate-y-1 sm:p-9"
-                        >
-                            <p className="type-eyebrow-mono text-[var(--text-tertiary)]">{template.kicker}</p>
-                            <h2 className="mt-12 text-3xl font-semibold tracking-[-0.035em]">{template.name}</h2>
-                            <p className="mt-3 max-w-lg leading-7 text-[var(--text-secondary)]">{template.description}</p>
-                            <span className="mt-8 inline-flex items-center gap-2 text-sm font-medium">
-                                See template
-                                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
-                            </span>
-                        </Link>
-                    ))}
-                </div>
-            </section>
+                <section className="templates-gallery-collection" id="all-templates">
+                    <div className="templates-gallery-grid">
+                        {PUBLIC_TEMPLATES.map((template, index) => (
+                            <Link
+                                className="templates-gallery-card"
+                                href={templateRunHref(template)}
+                                key={template.slug}
+                            >
+                                <span className="templates-gallery-card-art">
+                                    <Image
+                                        alt=""
+                                        fill
+                                        sizes="(max-width: 640px) 100vw, (max-width: 1040px) 50vw, 300px"
+                                        src={templateCoverPath(template)}
+                                        unoptimized
+                                    />
+                                    <span>{String(index + 1).padStart(2, '0')}</span>
+                                </span>
+                                <span className="templates-gallery-card-copy">
+                                    <span className="templates-gallery-card-meta">
+                                        <span>{template.category}</span>
+                                        <span>Open source pod</span>
+                                    </span>
+                                    <strong>{template.name}</strong>
+                                    <span className="templates-gallery-card-description">
+                                        {template.description}
+                                    </span>
+                                    <span className="templates-gallery-card-action">
+                                        Review and install
+                                        <ArrowRight className="h-4 w-4" />
+                                    </span>
+                                </span>
+                            </Link>
+                        ))}
+                    </div>
+                </section>
+
+                <section className="templates-gallery-install">
+                    <div className="templates-gallery-install-copy">
+                        <p className="templates-gallery-eyebrow">Transparent by default</p>
+                        <h2>Review before install.</h2>
+                        <p>
+                            Every card goes straight to Lemma’s installer. It reads the repository,
+                            shows what will be added, and asks where it should go.
+                        </p>
+                        <ol>
+                            <li>
+                                <Check className="h-3.5 w-3.5" />
+                                <span><strong>Source</strong> GitHub repository</span>
+                            </li>
+                            <li>
+                                <Check className="h-3.5 w-3.5" />
+                                <span><strong>Review</strong> apps, agents, workflows, data</span>
+                            </li>
+                            <li>
+                                <Check className="h-3.5 w-3.5" />
+                                <span><strong>Install</strong> new or existing pod</span>
+                            </li>
+                        </ol>
+                    </div>
+                </section>
+
+                <footer className="templates-gallery-footer">
+                    <Logo size="sm" variant="mark-wordmark" />
+                    <p>Open-source starting points for software that becomes yours.</p>
+                    <nav aria-label="Footer navigation">
+                        <Link href="/docs">Docs</Link>
+                        <a href="https://github.com/lemma-work/lemma-platform">GitHub</a>
+                    </nav>
+                </footer>
+            </div>
         </main>
     );
 }
