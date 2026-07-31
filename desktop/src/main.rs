@@ -3130,9 +3130,17 @@ mod tests {
         let commands = include_str!("../build.rs");
         let all: Vec<String> = commands
             .lines()
-            .filter_map(|line| line.trim().strip_prefix('"')?.strip_suffix("\",").map(str::to_string))
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix('"')?
+                    .strip_suffix("\",")
+                    .map(str::to_string)
+            })
             .collect();
-        assert!(all.len() > 15, "failed to parse the command list from build.rs");
+        assert!(
+            all.len() > 15,
+            "failed to parse the command list from build.rs"
+        );
 
         let mut all_granted: Vec<String> = Vec::new();
         for name in ["main", "control", "workspace"] {
@@ -3159,7 +3167,13 @@ mod tests {
             .as_array()
             .expect("remote urls")
             .iter()
-            .map(|value| value.as_str().expect("url string").parse().expect("valid pattern"))
+            .map(|value| {
+                value
+                    .as_str()
+                    .expect("url string")
+                    .parse()
+                    .expect("valid pattern")
+            })
             .collect();
         let matches = |raw: &str| {
             let url = tauri::Url::parse(raw).expect("valid url");
@@ -3192,7 +3206,11 @@ mod tests {
         assert_eq!(capability("main")["webviews"][0], "main");
         assert_eq!(capability("control")["webviews"][0], "control");
 
-        let splash_only = ["allow-prepare-runtime", "allow-choose-connection-mode", "allow-login"];
+        let splash_only = [
+            "allow-prepare-runtime",
+            "allow-choose-connection-mode",
+            "allow-login",
+        ];
         for permission in splash_only {
             assert!(granted("main").contains(&permission.to_string()));
             assert!(!granted("control").contains(&permission.to_string()));

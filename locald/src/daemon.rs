@@ -159,8 +159,13 @@ impl Daemon {
     }
 
     fn start_agent_host_monitor(self: &Arc<Self>) {
-        if let Err(error) = self.agent_host.start() {
-            let _ = self.write_daemon_log(&format!("Agent Host unavailable: {error}"));
+        // Honour what the user last chose rather than starting unconditionally.
+        // Turning the Agent Host off has to survive a daemon restart, and an
+        // unpaired machine has nothing for it to do.
+        if self.agent_host.desired_running() {
+            if let Err(error) = self.agent_host.start() {
+                let _ = self.write_daemon_log(&format!("Agent Host unavailable: {error}"));
+            }
         }
         let daemon = Arc::clone(self);
         thread::spawn(move || loop {
@@ -491,38 +496,14 @@ impl Daemon {
                         "v": PROTOCOL_VERSION,
                         "event": "agent-host.status",
                         "id": id.as_ref(),
-                        "agent_host": self.agent_host.status(),
+                        "agent_host": self.agent_host.detailed_status(),
                     }),
                 );
                 return true;
             }
-            "agent-host.start" | "agent-host.stop" | "agent-host.restart" => {
-                let result = match command.as_str() {
-                    "agent-host.start" => self.agent_host.start(),
-                    "agent-host.stop" => self.agent_host.stop(),
-                    _ => self.agent_host.restart(),
-                };
-                match result {
-                    Ok(()) => self.send_direct(
-                        client,
-                        json!({
-                            "v": PROTOCOL_VERSION,
-                            "event": "done",
-                            "cmd": command,
-                            "id": id.as_ref(),
-                            "ok": true,
-                            "agent_host": self.agent_host.status(),
-                        }),
-                    ),
-                    Err(error) => self.send_direct(
-                        client,
-                        error_event(
-                            "agent-host-operation-failed",
-                            error.to_string(),
-                            id.as_ref(),
-                        ),
-                    ),
-                }
+            "agent-host.start" | "agent-host.stop" | "agent-host.restart" | "agent-host.pair"
+            | "agent-host.unpair" | "agent-host.refresh" => {
+                self.start_agent_host_operation(command, request.clone(), client.clone());
                 return true;
             }
             _ => {}
@@ -599,8 +580,9 @@ impl Daemon {
     }
 
     // Desktop calls this on full quit. The daemon deliberately outlives the
-    // app, so anything that must not survive the app - today, an open LAN or
-    // public exposure - is torn down here rather than at daemon shutdown.
+    // app, so anything that must not survive the app - an open LAN or public
+    // exposure, and the Agent Host - is torn down here rather than at daemon
+    // shutdown.
     fn release_for_desktop_exit(&self, id: Option<&Value>, client: &mpsc::Sender<String>) {
         self.send_direct(
             client,
@@ -611,16 +593,25 @@ impl Daemon {
                 "id": id,
             }),
         );
-        let mut failure = None;
+        // Both teardowns run regardless of the other's outcome, and both
+        // reasons are reported: a failure to close a public tunnel must never
+        // be hidden by a failure to stop the Agent Host, or the reverse.
+        let mut failures: Vec<String> = Vec::new();
+        // The Agent Host runs while the app is open. Quitting is not the user
+        // turning it off, so stop the process but leave the preference alone.
+        if let Err(error) = self.agent_host.suspend() {
+            failures.push(format!("could not stop the Agent Host: {error}"));
+        }
         if let Some(sharing) = self.sharing.as_ref() {
             if let Err(error) = self.disable_sharing_transaction(sharing) {
                 // Full Desktop exit must close the exposure even if restoring
                 // the app origin failed. It is safer to leave the local stack
                 // stopped/misconfigured than to leave a public tunnel alive.
                 sharing.force_disable();
-                failure = Some(error.to_string());
+                failures.push(format!("could not stop sharing: {error}"));
             }
         }
+        let failure = (!failures.is_empty()).then(|| failures.join("; "));
         match failure {
             None => self.send_direct(
                 client,
@@ -636,11 +627,93 @@ impl Daemon {
                 client,
                 error_event(
                     "desktop-release-failed",
-                    format!("could not stop sharing before desktop exit: {error}"),
+                    format!("could not release local services before desktop exit: {error}"),
                     id,
                 ),
             ),
         }
+    }
+
+    /// Run an Agent Host lifecycle or pairing command off the client thread.
+    ///
+    /// `pair` and `unpair` reach the backend, so they can take seconds. The
+    /// caller gets an immediate ack and the outcome as a later `done`/`error`,
+    /// the same shape every other slow locald operation uses.
+    fn start_agent_host_operation(
+        self: &Arc<Self>,
+        command: String,
+        request: Value,
+        client: mpsc::Sender<String>,
+    ) {
+        let id = request.get("id").cloned();
+        self.send_direct(
+            &client,
+            json!({
+                "v": PROTOCOL_VERSION,
+                "event": "ack",
+                "cmd": command,
+                "id": id,
+            }),
+        );
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let text = |key: &str| {
+                request
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let result = match command.as_str() {
+                "agent-host.start" => daemon.agent_host.start(),
+                "agent-host.stop" => daemon.agent_host.stop(),
+                "agent-host.restart" => daemon.agent_host.restart(),
+                "agent-host.pair" => {
+                    daemon
+                        .agent_host
+                        .pair(&text("url"), &text("pairing_code"), &text("name"))
+                }
+                "agent-host.unpair" => {
+                    let target = text("target_id");
+                    daemon
+                        .agent_host
+                        .unpair((!target.is_empty()).then_some(target.as_str()))
+                }
+                _ => daemon.agent_host.refresh(),
+            };
+            match result {
+                Ok(()) => {
+                    let status = daemon.agent_host.detailed_status();
+                    daemon.send_direct(
+                        &client,
+                        json!({
+                            "v": PROTOCOL_VERSION,
+                            "event": "done",
+                            "cmd": command,
+                            "id": id,
+                            "ok": true,
+                            "agent_host": status.clone(),
+                        }),
+                    );
+                    // Every open surface - Local settings, the tray, the
+                    // workspace page - shows this state, and only one of them
+                    // asked for the change.
+                    daemon.broadcast(json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "agent-host.status",
+                        "agent_host": status,
+                    }));
+                }
+                Err(error) => daemon.send_direct(
+                    &client,
+                    error_event(
+                        "agent-host-operation-failed",
+                        error.to_string(),
+                        id.as_ref(),
+                    ),
+                ),
+            }
+        });
     }
 
     fn restore_sharing_after_desktop_disconnect(self: &Arc<Self>) {
@@ -697,7 +770,7 @@ impl Daemon {
             "release": self.host_processes.as_ref().map(|manager| manager.release()),
             "managed_runtime": self.managed_runtime.as_ref().and_then(|runtime| runtime.status()),
             "sharing": self.sharing.as_ref().map(|sharing| sharing.snapshot(true)),
-            "agent_host": self.agent_host.status(),
+            "agent_host": self.agent_host.detailed_status(),
             "paths": {
                 "locald": &self.paths.root,
                 "logs": self.paths.root.join("logs"),

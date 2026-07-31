@@ -586,9 +586,7 @@ impl SharingController {
 
     fn observe_tunnel_exit(&self) -> Option<String> {
         let mut active = self.active.lock().expect("sharing active lock poisoned");
-        let Some(active) = active.as_mut() else {
-            return None;
-        };
+        let active = active.as_mut()?;
         if active.tunnel.is_none() && active.gateway.address.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST)
         {
             let address = active.gateway.address.ip().to_string();
@@ -605,9 +603,7 @@ impl SharingController {
                 return Some(message);
             }
         }
-        let Some(tunnel) = active.tunnel.as_mut() else {
-            return None;
-        };
+        let tunnel = active.tunnel.as_mut()?;
         match tunnel.child.try_wait() {
             Ok(Some(status)) => {
                 let message = format!(
@@ -1332,7 +1328,7 @@ fn preflight_cloudflare() -> ProviderReadiness {
             executable: Some(executable.to_string_lossy().into_owned()),
             version,
             message: Some(redact_error(
-                &String::from_utf8_lossy(&output.stderr).to_string(),
+                String::from_utf8_lossy(&output.stderr).as_ref(),
             )),
             instructions: vec!["Run `cloudflared tunnel login` in Terminal.".into()],
             tunnels: Vec::new(),
