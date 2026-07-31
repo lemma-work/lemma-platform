@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -158,3 +159,289 @@ class AgentHostPairingCompleted(BaseModel):
     user_id: UUID
     organization_id: UUID | None
     host_secret: str
+
+
+class AgentHostCommandKind(str, Enum):
+    START_RUN = "START_RUN"
+    CANCEL_RUN = "CANCEL_RUN"
+
+
+class AgentHostCommandState(str, Enum):
+    QUEUED = "QUEUED"
+    DELIVERED = "DELIVERED"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
+
+
+class AgentHostRejectionCode(str, Enum):
+    DRAINING = "DRAINING"
+    COMMAND_EXPIRED = "COMMAND_EXPIRED"
+    HARNESS_NOT_FOUND = "HARNESS_NOT_FOUND"
+    CONFIG_REVISION_STALE = "CONFIG_REVISION_STALE"
+    CAPACITY_LOST = "CAPACITY_LOST"
+    ADAPTER_UNAVAILABLE = "ADAPTER_UNAVAILABLE"
+    INVALID_COMMAND = "INVALID_COMMAND"
+
+
+class AgentHostRunState(str, Enum):
+    QUEUED_FOR_HOST = "QUEUED_FOR_HOST"
+    LEASED = "LEASED"
+    ACCEPTED = "ACCEPTED"
+    DISPATCHING = "DISPATCHING"
+    RUNNING = "RUNNING"
+    RECOVERING = "RECOVERING"
+    WAITING_INPUT = "WAITING_INPUT"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    DISPATCH_UNKNOWN = "DISPATCH_UNKNOWN"
+
+
+# States from which the host has not yet durably accepted the run; a
+# pre-dispatch rejection or timeout here may safely fall back to a provider.
+PRE_DISPATCH_AGENT_HOST_RUN_STATES = frozenset(
+    {
+        AgentHostRunState.QUEUED_FOR_HOST,
+        AgentHostRunState.LEASED,
+    }
+)
+
+# States (including WAITING_INPUT, which ends the host's turn while the
+# conversation waits on a human) after which a lease no longer advances.
+TERMINAL_AGENT_HOST_RUN_STATES = frozenset(
+    {
+        AgentHostRunState.WAITING_INPUT,
+        AgentHostRunState.SUCCEEDED,
+        AgentHostRunState.FAILED,
+        AgentHostRunState.CANCELLED,
+        AgentHostRunState.DISPATCH_UNKNOWN,
+    }
+)
+
+
+_RUN_STATE_ORDER = {
+    AgentHostRunState.QUEUED_FOR_HOST: 0,
+    AgentHostRunState.LEASED: 1,
+    AgentHostRunState.ACCEPTED: 2,
+    AgentHostRunState.DISPATCHING: 3,
+    AgentHostRunState.RUNNING: 4,
+    AgentHostRunState.RECOVERING: 5,
+    AgentHostRunState.WAITING_INPUT: 6,
+    AgentHostRunState.SUCCEEDED: 7,
+    AgentHostRunState.FAILED: 7,
+    AgentHostRunState.CANCELLED: 7,
+    AgentHostRunState.DISPATCH_UNKNOWN: 7,
+}
+
+
+def run_state_progresses(
+    current: AgentHostRunState,
+    reported: AgentHostRunState,
+) -> bool:
+    """Validate a host-reported state transition is not a regression."""
+
+    if current in PRE_DISPATCH_AGENT_HOST_RUN_STATES:
+        return reported not in PRE_DISPATCH_AGENT_HOST_RUN_STATES
+    if current in {
+        AgentHostRunState.RECOVERING,
+        AgentHostRunState.WAITING_INPUT,
+    } and reported is AgentHostRunState.RUNNING:
+        return True
+    return _RUN_STATE_ORDER[reported] >= _RUN_STATE_ORDER[current]
+
+
+class AgentHostEventType(str, Enum):
+    RUN_STATE = "run_state"
+    USER_MESSAGE = "user_message"
+    AGENT_MESSAGE_CHUNK = "agent_message_chunk"
+    AGENT_MESSAGE_UPSERT = "agent_message_upsert"
+    AGENT_THOUGHT_CHUNK = "agent_thought_chunk"
+    AGENT_THOUGHT_UPSERT = "agent_thought_upsert"
+    PLAN_UPSERT = "plan_upsert"
+    TOOL_CALL_UPSERT = "tool_call_upsert"
+    TOOL_CALL_UPDATE = "tool_call_update"
+    USAGE_UPDATE = "usage_update"
+    CONFIG_UPDATE = "config_update"
+    PERMISSION_REQUEST = "permission_request"
+    TERMINAL = "terminal"
+
+
+class AgentHostRunCheckpoint(BaseModel):
+    run_id: UUID
+    lease_epoch: int = Field(ge=1)
+    state: AgentHostRunState
+    detail: JsonObject = Field(default_factory=dict)
+
+
+class AgentHostCommandRejection(BaseModel):
+    command_id: UUID
+    run_id: UUID
+    lease_epoch: int = Field(ge=1)
+    code: AgentHostRejectionCode
+    retryable: bool
+    detail: str | None = Field(default=None, max_length=2048)
+
+
+class AgentHostPollRequest(BaseModel):
+    hello: HostHello
+    capacity: AgentHostCapacity = Field(default_factory=AgentHostCapacity)
+    acknowledged_command_ids: list[UUID] = Field(default_factory=list, max_length=256)
+    checkpoints: list[AgentHostRunCheckpoint] = Field(
+        default_factory=list, max_length=256
+    )
+    rejections: list[AgentHostCommandRejection] = Field(
+        default_factory=list,
+        max_length=256,
+    )
+
+
+class AgentHostRunSpec(BaseModel):
+    agent_run_id: UUID
+    conversation_id: UUID
+    harness_id: UUID
+    profile_revision: str = Field(min_length=1, max_length=255)
+    model_name: str | None = Field(default=None, min_length=1, max_length=512)
+    config_selections: JsonObject = Field(default_factory=dict)
+    system_prompt: str
+    prompt: list[JsonObject] = Field(min_length=1)
+    context: JsonObject = Field(default_factory=dict)
+    run_deadline: datetime
+
+
+class AgentHostCommand(BaseModel):
+    command_id: UUID
+    kind: AgentHostCommandKind
+    created_at: datetime
+    expires_at: datetime
+    run_id: UUID | None = None
+    lease_epoch: int | None = Field(default=None, ge=1)
+    payload: JsonObject = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_run_fencing(self) -> "AgentHostCommand":
+        if self.kind in {
+            AgentHostCommandKind.START_RUN,
+            AgentHostCommandKind.CANCEL_RUN,
+        } and (self.run_id is None or self.lease_epoch is None):
+            raise ValueError(f"{self.kind.value} requires run_id and lease_epoch")
+        return self
+
+
+class AgentHostPollResponse(BaseModel):
+    protocol_version: int = AGENT_HOST_PROTOCOL_VERSION
+    host_status: AgentHostStatus
+    commands: list[AgentHostCommand] = Field(default_factory=list)
+    poll_after_ms: int = Field(default=0, ge=0, le=60_000)
+
+
+class AgentHostEvent(BaseModel):
+    """One run event on its way to the run's Redis Stream.
+
+    There is no event id: events are deduplicated by ``sequence`` against the
+    stream's watermark, which is what a resend after a Redis flush relies on.
+    There is no host timestamp either -- a Redis stream id already embeds the
+    millisecond it was appended.
+    """
+
+    run_id: UUID
+    lease_epoch: int = Field(ge=1)
+    sequence: int = Field(ge=1)
+    type: AgentHostEventType
+    object_id: str | None = Field(default=None, max_length=255)
+    payload: JsonObject = Field(default_factory=dict)
+
+
+class AgentHostEventBatch(BaseModel):
+    events: Annotated[list[AgentHostEvent], Field(min_length=1, max_length=256)]
+
+    @model_validator(mode="after")
+    def validate_single_ordered_run(self) -> "AgentHostEventBatch":
+        first = self.events[0]
+        expected = first.sequence
+        for event in self.events:
+            if event.run_id != first.run_id or event.lease_epoch != first.lease_epoch:
+                raise ValueError("event batch must contain one run and lease epoch")
+            if event.sequence != expected:
+                raise ValueError("event batch sequences must be contiguous and ordered")
+            expected += 1
+        return self
+
+
+class AgentHostEventAck(BaseModel):
+    run_id: UUID
+    lease_epoch: int
+    acked_through: int = Field(ge=0)
+
+
+def validate_agent_host_selections(
+    *,
+    config_options: list[object],
+    selections: JsonObject,
+) -> JsonObject:
+    """Validate provider-owned selections without translating their values."""
+    options_by_key: dict[str, dict[str, object]] = {}
+    for raw_option in config_options:
+        if not isinstance(raw_option, dict):
+            continue
+        option_id = str(raw_option.get("id") or "").strip()
+        category = str(raw_option.get("category") or "").strip()
+        if option_id:
+            options_by_key[option_id] = raw_option
+        if category:
+            options_by_key[category] = raw_option
+
+    normalized: JsonObject = {}
+    for key, value in selections.items():
+        normalized_key = str(key).strip()
+        option = options_by_key.get(normalized_key)
+        if option is None:
+            raise ValueError(f"Unknown Agent Host configuration selection: {key}")
+        if str(option.get("category") or "").strip() == "model":
+            raise ValueError("Model must be configured through default_model_name")
+        allowed_values = _agent_host_option_values(option.get("options"))
+        if allowed_values and value not in allowed_values:
+            raise ValueError(
+                f"Invalid value for Agent Host configuration selection: {key}"
+            )
+        normalized[normalized_key] = value
+    return normalized
+
+
+def validate_agent_host_model(
+    *,
+    config_options: list[object],
+    model_name: str | None,
+) -> str | None:
+    if model_name is None:
+        return None
+    normalized = model_name.strip()
+    if not normalized:
+        raise ValueError("default_model_name cannot be empty")
+    model_options: list[object] = []
+    has_model_option = False
+    for raw_option in config_options:
+        if not isinstance(raw_option, dict):
+            continue
+        if str(raw_option.get("category") or "").strip() != "model":
+            continue
+        has_model_option = True
+        model_options.extend(_agent_host_option_values(raw_option.get("options")))
+    if not has_model_option or normalized not in model_options:
+        raise ValueError("default_model_name is not offered by this harness")
+    return normalized
+
+
+def _agent_host_option_values(raw_options: object) -> list[object]:
+    if not isinstance(raw_options, list):
+        return []
+    values: list[object] = []
+    for item in raw_options:
+        if not isinstance(item, dict):
+            values.append(item)
+            continue
+        if "value" in item:
+            values.append(item["value"])
+        elif "id" in item:
+            values.append(item["id"])
+    return values
