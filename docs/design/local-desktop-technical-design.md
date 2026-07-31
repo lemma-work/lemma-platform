@@ -12,7 +12,6 @@ Tauri Desktop
   │ authenticated local IPC
   ▼
 lemma-locald ─────────────── process ledger / network state / logs / config vault
-  ├─ optional MLX-LM server (Apple Silicon, loopback only)
   ├─ optional canonical-origin sharing gateway
   ├─ optional exact-owned ngrok or cloudflared child
   ├─ all-in-one Python backend (API + worker + scheduler + AgentBox + documents)
@@ -237,9 +236,8 @@ Escape, Close, and Back to Lemma destroy the child and focus the original
 workspace.
 
 The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
-dependencies. Navigation is Overview; Models/AI provider; Sharing,
-Integrations/Channels; Runtime, Updates/Diagnostics. MLX controls are rendered
-only on Apple Silicon.
+dependencies. Navigation is Overview; AI provider; Sharing,
+Integrations/Channels; Runtime, Updates/Diagnostics.
 
 ## 7.2 Sharing and canonical origin
 
@@ -307,12 +305,6 @@ reservation and return capacity errors rather than induce guest OOM.
 
 Explicit full stop shuts down the VM and releases its memory.
 
-MLX is a host process rather than VM memory. locald serializes its lifecycle
-and records its exact executable, PID, and process start identity, so a
-repeated start or daemon replacement cannot create two Lemma-owned model
-servers. A normal desktop Quit synchronously disables and stops MLX before the
-shell exits; closing the window to the tray intentionally leaves it running.
-
 ## 9. Diagnostics
 
 Desktop’s diagnostic API enumerates installer, events, locald, migrations,
@@ -347,14 +339,9 @@ Operator configuration is schema validated. Secrets are stored in the OS vault.
 Apply writes a candidate, probes the provider, restarts only the backend,
 health-checks it, and commits; failure restores prior config and secrets.
 
-On macOS arm64, the host pack also contains an isolated, locked MLX-LM package
-tree. The model is not bundled. An explicit Control Center action asks
-`locald` to download and verify the pinned model, start a dynamic loopback
-endpoint, probe a real completion and `/v1/models`, and transactionally select
-it as the OpenAI-compatible default. Local AI has a separate exact process
-marker so a daemon restart reclaims only the matching PID, executable, and OS
-start identity. See
-[Apple Silicon local MLX AI experiment](local-mlx-ai-experiment.md).
+A local model is reached the same way as any other provider: Ollama and LM
+Studio prefill a loopback OpenAI-compatible endpoint that the user already
+runs, so Lemma never owns, downloads, or supervises a model process.
 
 The backend exposes safe capability health. The frontend local banner calls
 the validated native `open_control_center` command with `ai`; accepted
@@ -395,9 +382,6 @@ Unit/integration coverage must include:
 - sparse extraction and atomic activation;
 - dynamic-port persistence and unrelated-listener rotation;
 - process ledger match and PID-reuse rejection;
-- opt-in Apple Silicon gating, pinned local-model verification, thinking and
-  tool-call compatibility, resumable byte-level progress, model
-  switching/deletion, explicit stop, and exact MLX orphan reclamation;
 - strict 2xx/exact-generation health;
 - immediate child-exit error;
 - operation generation and navigation stability;

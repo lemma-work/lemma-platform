@@ -280,7 +280,7 @@ h1 { margin: 0; font-size: clamp(28px, 3.5vw, 38px); line-height: 1.08; letter-s
 .status.ok { color: var(--green); }
 .status.warn { color: var(--gold-strong); }
 .status.bad { color: var(--red); }
-.privacy-chip, .exposure-badge {
+.exposure-badge {
   padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -357,27 +357,6 @@ input[type="checkbox"] { width: auto; min-height: auto; accent-color: var(--gold
 }
 .config-page.dirty .savebar { display: flex; }
 
-.model-list { display: grid; gap: 10px; margin-top: 14px; }
-.model-item {
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel-raised);
-}
-.model-item.active { border-color: color-mix(in srgb, var(--green) 52%, var(--border)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 9%, transparent); }
-.model-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.model-name { font-family: var(--sans); font-weight: 600; }
-.model-copy { max-width: 780px; margin-top: 3px; color: var(--muted); font-size: 11px; }
-.model-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.model-meta span { padding: 4px 6px; border-radius: 5px; background: var(--canvas); color: var(--muted); font: 9px var(--mono); }
-.model-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
-.progress-panel { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
-.progress-copy { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 7px; font-size: 11px; }
-.progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: var(--border); }
-.progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--gold); transition: width .22s ease; }
-.progress-detail { min-height: 15px; margin-top: 6px; color: var(--muted); font-size: 10px; }
-.empty-state { padding: 28px 18px; border: 1px dashed var(--border-strong); border-radius: 10px; text-align: center; }
-.empty-state p { margin: 5px 0 0; color: var(--muted); }
 
 .mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .mode-card {

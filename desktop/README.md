@@ -35,11 +35,6 @@ downloads:
 - `lemma-host-pack-<target>.zip`;
 - `lemma-guest-runtime-<target>.zip`.
 
-The Apple Silicon host pack contains a separate locked MLX-LM package tree.
-The curated Ternary Bonsai and Qwen3 models are never bundled: each roughly
-2.3 GB download is an explicit Local settings opt-in owned and verified by
-`locald`.
-
 Every manifest entry contains source URL/resource, SHA-256, compressed size,
 expanded size, archive format, platform target, and release identity. Archives
 are resumable, verified while transferring, extracted into disposable staging,
@@ -84,17 +79,16 @@ Build Desktop sidecars:
 desktop/scripts/build-sidecar.sh
 ```
 
-For the Apple-Silicon MLX experiment, use the isolated dev launcher instead of
-building a DMG on every iteration:
+To iterate on Local settings without building a DMG every time, use the
+isolated dev launcher:
 
 ```bash
-desktop/scripts/dev-mlx.sh /absolute/path/to/local-runtime
+desktop/scripts/dev-local.sh /absolute/path/to/local-runtime
 ```
 
-The host pack must include `backend/mlx-runtime`. The launcher rebuilds the
-native sidecars, gracefully replaces the prior isolated dev daemon, and keeps
-its state under `/tmp/lemma-desktop-mlx-dev` so an installed Lemma daemon cannot
-capture the dev UI.
+It rebuilds the native sidecars, gracefully replaces the prior isolated dev
+daemon, and keeps its state under `/tmp/lemma-desktop-dev` so an installed
+Lemma daemon cannot capture the dev UI.
 
 For source-level installer testing, prepare an exact manifest and archives and
 set:
@@ -153,10 +147,9 @@ Acceptance flow:
 6. Open **Local settings** from the workspace footer, close it with Escape,
    reopen it from the tray, and confirm the underlying workspace state was not
    remounted or lost.
-7. On Apple Silicon, download and use both curated models through the MLX card;
-   verify thinking, structured tool calls, progress, model switching, explicit
-   stop/delete, and restart recovery. Also verify Ollama, LM Studio, or an API
-   provider can replace them.
+7. On the AI provider page, use **Use Ollama** and **Use LM Studio** to
+   prefill a loopback endpoint, apply it, and verify model discovery, thinking,
+   and structured tool calls. Also verify an API provider can replace them.
 8. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
    second browser, create/sign into an account, and verify streamed chat, a
    tool call, and a file transfer. Disable it and confirm the LAN port closes.
@@ -174,10 +167,7 @@ Acceptance flow:
 13. Restart and confirm ports and data persist, but LAN/Public mode does not
     resume automatically.
 14. Inspect every Diagnostics source and exercise runtime repair.
-15. Start a local MLX model, issue a second start, and confirm there is still
-    exactly one server PID. Use normal **Quit Lemma** and confirm that PID is
-    gone before the shell exits.
-16. Use **Quit and stop Lemma** and confirm the VM also releases its memory.
+15. Use **Quit and stop Lemma** and confirm the VM also releases its memory.
 
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
 and unrelated listeners occupying persisted ports.

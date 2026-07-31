@@ -13,7 +13,6 @@ import argparse
 import hashlib
 import json
 import os
-import platform
 import shutil
 import subprocess
 import sys
@@ -241,57 +240,6 @@ def prune_python_runtime(python_root: Path) -> None:
                 shutil.rmtree(tests, ignore_errors=True)
 
 
-def install_mlx_runtime(output: Path, python: Path, wheels: Path) -> None:
-    """Install MLX-LM in an isolated package tree on Apple Silicon builds."""
-
-    if sys.platform != "darwin" or platform.machine() != "arm64":
-        return
-    project = REPO_ROOT / "desktop/mlx-runtime"
-    locked_requirements = wheels / "mlx-runtime-requirements.txt"
-    run(
-        "uv",
-        "export",
-        "--project",
-        project,
-        "--frozen",
-        "--no-dev",
-        "--no-emit-project",
-        "--no-hashes",
-        "--quiet",
-        "--output-file",
-        locked_requirements,
-    )
-    destination = output / "backend/mlx-runtime"
-    run(
-        "uv",
-        "pip",
-        "install",
-        "--python",
-        python,
-        "--target",
-        destination,
-        "--requirements",
-        locked_requirements,
-    )
-    smoke_environment = os.environ.copy()
-    smoke_environment["PYTHONPATH"] = str(destination)
-    run(
-        python,
-        "-c",
-        (
-            "import importlib.metadata as metadata; "
-            "import huggingface_hub, mlx_lm; "
-            "assert metadata.version('mlx-lm') == '0.31.3'; "
-            "print('MLX runtime: import ok')"
-        ),
-        env=smoke_environment,
-    )
-    for cache in sorted(destination.rglob("__pycache__"), reverse=True):
-        shutil.rmtree(cache, ignore_errors=True)
-    for compiled in destination.rglob("*.py[co]"):
-        compiled.unlink(missing_ok=True)
-
-
 def copy_browser_assets(output: Path) -> None:
     browser = output / "backend/assets/browser-sdk"
     browser.mkdir(parents=True, exist_ok=True)
@@ -420,14 +368,10 @@ def size_breakdown(output: Path) -> dict[str, int]:
     node_bytes = tree_size(frontend / "node")
     frontend_bytes = tree_size(frontend)
     python_bytes = tree_size(output / "backend/python")
-    mlx_runtime_bytes = tree_size(output / "backend/mlx-runtime")
     backend_bytes = tree_size(output / "backend")
     return {
         "python_bytes": python_bytes,
-        "mlx_runtime_bytes": mlx_runtime_bytes,
-        "backend_assets_bytes": max(
-            0, backend_bytes - python_bytes - mlx_runtime_bytes
-        ),
+        "backend_assets_bytes": max(0, backend_bytes - python_bytes),
         "node_bytes": node_bytes,
         "next_bytes": max(0, frontend_bytes - node_bytes),
         "metadata_bytes": tree_size(output) - backend_bytes - frontend_bytes,
@@ -532,8 +476,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="lemma-host-wheels-") as wheel_dir:
         wheels = Path(wheel_dir)
-        python = install_python(output, args.python, wheels, args.python_root)
-        install_mlx_runtime(output, python, wheels)
+        install_python(output, args.python, wheels, args.python_root)
     copy_backend_assets(output)
     build_frontend(output, args.node_root)
     shutil.copy2(release_manifest, output / "release.json")

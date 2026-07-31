@@ -96,24 +96,18 @@ AI provider**. Open it, or use **Local settings → AI provider**.
 
 Supported setup paths include:
 
-- app-managed Ternary Bonsai 8B and Qwen3 4B through Apple MLX on Apple
-  Silicon;
 - OpenAI-compatible APIs;
 - Anthropic-compatible APIs;
 - local Ollama;
 - local LM Studio.
 
-On an Apple Silicon Mac, **Local settings → Models** shows optional app-owned
-MLX models. Each curated model has explicit
-**Download**, **Use model**, **Stop**, and **Delete** controls. Downloads are
-resumable and show transferred bytes, throughput, and ETA. `locald` verifies
-the pinned model before starting a loopback-only OpenAI-compatible server and
-making the selected model the default profile. Nothing is downloaded until
-you choose it. Once installed, local inference can run without internet;
-connectors, web access, and other external services still require their own
-networks. MLX memory is managed automatically by macOS; Lemma uses one active
-generation and a 1 GB reusable-cache budget, so there is no RAM slider to
-configure. **Stop** releases unified memory and disables automatic restart.
+To run models on your own machine, start Ollama or LM Studio and press
+**Use Ollama** or **Use LM Studio**. Each fills in that tool's loopback base
+URL, which **Validate & apply** then probes for its model list. Lemma talks to
+them as ordinary OpenAI-compatible providers, so the models, their memory, and
+their lifecycle stay owned by the tool you already run. Local inference then
+works without internet; connectors, web access, and other external services
+still require their own networks.
 
 Enter a base URL, default model, and API key when required, then choose
 **Validate & apply**. Lemma discovers models and verifies that the default
@@ -155,7 +149,7 @@ keeps signup open in this release. Cloudflare Quick Tunnels are not available.
 The shared URL covers the workspace, auth, API, files, streamed chat/tool
 calls, and webhook callbacks. Published pod apps stay local-only because their
 current routes require wildcard subdomains. PostgreSQL, Redis, SuperTokens, the
-private runtime, MLX, and model endpoints are never exposed.
+private runtime and model endpoints are never exposed.
 
 Closing to the tray keeps sharing active. Full Quit, a Desktop disconnect,
 network-interface loss, or tunnel exit stops sharing. LAN/Public mode never

@@ -19,7 +19,6 @@
       <nav id="nav">
         <button class="nav-item active" data-page="overview"><span>Overview</span><i class="health-dot" id="dot-overview"></i></button>
         <div class="nav-group">Intelligence</div>
-        <button class="nav-item" data-page="models" id="nav-models" hidden><span>Models</span><i class="health-dot" id="dot-models"></i></button>
         <button class="nav-item" data-page="ai"><span>AI provider</span><i class="health-dot" id="dot-ai"></i></button>
         <div class="nav-group">Connectivity</div>
         <button class="nav-item" data-page="sharing"><span>Sharing</span><i class="health-dot" id="dot-sharing"></i></button>
@@ -84,21 +83,6 @@
             <div id="overview-services"></div>
           </article>
         </div>
-      </section>
-
-      <section class="page" data-page="models">
-        <article class="panel" id="local-ai-card">
-          <div class="panel-heading">
-            <div><h2>Models on this Mac</h2><p>Apple Silicon only. One MLX model can be loaded at a time, on a private loopback endpoint.</p></div>
-            <span class="status" id="local-ai-status">checking</span>
-          </div>
-          <div class="summary-row"><span>Model server<small id="local-ai-detail">Checking MLX support…</small></span><span class="privacy-chip">Never exposed</span></div>
-          <div class="model-list" id="local-ai-models"></div>
-          <div class="empty-state" id="local-ai-unavailable" hidden>
-            <strong>Local models are available on Apple Silicon Macs.</strong>
-            <p>This page stays hidden from unsupported builds in the main Lemma navigation.</p>
-          </div>
-        </article>
       </section>
 
       <section class="page config-page" data-page="ai">

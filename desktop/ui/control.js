@@ -6,7 +6,6 @@ const csv = (value) => value.split(",").map((item) => item.trim()).filter(Boolea
 
 const titles = {
   overview: ["Overview", "Health, attention, and exposure at a glance."],
-  models: ["Models", "Download and run compact Apple MLX models without sending prompts off this Mac."],
   ai: ["AI provider", "Choose and validate the system model profile used by local agents."],
   sharing: ["Sharing", "Keep Lemma private, use it on trusted Wi-Fi, or create an intentional public link."],
   integrations: ["Integrations", "Configure service connections without mixing them with login or channel credentials."],
@@ -19,8 +18,6 @@ const titles = {
 let snapshot = null;
 let state = null;
 let runtimeInfo = null;
-let localAiPending = null;
-let localAiEventDetail = "";
 let filling = false;
 let requestCounter = 0;
 let sharingChoice = null;
@@ -44,31 +41,6 @@ function escapeHtml(value) {
   const node = document.createElement("span");
   node.textContent = String(value ?? "");
   return node.innerHTML;
-}
-
-function formatBytes(value) {
-  const bytes = Math.max(0, Number(value || 0));
-  if (bytes < 1000) return `${bytes} B`;
-  const units = ["KB", "MB", "GB", "TB"];
-  let amount = bytes;
-  let unit = -1;
-  do {
-    amount /= 1000;
-    unit += 1;
-  } while (amount >= 1000 && unit < units.length - 1);
-  return `${amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${units[unit]}`;
-}
-
-function formatEta(value) {
-  const seconds = Math.max(1, Math.round(Number(value || 0)));
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.ceil(seconds / 60)}m`;
-  return `${Math.floor(seconds / 3600)}h ${Math.ceil((seconds % 3600) / 60)}m`;
-}
-
-function formatTokenCount(value) {
-  const tokens = Math.max(0, Number(value || 0));
-  return tokens >= 1024 ? `${Math.round(tokens / 1024)}K` : String(tokens);
 }
 
 function setPage(page) {
@@ -161,10 +133,6 @@ function configureInteractionHandlers() {
     $("ai-private-network").checked = false;
     markDirty($("ai-base"));
     toast("LM Studio selected. Start its server, then validate.");
-  });
-  $("local-ai-models").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-local-ai-action]");
-    if (button && !button.disabled) localAiAction(button.dataset.localAiAction, button.dataset.modelId);
   });
   document.querySelectorAll("[data-sharing-mode]").forEach((button) => {
     button.addEventListener("click", () => selectSharingChoice(button.dataset.sharingMode));
@@ -324,25 +292,19 @@ async function runDesktopAction(button) {
 function render() {
   if (!snapshot?.operator) return;
   const readiness = snapshot.operator.readiness;
-  const localAi = snapshot.local_ai || {};
-  const localModels = Array.isArray(localAi.models) ? localAi.models : [];
-  const localModel = localModels.find((model) => model.running) || localModels.find((model) => model.selected);
-  const usesLocalAi = Boolean(localAi.base_url)
-    && String(snapshot.operator.config.ai.base_url || "").replace(/\/$/, "").toLowerCase()
-      === String(localAi.base_url).replace(/\/$/, "").toLowerCase();
   const services = snapshot.services || [];
   const appReady = services.length > 0 && services.every((service) => service.running);
-  const aiReady = readiness.ai === "ready" && (!usesLocalAi || localAi.running);
+  const aiReady = readiness.ai === "ready";
   const runtimeReady = Boolean(snapshot.managed_runtime);
   const sharing = snapshot.sharing || {};
   const sharingMode = sharing.mode || "this_computer";
 
   $("release").textContent = `Release ${snapshot.release || "development"}`;
   $("metric-app").textContent = appReady ? "Healthy" : state?.running ? "Starting" : "Stopped";
-  $("metric-ai").textContent = aiReady ? "Ready" : usesLocalAi ? "Model stopped" : "Needs setup";
-  $("metric-ai-detail").textContent = usesLocalAi
-    ? `Apple MLX · ${localModel?.name || localAi.model_name || "local model"}`
-    : aiReady ? `${snapshot.operator.config.ai.default_model || "Provider configured"}` : "Choose a provider or local model.";
+  $("metric-ai").textContent = aiReady ? "Ready" : "Needs setup";
+  $("metric-ai-detail").textContent = aiReady
+    ? `${snapshot.operator.config.ai.default_model || "Provider configured"}`
+    : "Choose a provider, or point Lemma at Ollama or LM Studio.";
   $("metric-exposure").textContent = modeLabel(sharingMode);
   $("metric-exposure-detail").textContent = exposureCopy(sharingMode);
 
@@ -350,7 +312,6 @@ function render() {
   pill.textContent = appReady && runtimeReady ? "Healthy" : state?.status || "Checking";
   pill.className = `state-pill ${appReady && runtimeReady ? "ok" : state?.last_error ? "bad" : "warn"}`;
   setDot("overview", appReady ? "ok" : "warn");
-  setDot("models", localAi.running ? "ok" : localAi.last_error ? "bad" : "");
   setDot("ai", aiReady ? "ok" : "warn");
   setDot("sharing", sharing.phase === "error" ? "bad" : sharingMode === "this_computer" ? "ok" : "warn");
   setDot("integrations", readiness.integrations === "configured" ? "ok" : "");
@@ -358,7 +319,7 @@ function render() {
   setDot("runtime", appReady ? "ok" : "warn");
 
   const attention = [];
-  if (!aiReady) attention.push({ title: "Choose an AI provider", copy: "Agents cannot answer until a provider or local model is ready.", page: usesLocalAi ? "models" : "ai" });
+  if (!aiReady) attention.push({ title: "Choose an AI provider", copy: "Agents cannot answer until a provider is configured.", page: "ai" });
   if (!appReady) attention.push({ title: "Application services need attention", copy: "Review the runtime state and reconcile services.", page: "runtime" });
   if (sharing.last_error) attention.push({ title: "Sharing needs attention", copy: sharing.last_error, page: "sharing" });
   const banner = $("attention-banner");
@@ -398,10 +359,9 @@ function render() {
   const workspaceUrl = snapshot.state?.url || state?.url;
   const apiUrl = snapshot.state?.api_url || state?.api_url;
   if (workspaceUrl && apiUrl) {
-    $("network-contract").innerHTML = `Main UI<br><code>${escapeHtml(workspaceUrl)}</code><br><br>API<br><code>${escapeHtml(apiUrl)}</code><br><br>MLX and private services<br><code>loopback only · never proxied</code>`;
+    $("network-contract").innerHTML = `Main UI<br><code>${escapeHtml(workspaceUrl)}</code><br><br>API<br><code>${escapeHtml(apiUrl)}</code><br><br>Private services<br><code>loopback only · never proxied</code>`;
     $("connector-callback").textContent = `${apiUrl.replace(/\/$/, "")}/api/v1/connectors/oauth/callback`;
   }
-  renderLocalAi(localAi);
   renderAgentHost(snapshot.agent_host || {});
   renderSharing(sharing);
 }
@@ -431,137 +391,6 @@ function serviceHtml(title, copy, status, tone) {
 function setDot(id, tone) {
   const dot = $(`dot-${id}`);
   if (dot) dot.className = `health-dot ${tone}`;
-}
-
-function renderLocalAi(localAi) {
-  const supported = localAi.supported === true;
-  $("nav-models").hidden = !supported;
-  $("local-ai-unavailable").hidden = supported;
-  $("local-ai-card").classList.toggle("unsupported", !supported);
-  if (!supported) {
-    $("local-ai-detail").textContent = "Apple Silicon and the bundled MLX runtime are required.";
-    $("local-ai-status").textContent = "unavailable";
-    $("local-ai-models").innerHTML = "";
-    return;
-  }
-  const models = Array.isArray(localAi.models) ? localAi.models : [];
-  const busyStages = ["downloading", "verifying", "starting", "stopping", "deleting"];
-  const busy = Boolean(localAiPending) || busyStages.includes(localAi.status) || Boolean(localAi.operation);
-  const active = models.find((model) => model.running);
-  const installedCount = models.filter((model) => model.installed).length;
-  const statusText = localAi.running
-    ? "running"
-    : busy ? String(localAi.stage || localAi.status || "working")
-      : localAi.last_error ? "attention" : "stopped";
-  $("local-ai-status").textContent = statusText.replaceAll("_", " ");
-  $("local-ai-status").className = `status ${localAi.running ? "ok" : localAi.last_error ? "bad" : ""}`;
-  if (!localAi.runtime_available) {
-    $("local-ai-detail").textContent = "The bundled MLX runtime is unavailable.";
-  } else if (active) {
-    $("local-ai-detail").textContent = `${active.name} · macOS-managed unified memory · private loopback`;
-  } else if (installedCount) {
-    $("local-ai-detail").textContent = `${installedCount} model${installedCount === 1 ? "" : "s"} downloaded · none loaded into memory`;
-  } else {
-    $("local-ai-detail").textContent = "No models downloaded. Downloads are resumable and opt-in.";
-  }
-  $("local-ai-models").innerHTML = models.map((model) => {
-    const pending = localAiPending?.split(":") || [];
-    const pendingStage = {
-      install: "preparing download",
-      start: "preparing server",
-      stop: "preparing stop",
-      delete: "preparing delete",
-    }[pending[0]];
-    const isPending = !localAi.operation && pending[1] === model.id;
-    const isOperation = localAi.operation_model_id === model.id || isPending;
-    const modelBusy = isOperation && busyStages.includes(localAi.stage || model.status);
-    const status = model.running
-      ? "running"
-      : isPending ? pendingStage
-        : modelBusy ? String(localAi.stage || model.status)
-          : model.installed ? "downloaded" : "available";
-    const progress = isPending
-      ? localAiProgress({ stage: pendingStage, progress: 0 })
-      : isOperation ? localAiProgress(localAi) : "";
-    const buttons = [];
-    if (!model.installed) {
-      buttons.push(`<button class="btn primary" data-local-ai-action="install" data-model-id="${escapeHtml(model.id)}"${busy || !localAi.runtime_available ? " disabled" : ""}>Download · ${escapeHtml(formatBytes(model.download_bytes))}</button>`);
-    } else if (!model.running) {
-      buttons.push(`<button class="btn primary" data-local-ai-action="start" data-model-id="${escapeHtml(model.id)}"${busy || !localAi.runtime_available ? " disabled" : ""}>Start</button>`);
-    }
-    if (model.running) {
-      buttons.push(`<button class="btn" data-local-ai-action="stop" data-model-id="${escapeHtml(model.id)}"${busy ? " disabled" : ""}>Stop</button>`);
-    }
-    if (model.installed) {
-      buttons.push(`<button class="btn danger" data-local-ai-action="delete" data-model-id="${escapeHtml(model.id)}"${busy ? " disabled" : ""}>Delete</button>`);
-    }
-    const capabilities = [
-      `${formatBytes(model.download_bytes)} download`,
-      model.license,
-      "16 GB friendly",
-      "Adaptive unified memory",
-      model.thinking ? "Thinking" : "",
-      model.tool_calling ? "Tool calls" : "",
-      Number(model.context_tokens) > 0 ? `${formatTokenCount(model.context_tokens)} context` : "",
-    ].filter(Boolean).map((item) => `<span>${escapeHtml(item)}</span>`).join("");
-    const runtimeGuidance = model.running
-      ? `<div class="model-copy">Memory is managed automatically by macOS. Lemma uses a ${escapeHtml(formatBytes(localAi.prompt_cache_bytes || 0))} reusable-cache budget, one active generation, and up to ${escapeHtml(formatTokenCount(localAi.max_output_tokens || 0))} output tokens per turn.</div>`
-      : "";
-    return `<div class="model-item${model.running ? " active" : ""}">
-      <div class="model-head"><div><div class="model-name">${escapeHtml(model.name)}</div><div class="model-copy">${escapeHtml(model.description)}</div></div><span class="status ${model.running ? "ok" : ""}">${escapeHtml(String(status || "working").replaceAll("_", " "))}</span></div>
-      <div class="model-meta">${capabilities}</div>
-      ${runtimeGuidance}
-      <div class="model-actions">${buttons.join("")}</div>
-      ${progress}
-    </div>`;
-  }).join("");
-  if (!busy) localAiEventDetail = "";
-}
-
-function localAiProgress(localAi) {
-  const stage = String(localAi.stage || localAi.status || "working");
-  const downloaded = Number(localAi.downloaded_bytes || 0);
-  const total = Number(localAi.total_bytes || 0);
-  const reported = Math.min(100, Number(localAi.progress || 0));
-  const percent = stage === "downloading" && total > 0
-    ? Math.min(100, Math.round(downloaded / total * 100))
-    : reported;
-  const title = `${stage[0].toUpperCase()}${stage.slice(1).replaceAll("_", " ")} · ${percent}%`;
-  const amount = total > 0
-    ? `${formatBytes(downloaded)} of ${formatBytes(total)}`
-    : localAiEventDetail || "Working…";
-  const details = [];
-  if (Number(localAi.throughput_bytes_per_second) > 0) {
-    details.push(`${formatBytes(localAi.throughput_bytes_per_second)}/s`);
-  }
-  if (Number(localAi.eta_seconds) > 0) {
-    details.push(`about ${formatEta(localAi.eta_seconds)} remaining`);
-  }
-  if (localAiEventDetail && !details.length) details.push(localAiEventDetail);
-  return `<div class="progress-panel" role="status" aria-live="polite">
-    <div class="progress-copy"><span>${escapeHtml(title)}</span><span>${escapeHtml(amount)}</span></div>
-    <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div class="progress-fill" style="width:${percent}%"></div></div>
-    <div class="progress-detail">${escapeHtml(details.join(" · "))}</div>
-  </div>`;
-}
-
-async function localAiAction(action, modelId) {
-  const model = snapshot?.local_ai?.models?.find((candidate) => candidate.id === modelId);
-  if (action === "delete" && !window.confirm(`Delete ${model?.name || "this model"} from this Mac? You can download it again later.`)) return;
-  localAiPending = `${action}:${modelId}`;
-  localAiEventDetail = action === "install"
-    ? "Measuring the model files before download…"
-    : action === "start" ? "Loading model weights into unified memory…"
-      : action === "delete" ? "Removing downloaded model files…"
-        : "Releasing model memory…";
-  renderLocalAi(snapshot.local_ai || {});
-  try {
-    await invoke("local_ai_action", { action, modelId, id: nextId(`local-ai-${action}`) });
-  } catch (error) {
-    localAiPending = null;
-    toast(String(error), true);
-    requestSnapshot();
-  }
 }
 
 function modeLabel(mode) {
@@ -829,25 +658,11 @@ function handleLocaldEvent(event) {
     requestSnapshot();
   }
   if (event.event === "error") {
-    localAiPending = null;
     sharingBusy = false;
     document.querySelectorAll("[data-save]").forEach((button) => {
       button.disabled = false;
     });
     toast(event.message || "Local operation failed", true);
-    requestSnapshot();
-  }
-  if (event.event === "local-ai.phase") {
-    localAiEventDetail = event.detail || "Working…";
-    if (event.local_ai && snapshot) {
-      snapshot.local_ai = event.local_ai;
-      renderLocalAi(snapshot.local_ai);
-    }
-  }
-  if (["local-ai.status", "local-ai.changed"].includes(event.event)) {
-    if (event.local_ai && snapshot) snapshot.local_ai = event.local_ai;
-    if (event.event === "local-ai.changed") localAiPending = null;
-    render();
     requestSnapshot();
   }
   if (event.event === "sharing.progress") {

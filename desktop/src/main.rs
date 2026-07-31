@@ -1700,13 +1700,11 @@ fn show_control_center_page(app: &AppHandle, page: Option<&str>) -> Result<(), S
         "connectors" => "integrations",
         "services" => "runtime",
         "surfaces" => "channels",
-        "local-ai" => "models",
         page => page,
     };
     if !matches!(
         page,
         "overview"
-            | "models"
             | "ai"
             | "sharing"
             | "integrations"
@@ -1931,7 +1929,6 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
         ("migrations", "Migrations", root.join("logs/migrations.log")),
         ("backend", "Backend", root.join("logs/backend.log")),
         ("frontend", "Frontend", root.join("logs/frontend.log")),
-        ("local-ai", "Local AI (MLX)", root.join("logs/local-ai.log")),
         ("vm", "VM helper", vm_log),
         ("guest", "Guest services", guest_log),
         ("locald", "Service manager", root.join("locald.log")),
@@ -2275,35 +2272,6 @@ fn apply_operator_config(
     send_to_locald(
         &app,
         json!({"cmd":"config.apply", "id": id, "payload": payload}),
-    )
-}
-
-#[tauri::command]
-fn local_ai_action(
-    window: Webview,
-    app: AppHandle,
-    action: String,
-    model_id: String,
-    id: String,
-) -> Result<(), String> {
-    require_control_window(&window)?;
-    if current_mode(&app) != "local" {
-        return Err("local AI is available only for a local workspace".into());
-    }
-    if !matches!(action.as_str(), "install" | "start" | "stop" | "delete") {
-        return Err(format!("unknown local AI action: {action}"));
-    }
-    if model_id.trim().is_empty() {
-        return Err("choose a local AI model first".into());
-    }
-    ensure_locald(&app)?;
-    send_to_locald(
-        &app,
-        json!({
-            "cmd": format!("local-ai.{action}"),
-            "id": id,
-            "model_id": model_id,
-        }),
     )
 }
 
@@ -2848,41 +2816,43 @@ fn disconnect_locald(app: &AppHandle) {
     *shell.locald_writer.lock().unwrap() = None;
 }
 
-fn release_local_ai_before_exit() -> Result<(), String> {
+// Full quit must close any LAN or public exposure. The daemon deliberately
+// outlives the app, so it cannot infer this from its own shutdown.
+fn release_before_exit() -> Result<(), String> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     std::thread::spawn(move || {
-        let _ = sender.send(request_local_ai_release());
+        let _ = sender.send(request_desktop_release());
     });
     receiver
         .recv_timeout(Duration::from_secs(120))
-        .map_err(|_| "timed out while stopping sharing and releasing MLX memory".to_string())?
+        .map_err(|_| "timed out while stopping sharing".to_string())?
 }
 
-fn request_local_ai_release() -> Result<(), String> {
+fn request_desktop_release() -> Result<(), String> {
     let mut connection = connect_locald()?;
-    let id = format!("desktop-exit-local-ai-release-{}", std::process::id());
+    let id = format!("desktop-exit-release-{}", std::process::id());
     writeln!(
         connection.writer,
         "{}",
-        json!({"v": 1, "cmd": "local-ai.release", "id": id})
+        json!({"v": 1, "cmd": "desktop.release", "id": id})
     )
-    .map_err(|error| format!("could not request MLX shutdown: {error}"))?;
+    .map_err(|error| format!("could not request desktop release: {error}"))?;
     connection
         .writer
         .flush()
-        .map_err(|error| format!("could not request MLX shutdown: {error}"))?;
+        .map_err(|error| format!("could not request desktop release: {error}"))?;
 
     loop {
         let mut line = String::new();
         let bytes = connection
             .reader
             .read_line(&mut line)
-            .map_err(|error| format!("could not confirm MLX shutdown: {error}"))?;
+            .map_err(|error| format!("could not confirm desktop release: {error}"))?;
         if bytes == 0 {
-            return Err("locald disconnected before confirming MLX shutdown".into());
+            return Err("locald disconnected before confirming desktop release".into());
         }
         if line.len() > 1024 * 1024 {
-            return Err("locald MLX shutdown response exceeded 1 MiB".into());
+            return Err("locald desktop release response exceeded 1 MiB".into());
         }
         let Ok(event) = serde_json::from_str::<Value>(line.trim_end()) else {
             continue;
@@ -2898,7 +2868,7 @@ fn request_local_ai_release() -> Result<(), String> {
                 return Err(event
                     .get("message")
                     .and_then(Value::as_str)
-                    .unwrap_or("locald could not release MLX memory")
+                    .unwrap_or("locald could not stop sharing")
                     .to_string());
             }
             _ => {}
@@ -2946,7 +2916,6 @@ fn main() {
             control_snapshot,
             agent_host_action,
             apply_operator_config,
-            local_ai_action,
             sharing_action,
             close_local_settings,
             open_developer_tools
@@ -3060,8 +3029,8 @@ fn main() {
             }
             tauri::RunEvent::Exit => {
                 if current_mode(app) == "local" {
-                    if let Err(error) = release_local_ai_before_exit() {
-                        eprintln!("[local-ai-exit] {error}");
+                    if let Err(error) = release_before_exit() {
+                        eprintln!("[desktop-release-exit] {error}");
                     }
                 }
                 disconnect_locald(app);
@@ -3358,15 +3327,20 @@ mod tests {
     }
 
     #[test]
-    fn local_ai_is_explicit_and_hidden_without_apple_silicon_support() {
+    fn local_models_are_reached_through_a_provider_endpoint_not_an_app_owned_server() {
         let html = include_str!("../ui/control.html");
         let script = include_str!("../ui/control.js");
 
-        assert!(html.contains("id=\"nav-models\" hidden"));
-        assert!(script.contains("Downloads are resumable and opt-in"));
-        assert!(script.contains("$(\"nav-models\").hidden = !supported"));
-        assert!(script.contains("invoke(\"local_ai_action\""));
-        assert!(!script.contains("localAiAction(\"install\")();"));
+        // Ollama and LM Studio are the supported local-model path: they are
+        // ordinary OpenAI-compatible endpoints the user already runs, so they
+        // only prefill the provider form and never give Lemma a model process
+        // of its own to install, supervise, or free memory for.
+        assert!(html.contains("id=\"detect-ollama\""));
+        assert!(html.contains("id=\"detect-lmstudio\""));
+        assert!(script.contains("http://127.0.0.1:11434/v1"));
+        assert!(script.contains("http://127.0.0.1:1234/v1"));
+        assert!(!script.contains("local_ai_action"));
+        assert!(!html.contains("data-page=\"models\""));
     }
 
     #[test]

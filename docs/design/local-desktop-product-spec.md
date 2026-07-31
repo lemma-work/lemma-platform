@@ -59,10 +59,6 @@ container sockets, PostgreSQL, Redis, SuperTokens, or fixed ports.
   **AI provider**.
 - Ollama, LM Studio, OpenAI-compatible, and Anthropic-compatible profiles can
   be validated.
-- Apple Silicon users may explicitly download and select an app-managed
-  Ternary Bonsai 8B or Qwen3 4B MLX profile. Both profiles support thinking
-  and structured tool calls. The model manager is hidden on other systems and
-  never downloads a model before consent.
 - Agents show an explicit unavailable reason until a profile is ready.
 - Integrations, custom OAuth apps, and agent surfaces are independently
   configurable.
@@ -197,7 +193,7 @@ uses HTTPS at the tunnel edge while its gateway remains loopback-only.
 - Local auth relaxations cannot affect hosted production.
 - AgentBox remains isolated in the private Linux runtime.
 - The gateway replaces client-supplied forwarding headers with trusted values
-  and never exposes PostgreSQL, Redis, SuperTokens, VM, MLX, or model ports.
+  and never exposes PostgreSQL, Redis, SuperTokens, VM, or model ports.
 
 ## 7. Performance and quality targets
 

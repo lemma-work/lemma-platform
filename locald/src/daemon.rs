@@ -12,7 +12,6 @@ use serde_json::{json, Value};
 
 use crate::agent_host::AgentHostSupervisor;
 use crate::host_process::HostProcessManager;
-use crate::local_ai::LocalAiManager;
 use crate::managed_runtime::{ManagedRuntimeBootstrap, ManagedRuntimeController};
 use crate::native_host_pack;
 use crate::operator_config::{ApplyOperatorConfig, OperatorConfigStore};
@@ -46,7 +45,6 @@ pub struct Daemon {
     host_processes: Option<Arc<HostProcessManager>>,
     host_pack_root: Option<String>,
     managed_runtime: Option<Arc<ManagedRuntimeController>>,
-    local_ai: Arc<LocalAiManager>,
     operator_config: Arc<OperatorConfigStore>,
     sharing: Option<Arc<SharingController>>,
     host_operation_running: AtomicBool,
@@ -78,10 +76,6 @@ impl Daemon {
         let host_processes = host_manifest
             .map(|path| HostProcessManager::load(&path, paths.root.join("logs")))
             .transpose()?;
-        let local_ai = Arc::new(LocalAiManager::load(
-            &paths.root,
-            host_pack_root.as_deref(),
-        )?);
         if let Some(manager) = host_processes.as_ref() {
             manager.set_backend_environment(operator_config.backend_environment()?);
             if let Some((frontend_port, backend_port)) = manager.application_ports() {
@@ -135,7 +129,6 @@ impl Daemon {
             host_processes,
             host_pack_root: host_pack_root.map(path_identity),
             managed_runtime,
-            local_ai,
             operator_config,
             sharing,
             host_operation_running: AtomicBool::new(false),
@@ -185,10 +178,8 @@ impl Daemon {
         let daemon = Arc::clone(self);
         thread::spawn(move || {
             let mut previous = String::new();
-            let mut previous_local_ai = String::new();
             let mut next_runtime_probe = std::time::Instant::now();
             let mut next_runtime_recovery = std::time::Instant::now();
-            let mut next_local_ai_recovery = std::time::Instant::now();
             let mut runtime_failure_reported = false;
             loop {
                 let manager = daemon
@@ -286,47 +277,6 @@ impl Daemon {
                 if current != previous {
                     previous = current;
                     daemon.broadcast(event);
-                }
-                if manager.backend_restart_available()
-                    && daemon.local_ai.needs_recovery()
-                    && now >= next_local_ai_recovery
-                    && daemon
-                        .host_operation_running
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                {
-                    next_local_ai_recovery = now + std::time::Duration::from_secs(15);
-                    daemon.broadcast(json!({
-                        "v": PROTOCOL_VERSION,
-                        "event": "local-ai.phase",
-                        "stage": "recovery",
-                        "progress": 90,
-                        "detail": "restarting the app-owned MLX server",
-                        "local_ai": daemon.local_ai.status(),
-                    }));
-                    let recovery = Arc::clone(&daemon);
-                    thread::spawn(move || {
-                        if let Err(error) = recovery.recover_local_ai_stack() {
-                            recovery.broadcast(error_event(
-                                "local-ai-recovery-failed",
-                                format!("Could not recover local AI: {error}"),
-                                None,
-                            ));
-                        }
-                        recovery
-                            .host_operation_running
-                            .store(false, Ordering::Release);
-                    });
-                }
-                let local_ai = daemon.local_ai.status();
-                let current_local_ai = local_ai.to_string();
-                if current_local_ai != previous_local_ai {
-                    previous_local_ai = current_local_ai;
-                    daemon.broadcast(json!({
-                        "v": PROTOCOL_VERSION,
-                        "event": "local-ai.status",
-                        "local_ai": local_ai,
-                    }));
                 }
                 if let Some(sharing) = daemon.sharing.as_ref() {
                     if let Some(message) = sharing.poll_failure() {
@@ -530,12 +480,8 @@ impl Daemon {
                 self.apply_operator_config(request, client);
                 return true;
             }
-            "local-ai.release" => {
-                self.release_local_ai_for_desktop_exit(id.as_ref(), client);
-                return true;
-            }
-            "local-ai.install" | "local-ai.start" | "local-ai.stop" | "local-ai.delete" => {
-                self.start_local_ai_operation(command, request, client.clone());
+            "desktop.release" => {
+                self.release_for_desktop_exit(id.as_ref(), client);
                 return true;
             }
             "agent-host.status" => {
@@ -652,13 +598,16 @@ impl Daemon {
         true
     }
 
-    fn release_local_ai_for_desktop_exit(&self, id: Option<&Value>, client: &mpsc::Sender<String>) {
+    // Desktop calls this on full quit. The daemon deliberately outlives the
+    // app, so anything that must not survive the app - today, an open LAN or
+    // public exposure - is torn down here rather than at daemon shutdown.
+    fn release_for_desktop_exit(&self, id: Option<&Value>, client: &mpsc::Sender<String>) {
         self.send_direct(
             client,
             json!({
                 "v": PROTOCOL_VERSION,
                 "event": "ack",
-                "cmd": "local-ai.release",
+                "cmd": "desktop.release",
                 "id": id,
             }),
         );
@@ -672,37 +621,22 @@ impl Daemon {
                 failure = Some(error.to_string());
             }
         }
-        if let Err(error) = self.local_ai.disable() {
-            failure
-                .get_or_insert_with(String::new)
-                .push_str(&format!("; MLX cleanup failed: {error}"));
-        }
         match failure {
-            None => {
-                self.broadcast(json!({
+            None => self.send_direct(
+                client,
+                json!({
                     "v": PROTOCOL_VERSION,
-                    "event": "local-ai.changed",
+                    "event": "done",
+                    "cmd": "desktop.release",
                     "id": id,
-                    "local_ai": self.local_ai.status(),
-                }));
-                self.send_direct(
-                    client,
-                    json!({
-                        "v": PROTOCOL_VERSION,
-                        "event": "done",
-                        "cmd": "local-ai.release",
-                        "id": id,
-                        "ok": true,
-                    }),
-                );
-            }
+                    "ok": true,
+                }),
+            ),
             Some(error) => self.send_direct(
                 client,
                 error_event(
-                    "local-ai-release-failed",
-                    format!(
-                        "could not stop sharing and release MLX memory before desktop exit: {error}"
-                    ),
+                    "desktop-release-failed",
+                    format!("could not stop sharing before desktop exit: {error}"),
                     id,
                 ),
             ),
@@ -762,7 +696,6 @@ impl Daemon {
             "capabilities": self.host_processes.as_ref().and_then(|manager| manager.capabilities()),
             "release": self.host_processes.as_ref().map(|manager| manager.release()),
             "managed_runtime": self.managed_runtime.as_ref().and_then(|runtime| runtime.status()),
-            "local_ai": self.local_ai.status(),
             "sharing": self.sharing.as_ref().map(|sharing| sharing.snapshot(true)),
             "agent_host": self.agent_host.status(),
             "paths": {
@@ -1125,8 +1058,6 @@ impl Daemon {
                 return;
             }
         };
-        let switches_away_from_local_ai =
-            self.local_ai.enabled() && !self.local_ai.owns_base_url(&apply.config.ai.base_url);
         self.send_direct(
             client,
             json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.apply", "id": id.as_ref()}),
@@ -1146,9 +1077,6 @@ impl Daemon {
                             manager.set_backend_environment(daemon.backend_environment()?);
                             manager.restart_backend()?;
                         }
-                    }
-                    if switches_away_from_local_ai {
-                        daemon.local_ai.disable()?;
                     }
                     Ok(snapshot)
                 })();
@@ -1225,9 +1153,6 @@ impl Daemon {
                     failure = Some(error.to_string());
                 }
             }
-            if let Err(error) = daemon.local_ai.stop() {
-                failure.get_or_insert_with(|| error.to_string());
-            }
             if let Err(error) = daemon.agent_host.stop() {
                 failure.get_or_insert_with(|| error.to_string());
             }
@@ -1302,7 +1227,7 @@ impl Daemon {
             let result = match command.as_str() {
                 "start" => daemon.start_host_packs(manager, id.as_ref()),
                 "stop" => {
-                    let result = manager.stop_all().and_then(|_| daemon.local_ai.stop());
+                    let result = manager.stop_all();
                     if result.is_ok() && request.get("infra").and_then(Value::as_bool) == Some(true)
                     {
                         daemon.stop_private_infra()
@@ -1312,7 +1237,6 @@ impl Daemon {
                 }
                 "restart" => manager
                     .stop_all()
-                    .and_then(|_| daemon.local_ai.stop())
                     .and_then(|_| daemon.start_host_packs(manager, id.as_ref())),
                 _ => unreachable!(),
             };
@@ -1443,204 +1367,6 @@ impl Daemon {
         });
     }
 
-    fn start_local_ai_operation(
-        self: &Arc<Self>,
-        command: String,
-        request: Value,
-        client: mpsc::Sender<String>,
-    ) {
-        let id = request.get("id").cloned();
-        let model_id = request
-            .get("model_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        if command != "local-ai.stop" && model_id.is_empty() {
-            self.send_direct(
-                &client,
-                error_event(
-                    "local-ai-model-required",
-                    "choose a local AI model first",
-                    id.as_ref(),
-                ),
-            );
-            return;
-        }
-        if !self.local_ai.supported() {
-            self.send_direct(
-                &client,
-                error_event(
-                    "local-ai-unsupported",
-                    "local MLX AI is available only on Apple Silicon Macs",
-                    id.as_ref(),
-                ),
-            );
-            return;
-        }
-        if !self.local_ai.runtime_available() {
-            self.send_direct(
-                &client,
-                error_event(
-                    "local-ai-runtime-unavailable",
-                    "this Lemma runtime does not include the optional MLX packages",
-                    id.as_ref(),
-                ),
-            );
-            return;
-        }
-        if self
-            .host_operation_running
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
-            self.send_direct(
-                &client,
-                error_event("busy", "another local operation is running", id.as_ref()),
-            );
-            return;
-        }
-        self.send_direct(
-            &client,
-            json!({
-                "v": PROTOCOL_VERSION,
-                "event": "ack",
-                "cmd": command,
-                "id": id.as_ref(),
-            }),
-        );
-
-        let daemon = Arc::clone(self);
-        thread::spawn(move || {
-            let emit_progress = |stage: &str, progress: u8, detail: &str| {
-                daemon.broadcast(json!({
-                    "v": PROTOCOL_VERSION,
-                    "event": "local-ai.phase",
-                    "id": id.as_ref(),
-                    "stage": stage,
-                    "progress": progress,
-                    "detail": detail,
-                    "local_ai": daemon.local_ai.status(),
-                }));
-            };
-            let result = match command.as_str() {
-                "local-ai.install" => daemon.local_ai.install(&model_id, emit_progress),
-                "local-ai.start" => match daemon.operator_config.capture_state() {
-                    Err(error) => Err(error),
-                    Ok(previous) => {
-                        let backend_restart_available = daemon
-                            .host_processes
-                            .as_ref()
-                            .is_some_and(|manager| manager.backend_restart_available());
-                        let activation: io::Result<()> = (|| {
-                            daemon.local_ai.start(&model_id, emit_progress)?;
-                            daemon.configure_local_ai_provider()?;
-                            if let Some(manager) = daemon.host_processes.as_ref() {
-                                if backend_restart_available {
-                                    manager.set_backend_environment(daemon.backend_environment()?);
-                                    manager.restart_backend()?;
-                                }
-                            }
-                            Ok(())
-                        })();
-                        match activation {
-                            Ok(()) => Ok(()),
-                            Err(error) => {
-                                let stopped = daemon.local_ai.disable();
-                                let rollback = daemon
-                                    .operator_config
-                                    .restore_state(previous)
-                                    .and_then(|_| {
-                                        if let Some(manager) = daemon.host_processes.as_ref() {
-                                            if backend_restart_available {
-                                                manager.set_backend_environment(
-                                                    daemon.backend_environment()?,
-                                                );
-                                                manager.restart_backend()?;
-                                            }
-                                        }
-                                        Ok(())
-                                    });
-                                match (stopped, rollback) {
-                                        (Ok(()), Ok(())) => Err(io::Error::other(format!(
-                                            "local AI could not be activated and was rolled back: {error}"
-                                        ))),
-                                        (stop, restore) => Err(io::Error::other(format!(
-                                            "local AI could not be activated: {error}; cleanup failed: {}; rollback failed: {}",
-                                            stop.err().map_or_else(
-                                                || "none".into(),
-                                                |error| error.to_string()
-                                            ),
-                                            restore.err().map_or_else(
-                                                || "none".into(),
-                                                |error| error.to_string()
-                                            ),
-                                        ))),
-                                    }
-                            }
-                        }
-                    }
-                },
-                "local-ai.stop" => daemon.local_ai.disable(),
-                "local-ai.delete" => {
-                    let selected = daemon.local_ai.is_selected(&model_id);
-                    let local_base_url = daemon.local_ai.base_url();
-                    daemon.local_ai.delete(&model_id).and_then(|_| {
-                        if selected {
-                            if let Some(base_url) = local_base_url {
-                                daemon
-                                    .operator_config
-                                    .clear_local_openai_if_base(&base_url)?;
-                            }
-                            if let Some(manager) = daemon.host_processes.as_ref() {
-                                if manager.backend_restart_available() {
-                                    manager.set_backend_environment(daemon.backend_environment()?);
-                                    manager.restart_backend()?;
-                                }
-                            }
-                        }
-                        Ok(())
-                    })
-                }
-                _ => unreachable!(),
-            };
-
-            match result {
-                Ok(()) => {
-                    daemon.broadcast(json!({
-                        "v": PROTOCOL_VERSION,
-                        "event": "local-ai.changed",
-                        "id": id.as_ref(),
-                        "local_ai": daemon.local_ai.status(),
-                    }));
-                    daemon.broadcast(json!({
-                        "v": PROTOCOL_VERSION,
-                        "event": "done",
-                        "cmd": command,
-                        "id": id.as_ref(),
-                        "ok": true,
-                    }));
-                }
-                Err(error) => {
-                    daemon.broadcast(error_event(
-                        "local-ai-operation-failed",
-                        error.to_string(),
-                        id.as_ref(),
-                    ));
-                    daemon.broadcast(json!({
-                        "v": PROTOCOL_VERSION,
-                        "event": "done",
-                        "cmd": command,
-                        "id": id.as_ref(),
-                        "ok": false,
-                    }));
-                }
-            }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
-        });
-    }
-
     fn start_host_packs(
         self: &Arc<Self>,
         manager: &HostProcessManager,
@@ -1649,19 +1375,6 @@ impl Daemon {
         let runtime_generation = manager.prepare_runtime_generation()?;
         self.prepare_private_infra(operation_id, &runtime_generation)?;
         manager.mark_dependency_ready();
-        if self.local_ai.enabled() {
-            self.local_ai.start_selected(|stage, progress, detail| {
-                self.broadcast(json!({
-                    "v": PROTOCOL_VERSION,
-                    "event": "local-ai.phase",
-                    "stage": stage,
-                    "progress": progress,
-                    "detail": detail,
-                    "local_ai": self.local_ai.status(),
-                }));
-            })?;
-            self.configure_local_ai_provider()?;
-        }
         manager.set_backend_environment(self.backend_environment()?);
         manager.start_all_with_progress(|component| {
             let (label, progress, detail, log_source) = match component {
@@ -1737,10 +1450,6 @@ impl Daemon {
             .as_ref()
             .ok_or_else(|| io::Error::other("host process manager is unavailable"))?;
         runtime.start()?;
-        if self.local_ai.enabled() {
-            self.local_ai.start_selected(|_, _, _| {})?;
-            self.configure_local_ai_provider()?;
-        }
         manager.set_backend_environment(self.backend_environment()?);
         manager.restart_all()?;
         manager.mark_dependency_ready();
@@ -1760,43 +1469,6 @@ impl Daemon {
             "api_url": state.api_url,
             "mode": "managed-local",
             "release": manager.release(),
-        }));
-        Ok(())
-    }
-
-    fn configure_local_ai_provider(&self) -> io::Result<()> {
-        let base_url = self
-            .local_ai
-            .base_url()
-            .ok_or_else(|| io::Error::other("local AI started without a loopback endpoint"))?;
-        let model = self.local_ai.model_name()?;
-        self.operator_config
-            .configure_local_openai(base_url, model)
-            .map(|_| ())
-    }
-
-    fn recover_local_ai_stack(self: &Arc<Self>) -> io::Result<()> {
-        self.local_ai.start_selected(|stage, progress, detail| {
-            self.broadcast(json!({
-                "v": PROTOCOL_VERSION,
-                "event": "local-ai.phase",
-                "stage": stage,
-                "progress": progress,
-                "detail": detail,
-                "local_ai": self.local_ai.status(),
-            }));
-        })?;
-        self.configure_local_ai_provider()?;
-        if let Some(manager) = self.host_processes.as_ref() {
-            if manager.backend_restart_available() {
-                manager.set_backend_environment(self.backend_environment()?);
-                manager.restart_backend()?;
-            }
-        }
-        self.broadcast(json!({
-            "v": PROTOCOL_VERSION,
-            "event": "local-ai.changed",
-            "local_ai": self.local_ai.status(),
         }));
         Ok(())
     }

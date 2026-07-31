@@ -1,7 +1,6 @@
 pub mod agent_host;
 pub mod daemon;
 pub mod host_process;
-pub mod local_ai;
 pub mod managed_runtime;
 pub mod native_host_pack;
 pub mod network;
