@@ -30,6 +30,7 @@ import {
     agentHostHarnessHealth,
     agentHostHarnessModelCount,
     agentHostStatusLabel,
+    pairingCommands,
     harnessLogo,
     isLocalAgentKind,
     runtimeAvailabilityLabel,
@@ -407,10 +408,7 @@ function PairingInstructions({
     pairing: AgentHostPairing & { display_name: string };
     onDone: () => void;
 }) {
-    const commands = [
-        'lemma agent-host install',
-        `lemma agent-host connect --url ${getLemmaApiBaseUrl()} --pairing-code ${pairing.pairing_code} --name "${pairing.display_name.replaceAll('"', '\\"')}"`,
-    ];
+    const commands = pairingCommands(pairing, getLemmaApiBaseUrl());
     const expiresAt = new Date(pairing.expires_at);
     const copy = async () => {
         try {
@@ -442,7 +440,8 @@ function PairingInstructions({
             </div>
             <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[var(--text-tertiary)]">
-                    This code works once, and expires{' '}
+                    Skip the first line if that computer already has the Lemma CLI. This code works
+                    once, and expires{' '}
                     {Number.isNaN(expiresAt.valueOf()) ? 'shortly' : expiresAt.toLocaleTimeString()}.
                 </p>
                 <Button type="button" size="sm" onClick={onDone}>
@@ -528,8 +527,9 @@ function AgentHostCard({
                 ))}
                 {!harnesses.isLoading && !(harnesses.data?.items.length ?? 0) ? (
                     <p className="px-1 text-xs text-[var(--text-tertiary)]">
-                        No agents published yet. Run <code className="font-mono">lemma agent-host harnesses</code> on that
-                        computer to see what it found.
+                        No agents published yet. That computer republishes what it finds every 15
+                        minutes; <code className="font-mono">lemma agent-host refresh</code> asks it
+                        to look again now.
                     </p>
                 ) : null}
             </div>

@@ -14,6 +14,7 @@ import type {
 import {
     formatAgentRuntime,
     hydrateRuntimeModel,
+    pairingCommands,
     resolveDefaultAgentRuntime,
     resolveRuntimeModelName,
 } from './agent-runtime-helpers';
@@ -140,5 +141,36 @@ describe('formatAgentRuntime', () => {
     it("resolves through the runtime's own profile, not the catalog default", () => {
         expect(formatAgentRuntime({ profile_id: 'org:byo' }, catalog))
             .toBe('Acme · claude-sonnet-5');
+    });
+});
+
+describe('pairing commands', () => {
+    const pairing = { pairing_code: 'code-123', display_name: 'Ana"s laptop' };
+
+    it('does not ask for a separate install step', () => {
+        // `connect` resolves the binary itself, and `install` only ever downloads
+        // a release asset - which does not exist for a self-hosted or dev build,
+        // so the first line of the old instructions stopped those users outright.
+        expect(pairingCommands(pairing, 'https://api.lemma.work').join('\n')).not.toContain(
+            'agent-host install',
+        );
+    });
+
+    it('installs the CLI, pairs, then verifies', () => {
+        expect(pairingCommands(pairing, 'https://api.lemma.work')).toEqual([
+            'uv tool install lemma-terminal',
+            'lemma agent-host connect --url https://api.lemma.work --pairing-code code-123 --name "Ana\\"s laptop"',
+            'lemma agent-host status',
+        ]);
+    });
+
+    it('opts in to plain HTTP only when the CLI would refuse the URL', () => {
+        const connectFor = (apiBaseUrl: string) => pairingCommands(pairing, apiBaseUrl)[1];
+
+        expect(connectFor('http://10.0.0.4:8710')).toContain('--allow-insecure-http');
+        // Loopback is already trusted, so the flag would be noise.
+        expect(connectFor('http://127.0.0.1:8710')).not.toContain('--allow-insecure-http');
+        expect(connectFor('http://localhost:8710')).not.toContain('--allow-insecure-http');
+        expect(connectFor('https://api.example.com')).not.toContain('--allow-insecure-http');
     });
 });

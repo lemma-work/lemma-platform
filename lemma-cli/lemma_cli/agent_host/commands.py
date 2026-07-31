@@ -261,7 +261,7 @@ def _is_local_url(url: str) -> bool:
 def harnesses(ctx: typer.Context) -> None:
     """List paired hosts and the harness ids runtime profiles bind to.
 
-    Without this the id needed by `lemma runtime profiles create HARNESS
+    Without this the id needed by `lemma runtime profiles create AGENT_HOST
     --harness-id` is undiscoverable from the CLI.
     """
     from lemma_cli.cli_core.io import emit  # noqa: PLC0415
