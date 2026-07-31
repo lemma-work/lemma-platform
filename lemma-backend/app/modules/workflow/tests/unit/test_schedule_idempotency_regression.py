@@ -473,3 +473,35 @@ async def test_unparseable_schedule_fire_is_dropped_by_the_inbox() -> None:
 
     assert inbox.terminal == ["workflow.schedule-start:ValidationError"]
     job_queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_owner_survives_the_queue_boundary_as_none_not_the_string_none() -> None:
+    """An owner-less fire must reach the worker as None, not ``"None"``.
+
+    The enqueue boundary stringifies its kwargs. ``str(None)`` produces the
+    literal ``"None"``, which is truthy, so the legacy-timer branch would try
+    ``UUID("None")`` and the run would never wake — the exact failure this
+    ownership work is meant to remove.
+    """
+    from app.modules.schedule.domain.events.schedule import ScheduleFired
+    from app.modules.schedule.domain.schedule import ScheduleType
+    from app.modules.workflow.events.handlers import on_schedule_fired
+
+    job_queue = Mock(enqueue=AsyncMock())
+    owner = uuid4()
+
+    for user_id, expected in ((None, None), (owner, str(owner))):
+        job_queue.enqueue.reset_mock()
+        await on_schedule_fired(
+            ScheduleFired(
+                schedule_id=uuid4(),
+                user_id=user_id,
+                schedule_type=ScheduleType.TIME,
+                payload={"workflow_run_id": str(uuid4()), "wait_ref": str(uuid4())},
+                source_event_id="timer:boundary-1",
+            ),
+            Mock(),
+            job_queue,
+        )
+        assert job_queue.enqueue.await_args.kwargs["user_id"] == expected

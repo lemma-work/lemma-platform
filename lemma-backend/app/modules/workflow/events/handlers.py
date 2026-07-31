@@ -251,7 +251,10 @@ async def on_schedule_fired(
     await job_queue.enqueue(
         "check_and_start_flows_for_schedule",
         schedule_id=str(schedule_id),
-        user_id=str(event.user_id),
+        # Stays None across the queue boundary: str(None) would arrive as the
+        # literal "None" and blow up on UUID() instead of being recognised as
+        # an owner-less legacy timer.
+        user_id=str(event.user_id) if event.user_id else None,
         payload=event.payload,
         metadata=event.metadata or {},
         llm_output=event.llm_output,
@@ -270,7 +273,7 @@ async def on_schedule_fired(
 @streaq_task(name="check_and_start_flows_for_schedule")
 async def check_and_start_flows_for_schedule(
     schedule_id: str,
-    user_id: str,
+    user_id: str | None,
     payload: dict,
     schedule_event_id: str,
     metadata: dict | None = None,
