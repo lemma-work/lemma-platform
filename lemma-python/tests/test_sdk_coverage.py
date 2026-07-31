@@ -31,6 +31,15 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "usage.",
     "workspace.",       # workspace runtime is driven by the backend
     "channel.",
+    # Device protocol: the Agent Host binary calls these with its own
+    # per-installation secret. The SDK exposes only the user-facing
+    # management side (agent.host.pairing.create / list / harnesses.list
+    # / revoke) via the AgentHosts resource.
+    "agent.host.events.append",
+    "agent.host.harnesses.publish",
+    "agent.host.pairing.complete",
+    "agent.host.poll",
+    "agent.host.self_revoke",
     "app.public",
     "health_check",     # liveness probe
     # OAuth/consent browser callbacks — never called by a client
