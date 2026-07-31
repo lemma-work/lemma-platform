@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 
 DEFAULT_PAIRING_TTL_SECONDS = 600
+DEFAULT_COMMAND_TTL_SECONDS = 300
+DEFAULT_RUN_LEASE_SECONDS = 90
 
 
 class AgentHostRepositoryError(RuntimeError):
@@ -22,6 +24,10 @@ class AgentHostPairingRejected(AgentHostRepositoryError):
 
 class AgentHostProtocolViolation(AgentHostRepositoryError):
     code = "AGENT_HOST_PROTOCOL_VIOLATION"
+
+
+class AgentHostRunConflict(AgentHostRepositoryError):
+    code = "AGENT_HOST_RUN_CONFLICT"
 
 
 def utcnow() -> datetime:

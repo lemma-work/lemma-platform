@@ -372,3 +372,76 @@ class AgentHostEventAck(BaseModel):
     run_id: UUID
     lease_epoch: int
     acked_through: int = Field(ge=0)
+
+
+def validate_agent_host_selections(
+    *,
+    config_options: list[object],
+    selections: JsonObject,
+) -> JsonObject:
+    """Validate provider-owned selections without translating their values."""
+    options_by_key: dict[str, dict[str, object]] = {}
+    for raw_option in config_options:
+        if not isinstance(raw_option, dict):
+            continue
+        option_id = str(raw_option.get("id") or "").strip()
+        category = str(raw_option.get("category") or "").strip()
+        if option_id:
+            options_by_key[option_id] = raw_option
+        if category:
+            options_by_key[category] = raw_option
+
+    normalized: JsonObject = {}
+    for key, value in selections.items():
+        normalized_key = str(key).strip()
+        option = options_by_key.get(normalized_key)
+        if option is None:
+            raise ValueError(f"Unknown Agent Host configuration selection: {key}")
+        if str(option.get("category") or "").strip() == "model":
+            raise ValueError("Model must be configured through default_model_name")
+        allowed_values = _agent_host_option_values(option.get("options"))
+        if allowed_values and value not in allowed_values:
+            raise ValueError(
+                f"Invalid value for Agent Host configuration selection: {key}"
+            )
+        normalized[normalized_key] = value
+    return normalized
+
+
+def validate_agent_host_model(
+    *,
+    config_options: list[object],
+    model_name: str | None,
+) -> str | None:
+    if model_name is None:
+        return None
+    normalized = model_name.strip()
+    if not normalized:
+        raise ValueError("default_model_name cannot be empty")
+    model_options: list[object] = []
+    has_model_option = False
+    for raw_option in config_options:
+        if not isinstance(raw_option, dict):
+            continue
+        if str(raw_option.get("category") or "").strip() != "model":
+            continue
+        has_model_option = True
+        model_options.extend(_agent_host_option_values(raw_option.get("options")))
+    if not has_model_option or normalized not in model_options:
+        raise ValueError("default_model_name is not offered by this harness")
+    return normalized
+
+
+def _agent_host_option_values(raw_options: object) -> list[object]:
+    if not isinstance(raw_options, list):
+        return []
+    values: list[object] = []
+    for item in raw_options:
+        if not isinstance(item, dict):
+            values.append(item)
+            continue
+        if "value" in item:
+            values.append(item["value"])
+        elif "id" in item:
+            values.append(item["id"])
+    return values
