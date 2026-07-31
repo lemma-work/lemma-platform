@@ -28,6 +28,7 @@ import {
   isLocalAgentKind,
   modelPathHint,
   profileHarnessKey,
+  resolveRuntimeModelName,
   runtimeCatalogToModelOptions,
   runtimeKey,
   shortModelName,
@@ -534,7 +535,10 @@ export function RuntimeModelPicker({
   allowAuto,
 }: RuntimeModelPickerProps) {
   const options = useMemo(() => runtimeCatalogToModelOptions(catalog), [catalog]);
-  const defaultModelLabel = defaultRuntime?.model_name ? shortModelName(defaultRuntime.model_name) : undefined;
+  // The default usually pins only a profile, so ask the catalog which model
+  // that profile will actually run rather than showing a nameless "Default".
+  const defaultModelName = resolveRuntimeModelName(defaultRuntime, catalog);
+  const defaultModelLabel = defaultModelName ? shortModelName(defaultModelName) : undefined;
   // "Currently <model>" signals this tracks the default — it'll move if the
   // default changes, unlike pinning a specific model below. Callers that *are*
   // the default (e.g. the pod-default setting) override this, since "use the

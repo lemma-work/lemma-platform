@@ -5,7 +5,7 @@ import type {
     AgentRuntimeProfileListResponse,
 } from 'lemma-sdk';
 
-import { shortModelName } from '@/components/agents/agent-runtime-helpers';
+import { resolveRuntimeModelName, shortModelName } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import {
     Select,
@@ -47,7 +47,13 @@ export function ConversationComposerContext({
     const agentLabel = agentDisplayLabel
         ?? (selectedAgentName ? formatAgentName(selectedAgentName) : 'Pod default');
     const agentValue = selectedAgentName || POD_DEFAULT_AGENT_VALUE;
-    const resolvedModelName = selectedRuntime?.model_name ?? defaultRuntime?.model_name ?? null;
+    // Neither runtime is required to carry a model — an inherited default names
+    // only its profile — so resolve both through the catalog the run will use.
+    // "Default" survives only until the catalog loads, or where nothing is set
+    // up to run at all; naming the model is the whole point of this row.
+    const defaultModelName = resolveRuntimeModelName(defaultRuntime, runtimeCatalog);
+    const resolvedModelName = resolveRuntimeModelName(selectedRuntime, runtimeCatalog)
+        ?? defaultModelName;
     const modelLabel = resolvedModelName ? shortModelName(resolvedModelName) : 'Default';
 
     if (!isNewConversation) {
@@ -99,7 +105,7 @@ export function ConversationComposerContext({
                 compact
                 scopeHint="Just for this chat"
                 manageHref={manageModelsHref}
-                autoTriggerLabel={defaultRuntime?.model_name ? shortModelName(defaultRuntime.model_name) : 'Default'}
+                autoTriggerLabel={defaultModelName ? shortModelName(defaultModelName) : 'Default'}
                 className="min-w-0 [&>button]:max-w-28 sm:[&>button]:max-w-52"
                 triggerClassName="text-xs font-normal"
                 triggerLabelClassName="text-xs font-normal"

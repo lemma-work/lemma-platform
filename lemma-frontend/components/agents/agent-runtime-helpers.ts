@@ -101,6 +101,36 @@ export function defaultAgentRuntimeFromProfile(
     };
 }
 
+// The model a runtime will actually run on. A stored runtime routinely pins a
+// profile and leaves the model open: the catalog's own `default_runtime` is a
+// bare `{ profile_id: 'system:lemma' }`, a pod that never set a default has no
+// runtime at all, and an agent can inherit its profile's model. The backend
+// fills that gap at dispatch — the profile's default model, else the first
+// catalog entry (`_selected_model` in runtime_profile_service.py) — so resolve
+// it the same way here instead of calling a well-defined model "Default".
+export function resolveRuntimeModelName(
+    runtime?: AgentRuntimeConfig | null,
+    catalog?: AgentRuntimeProfileListResponse,
+): string | null {
+    if (!runtime) return null;
+    if (runtime.model_name) return runtime.model_name;
+    const profile = findProfileByRuntime(catalog, runtime);
+    return profile?.default_model_name ?? runtimeModels(profile)[0]?.name ?? null;
+}
+
+// The same runtime with its model spelled out, for pickers and labels that read
+// `model_name` directly. Returned unchanged when nothing can name the model —
+// while the catalog is still loading, or when its profile has gone away.
+export function hydrateRuntimeModel(
+    runtime?: AgentRuntimeConfig | null,
+    catalog?: AgentRuntimeProfileListResponse,
+): AgentRuntimeConfig | null {
+    if (!runtime) return null;
+    if (runtime.model_name) return runtime;
+    const modelName = resolveRuntimeModelName(runtime, catalog);
+    return modelName ? { ...runtime, model_name: modelName } : runtime;
+}
+
 export function resolveDefaultAgentRuntime(
     catalog?: AgentRuntimeProfileListResponse,
     profileId?: string | null,
@@ -108,7 +138,8 @@ export function resolveDefaultAgentRuntime(
     const profile = profileId
         ? catalog?.items.find((item) => item.id === profileId)
         : undefined;
-    return defaultAgentRuntimeFromProfile(profile) ?? catalog?.default_runtime ?? null;
+    return defaultAgentRuntimeFromProfile(profile)
+        ?? hydrateRuntimeModel(catalog?.default_runtime, catalog);
 }
 
 export function formatAgentRuntime(
@@ -118,7 +149,9 @@ export function formatAgentRuntime(
 ): string {
     if (!runtime) return includeModel ? 'Default model' : 'Default Agent Runtime';
     const profile = findProfileByRuntime(catalog, runtime);
-    const modelName = runtime.model_name ?? catalog?.default_runtime?.model_name ?? null;
+    // Resolve through this runtime's own profile — borrowing the catalog
+    // default's model would name a model this profile may not even serve.
+    const modelName = resolveRuntimeModelName(runtime, catalog);
     const prefix = profile?.name ?? (runtime.profile_id === catalog?.default_runtime?.profile_id ? 'Default Agent Runtime' : runtime.profile_id);
     return includeModel && modelName ? `${prefix} · ${shortModelName(modelName)}` : prefix;
 }
