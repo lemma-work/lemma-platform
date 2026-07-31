@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "workspace-capability",
+  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants exactly one command: opening Local settings. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing here.",
+  "local": false,
+  "webviews": ["main"],
+  "remote": {
+    "urls": ["http://app.lemma.localhost:*", "https://lemma.work"]
+  },
+  "permissions": ["allow-open-control-center"]
+}

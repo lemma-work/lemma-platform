@@ -1,6 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Settings } from "@/components/ui/icons";
 import { cn } from "@/lib/utils";
@@ -18,11 +19,14 @@ declare global {
 
 type LocalSettingsButtonProps = {
   variant?: "row" | "rail";
-  page?: "overview" | "models" | "sharing" | "diagnostics";
+  page?: "overview" | "ai" | "sharing" | "diagnostics";
   className?: string;
   onOpen?: () => void;
 };
 
+// The desktop shell injects its globals as an initialization script, which runs
+// before any page script on every navigation. They are therefore already there
+// on first render and never appear later, so there is nothing to subscribe to.
 function subscribeDesktopContext() {
   return () => {};
 }
@@ -48,9 +52,18 @@ export function LocalSettingsButton({
 
   if (!visible) return null;
 
-  const open = () => {
+  const open = async () => {
     onOpen?.();
-    void window.__TAURI__?.core?.invoke?.("open_control_center", { page });
+    try {
+      await window.__TAURI__?.core?.invoke?.("open_control_center", { page });
+    } catch (error) {
+      // The workspace is a remote origin to Tauri, so this call depends on a
+      // capability naming this exact origin. When that is missing the promise
+      // rejects and the button would otherwise look simply broken.
+      toast.error(
+        `Couldn't open Local settings: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   };
 
   if (variant === "rail") {
@@ -62,7 +75,7 @@ export function LocalSettingsButton({
               type="button"
               variant="ghost"
               size="icon"
-              onClick={open}
+              onClick={() => void open()}
               className={cn("lemma-sidebar-rail-icon relative", className)}
               aria-label="Open Local settings"
             >
@@ -84,7 +97,7 @@ export function LocalSettingsButton({
       type="button"
       variant="ghost"
       size="sm"
-      onClick={open}
+      onClick={() => void open()}
       className={cn(
         "lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring relative w-full text-[var(--text-secondary)]",
         className,

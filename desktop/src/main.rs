@@ -353,6 +353,58 @@ fn hosted_url() -> String {
     std::env::var("LEMMA_DESKTOP_HOSTED_URL").unwrap_or_else(|_| DEFAULT_HOSTED_URL.into())
 }
 
+/// The workspace origins `capabilities/workspace.json` already covers.
+const SHIPPED_WORKSPACE_ORIGINS: &[&str] = &["http://app.lemma.localhost:*", "https://lemma.work"];
+
+/// A capability granting the overridden workspace origin the same single
+/// command the shipped one gets, or `None` when nothing is overridden.
+///
+/// Only the origin varies. The permission list must stay identical to
+/// `capabilities/workspace.json`, so a dev build can never reach further into
+/// the shell than a packaged one.
+fn overridden_workspace_capability() -> Option<String> {
+    let configured = ["LEMMA_DESKTOP_HOSTED_URL", "LEMMA_DESKTOP_LOCAL_URL"]
+        .into_iter()
+        .filter_map(|variable| std::env::var(variable).ok());
+    workspace_capability_for(configured)
+}
+
+fn workspace_capability_for(configured: impl Iterator<Item = String>) -> Option<String> {
+    let mut urls: Vec<String> = Vec::new();
+    for value in configured {
+        let Ok(url) = tauri::Url::parse(value.trim()) else {
+            continue;
+        };
+        // Match the whole origin and any path under it, never a bare host that
+        // a lookalike could also satisfy.
+        let Some(host) = url.host_str() else { continue };
+        let origin = match url.port() {
+            Some(port) => format!("{}://{host}:{port}", url.scheme()),
+            None => format!("{}://{host}", url.scheme()),
+        };
+        if SHIPPED_WORKSPACE_ORIGINS.contains(&origin.as_str()) {
+            continue;
+        }
+        if !urls.contains(&origin) {
+            urls.push(origin);
+        }
+    }
+    if urls.is_empty() {
+        return None;
+    }
+    Some(
+        json!({
+            "identifier": "workspace-override-capability",
+            "description": "Development or self-hosted workspace origin, granted the same single command as the shipped one.",
+            "local": false,
+            "webviews": ["main"],
+            "remote": {"urls": urls},
+            "permissions": ["allow-open-control-center"],
+        })
+        .to_string(),
+    )
+}
+
 /// Where the monorepo checkout lives, used only for development fallbacks.
 /// Dev default: this repo. Packaged builds set
 /// LEMMA_DESKTOP_RUNTIME_ROOT (or persist runtimeRoot in desktop config).
@@ -2923,6 +2975,14 @@ fn main() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
+            if let Some(capability) = overridden_workspace_capability() {
+                // capabilities/workspace.json can only name the shipped origins.
+                // A dev or self-hosted build points the workspace somewhere else
+                // through these variables, and its Local settings button would
+                // otherwise be rejected by an ACL that has never heard of it.
+                app.add_capability(capability)?;
+            }
+
             let initial_url = if mode == "hosted" {
                 WebviewUrl::External(hosted_url().parse().expect("valid hosted url"))
             } else {
@@ -3042,6 +3102,131 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capability(name: &str) -> Value {
+        let raw = match name {
+            "main" => include_str!("../capabilities/main.json"),
+            "control" => include_str!("../capabilities/control.json"),
+            "workspace" => include_str!("../capabilities/workspace.json"),
+            other => panic!("unknown capability {other}"),
+        };
+        serde_json::from_str(raw).expect("capability is valid JSON")
+    }
+
+    fn granted(name: &str) -> Vec<String> {
+        capability(name)["permissions"]
+            .as_array()
+            .expect("permissions array")
+            .iter()
+            .filter_map(|value| value.as_str().map(str::to_string))
+            .collect()
+    }
+
+    #[test]
+    fn every_command_is_granted_to_exactly_the_surfaces_that_call_it() {
+        // Declaring an app manifest means an ungranted command is rejected at
+        // runtime, from the bundled pages too. Nothing in the build surfaces
+        // that - the page just stops working - so pin it here instead.
+        let commands = include_str!("../build.rs");
+        let all: Vec<String> = commands
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix('"')?.strip_suffix("\",").map(str::to_string))
+            .collect();
+        assert!(all.len() > 15, "failed to parse the command list from build.rs");
+
+        let mut all_granted: Vec<String> = Vec::new();
+        for name in ["main", "control", "workspace"] {
+            all_granted.extend(granted(name));
+        }
+        for command in &all {
+            let permission = format!("allow-{}", command.replace('_', "-"));
+            assert!(
+                all_granted.contains(&permission),
+                "{command} is registered but no capability grants {permission}, so every call to it is rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
+        // The workspace is a remote origin to Tauri - locald serves it over
+        // http, and the hosted build loads lemma.work - so without this
+        // capability its Local settings button is silently rejected by the ACL.
+        assert_eq!(granted("workspace"), vec!["allow-open-control-center"]);
+
+        let patterns: Vec<tauri::utils::acl::RemoteUrlPattern> = capability("workspace")["remote"]
+            ["urls"]
+            .as_array()
+            .expect("remote urls")
+            .iter()
+            .map(|value| value.as_str().expect("url string").parse().expect("valid pattern"))
+            .collect();
+        let matches = |raw: &str| {
+            let url = tauri::Url::parse(raw).expect("valid url");
+            patterns.iter().any(|pattern| pattern.test(&url))
+        };
+
+        assert!(matches("http://app.lemma.localhost:3711/pod/abc"));
+        assert!(matches("http://app.lemma.localhost:63844/"));
+        assert!(matches("https://lemma.work/pod/abc"));
+
+        // Sharing publishes the same workspace on a different host. Those
+        // visitors must not be able to drive this Mac's Local settings.
+        assert!(!matches("http://192.168.1.24:3711/"));
+        assert!(!matches("https://team.trycloudflare.com/"));
+        assert!(!matches("https://lemma.work.evil.example/"));
+        assert!(!matches("http://lemma.work/"));
+    }
+
+    #[test]
+    fn local_settings_does_not_inherit_the_splash_commands() {
+        // Local settings is a child webview of the main window, and capability
+        // matching is (window OR webview). A window-scoped splash capability
+        // would therefore hand its commands to Local settings as well.
+        for name in ["main", "control", "workspace"] {
+            assert!(
+                capability(name).get("windows").is_none(),
+                "{name} must scope by webview, not window",
+            );
+        }
+        assert_eq!(capability("main")["webviews"][0], "main");
+        assert_eq!(capability("control")["webviews"][0], "control");
+
+        let splash_only = ["allow-prepare-runtime", "allow-choose-connection-mode", "allow-login"];
+        for permission in splash_only {
+            assert!(granted("main").contains(&permission.to_string()));
+            assert!(!granted("control").contains(&permission.to_string()));
+        }
+        assert!(granted("control").contains(&"allow-apply-operator-config".to_string()));
+        assert!(!granted("main").contains(&"allow-apply-operator-config".to_string()));
+    }
+
+    #[test]
+    fn an_overridden_workspace_origin_gets_the_same_single_command() {
+        let capability_for = |values: &[&str]| {
+            workspace_capability_for(values.iter().map(|value| value.to_string()))
+        };
+
+        assert!(capability_for(&[]).is_none());
+        // A shipped origin is already covered; re-granting it would only widen
+        // the pattern set for no reason.
+        assert!(capability_for(&["https://lemma.work"]).is_none());
+        assert!(capability_for(&["not a url"]).is_none());
+
+        let raw = capability_for(&["https://staging.lemma.work/", "http://127.0.0.1:3711"])
+            .expect("an overridden origin produces a capability");
+        let capability: Value = serde_json::from_str(&raw).expect("valid capability JSON");
+        assert_eq!(
+            capability["remote"]["urls"],
+            json!(["https://staging.lemma.work", "http://127.0.0.1:3711"]),
+        );
+        assert_eq!(
+            capability["permissions"],
+            json!(["allow-open-control-center"]),
+            "an override must not reach further than the shipped capability",
+        );
+        assert_eq!(capability["local"], json!(false));
+    }
 
     #[test]
     fn privileged_configuration_commands_are_control_window_only() {
