@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -108,6 +109,70 @@ def _extract_script(conversation: Any) -> list[dict[str, Any]] | None:
     return None
 
 
+# ``${tool_call_id.dotted.path}`` in a scripted argument, replaced with that
+# value from the named earlier tool result. A script is static JSON persisted on
+# the conversation, so without this it can only ever pass literals - and an id
+# the workspace generated at runtime (a process id, a file handle) cannot be a
+# literal. Scripting a made-up one instead tests nothing: the tool correctly
+# reports that no such process exists.
+_RESULT_REFERENCE = re.compile(r"^\$\{([^.{}]+)\.([^{}]+)\}$")
+
+
+def _as_mapping(value: Any) -> Any:
+    """Normalize a tool result to a dict when it plausibly is one.
+
+    A tool return reaches the model as whatever the tool returned - a dict, a
+    pydantic model, or a JSON string depending on the toolset - and a reference
+    should resolve against any of them.
+    """
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return dump(mode="json")
+        except TypeError:
+            return dump()
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value
+    return value
+
+
+def _tool_result_value(
+    messages: Sequence[ModelMessage],
+    tool_call_id: str,
+    path: str,
+) -> Any:
+    """Read ``path`` out of the result of an earlier tool call in this run."""
+    for message in reversed(messages):
+        for part in getattr(message, "parts", None) or []:
+            if not isinstance(part, ToolReturnPart):
+                continue
+            if part.tool_call_id != tool_call_id:
+                continue
+            value = _as_mapping(part.content)
+            for key in path.split("."):
+                if not isinstance(value, dict):
+                    return None
+                value = _as_mapping(value.get(key))
+            return value
+    return None
+
+
+def _resolve_references(value: Any, messages: Sequence[ModelMessage]) -> Any:
+    if isinstance(value, str):
+        match = _RESULT_REFERENCE.match(value)
+        if match is None:
+            return value
+        return _tool_result_value(messages, match.group(1), match.group(2))
+    if isinstance(value, dict):
+        return {key: _resolve_references(item, messages) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_references(item, messages) for item in value]
+    return value
+
+
 def _resolve_turn(
     messages: Sequence[ModelMessage],
     info: AgentInfo,
@@ -119,7 +184,11 @@ def _resolve_turn(
         if turn_index < len(script):
             turn = script[turn_index]
             _raise_scripted_error(turn.get("error"))
-            return turn.get("text"), list(turn.get("tool_calls") or [])
+            tool_calls = [
+                {**call, "args": _resolve_references(call.get("args") or {}, messages)}
+                for call in (turn.get("tool_calls") or [])
+            ]
+            return turn.get("text"), tool_calls
         # Script exhausted (e.g. an extra request after the last tool round) —
         # close out the run with a final answer.
         return "[mock] done", []

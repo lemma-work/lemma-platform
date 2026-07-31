@@ -14,6 +14,7 @@ from app.modules.test_support.e2e.scripted_model import (
     script_model_error,
     script_text,
     script_tool_call,
+    script_tool_result_ref,
 )
 
 pytestmark = pytest.mark.e2e
@@ -644,9 +645,12 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         script_tool_call(
             "exec_command",
             {
-                "cmd": "printf 'tty-proof'",
+                # `cat` echoes whatever it is sent and stays alive until killed,
+                # so the input and kill calls below have a real process to drive
+                # and its echo proves the characters actually arrived.
+                "cmd": "printf 'tty-proof\\n' && cat",
                 "tty": True,
-                "yield_time_ms": 10,
+                "yield_time_ms": 200,
                 "comment": "Exercise the interactive command contract",
             },
             tool_call_id="shell-tty-1",
@@ -664,9 +668,9 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             "manage_process",
             {
                 "action": "input",
-                "process_id": "fake-interactive-process",
+                "process_id": script_tool_result_ref("shell-tty-1", "process_id"),
                 "chars": "status\n",
-                "yield_time_ms": 10,
+                "yield_time_ms": 500,
             },
             tool_call_id="process-input-1",
         ),
@@ -674,7 +678,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             "manage_process",
             {
                 "action": "kill",
-                "process_id": "fake-interactive-process",
+                "process_id": script_tool_result_ref("shell-tty-1", "process_id"),
                 "comment": "Stop the deterministic process",
             },
             tool_call_id="process-kill-1",
@@ -809,7 +813,12 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         tool_returns_by_id["shell-blocking-1"]["tool_result"]
     )
     assert tool_returns_by_id["shell-failure-1"]["tool_result"]["success"] is False
-    assert tool_returns_by_id["process-input-1"]["tool_result"]["success"] is True
+    # These drive the process `shell-tty-1` actually started, by the id it
+    # actually returned. Asserting only `success` would pass against a process
+    # that ignored the input, so require the echo back from `cat`.
+    process_input = tool_returns_by_id["process-input-1"]["tool_result"]
+    assert process_input["success"] is True
+    assert "status" in str(process_input)
     assert tool_returns_by_id["process-kill-1"]["tool_result"]["success"] is True
     assert "42" in str(tool_returns_by_id["python-1"]["tool_result"])
     assert tool_returns_by_id["python-failure-1"]["tool_result"]["success"] is False
@@ -1234,16 +1243,20 @@ async def {function_name}(
         f"/pods/{pod_id}/conversations/{conversation_id}/messages"
     )
     assert messages.status_code == status.HTTP_200_OK, messages.text
-    returns = {
-        item["tool_call_id"]: item["tool_result"]
-        for item in messages.json()["items"]
-        if item["kind"] == "TOOL_RETURN"
-    }
-    assert returns["dynamic-function"] == {
-        "echo": {"value": "function input"},
-        "function": function_name,
-    }
+    tool_returns = [
+        item for item in messages.json()["items"] if item["kind"] == "TOOL_RETURN"
+    ]
+    returns = {item["tool_call_id"]: item["tool_result"] for item in tool_returns}
+    tool_names = {item["tool_call_id"]: item["tool_name"] for item in tool_returns}
+
+    # The function tool returns the function's own declared output - the tool
+    # adds no envelope of its own (callable_tool_factory returns
+    # ``run.output_data``). So the result being exactly FunctionOutput is what
+    # proves the real sandboxed function ran and its value round-tripped.
+    assert returns["dynamic-function"] == {"value": "function input"}
+    assert tool_names["dynamic-function"] == f"function_{function_name}"
     assert "delegated child input" in str(returns["dynamic-agent"])
+    assert tool_names["dynamic-agent"] == f"agent_{child_name}"
 
     children = await authenticated_client.get(
         f"/pods/{pod_id}/conversations",
