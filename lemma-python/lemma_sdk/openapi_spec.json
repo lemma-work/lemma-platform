@@ -647,6 +647,937 @@
         "title": "AgentHarnessListResponse",
         "type": "object"
       },
+      "AgentHostCapacity": {
+        "properties": {
+          "active_runs": {
+            "default": 0,
+            "maximum": 128.0,
+            "minimum": 0.0,
+            "title": "Active Runs",
+            "type": "integer"
+          },
+          "available_runs": {
+            "default": 1,
+            "maximum": 128.0,
+            "minimum": 0.0,
+            "title": "Available Runs",
+            "type": "integer"
+          },
+          "max_runs": {
+            "default": 1,
+            "maximum": 128.0,
+            "minimum": 0.0,
+            "title": "Max Runs",
+            "type": "integer"
+          }
+        },
+        "title": "AgentHostCapacity",
+        "type": "object"
+      },
+      "AgentHostCommand": {
+        "properties": {
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AgentHostCommandKind"
+          },
+          "lease_epoch": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lease Epoch"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "command_id",
+          "kind",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "AgentHostCommand",
+        "type": "object"
+      },
+      "AgentHostCommandKind": {
+        "enum": [
+          "START_RUN",
+          "CANCEL_RUN",
+          "RESOLVE_PERMISSION"
+        ],
+        "title": "AgentHostCommandKind",
+        "type": "string"
+      },
+      "AgentHostCommandRejection": {
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/AgentHostRejectionCode"
+          },
+          "command_id": {
+            "format": "uuid",
+            "title": "Command Id",
+            "type": "string"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          },
+          "lease_epoch": {
+            "minimum": 1.0,
+            "title": "Lease Epoch",
+            "type": "integer"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "run_id",
+          "lease_epoch",
+          "code",
+          "retryable"
+        ],
+        "title": "AgentHostCommandRejection",
+        "type": "object"
+      },
+      "AgentHostConfigOption": {
+        "properties": {
+          "category": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "current_value": {
+            "title": "Current Value"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Options",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "name"
+        ],
+        "title": "AgentHostConfigOption",
+        "type": "object"
+      },
+      "AgentHostEvent": {
+        "description": "One run event on its way to the run's Redis Stream.\n\nThere is no event id: events are deduplicated by ``sequence`` against the\nstream's watermark, which is what a resend after a Redis flush relies on.\nThere is no host timestamp either -- a Redis stream id already embeds the\nmillisecond it was appended.",
+        "properties": {
+          "lease_epoch": {
+            "minimum": 1.0,
+            "title": "Lease Epoch",
+            "type": "integer"
+          },
+          "object_id": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Id"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "sequence": {
+            "minimum": 1.0,
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/AgentHostEventType"
+          }
+        },
+        "required": [
+          "run_id",
+          "lease_epoch",
+          "sequence",
+          "type"
+        ],
+        "title": "AgentHostEvent",
+        "type": "object"
+      },
+      "AgentHostEventAck": {
+        "properties": {
+          "acked_through": {
+            "minimum": 0.0,
+            "title": "Acked Through",
+            "type": "integer"
+          },
+          "lease_epoch": {
+            "title": "Lease Epoch",
+            "type": "integer"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "lease_epoch",
+          "acked_through"
+        ],
+        "title": "AgentHostEventAck",
+        "type": "object"
+      },
+      "AgentHostEventBatch": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostEvent"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Events",
+            "type": "array"
+          }
+        },
+        "required": [
+          "events"
+        ],
+        "title": "AgentHostEventBatch",
+        "type": "object"
+      },
+      "AgentHostEventType": {
+        "enum": [
+          "run_state",
+          "user_message",
+          "agent_message_chunk",
+          "agent_message_upsert",
+          "agent_thought_chunk",
+          "agent_thought_upsert",
+          "plan_upsert",
+          "tool_call_upsert",
+          "tool_call_update",
+          "usage_update",
+          "config_update",
+          "permission_request",
+          "terminal"
+        ],
+        "title": "AgentHostEventType",
+        "type": "string"
+      },
+      "AgentHostHarnessCapabilities": {
+        "additionalProperties": true,
+        "description": "Harness capabilities the server actually branches on.\n\nOnly ``images`` changes server behaviour today (it adds the vision\ncapability to the runtime picker). Anything else a host reports is kept\nverbatim by ``extra: allow`` rather than typed here, so the wire format\nstays open without inventing fields no code reads.",
+        "properties": {
+          "images": {
+            "default": false,
+            "title": "Images",
+            "type": "boolean"
+          }
+        },
+        "title": "AgentHostHarnessCapabilities",
+        "type": "object"
+      },
+      "AgentHostHarnessHealth": {
+        "enum": [
+          "READY",
+          "AUTH_REQUIRED",
+          "UNSUPPORTED_VERSION",
+          "CONFIG_INVALID",
+          "PROBE_FAILED",
+          "INSTALLING",
+          "DISABLED"
+        ],
+        "title": "AgentHostHarnessHealth",
+        "type": "string"
+      },
+      "AgentHostHarnessListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostHarnessResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AgentHostHarnessListResponse",
+        "type": "object"
+      },
+      "AgentHostHarnessPublishRequest": {
+        "properties": {
+          "harnesses": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostHarnessSnapshot"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "title": "Harnesses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "harnesses"
+        ],
+        "title": "AgentHostHarnessPublishRequest",
+        "type": "object"
+      },
+      "AgentHostHarnessPublishResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostHarnessResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AgentHostHarnessPublishResponse",
+        "type": "object"
+      },
+      "AgentHostHarnessResponse": {
+        "properties": {
+          "adapter_version": {
+            "title": "Adapter Version",
+            "type": "string"
+          },
+          "capabilities": {
+            "additionalProperties": true,
+            "title": "Capabilities",
+            "type": "object"
+          },
+          "config_options": {
+            "items": {},
+            "title": "Config Options",
+            "type": "array"
+          },
+          "config_revision": {
+            "title": "Config Revision",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "harness_key": {
+            "title": "Harness Key",
+            "type": "string"
+          },
+          "health": {
+            "title": "Health",
+            "type": "string"
+          },
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "stale_after": {
+            "format": "date-time",
+            "title": "Stale After",
+            "type": "string"
+          },
+          "stale_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Reason"
+          },
+          "upstream_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upstream Version"
+          }
+        },
+        "required": [
+          "id",
+          "host_id",
+          "harness_key",
+          "display_name",
+          "adapter_version",
+          "upstream_version",
+          "health",
+          "capabilities",
+          "config_revision",
+          "config_options",
+          "stale_after",
+          "stale_reason"
+        ],
+        "title": "AgentHostHarnessResponse",
+        "type": "object"
+      },
+      "AgentHostHarnessSnapshot": {
+        "properties": {
+          "adapter_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Adapter Version",
+            "type": "string"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/AgentHostHarnessCapabilities"
+          },
+          "config_options": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostConfigOption"
+            },
+            "title": "Config Options",
+            "type": "array"
+          },
+          "config_revision": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Config Revision",
+            "type": "string"
+          },
+          "display_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "harness_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Harness Key",
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/AgentHostHarnessHealth"
+          },
+          "stale_after": {
+            "format": "date-time",
+            "title": "Stale After",
+            "type": "string"
+          },
+          "stale_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stale Reason"
+          },
+          "upstream_version": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upstream Version"
+          }
+        },
+        "required": [
+          "harness_key",
+          "display_name",
+          "adapter_version",
+          "health",
+          "config_revision",
+          "stale_after"
+        ],
+        "title": "AgentHostHarnessSnapshot",
+        "type": "object"
+      },
+      "AgentHostListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "AgentHostListResponse",
+        "type": "object"
+      },
+      "AgentHostPairingComplete": {
+        "properties": {
+          "display_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "hello": {
+            "$ref": "#/components/schemas/HostHello"
+          },
+          "pairing_code": {
+            "maxLength": 512,
+            "minLength": 16,
+            "title": "Pairing Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pairing_code",
+          "display_name",
+          "hello"
+        ],
+        "title": "AgentHostPairingComplete",
+        "type": "object"
+      },
+      "AgentHostPairingCompleted": {
+        "properties": {
+          "host_id": {
+            "format": "uuid",
+            "title": "Host Id",
+            "type": "string"
+          },
+          "host_secret": {
+            "title": "Host Secret",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "host_id",
+          "user_id",
+          "organization_id",
+          "host_secret"
+        ],
+        "title": "AgentHostPairingCompleted",
+        "type": "object"
+      },
+      "AgentHostPairingCreate": {
+        "properties": {
+          "display_name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          }
+        },
+        "required": [
+          "display_name"
+        ],
+        "title": "AgentHostPairingCreate",
+        "type": "object"
+      },
+      "AgentHostPairingCreated": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "pairing_code": {
+            "title": "Pairing Code",
+            "type": "string"
+          },
+          "pairing_id": {
+            "format": "uuid",
+            "title": "Pairing Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pairing_id",
+          "pairing_code",
+          "expires_at"
+        ],
+        "title": "AgentHostPairingCreated",
+        "type": "object"
+      },
+      "AgentHostPollRequest": {
+        "properties": {
+          "acknowledged_command_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Acknowledged Command Ids",
+            "type": "array"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/AgentHostCapacity"
+          },
+          "checkpoints": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostRunCheckpoint"
+            },
+            "maxItems": 256,
+            "title": "Checkpoints",
+            "type": "array"
+          },
+          "hello": {
+            "$ref": "#/components/schemas/HostHello"
+          },
+          "rejections": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostCommandRejection"
+            },
+            "maxItems": 256,
+            "title": "Rejections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "hello"
+        ],
+        "title": "AgentHostPollRequest",
+        "type": "object"
+      },
+      "AgentHostPollResponse": {
+        "properties": {
+          "commands": {
+            "items": {
+              "$ref": "#/components/schemas/AgentHostCommand"
+            },
+            "title": "Commands",
+            "type": "array"
+          },
+          "host_status": {
+            "$ref": "#/components/schemas/AgentHostStatus"
+          },
+          "poll_after_ms": {
+            "default": 0,
+            "maximum": 60000.0,
+            "minimum": 0.0,
+            "title": "Poll After Ms",
+            "type": "integer"
+          },
+          "protocol_version": {
+            "default": 2,
+            "title": "Protocol Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host_status"
+        ],
+        "title": "AgentHostPollResponse",
+        "type": "object"
+      },
+      "AgentHostRejectionCode": {
+        "enum": [
+          "DRAINING",
+          "COMMAND_EXPIRED",
+          "HARNESS_NOT_FOUND",
+          "CONFIG_REVISION_STALE",
+          "CAPACITY_LOST",
+          "ADAPTER_UNAVAILABLE",
+          "INVALID_COMMAND"
+        ],
+        "title": "AgentHostRejectionCode",
+        "type": "string"
+      },
+      "AgentHostResponse": {
+        "properties": {
+          "capacity": {
+            "additionalProperties": true,
+            "title": "Capacity",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "host_release": {
+            "title": "Host Release",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "protocol_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentHostStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "organization_id",
+          "installation_id",
+          "display_name",
+          "status",
+          "protocol_version",
+          "host_release",
+          "capacity",
+          "last_seen_at",
+          "revoked_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AgentHostResponse",
+        "type": "object"
+      },
+      "AgentHostRunCheckpoint": {
+        "properties": {
+          "detail": {
+            "additionalProperties": true,
+            "title": "Detail",
+            "type": "object"
+          },
+          "lease_epoch": {
+            "minimum": 1.0,
+            "title": "Lease Epoch",
+            "type": "integer"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AgentHostRunState"
+          }
+        },
+        "required": [
+          "run_id",
+          "lease_epoch",
+          "state"
+        ],
+        "title": "AgentHostRunCheckpoint",
+        "type": "object"
+      },
+      "AgentHostRunState": {
+        "enum": [
+          "QUEUED_FOR_HOST",
+          "LEASED",
+          "ACCEPTED",
+          "DISPATCHING",
+          "RUNNING",
+          "RECOVERING",
+          "WAITING_INPUT",
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED",
+          "DISPATCH_UNKNOWN"
+        ],
+        "title": "AgentHostRunState",
+        "type": "string"
+      },
+      "AgentHostStatus": {
+        "enum": [
+          "ONLINE",
+          "OFFLINE",
+          "DRAINING",
+          "UPGRADE_REQUIRED",
+          "REVOKED"
+        ],
+        "title": "AgentHostStatus",
+        "type": "string"
+      },
       "AgentListResponse": {
         "properties": {
           "items": {
@@ -6680,6 +7611,34 @@
         ],
         "title": "HarnessKind",
         "type": "string"
+      },
+      "HostHello": {
+        "properties": {
+          "host_release": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Host Release",
+            "type": "string"
+          },
+          "installation_id": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "protocol_version": {
+            "minimum": 1.0,
+            "title": "Protocol Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "installation_id",
+          "host_release",
+          "protocol_version"
+        ],
+        "title": "HostHello",
+        "type": "object"
       },
       "IconUploadRequest": {
         "properties": {
@@ -15049,6 +16008,328 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/agent-host/events:append": {
+      "post": {
+        "description": "Append one ordered batch to the run's stream.\n\nThere is no second lane to publish on: every event type travels the one\nordered stream, and the ack watermark is the stream's last entry.",
+        "operationId": "agent.host.events.append",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentHostEventBatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostEventAck"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Append Agent Host Events",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.host.events"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.host.events",
+          "result": "entity",
+          "verb": "append"
+        }
+      }
+    },
+    "/agent-host/harnesses": {
+      "put": {
+        "description": "Replace this host's harness snapshots with the reported set.",
+        "operationId": "agent.host.harnesses.publish",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentHostHarnessPublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostHarnessPublishResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Agent Host Harnesses",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.host.harnesses"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.host.harnesses",
+          "result": "entity",
+          "verb": "publish"
+        }
+      }
+    },
+    "/agent-host/pairings:complete": {
+      "post": {
+        "description": "Consume a pairing code and issue the host secret, shown exactly once.",
+        "operationId": "agent.host.pairing.complete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentHostPairingComplete"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostPairingCompleted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Complete Agent Host Pairing",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.host.pairing"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.host.pairing",
+          "result": "entity",
+          "verb": "complete"
+        }
+      }
+    },
+    "/agent-host/poll": {
+      "post": {
+        "description": "Long-poll for commands, carrying the host's control updates up.\n\nThis owns its own units of work rather than the request-scoped one: the\nidle wait below can hold the connection open for 25 seconds, and a\ntransaction must not stay open across it.",
+        "operationId": "agent.host.poll",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentHostPollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostPollResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Poll Agent Host Commands",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.host"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.host",
+          "result": "entity",
+          "verb": "poll"
+        }
+      }
+    },
+    "/agent-host/revoke": {
+      "post": {
+        "description": "Let a host retire its own credential, e.g. on uninstall.",
+        "operationId": "agent.host.self_revoke",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Self Revoke Agent Host",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.host"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.host",
+          "result": "entity",
+          "verb": "self_revoke"
+        }
+      }
+    },
     "/agent-runtime/harnesses": {
       "get": {
         "operationId": "agent.runtime.harnesses.list",
@@ -15403,6 +16684,190 @@
           "resource": "icon",
           "result": "entity",
           "verb": "upload"
+        }
+      }
+    },
+    "/me/runtime/agent-host-pairings": {
+      "post": {
+        "description": "Mint a short-lived pairing code for a machine this user controls.",
+        "operationId": "agent.host.pairing.create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentHostPairingCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostPairingCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Agent Host Pairing",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.host.pairing"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.host.pairing",
+          "result": "entity",
+          "verb": "create"
+        }
+      }
+    },
+    "/me/runtime/agent-hosts": {
+      "get": {
+        "operationId": "agent.host.list",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Agent Hosts",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.host",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/me/runtime/agent-hosts/{host_id}": {
+      "delete": {
+        "description": "Revoke a host, invalidating its secret immediately.",
+        "operationId": "agent.host.revoke",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke Agent Host",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.host"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.host",
+          "result": "void",
+          "verb": "revoke"
+        }
+      }
+    },
+    "/me/runtime/agent-hosts/{host_id}/harnesses": {
+      "get": {
+        "operationId": "agent.host.harnesses.list",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "host_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Host Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHostHarnessListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Agent Host Harnesses",
+        "tags": [
+          "agent_host"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.host.harnesses",
+          "result": "collection",
+          "verb": "list"
         }
       }
     },
