@@ -1367,11 +1367,11 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         matching_emails = []
         for path in Path(e2e_settings.email_output_dir).glob("*.json"):
             message = json.loads(path.read_text(encoding="utf-8"))
-            if (
-                message.get("to_email") == fixed_test_user["email"]
-                and message.get("subject")
-                == "A scheduled automation was paused after repeated failures"
-            ):
+            # The subject leads with the schedule's humanized display name, so
+            # match the stable tail rather than pinning the whole string.
+            if message.get("to_email") == fixed_test_user["email"] and str(
+                message.get("subject", "")
+            ).endswith("was paused after repeated failures"):
                 matching_emails.append(message)
         if matching_emails:
             break
