@@ -27,13 +27,6 @@ from app.modules.agent.domain.entities import (
     Conversation as ConversationEntity,
     Message as MessageEntity,
 )
-from app.modules.agent.domain.runtime_profiles import (
-    AgentRuntimeProfile,
-    RuntimeProfileKind,
-    RuntimeProfileProtocol,
-    RuntimeProfileScope,
-    RuntimeProfileStatus,
-)
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
     AgentRunStatus,
@@ -107,111 +100,6 @@ class AgentModel(UUIDAuditBase):
             metadata=self.agent_metadata,
         )
 
-
-class AgentRuntimeProfileModel(UUIDAuditBase):
-    """Organization-owned agent runtime profile."""
-
-    __tablename__ = "agent_runtime_profiles"
-    __table_args__ = (
-        Index(
-            "ix_agent_runtime_profile_org_scope_status",
-            "organization_id",
-            "scope",
-            "status",
-        ),
-        Index("ix_agent_runtime_profile_org_status", "organization_id", "status"),
-        Index(
-            "uq_agent_runtime_profile_org_name",
-            "organization_id",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'ORGANIZATION'"),
-        ),
-        Index(
-            "uq_agent_runtime_profile_personal_name",
-            "organization_id",
-            "user_id",
-            "name",
-            unique=True,
-            postgresql_where=text("scope = 'PERSONAL'"),
-        ),
-        # Holds for legacy rows too: a NULL runtime_type takes the first
-        # branch, which only requires harness_id to be NULL.
-        CheckConstraint(
-            "(runtime_type IS DISTINCT FROM 'HARNESS' AND harness_id IS NULL) OR "
-            "(runtime_type = 'HARNESS' AND harness_id IS NOT NULL)",
-            name="ck_agent_runtime_profile_harness_binding",
-        ),
-    )
-
-    organization_id: Mapped[UUID] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    # Nullable during the Agent Host rollout: legacy daemon profiles predate
-    # runtime_type and are filtered out in code rather than backfilled.
-    runtime_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    harness_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_host_harnesses.id", ondelete="RESTRICT"),
-        nullable=True,
-        index=True,
-    )
-    user_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    daemon_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("agent_runtime_daemons.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    scope: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    protocol: Mapped[str] = mapped_column(String(32), nullable=False)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    default_model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    model_catalog: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    credentials: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        nullable=False,
-        default=RuntimeProfileStatus.ACTIVE.value,
-        index=True,
-    )
-    profile_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-
-    organization: Mapped[Any] = relationship(
-        "Organization",
-        foreign_keys=[organization_id],
-    )
-    user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-    daemon: Mapped["AgentRuntimeDaemonModel | None"] = relationship(
-        "AgentRuntimeDaemonModel",
-        foreign_keys=[daemon_id],
-    )
-
-    def to_entity(self) -> AgentRuntimeProfile:
-        return AgentRuntimeProfile(
-            id=str(self.id),
-            organization_id=self.organization_id,
-            user_id=self.user_id,
-            daemon_id=self.daemon_id,
-            scope=RuntimeProfileScope(self.scope),
-            kind=RuntimeProfileKind(self.kind),
-            protocol=RuntimeProfileProtocol(self.protocol),
-            name=self.name,
-            description=self.description,
-            default_model_name=self.default_model_name,
-            model_catalog=self.model_catalog or [],
-            config=self.config or {},
-            credentials=self.credentials,
-            status=RuntimeProfileStatus(self.status),
-            metadata=self.profile_metadata or {},
-        )
 
 
 class AgentRuntimeDaemonModel(UUIDAuditBase):
