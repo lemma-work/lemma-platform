@@ -17,8 +17,14 @@
   background: var(--bg-canvas);
 }
 
+/* `minmax(0, 1fr)`, not the default `auto`: an auto track is floored by its
+   items' min-content, so one unbreakable path in the instructions used to widen
+   the track past this max-width and stretch *every* card on the page with it,
+   leaving the whole column scrolling sideways. The column sets the width; a
+   card that cannot fit its content wraps or scrolls inside itself. */
 .resource-page-column {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2-5);
   margin: 0 auto;
   max-width: 52rem;
@@ -27,6 +33,7 @@
 
 /* Three boxes on the canvas: what this thing is, what it says, and the dock. */
 .resource-card {
+  min-width: 0;
   border: 1px solid var(--card-border-subtle);
   border-radius: var(--radius-xl);
   background: var(--card-bg);
