@@ -127,11 +127,11 @@
 }
 
 .lemma-assistant-user-approval-card {
-  border-radius: 1rem;
+  border-radius: var(--radius-3xl);
 }
 
 .lemma-assistant-user-message-bubble {
-  border-radius: 0.75rem;
+  border-radius: var(--radius-2xl);
 }
 
 .lemma-assistant-choice-dot {
@@ -164,11 +164,11 @@
      one continuous strip across all three regions. */
   border-bottom-color: color-mix(in srgb, var(--border-subtle) 32%, transparent);
   background: var(--pod-main-bg);
-  padding: 0 1rem;
+  padding: 0 var(--space-4);
 }
 
 .pod-assistant-sidebar-surface .lemma-assistant-header h3 {
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   font-weight: 400;
   line-height: 1rem;
   letter-spacing: 0;
@@ -204,7 +204,7 @@
   background: transparent !important;
   box-shadow: none !important;
   padding-inline: 0.875rem;
-  padding-bottom: 0.875rem;
+  padding-bottom: var(--space-3-5);
 }
 
 .pod-assistant-sidebar-surface .lemma-assistant-composer::before,
@@ -235,7 +235,7 @@
 .lemma-assistant-inline-approval-button {
   color: var(--text-secondary);
   font-family: var(--font-body-family);
-  font-size: 0.8125rem;
+  font-size: var(--text-xs);
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.25rem;
@@ -251,7 +251,7 @@
 .lemma-assistant-run-trace-header {
   color: var(--text-secondary);
   font-family: var(--font-body-family);
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.5rem;
