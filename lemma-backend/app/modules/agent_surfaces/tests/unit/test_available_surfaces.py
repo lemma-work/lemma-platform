@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
+
+from sqlalchemy.exc import OperationalError
 
 from app.modules.agent_surfaces.domain.entities import (
     SurfaceCredentialMode,
@@ -148,6 +152,116 @@ async def test_no_lemma_capability_does_not_raise(monkeypatch):
     surface = _by_platform(resp)[SurfacePlatform.GMAIL]
     assert surface.connector_available is False
     assert surface.connect is None
+
+
+def _claim_repository(conflict=None, *, raises=False) -> AsyncMock:
+    repo = AsyncMock()
+    if raises:
+        repo.get_system_credential_conflict_in_org.side_effect = OperationalError(
+            "SELECT 1", {}, Exception("connection reset")
+        )
+    else:
+        repo.get_system_credential_conflict_in_org.return_value = conflict
+    return repo
+
+
+async def test_system_claim_absent_for_platforms_without_a_system_mode(monkeypatch):
+    # No SYSTEM mode means there is no shared identity to claim, so the field is
+    # None rather than a misleading "available".
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
+    resp = await build_available_surfaces(
+        connector_service=_connector_service(),
+        pod_id=uuid4(),
+        surface_repository=_claim_repository(),
+    )
+    assert all(surface.system_claim is None for surface in resp.surfaces)
+
+
+async def test_system_claim_available_when_org_has_not_claimed_it(monkeypatch):
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    resp = await build_available_surfaces(
+        connector_service=_connector_service(),
+        pod_id=uuid4(),
+        surface_repository=_claim_repository(None),
+    )
+    claim = _by_platform(resp)[SurfacePlatform.TELEGRAM].system_claim
+    assert claim is not None
+    assert claim.available is True
+    assert claim.claimed_by_pod_id is None
+
+
+async def test_system_claim_names_the_pod_holding_it(monkeypatch):
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    holder_pod_id = uuid4()
+    conflict = SimpleNamespace(pod_id=holder_pod_id, name="whatsapp")
+    monkeypatch.setattr(mod, "AgentSurfaceEntity", SimpleNamespace)
+    resp = await build_available_surfaces(
+        connector_service=_connector_service(),
+        pod_id=uuid4(),
+        surface_repository=_claim_repository(conflict),
+    )
+    claim = _by_platform(resp)[SurfacePlatform.WHATSAPP].system_claim
+    assert claim is not None
+    assert claim.available is False
+    assert claim.claimed_by_pod_id == holder_pod_id
+    assert claim.claimed_by_surface_name == "whatsapp"
+
+
+async def test_system_claim_degrades_to_available_when_lookup_fails(monkeypatch):
+    # A catalog read must never fail on a repository hiccup; the write path
+    # still enforces the claim, so optimistic is the safe direction.
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    resp = await build_available_surfaces(
+        connector_service=_connector_service(),
+        pod_id=uuid4(),
+        surface_repository=_claim_repository(raises=True),
+    )
+    claim = _by_platform(resp)[SurfacePlatform.TELEGRAM].system_claim
+    assert claim is not None and claim.available is True
+
+
+async def test_system_claim_skipped_without_pod_context(monkeypatch):
+    # The builder stays usable as a pure registry join.
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: p in _NATIVE)
+    resp = await build_available_surfaces(connector_service=_connector_service())
+    claim = _by_platform(resp)[SurfacePlatform.TELEGRAM].system_claim
+    assert claim is not None and claim.available is True
+
+
+async def test_managed_setup_offered_only_where_a_manager_bot_exists(monkeypatch):
+    # Telegram can hand a user their own bot, but only where this deployment has
+    # a manager bot configured — otherwise the option must not be offered.
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
+    monkeypatch.setattr(
+        mod.surface_settings, "telegram_manager_bot_token", "123:abc", raising=False
+    )
+    monkeypatch.setattr(
+        mod.surface_settings, "telegram_manager_bot_username", "lemma_manager", raising=False
+    )
+    surfaces = _by_platform(
+        await build_available_surfaces(connector_service=_connector_service())
+    )
+    assert surfaces[SurfacePlatform.TELEGRAM].managed_setup_available is True
+    # It is a Telegram-only path; nothing else claims it.
+    assert all(
+        surface.managed_setup_available is False
+        for platform, surface in surfaces.items()
+        if platform is not SurfacePlatform.TELEGRAM
+    )
+
+
+async def test_managed_setup_hidden_without_a_manager_bot(monkeypatch):
+    monkeypatch.setattr(mod, "has_native_credentials", lambda p: False)
+    monkeypatch.setattr(
+        mod.surface_settings, "telegram_manager_bot_token", None, raising=False
+    )
+    monkeypatch.setattr(
+        mod.surface_settings, "telegram_manager_bot_username", None, raising=False
+    )
+    surfaces = _by_platform(
+        await build_available_surfaces(connector_service=_connector_service())
+    )
+    assert surfaces[SurfacePlatform.TELEGRAM].managed_setup_available is False
 
 
 async def test_one_row_per_registry_platform(monkeypatch):

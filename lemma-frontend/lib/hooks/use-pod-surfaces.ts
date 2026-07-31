@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import type { CatalogSurface } from '@/lib/surfaces/catalog';
 import type { AssistantSurface } from '@/lib/types';
 import type {
     AvailableSurfaceChannelsResponse,
@@ -51,6 +52,26 @@ function invalidatePodSurfaces(
     queryClient.invalidateQueries({ queryKey: channelsPrefix(podId) });
     queryClient.invalidateQueries({ queryKey: userSurfacesKey() });
 }
+
+/**
+ * The connectable-surface catalog for a pod: which platforms this deployment can
+ * actually run, the credential schema to connect an account, and whether the org
+ * has already claimed each platform's Lemma-managed bot/number. Drives the setup
+ * modal so a platform the deployment can't support is never offered.
+ */
+export const useAvailableSurfaces = (podId: string | undefined, enabled = true) => {
+    return useQuery({
+        queryKey: ['pod-available-surfaces', podId],
+        queryFn: async () => {
+            const response = await getLemmaClient().podSurfaces.available(podId!);
+            return (response.surfaces ?? []) as CatalogSurface[];
+        },
+        enabled: Boolean(podId) && enabled,
+        // The claim half changes whenever any pod in the org connects a surface,
+        // so keep this fresher than the per-pod list.
+        staleTime: 15_000,
+    });
+};
 
 export const usePodSurfaces = (podId: string | undefined) => {
     return useQuery({

@@ -542,8 +542,32 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "WHATSAPP"},
     )
-    assert duplicate_system.status_code == 422, duplicate_system.text
+    assert duplicate_system.status_code == 409, duplicate_system.text
     assert "System WHATSAPP credentials are already used" in duplicate_system.text
+    # The setup UI names the pod holding the claim and links to it, so the
+    # conflict has to be structured — not just a message.
+    conflict_body = duplicate_system.json()
+    assert conflict_body["code"] == "AGENT_SURFACE_CREDENTIAL_CONFLICT"
+    assert conflict_body["details"]["kind"] == "SYSTEM"
+    assert conflict_body["details"]["conflicting_surface"] == {
+        "pod_id": primary_pod_id,
+        "name": "whatsapp",
+    }
+
+    # And the catalog publishes the same claim up front, so the option can be
+    # disabled before the user commits.
+    catalog = await authenticated_client.get(
+        f"/pods/{sibling_pod_id}/available-surfaces"
+    )
+    assert catalog.status_code == 200, catalog.text
+    whatsapp_row = next(
+        row for row in catalog.json()["surfaces"] if row["platform"] == "WHATSAPP"
+    )
+    assert whatsapp_row["system_claim"] == {
+        "available": False,
+        "claimed_by_pod_id": primary_pod_id,
+        "claimed_by_surface_name": "whatsapp",
+    }
 
     deleted_system = await authenticated_client.delete(
         f"/pods/{primary_pod_id}/surfaces/whatsapp"
