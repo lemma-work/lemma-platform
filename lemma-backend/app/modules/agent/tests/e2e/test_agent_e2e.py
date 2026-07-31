@@ -2633,11 +2633,15 @@ class TestAgentOpenApi:
         schemas = openapi["components"]["schemas"]
 
         assert "/pods/{pod_id}/conversations" in paths
-        assert "/agent-runtime/harnesses" in paths
         assert "/organizations/{org_id}/agent-runtime/profiles" in paths
+        assert "/me/runtime/agent-hosts/{host_id}/harnesses" in paths
         assert "/agent-runtime/profiles" not in paths
         assert "/agent-runtime/default" not in paths
         assert "/agent-runtime/harnesses/{harness_kind}/models" not in paths
+        # Harnesses used to be listed per local-daemon kind. The daemon is gone
+        # (#253); a harness now belongs to a paired Agent Host and is listed
+        # under that host.
+        assert "/agent-runtime/harnesses" not in paths
         assert "/agent-runtime/config" not in paths
         assert "/pods/{pod_id}/agent-runtime/config" not in paths
         assert "/organizations/{organization_id}/agent-runtime/config" not in paths
@@ -2649,20 +2653,15 @@ class TestAgentOpenApi:
             not in paths
         )
         assert "/agent/global/conversations" not in paths
-        assert schemas["HarnessKind"]["enum"] == [
-            "LEMMA",
-            "CODEX",
-            "CLAUDE_CODE",
-            "OPENCODE",
-            "CURSOR",
-            "ANTIGRAVITY",
-        ]
+        # The local daemon needed one kind per coding tool. Agent Host needs
+        # one: which tool a profile runs is its harness_id, not its kind.
+        assert schemas["HarnessKind"]["enum"] == ["LEMMA", "HARNESS"]
         assert "model_name" not in schemas["SendMessageRequest"]["properties"]
         assert "model_name" in schemas["AgentRuntimeConfig"]["properties"]
-        assert "default_runtime" not in schemas["AgentHarnessListResponse"][
-            "properties"
-        ]
-        assert schemas["AgentHarnessListResponse"]["required"] == ["items"]
+        # AgentHarnessListResponse belonged to the daemon's per-kind harness
+        # listing. A harness now hangs off the Agent Host that published it.
+        assert "AgentHarnessListResponse" not in schemas
+        assert schemas["AgentHostHarnessListResponse"]["required"] == ["items"]
         assert "metadata" in schemas["SendMessageRequest"]["properties"]
         assert "instructions" in schemas["CreateConversationRequest"]["properties"]
         assert "instructions" in schemas["UpdateConversationRequest"]["properties"]
@@ -2683,8 +2682,8 @@ class TestAgentOpenApi:
             == "agent.conversation.message.send"
         )
         assert (
-            paths["/agent-runtime/harnesses"]["get"]["operationId"]
-            == "agent.runtime.harnesses.list"
+            paths["/me/runtime/agent-hosts/{host_id}/harnesses"]["get"]["operationId"]
+            == "agent.host.harnesses.list"
         )
         assert (
             paths["/organizations/{org_id}/agent-runtime/profiles"]["get"][
