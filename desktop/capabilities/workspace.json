@@ -1,11 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "workspace-capability",
-  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants exactly one command: opening Local settings. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing here.",
+  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants opening Local settings, and controlling this computer's Agent Host, because that page is the one surface a local and a cloud user share. Nothing here touches the local stack. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing.",
   "local": false,
   "webviews": ["main"],
   "remote": {
     "urls": ["http://app.lemma.localhost:*", "https://lemma.work"]
   },
-  "permissions": ["allow-open-control-center"]
+  "permissions": [
+    "allow-open-control-center",
+    "allow-agent-host-status",
+    "allow-agent-host-set-enabled",
+    "allow-agent-host-pair",
+    "allow-agent-host-unpair",
+    "allow-agent-host-refresh",
+    "allow-agent-host-open-log"
+  ]
 }

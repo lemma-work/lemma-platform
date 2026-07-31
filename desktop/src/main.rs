@@ -64,6 +64,10 @@ struct UiState {
     api_url: String,
     log_source: String,
     component: String,
+    // Not sent to the splash page, which has no Agent Host UI. The tray reads
+    // it to know which way its toggle should point.
+    #[serde(skip)]
+    agent_host_running: bool,
     #[serde(skip)]
     active_operation_id: String,
     #[serde(skip)]
@@ -104,6 +108,9 @@ struct Shell {
     locald_writer: Mutex<Option<SendHalf>>,
     locald_connect: Mutex<()>,
     quit_after_stop: AtomicBool,
+    // The tray is built once, so its Agent Host entries are kept here to be
+    // rewritten as status arrives.
+    tray_agent_host: Mutex<Option<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)>>,
 }
 
 struct LocaldConnection {
@@ -127,6 +134,7 @@ impl Shell {
             locald_writer: Mutex::new(None),
             locald_connect: Mutex::new(()),
             quit_after_stop: AtomicBool::new(false),
+            tray_agent_host: Mutex::new(None),
         }
     }
 }
@@ -721,6 +729,42 @@ fn ensure_locald(app: &AppHandle) -> Result<(), String> {
     Err(format!("could not connect to lemma-locald: {last_error}"))
 }
 
+/// Bring up locald for a workspace that has no local stack.
+///
+/// A hosted workspace still wants the Agent Host on this machine, and locald is
+/// what supervises it. Unlike the local path this downloads nothing and accepts
+/// whatever daemon is already listening: with no host pack there is no release
+/// to match, and locald without one only holds its socket and the sidecar.
+fn ensure_locald_without_host_pack(app: &AppHandle) -> Result<(), String> {
+    let shell: State<Shell> = app.state();
+    if shell.locald_writer.lock().unwrap().is_some() {
+        return Ok(());
+    }
+    let _connect_guard = shell.locald_connect.lock().unwrap();
+    if shell.locald_writer.lock().unwrap().is_some() {
+        return Ok(());
+    }
+
+    if let Ok(connection) = connect_locald() {
+        install_locald_connection(app, connection);
+        return Ok(());
+    }
+
+    spawn_locald()?;
+    let mut last_error = "daemon did not create its control endpoint".to_string();
+    for _ in 0..80 {
+        match connect_locald() {
+            Ok(connection) => {
+                install_locald_connection(app, connection);
+                return Ok(());
+            }
+            Err(error) => last_error = error,
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!("could not connect to lemma-locald: {last_error}"))
+}
+
 fn ensure_runtime_artifacts(app: &AppHandle) -> Result<(), String> {
     match ensure_runtime_artifacts_inner(app) {
         Ok(()) => Ok(()),
@@ -1293,6 +1337,12 @@ fn install_locald_connection(app: &AppHandle, connection: LocaldConnection) {
         }
         locald_gone(&handle);
     });
+    // Ask once on connect so the tray reports real state instead of "checking…"
+    // until something else happens to mention the Agent Host.
+    let _ = send_to_locald(
+        app,
+        json!({"cmd": "agent-host.status", "id": operation_id("agent-host-initial")}),
+    );
 }
 
 fn send_to_locald(app: &AppHandle, message: Value) -> Result<(), String> {
@@ -1387,6 +1437,11 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         }
     }
     let _ = app.emit_to("control", "lemma:locald-event", event.clone());
+    // Every reply that carries Agent Host state refreshes the tray, so a change
+    // made in one surface shows in the others without anyone polling.
+    if let Some(status) = event.get("agent_host").filter(|value| value.is_object()) {
+        refresh_agent_host_tray(app, status);
+    }
 
     let mut start_after_prepare = false;
     let (snapshot, schedule_terminal_recovery) = {
@@ -1927,7 +1982,11 @@ fn open_logs(window: Webview) -> Result<(), String> {
 }
 
 fn open_logs_impl() -> Result<(), String> {
-    let logs = locald_root();
+    reveal_path(&locald_root())
+}
+
+/// Hand a Lemma-owned path to the platform file handler.
+fn reveal_path(path: &std::path::Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let opener = "/usr/bin/open";
     #[cfg(target_os = "windows")]
@@ -1935,9 +1994,9 @@ fn open_logs_impl() -> Result<(), String> {
     #[cfg(all(unix, not(target_os = "macos")))]
     let opener = "xdg-open";
     Command::new(opener)
-        .arg(&logs)
+        .arg(path)
         .spawn()
-        .map_err(|e| format!("could not open {}: {e}", logs.display()))?;
+        .map_err(|e| format!("could not open {}: {e}", path.display()))?;
     Ok(())
 }
 
@@ -2302,7 +2361,7 @@ fn agent_host_action(window: Webview, app: AppHandle, action: String) -> Result<
     if !matches!(action.as_str(), "start" | "stop" | "restart") {
         return Err(format!("unknown Agent Host action {action:?}"));
     }
-    ensure_locald(&app)?;
+    ensure_agent_host_daemon(&app)?;
     send_to_locald(
         &app,
         json!({
@@ -2310,6 +2369,256 @@ fn agent_host_action(window: Webview, app: AppHandle, action: String) -> Result<
             "id": operation_id("agent-host"),
         }),
     )
+}
+
+/// Who may drive this computer's Agent Host.
+///
+/// Local settings qualifies as a trusted bundled page. So does the signed-in
+/// workspace, which is the whole point - the Agent Host page lives there so a
+/// cloud user gets it too - but only while it is on the origin this app
+/// actually navigated to. Sharing republishes that same workspace on a LAN or
+/// tunnel host, and a visitor loading it must not reach this Mac. The ACL in
+/// capabilities/workspace.json is the primary gate; this is the second one, in
+/// case a URL pattern is ever written too loosely.
+fn require_agent_host_caller(window: &Webview, app: &AppHandle) -> Result<(), String> {
+    if is_control_window_label(window.label()) {
+        return require_control_window(window);
+    }
+    if window.label() != "main" {
+        return Err("the Agent Host is controlled from Lemma, not from this window".into());
+    }
+    let url = window
+        .url()
+        .map_err(|error| format!("could not inspect the workspace: {error}"))?;
+    if trusted_native_asset_url(&url) {
+        return Ok(());
+    }
+    let expected = app_base_url(app)?;
+    let expected =
+        tauri::Url::parse(&expected).map_err(|_| "no workspace origin yet".to_string())?;
+    if url.origin() != expected.origin() {
+        return Err("only the signed-in Lemma workspace can control the Agent Host".into());
+    }
+    Ok(())
+}
+
+/// Connect to locald, starting it if needed, for Agent Host work only.
+///
+/// A cloud user has no local stack, so the shell never brings locald up for
+/// them - and without it nothing supervises the Agent Host, which is exactly
+/// the feature they want on their own machine. locald with no host pack does
+/// nothing but hold the socket and supervise the sidecar, so it is the right
+/// process for both modes; only the local one needs the runtime artifacts.
+fn ensure_agent_host_daemon(app: &AppHandle) -> Result<(), String> {
+    if current_mode(app) == "local" {
+        ensure_locald(app)
+    } else {
+        ensure_locald_without_host_pack(app)
+    }
+}
+
+#[tauri::command]
+fn agent_host_status(window: Webview, app: AppHandle, id: String) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    ensure_agent_host_daemon(&app)?;
+    send_to_locald(&app, json!({"cmd": "agent-host.status", "id": id}))
+}
+
+#[tauri::command]
+fn agent_host_set_enabled(window: Webview, app: AppHandle, enabled: bool) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    ensure_agent_host_daemon(&app)?;
+    let command = if enabled { "start" } else { "stop" };
+    send_to_locald(
+        &app,
+        json!({
+            "cmd": format!("agent-host.{command}"),
+            "id": operation_id("agent-host"),
+        }),
+    )
+}
+
+#[tauri::command]
+fn agent_host_pair(
+    window: Webview,
+    app: AppHandle,
+    url: String,
+    pairing_code: String,
+    name: String,
+) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    if url.trim().is_empty() || pairing_code.trim().is_empty() {
+        return Err("pairing needs a workspace URL and a pairing code".into());
+    }
+    ensure_agent_host_daemon(&app)?;
+    send_to_locald(
+        &app,
+        json!({
+            "cmd": "agent-host.pair",
+            "id": operation_id("agent-host-pair"),
+            "url": url.trim(),
+            "pairing_code": pairing_code.trim(),
+            "name": name.trim(),
+        }),
+    )
+}
+
+#[tauri::command]
+fn agent_host_unpair(
+    window: Webview,
+    app: AppHandle,
+    target_id: Option<String>,
+) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    ensure_agent_host_daemon(&app)?;
+    send_to_locald(
+        &app,
+        json!({
+            "cmd": "agent-host.unpair",
+            "id": operation_id("agent-host-unpair"),
+            "target_id": target_id.unwrap_or_default(),
+        }),
+    )
+}
+
+#[tauri::command]
+fn agent_host_refresh(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    ensure_agent_host_daemon(&app)?;
+    send_to_locald(
+        &app,
+        json!({
+            "cmd": "agent-host.refresh",
+            "id": operation_id("agent-host-refresh"),
+        }),
+    )
+}
+
+/// Whether this machine has an Agent Host worth supervising, read from the
+/// files locald itself uses, so the shell can decide before locald exists.
+fn agent_host_wants_to_run() -> bool {
+    let root = locald_root();
+    let data_dir = root.parent().unwrap_or(&root).join("agent-host");
+    if let Ok(raw) = std::fs::read_to_string(data_dir.join("supervisor.json")) {
+        if let Ok(preference) = serde_json::from_str::<Value>(&raw) {
+            if let Some(enabled) = preference.get("enabled").and_then(Value::as_bool) {
+                return enabled;
+            }
+        }
+    }
+    let Ok(raw) = std::fs::read_to_string(data_dir.join("config.json")) else {
+        return false;
+    };
+    serde_json::from_str::<Value>(&raw)
+        .ok()
+        .and_then(|config| {
+            config
+                .get("targets")
+                .and_then(Value::as_array)
+                .map(|targets| !targets.is_empty())
+        })
+        .unwrap_or(false)
+}
+
+/// Shared with the CLI-managed host, so both write the same file.
+fn agent_host_log_path() -> PathBuf {
+    let root = locald_root();
+    root.parent()
+        .unwrap_or(&root)
+        .join("agent-host/agent-host.log")
+}
+
+#[tauri::command]
+fn agent_host_open_log(window: Webview, app: AppHandle) -> Result<(), String> {
+    require_agent_host_caller(&window, &app)?;
+    let log = agent_host_log_path();
+    if !log.is_file() {
+        return Err("the Agent Host has not written a log yet".into());
+    }
+    reveal_path(&log)
+}
+
+/// Flip the Agent Host from the tray, without needing a window open.
+fn toggle_agent_host_from_tray(app: &AppHandle) -> Result<(), String> {
+    let enabled = {
+        let shell: State<Shell> = app.state();
+        let ui = shell.ui.lock().unwrap();
+        ui.agent_host_running
+    };
+    ensure_agent_host_daemon(app)?;
+    let command = if enabled { "stop" } else { "start" };
+    send_to_locald(
+        app,
+        json!({
+            "cmd": format!("agent-host.{command}"),
+            "id": operation_id("agent-host-tray"),
+        }),
+    )
+}
+
+/// What the tray says about the Agent Host.
+///
+/// Reachability, not liveness. A running host that is unpaired or cannot reach
+/// its workspace takes no work, so reporting it as simply "on" would be a lie
+/// the user only discovers when a run never starts.
+fn agent_host_tray_label(available: bool, running: bool, paired: bool, connected: bool) -> String {
+    if !available {
+        "Agent Host: not installed".into()
+    } else if !running {
+        "Agent Host: off".into()
+    } else if !paired {
+        "Agent Host: not paired".into()
+    } else if connected {
+        "Agent Host: connected".into()
+    } else {
+        "Agent Host: reconnecting…".into()
+    }
+}
+
+/// Rewrite the tray's Agent Host entries from a status payload.
+///
+/// The tray is built once and never rebuilt, so without this it would keep
+/// claiming whatever was true at launch.
+fn refresh_agent_host_tray(app: &AppHandle, status: &Value) {
+    let available = status.get("available").and_then(Value::as_bool) == Some(true);
+    let running = status.get("running").and_then(Value::as_bool) == Some(true);
+    let paired = status.get("paired").and_then(Value::as_bool) == Some(true);
+    let connected = status
+        .get("targets")
+        .and_then(Value::as_array)
+        .is_some_and(|targets| {
+            targets.iter().any(|target| {
+                target.get("connection_state").and_then(Value::as_str) == Some("ONLINE")
+            })
+        });
+
+    let state = agent_host_tray_label(available, running, paired, connected);
+
+    {
+        let shell: State<Shell> = app.state();
+        shell.ui.lock().unwrap().agent_host_running = running;
+    }
+    let shell: State<Shell> = app.state();
+    let items = shell.tray_agent_host.lock().unwrap();
+    let Some((state_item, toggle_item)) = items.as_ref() else {
+        return;
+    };
+    let _ = state_item.set_text(state);
+    let _ = toggle_item.set_text(if running {
+        "Turn Agent Host Off"
+    } else {
+        "Turn Agent Host On"
+    });
+    let _ = toggle_item.set_enabled(available);
+    if let Some(tray) = app.tray_by_id("lemma-tray") {
+        let _ = tray.set_tooltip(Some(if running && connected {
+            "Lemma · Agent Host connected"
+        } else if running {
+            "Lemma · Agent Host starting"
+        } else {
+            "Lemma"
+        }));
+    }
 }
 
 #[tauri::command]
@@ -2740,6 +3049,36 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         Some("CmdOrCtrl+Alt+I"),
     )?;
     let control_item = MenuItem::with_id(app, "control", "Local settings…", true, None::<&str>)?;
+    // Disabled: a label, not an action. The tray is where you glance at whether
+    // this computer is currently able to run coding agents.
+    let agent_host_state_item = MenuItem::with_id(
+        app,
+        "agent-host-state",
+        "Agent Host: checking…",
+        false,
+        None::<&str>,
+    )?;
+    let agent_host_toggle_item = MenuItem::with_id(
+        app,
+        "agent-host-toggle",
+        "Turn Agent Host On",
+        true,
+        None::<&str>,
+    )?;
+    let agent_host_log_item = MenuItem::with_id(
+        app,
+        "agent-host-log",
+        "Open Agent Host Log",
+        true,
+        None::<&str>,
+    )?;
+    {
+        let shell: State<Shell> = app.state();
+        *shell.tray_agent_host.lock().unwrap() = Some((
+            agent_host_state_item.clone(),
+            agent_host_toggle_item.clone(),
+        ));
+    }
     let quit_item = MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?;
     let quit_and_stop_item = MenuItem::with_id(
         app,
@@ -2764,6 +3103,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &mode_item,
             &autostart_item,
+            &PredefinedMenuItem::separator(app)?,
+            &agent_host_state_item,
+            &agent_host_toggle_item,
+            &agent_host_log_item,
+            &PredefinedMenuItem::separator(app)?,
             &control_item,
             &logs_item,
             &devtools_item,
@@ -2827,6 +3171,12 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
                 "control" => {
                     let _ = show_control_center(&app);
+                }
+                "agent-host-toggle" => {
+                    let _ = toggle_agent_host_from_tray(&app);
+                }
+                "agent-host-log" => {
+                    let _ = reveal_path(&agent_host_log_path());
                 }
                 "logs" => {
                     let _ = open_logs_impl();
@@ -2967,6 +3317,12 @@ fn main() {
             repair_runtime,
             control_snapshot,
             agent_host_action,
+            agent_host_status,
+            agent_host_set_enabled,
+            agent_host_pair,
+            agent_host_unpair,
+            agent_host_refresh,
+            agent_host_open_log,
             apply_operator_config,
             sharing_action,
             close_local_settings,
@@ -2974,6 +3330,16 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            if connection_mode() == "hosted" && agent_host_wants_to_run() {
+                // "Runs while Lemma is open" has to hold for a cloud workspace
+                // too, and locald is what supervises the sidecar. An unpaired
+                // or switched-off machine still gets no daemon at all.
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let _ = ensure_locald_without_host_pack(&handle);
+                });
+            }
 
             if let Some(capability) = overridden_workspace_capability() {
                 // capabilities/workspace.json can only name the shipped origins.
@@ -3156,11 +3522,58 @@ mod tests {
     }
 
     #[test]
+    fn the_tray_reports_reachability_rather_than_liveness() {
+        // Each of these is a live process that cannot take work, and the old
+        // process-only status called them all "running".
+        assert_eq!(
+            agent_host_tray_label(true, true, false, false),
+            "Agent Host: not paired",
+        );
+        assert_eq!(
+            agent_host_tray_label(true, true, true, false),
+            "Agent Host: reconnecting…",
+        );
+        assert_eq!(
+            agent_host_tray_label(true, true, true, true),
+            "Agent Host: connected",
+        );
+        assert_eq!(
+            agent_host_tray_label(true, false, true, false),
+            "Agent Host: off"
+        );
+        // A build without the sidecar cannot be switched on, so say so rather
+        // than offering a toggle that always fails.
+        assert_eq!(
+            agent_host_tray_label(false, false, false, false),
+            "Agent Host: not installed",
+        );
+    }
+
+    #[test]
     fn the_workspace_origin_reaches_local_settings_and_nothing_else() {
         // The workspace is a remote origin to Tauri - locald serves it over
         // http, and the hosted build loads lemma.work - so without this
         // capability its Local settings button is silently rejected by the ACL.
-        assert_eq!(granted("workspace"), vec!["allow-open-control-center"]);
+        // It gets Local settings and this computer's Agent Host, and nothing
+        // that touches the local stack.
+        let workspace = granted("workspace");
+        assert!(workspace.contains(&"allow-open-control-center".to_string()));
+        assert!(workspace.iter().all(|permission| {
+            permission == "allow-open-control-center" || permission.starts_with("allow-agent-host-")
+        }));
+        for forbidden in [
+            "allow-apply-operator-config",
+            "allow-sharing-action",
+            "allow-prepare-runtime",
+            "allow-repair-runtime",
+            "allow-stop",
+            "core:default",
+        ] {
+            assert!(
+                !workspace.contains(&forbidden.to_string()),
+                "the workspace origin must not be granted {forbidden}",
+            );
+        }
 
         let patterns: Vec<tauri::utils::acl::RemoteUrlPattern> = capability("workspace")["remote"]
             ["urls"]
