@@ -1,6 +1,7 @@
 'use client';
 
 import { use } from 'react';
+import { useSearchParams } from 'next/navigation';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { ModelsSettings } from '@/components/agents/models-settings';
@@ -9,6 +10,7 @@ import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { useAgentRuntimes } from '@/lib/hooks/use-agent-runtime';
+import { normalizeInternalReturnPath } from '@/lib/navigation/settings-return';
 import { useOrganizationDetails } from '@/lib/hooks/use-organizations';
 
 export default function OrganizationAgentRuntimesPage({ params }: { params: Promise<{ id: string }> }) {
@@ -21,6 +23,8 @@ export default function OrganizationAgentRuntimesPage({ params }: { params: Prom
 
 function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id: string }> }) {
     const { id: organizationId } = use(params);
+    const searchParams = useSearchParams();
+    const returnPath = normalizeInternalReturnPath(searchParams.get('returnTo'));
     const { data: organization } = useOrganizationDetails(organizationId);
     const {
         data: runtimeCatalog,
@@ -33,8 +37,8 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
         <PlainPageShell
             title="Models"
             icon={<ProductIcon kind="settings" size="sm" />}
-            backHref="/home"
-            backLabel="Home"
+            backHref={returnPath || '/home'}
+            backLabel={returnPath ? 'Back to pod' : 'Home'}
             meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={organizationId} />}
             contentWidthClassName="max-w-6xl"

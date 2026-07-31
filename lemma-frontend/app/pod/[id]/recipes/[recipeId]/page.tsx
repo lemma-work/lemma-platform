@@ -8,7 +8,7 @@ import { ProtectedRoute } from '@/components/auth/protected-route';
 import { RecipeReadme } from '@/components/recipes/recipe-readme';
 import { renderRecipeIcon } from '@/components/recipes/recipe-icon';
 import { StarterPreview } from '@/components/recipes/starter-preview';
-import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceHeroTitle, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { Button } from '@/components/ui/button';
 import { usePod } from '@/lib/hooks/use-pods';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
@@ -40,9 +40,8 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
                 <RecipeDetail podId={podId} recipe={recipe} />
             ) : (
                 <ResourceIndexShell>
-                    <ResourceIndexHeader
+                    <ResourceHeader
                         title="Starter not found"
-                        productIconKind="apps"
                         backHref={`/pod/${podId}/recipes`}
                         backLabel="Starters"
                     />
@@ -83,11 +82,11 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title={recipe.name}
-                productIconKind="apps"
                 backHref={backHref}
                 backLabel={theme?.name || 'Starters'}
+                titleOwner="page"
                 actions={recipe.source.kind === 'repo' ? (
                     <a
                         href={recipe.source.github}
@@ -113,7 +112,9 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
                                     <p className="type-eyebrow-mono text-[var(--text-tertiary)]">
                                         {categoryLabel || (isPrompt ? 'Starter' : 'Published kit')}
                                     </p>
-                                    <h1 className="mt-1 text-2xl font-semibold tracking-normal text-[var(--text-primary)]">{recipe.name}</h1>
+                                    <ResourceHeroTitle className="mt-1 text-2xl font-semibold tracking-normal text-[var(--text-primary)]">
+                                        {recipe.name}
+                                    </ResourceHeroTitle>
                                 </div>
                             </div>
                             <p className="mt-3.5 max-w-2xl text-base font-medium leading-6 text-[var(--text-primary)]">{recipe.kicker}</p>

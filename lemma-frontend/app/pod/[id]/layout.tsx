@@ -33,6 +33,7 @@ import {
 } from "@/lib/assistant/conversation-presentation";
 import type { PodRoutePolicyKey } from "@/lib/authz/pod-permissions";
 import { cn } from "@/lib/utils";
+import { barOwnsTitle, resolveTabLabel } from "@/lib/pods/topbar-title";
 import type { Pod } from "@/lib/types";
 import type { PodContext } from "@/lib/types/ai";
 
@@ -102,9 +103,6 @@ function getPodSectionLabel(podId: string, pathname: string) {
         case "files":
         case "docs":
             return "Docs";
-        case "channels":
-        case "surfaces":
-            return "Surfaces";
         case "connectors":
             return "Connectors";
         case "settings":
@@ -128,7 +126,13 @@ function getPodSectionLabel(podId: string, pathname: string) {
 }
 
 function getPodRoutePolicyKey(podId: string, pathname: string): PodRoutePolicyKey | null {
-    const section = pathname.replace(`/pod/${podId}`, "").split("/").filter(Boolean)[0];
+    const segments = pathname.replace(`/pod/${podId}`, "").split("/").filter(Boolean);
+    const section = segments[0];
+
+    // The automation ledger sits under settings but is about schedules, and the
+    // people who own schedules are builders, not pod admins. Gate it on what it
+    // actually shows.
+    if (section === "settings" && segments[1] === "automation") return "schedules";
 
     switch (section) {
         case undefined:
@@ -152,9 +156,6 @@ function getPodRoutePolicyKey(podId: string, pathname: string): PodRoutePolicyKe
             return "connectors";
         case "app":
             return "apps";
-        case "channels":
-        case "surfaces":
-            return "surfaces";
         case "conversations":
             return "conversations";
         case "settings":
@@ -217,15 +218,9 @@ function getPodScreenLabel(podId: string, pathname: string, searchParams: Search
         return formatDisplayName(safeDecodeSegment(detail));
     }
 
-    if (section === "schedules" && detail === "new") return "New schedule";
-
     if (section === "forms" && detail === "view") return "Agent Needs Your Input";
 
     if (section === "widgets" && detail === "view") return "Presented Widget";
-
-    if ((section === "surfaces" || section === "channels") && detail === "new") {
-        return "New surface";
-    }
 
     if (section === "files" || section === "docs") {
         const file = getPathBasename(searchParams.get("file"));
@@ -283,6 +278,10 @@ function PodShell({
     } = usePodLayout();
     const { pages: appPages, isLoading: appPagesLoading } = useApp();
     const [topbar, setTopbar] = useState<PodTopbarState>({});
+    // Reported by the active page's `ResourceHeroTitle`. Only consulted when a
+    // route hands the title to the page (`titleOwner: 'page'`); it stays false
+    // for every other route, which keeps the bar title on unconditionally.
+    const [heroTitleVisible, setHeroTitleVisible] = useState(false);
     const [isPresentedClosing, setIsPresentedClosing] = useState(false);
     const [conversationStageFrameContext, setConversationStageFrameContext] = useState<"checking" | "embedded" | "top-level">("checking");
     const handledAssistantMessageRef = useRef<string | null>(null);
@@ -325,7 +324,7 @@ function PodShell({
     const isConversationStageEmbed =
         searchParams.get(CONVERSATION_STAGE_EMBED_PARAM) === CONVERSATION_STAGE_EMBED_VALUE;
     const sectionLabel = getPodSectionLabel(pod.id, pathname);
-    const topbarRouteTitle = typeof topbar.title === "string" ? topbar.title.trim() : "";
+    const topbarRouteTitle = resolveTabLabel(topbar.tabTitle, topbar.title);
     const workspaceTabs = usePodWorkspaceTabs({
         enabled: !isConversationStageEmbed,
         podId: pod.id,
@@ -380,7 +379,8 @@ function PodShell({
     const canUseSettings = podAccess.canAccessRoute("settings");
     const topbarContextValue = useMemo(() => ({
         setTopbar,
-    }), [setTopbar]);
+        setHeroTitleVisible,
+    }), [setTopbar, setHeroTitleVisible]);
     // Focus routes own the full surface and have their own chrome, so fullscreen
     // is no longer gated by the assistant — on focus routes the assistant yields
     // to a launcher instead of docking, so it can never double up the topbar.
@@ -396,6 +396,16 @@ function PodShell({
     const backTarget = topbar.backHref && topbar.backLabel
         ? { href: topbar.backHref, label: topbar.backLabel }
         : null;
+    // Whether the tab strip directly above the bar is already printing this
+    // resource's name. Compared against the strip's own label rather than the
+    // bar title, because `titleOwner: 'page'` lets those diverge.
+    const tabStripNamesResource = Boolean(
+        topbarRouteTitle &&
+            workspaceTabs.tabs.some(
+                (tab) => tab.id === workspaceTabs.activeTabId && tab.title === topbarRouteTitle,
+            ),
+    );
+    const showBarTitle = barOwnsTitle(topbar.titleOwner, heroTitleVisible, tabStripNamesResource);
 
     useEffect(() => {
         writeLastOpenedPodId(pod.id);
@@ -698,8 +708,25 @@ function PodShell({
                                     {backTarget.label}
                                 </Link>
                             ) : null}
-                            <div className="pod-shell-topbar-title min-w-0 truncate text-base font-semibold leading-7 text-[var(--text-primary)]">
-                                {topbar.title || currentScreenLabel || sectionLabel}
+                            <div
+                                className={cn(
+                                    "pod-shell-topbar-title flex min-w-0 items-center gap-2 text-base font-semibold leading-7 text-[var(--text-primary)]",
+                                    "transition-opacity duration-[var(--dur-panel)] ease-[var(--ease-standard)]",
+                                    // Kept mounted rather than removed, so handing the
+                                    // title back and forth cross-fades instead of
+                                    // shunting the mode switch and actions sideways.
+                                    showBarTitle ? "opacity-100" : "pointer-events-none opacity-0"
+                                )}
+                                aria-hidden={!showBarTitle}
+                            >
+                                {topbar.icon ? (
+                                    <span className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--text-tertiary)]">
+                                        {topbar.icon}
+                                    </span>
+                                ) : null}
+                                <span className="min-w-0 truncate">
+                                    {topbar.title || currentScreenLabel || sectionLabel}
+                                </span>
                             </div>
                             {topbar.switcher ? <span className="shrink-0">{topbar.switcher}</span> : null}
                             {topbar.meta ? (

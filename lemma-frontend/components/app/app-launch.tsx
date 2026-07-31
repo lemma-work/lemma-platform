@@ -6,7 +6,7 @@ import { useTheme } from 'next-themes';
 import { Copy, ExternalLink, RefreshCw, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { ResourceDetailHeader } from '@/components/pod/resource-layout';
+import { ResourceHeader } from '@/components/pod/resource-layout';
 import { ResourceShareButton, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -97,9 +97,8 @@ export function AppFrame({
 
     return (
         <div className="embedded-canvas relative flex h-full w-full flex-col overflow-hidden text-[var(--text-primary)]">
-            <ResourceDetailHeader
+            <ResourceHeader
                 title={title}
-                productIconKind="apps"
                 backHref={`/pod/${podId}/app/pages`}
                 backLabel="Apps"
                 actions={(

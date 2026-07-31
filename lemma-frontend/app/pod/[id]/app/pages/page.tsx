@@ -10,7 +10,7 @@ import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { StepLoader } from '@/components/brand/loader';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { RecipeCard } from '@/components/recipes/recipe-card';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
@@ -118,9 +118,8 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title="Apps"
-                productIconKind="apps"
                 meta={<ConceptHint concept="app" />}
                 actions={(
                     canCreateApp ? (
@@ -166,7 +165,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             <button
                                 type="button"
                                 onClick={createAppWithAssistant}
-                                className="resource-index-card custom-focus-ring group flex min-h-[7.5rem] flex-col items-start justify-center gap-2 rounded-lg border border-dashed p-4 text-left transition-colors hover:border-[var(--border-strong)]"
+                                className="resource-index-card resource-option-button custom-focus-ring group flex min-h-[7.5rem] flex-col items-start justify-center gap-2 rounded-lg border border-dashed p-4 text-left transition-colors hover:border-[var(--border-strong)]"
                             >
                                 <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-2)] text-[var(--text-secondary)]">
                                     <Plus className="h-4 w-4" />

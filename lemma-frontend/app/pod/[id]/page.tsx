@@ -846,7 +846,8 @@ function conversationToAgentItem(
 function getScheduleHref(podId: string, schedule: { workflow_name?: string | null; agent_name?: string | null }, agentName?: string, workflowName?: string) {
     if (agentName || schedule.agent_name) return `/pod/${podId}/agents/${encodeURIComponent(agentName || schedule.agent_name || '')}`;
     if (workflowName || schedule.workflow_name) return `/pod/${podId}/flows/${encodeURIComponent(workflowName || schedule.workflow_name || '')}`;
-    return `/pod/${podId}/schedules`;
+    // A trigger with no resolvable target only exists on the pod-wide ledger.
+    return `/pod/${podId}/settings/automation`;
 }
 
 function formatRelativeTime(value: string | null | undefined) {

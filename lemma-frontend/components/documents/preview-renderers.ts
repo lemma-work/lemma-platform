@@ -1,13 +1,21 @@
 export type DocumentPreviewType = 'markdown' | 'json' | 'html' | 'code' | 'image' | 'pdf' | 'office' | 'unsupported';
 
+export interface PdfPreviewPage {
+    src: string;
+    displayWidth: number;
+    displayHeight: number;
+}
+
 export interface PdfPreviewData {
-    pages: string[];
+    pages: PdfPreviewPage[];
     totalPages: number;
     truncated: boolean;
 }
 
 const MAX_PDF_PREVIEW_PAGES = 24;
-const PDF_RENDER_SCALE = 1.25;
+const PDF_DISPLAY_SCALE = 1.25;
+const MIN_PDF_RENDER_PIXEL_RATIO = 1.5;
+const MAX_PDF_RENDER_PIXEL_RATIO = 2.5;
 const CODE_FILE_EXTENSIONS = new Set([
     'asc',
     'asm',
@@ -202,6 +210,16 @@ export async function renderDocxPreview(blob: Blob): Promise<DocxPreviewData> {
     };
 }
 
+export function pdfRenderPixelRatio(devicePixelRatio?: number): number {
+    const ratio = typeof devicePixelRatio === 'number' && Number.isFinite(devicePixelRatio)
+        ? devicePixelRatio
+        : 1;
+    return Math.min(
+        MAX_PDF_RENDER_PIXEL_RATIO,
+        Math.max(MIN_PDF_RENDER_PIXEL_RATIO, ratio),
+    );
+}
+
 export async function renderPdfPreview(blob: Blob): Promise<PdfPreviewData> {
     const pdfjs = await import('pdfjs-dist');
 
@@ -219,20 +237,34 @@ export async function renderPdfPreview(blob: Blob): Promise<PdfPreviewData> {
     try {
         const totalPages = pdf.numPages;
         const targetPages = Math.min(totalPages, MAX_PDF_PREVIEW_PAGES);
-        const pages: string[] = [];
+        const pages: PdfPreviewPage[] = [];
+        const renderPixelRatio = pdfRenderPixelRatio(
+            typeof window === 'undefined' ? undefined : window.devicePixelRatio,
+        );
 
         for (let pageIndex = 1; pageIndex <= targetPages; pageIndex += 1) {
             const page = await pdf.getPage(pageIndex);
-            const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+            const displayViewport = page.getViewport({ scale: PDF_DISPLAY_SCALE });
+            const renderViewport = page.getViewport({
+                scale: PDF_DISPLAY_SCALE * renderPixelRatio,
+            });
             const canvas = document.createElement('canvas');
             const context = canvas.getContext('2d');
             if (!context) continue;
 
-            canvas.width = Math.ceil(viewport.width);
-            canvas.height = Math.ceil(viewport.height);
+            canvas.width = Math.ceil(renderViewport.width);
+            canvas.height = Math.ceil(renderViewport.height);
 
-            await page.render({ canvas, canvasContext: context, viewport }).promise;
-            pages.push(canvas.toDataURL('image/png'));
+            await page.render({
+                canvas,
+                canvasContext: context,
+                viewport: renderViewport,
+            }).promise;
+            pages.push({
+                src: canvas.toDataURL('image/png'),
+                displayWidth: Math.ceil(displayViewport.width),
+                displayHeight: Math.ceil(displayViewport.height),
+            });
         }
 
         return {

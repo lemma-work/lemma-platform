@@ -28,6 +28,108 @@ export type SetupStep =
   | "connect"
   | "start";
 export type BuildPath = "ai" | "template" | "code";
+export type OnboardingStartPath =
+  | "telegram"
+  | "chatgpt"
+  | "internal-app"
+  | "agent-skin"
+  | "coding-agents"
+  | "templates";
+export type OnboardingStartDetails = {
+  brief: string;
+  secondaryBrief?: string;
+  codingAgent?: CodingAgentKind;
+};
+export type CodingAgentKind = "codex" | "claude-code" | "opencode";
+
+export function codingAgentStarterPrompt(agent: CodingAgentKind) {
+  const agentName =
+    agent === "claude-code"
+      ? "Claude Code"
+      : agent === "opencode"
+        ? "OpenCode"
+        : "Codex";
+
+  return `Use Lemma as the durable workspace for this project.
+
+First inspect this repository and explain, in one short paragraph, the most useful Lemma pod this codebase could become. Then:
+
+1. Check whether the Lemma CLI and Lemma builder skill are available. If either is missing, show me the exact setup step and wait.
+2. Create or select one pod for this project. Do not create duplicates.
+3. Model the durable state, files, functions, agents, workflows, schedules, and app surfaces the product actually needs.
+4. Build the smallest complete working path, seed believable data, and verify it end to end.
+5. Keep the repository as the codebase and Lemma as its durable runtime and workspace. Finish by telling me what changed and how to use it.
+
+Ask only one question if the repository does not make the intended outcome clear. Work through the ${agentName} session you are already running in.`;
+}
+
+export function startPathLaunchConfig(
+  path: Exclude<OnboardingStartPath, "templates" | "coding-agents">,
+  details: OnboardingStartDetails,
+) {
+  const brief = details.brief.trim();
+  const secondaryBrief = details.secondaryBrief?.trim();
+
+  if (path === "telegram") {
+    return {
+      intent: "telegram_agent_companion_app",
+      message: [
+        "Build a Telegram agent and a companion app inside this pod.",
+        `Use these as the agent's custom operating instructions: ${brief}`,
+        secondaryBrief
+          ? `The companion app should keep this organized: ${secondaryBrief}`
+          : "The companion app should turn the agent's messages and actions into a useful, persistent view.",
+        "Create the smallest working version, with believable sample data. Then guide me through connecting Telegram. Do not claim Telegram is connected until the connector is actually authorized.",
+      ].join("\n\n"),
+    };
+  }
+
+  if (path === "chatgpt") {
+    return {
+      intent: "external_ai_pod_mcp",
+      message: [
+        "Set up this pod so ChatGPT or Claude can keep real work state updated through the pod-scoped Lemma MCP surface.",
+        `The work that should stay current is: ${brief}`,
+        "Create the durable tables, files, and views needed for that state, seed a useful first version, and preserve clear ownership and history.",
+        "Then guide me through connecting my external AI client to this pod's MCP surface. Do not pretend the external connection is complete before it is authorized and tested.",
+      ].join("\n\n"),
+    };
+  }
+
+  if (path === "agent-skin") {
+    const agentName =
+      details.codingAgent === "claude-code"
+        ? "Claude Code"
+        : details.codingAgent === "opencode"
+          ? "OpenCode"
+          : "Codex";
+
+    return {
+      intent: "local_agent_workspace_skin",
+      message: [
+        `Build a persistent Lemma workspace skin around ${agentName}.`,
+        `The state and controls that should remain visible between local-agent sessions are: ${brief}`,
+        secondaryBrief
+          ? `People should be able to steer the agent through: ${secondaryBrief}`
+          : "Give people a clear place to inspect state, steer the work, and revisit outputs without reading a terminal transcript.",
+        "Keep the local coding agent as the executor. Build the durable state, app surfaces, run history, and artifacts around it in Lemma, using the daemon and MCP boundary where supported.",
+        `Then guide me through connecting ${agentName}. Do not claim the local agent is connected until its runtime is available, authorized, and tested.`,
+      ].join("\n\n"),
+    };
+  }
+
+  return {
+    intent: "internal_ai_app",
+    message: [
+      "Build an internal AI app inside this pod.",
+      `The team should be able to: ${brief}`,
+      secondaryBrief
+        ? `The primary users are: ${secondaryBrief}`
+        : "Keep the first version focused on one clear user and one repeated decision or workflow.",
+      "Put the app in front and the agents behind it. Create the durable state, approval points, and believable sample data needed to make the first version immediately usable.",
+    ].join("\n\n"),
+  };
+}
 
 // Who the user is setting this up for. Drives how much workspace setup we do
 // up front (solo users never see the org/approvals step) and which starting
@@ -48,8 +150,17 @@ export function resolveOnboardingStartStep(
   storedStep: SetupStep | null | undefined,
   needsProfile: boolean,
 ): SetupStep {
-  if (storedStep && storedStep !== "boot") return storedStep;
-  return needsProfile ? "identity" : "audience";
+  if (
+    needsProfile ||
+    !storedStep ||
+    storedStep === "boot" ||
+    storedStep === "identity"
+  ) {
+    return "identity";
+  }
+
+  // Older drafts from the longer team-first flow resume at first value.
+  return "start";
 }
 
 export function previousOnboardingStep(
@@ -68,7 +179,7 @@ export function previousOnboardingStep(
 // matches the path the user is actually on.
 export function setupStepsForAudience(audience: Audience | null): SetupStep[] {
   if (audience === "personal") {
-    return ["boot", "identity", "audience", "connect", "start"];
+    return ["identity", "start"];
   }
   if (audience === "team") {
     return [
@@ -384,12 +495,73 @@ export function inferFullName(
     .join(" ");
 }
 
+export function hasUsableProfileName(
+  profile?: {
+    first_name?: string | null;
+    full_name?: string | null;
+  } | null,
+) {
+  return Boolean(profile?.first_name?.trim() || profile?.full_name?.trim());
+}
+
 export function splitName(value: string) {
   const parts = value.trim().split(/\s+/).filter(Boolean);
   return {
     firstName: parts[0] || "",
     lastName: parts.slice(1).join(" "),
   };
+}
+
+const ORGANIZATION_NAME_ADJECTIVES = [
+  "Amber",
+  "Bright",
+  "Cedar",
+  "Clear",
+  "Copper",
+  "Golden",
+  "Indigo",
+  "North",
+  "Olive",
+  "Open",
+  "Quiet",
+  "Silver",
+  "Wild",
+] as const;
+
+const ORGANIZATION_NAME_NOUNS = [
+  "Atlas",
+  "Bridge",
+  "Compass",
+  "Field",
+  "Forge",
+  "Garden",
+  "Grove",
+  "Harbor",
+  "Lantern",
+  "Meadow",
+  "Orchard",
+  "Signal",
+  "Studio",
+  "Summit",
+] as const;
+
+export function generatedOrganizationName(seed: string, attempt = 0) {
+  const normalizedSeed = seed.trim().toLowerCase() || "lemma";
+  let hash = 2166136261;
+  for (const character of normalizedSeed) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  const adjective =
+    ORGANIZATION_NAME_ADJECTIVES[
+      Math.abs(hash + attempt * 17) % ORGANIZATION_NAME_ADJECTIVES.length
+    ];
+  const noun =
+    ORGANIZATION_NAME_NOUNS[
+      Math.abs((hash >>> 8) + attempt * 29) % ORGANIZATION_NAME_NOUNS.length
+    ];
+  return `${adjective} ${noun}`;
 }
 
 const COMMON_COUNTRY_CODE_SECOND_LEVEL_DOMAINS = new Set([
