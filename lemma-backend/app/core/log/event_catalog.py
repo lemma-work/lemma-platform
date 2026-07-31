@@ -78,6 +78,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.adapter.teams_inbound_event_enrichment_skipped.diagnostic': EventSpec('debug', frozenset({'team_id', 'tenant_id'})),
     'agent_surfaces.adapter.teams_typing_indicator_best_effort.observed': EventSpec('debug', frozenset()),
     'agent_surfaces.available_surfaces_builder.surface_connector_s_has_no.diagnostic': EventSpec('debug', frozenset({'connector_id'})),
+    'agent_surfaces.available_surfaces_builder.system_claim_lookup_failed.diagnostic': EventSpec('debug', frozenset({'platform'})),
     'agent_surfaces.client.teams_could_not_resolve_team.diagnostic': EventSpec('debug', frozenset({'raw_team_id', 'status'})),
     'agent_surfaces.client.teams_graph_team_resolution_missing.diagnostic': EventSpec('debug', frozenset({'raw_team_id'})),
     'agent_surfaces.client.teams_team_details_raw_team.diagnostic': EventSpec('debug', frozenset({'raw_team_id'})),

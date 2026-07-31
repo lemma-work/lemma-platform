@@ -9,12 +9,10 @@ import { FunctionEditor } from '@/components/functions/function-editor';
 import { PodHeaderMetrics, PodPageHeader } from '@/components/pod/pod-page-header';
 import { showResourceCreatedToast, showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useCreateFunction } from '@/lib/hooks/use-functions';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { Function as FunctionType, FunctionStatus } from '@/lib/types';
 
-type FunctionPanelTab = 'code' | 'config' | 'schemas' | 'runs';
 
 export default function NewFunctionPage({
     params,
@@ -25,7 +23,6 @@ export default function NewFunctionPage({
     const router = useRouter();
     const podAccess = usePodAccess(podId);
     const createFunction = useCreateFunction();
-    const [panelTab, setPanelTab] = useState<FunctionPanelTab>('code');
 
     const [localData, setLocalData] = useState<Partial<FunctionType>>({
         name: 'untitled_function',
@@ -104,7 +101,6 @@ async def untitled_function(ctx: FunctionContext, data: FunctionInput) -> Functi
         <div className="h-full flex flex-col bg-transparent">
             <PodPageHeader
                 podId={podId}
-                variant="bar"
                 title={localData.name || 'Untitled Function'}
                 eyebrow="Function builder"
                 backHref={`/pod/${podId}/functions`}
@@ -112,18 +108,7 @@ async def untitled_function(ctx: FunctionContext, data: FunctionInput) -> Functi
                 icon={<FileCode className="h-3.5 w-3.5" />}
                 meta={<PodHeaderMetrics items={[
                     { label: 'Status', value: (localData.name || '').trim() ? 'Ready to create' : 'Draft', tone: (localData.name || '').trim() ? 'ready' : 'muted' },
-                    { label: 'Panel', value: panelTab },
-                ]} />}
-                tabs={(
-                        <Tabs value={panelTab} onValueChange={(value) => setPanelTab(value as FunctionPanelTab)} className="min-w-0">
-                            <TabsList className="lemma-header-tabs flex-nowrap">
-                                <TabsTrigger value="code" className="lemma-header-tab">Code</TabsTrigger>
-                                <TabsTrigger value="config" className="lemma-header-tab">Config</TabsTrigger>
-                                <TabsTrigger value="schemas" className="lemma-header-tab">Schemas</TabsTrigger>
-                                <TabsTrigger value="runs" className="lemma-header-tab">Runs</TabsTrigger>
-                            </TabsList>
-                        </Tabs>
-                )}
+                                    ]} />}
                 actions={(
                     <Button
                         onClick={handleCreate}
@@ -141,11 +126,7 @@ async def untitled_function(ctx: FunctionContext, data: FunctionInput) -> Functi
                 <FunctionEditor
                     podId={podId}
                     functionData={localData as FunctionType}
-                    panelTab={panelTab}
-                    onPanelTabChange={setPanelTab}
                     onUpdate={handleUpdate}
-                    isUpdating={false}
-                    hideHeader
                     isNameEditable
                     shareUrl={undefined}
                 />

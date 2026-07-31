@@ -2,9 +2,7 @@
 
 <img src="docs/Assets/Banner/lemma-brand-loop.gif" alt="Apps, agents, and data connected through Lemma to WhatsApp, Telegram, Slack, and Microsoft Teams" width="100%">
 
-**Build AI around the way your team works.**
-
-Create a custom harness with its own state, agents, workflows, permissions, and screens. Add your teammates and use it wherever the work already happens.
+**Build the AI software your team needs. Run it on Lemma.**
 
 ![License](https://img.shields.io/github/license/lemma-work/lemma-platform)
 ![Release](https://img.shields.io/github/v/release/lemma-work/lemma-platform)
@@ -20,7 +18,11 @@ Website → **[lemma.work](https://lemma.work)**
 
 ---
 
-A Lemma harness is a working system built around one job—not a prompt wrapped in a chatbox. Your team works through purpose-built screens and the tools they already use. Agents work against the same state, follow the same workflows and permissions, and keep the job moving in the background.
+The exact software a team needs usually does not exist. Coding agents can now create it.
+
+But generated code is not yet working team software—it still needs shared state, permissions, workflows, approvals, deployment, and somewhere agents can keep working.
+
+Lemma supplies that missing system. People use the app; agents work through the same state and workflows.
 
 **Open source. Run it on your laptop, your server, or Lemma Cloud. Use Claude Code or Codex through your existing subscription, Lemma-managed models, or any OpenAI- or Anthropic-compatible provider.**
 

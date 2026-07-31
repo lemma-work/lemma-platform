@@ -1,11 +1,12 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, ExternalLink, Sparkles } from '@/components/ui/icons';
+import { ArrowRight, ExternalLink, ShieldCheck, Sparkles } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { LemmaMark } from '@/components/brand/logo';
+import { Logo } from '@/components/brand/logo';
 import { PageLoader } from '@/components/brand/loader';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { Button } from '@/components/ui/button';
@@ -74,51 +75,70 @@ function RemixAppLanding({ rawSource }: { rawSource?: string }) {
         );
     }
 
-    return (
-        <PlainPageShell
-            title="Remix on Lemma"
-            icon={<LemmaMark size="xs" />}
-            backHref="/"
-            backLabel="Home"
-            contentWidthClassName="max-w-xl"
-            centerContent
-        >
-            <section className="surface-panel overflow-hidden">
-                <div className="border-b border-[var(--border-subtle)] p-6 sm:p-8">
-                    <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--surface-2)] text-[var(--delight)]">
-                        <Sparkles className="h-5 w-5" />
-                    </span>
-                    <h1 className="mt-5 text-2xl font-semibold tracking-tight text-[var(--text-primary)]">
-                        Make it yours.
-                    </h1>
-                    <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
-                        Your pod assistant will inspect the app, understand what makes it
-                        useful, and rebuild or adapt it with you.
-                    </p>
+    const sourceLabel = remixSourceLabel(source);
 
+    return (
+        <main className="github-import-page remix-page">
+            <div className="github-import-stationery" aria-hidden="true">
+                <span className="github-import-stationery-botanical" />
+                <span className="github-import-stationery-upgrade" />
+                <span className="github-import-stationery-riso" />
+            </div>
+
+            <header className="github-import-header">
+                <div className="github-import-header-inner">
+                    <div className="remix-header-identity">
+                        <Link href="/" aria-label="Lemma home">
+                            <Logo size="sm" variant="mark-wordmark" />
+                        </Link>
+                        <span>
+                            <Sparkles className="h-3.5 w-3.5" />
+                            Remix
+                        </span>
+                    </div>
                     <a
                         href={source}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="mt-5 inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--border-subtle)] bg-[var(--surface-2)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
+                        className="github-import-header-source"
                     >
-                        <span className="truncate">{remixSourceLabel(source)}</span>
+                        <span className="remix-header-source-desktop">{sourceLabel}</span>
+                        <span className="remix-header-source-mobile">Source</span>
                         <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                     </a>
                 </div>
+            </header>
 
-                <div className="p-6 sm:p-8">
-                    {pods.length ? (
-                        <>
-                            <label
-                                htmlFor="remix-pod"
-                                className="text-sm font-medium text-[var(--text-primary)]"
-                            >
-                                Remix into
-                            </label>
-                            <div className="mt-2.5 flex flex-col gap-2 sm:flex-row">
+            <div className="remix-stage">
+                <aside className="remix-command-wrap">
+                    <div className="github-import-installer remix-command">
+                        <span className="remix-command-icon" aria-hidden="true">
+                            <Sparkles className="h-4 w-4" />
+                        </span>
+                        <div className="github-import-installer-copy">
+                            <p className="github-import-installer-eyebrow">Remix on Lemma</p>
+                            <h1>Make it yours.</h1>
+                            <p>Choose the pod where you want to continue.</p>
+                        </div>
+
+                        <a
+                            href={source}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="remix-source-link"
+                        >
+                            <span>
+                                <small>From</small>
+                                <strong>{sourceLabel}</strong>
+                            </span>
+                            <ExternalLink className="h-4 w-4" />
+                        </a>
+
+                        {pods.length ? (
+                            <div className="remix-command-target">
+                                <label htmlFor="remix-pod">Remix into</label>
                                 <Select value={effectivePodId} onValueChange={setSelectedPodId}>
-                                    <SelectTrigger id="remix-pod" className="sm:flex-1">
+                                    <SelectTrigger id="remix-pod">
                                         <SelectValue placeholder="Choose a pod" />
                                     </SelectTrigger>
                                     <SelectContent>
@@ -133,7 +153,7 @@ function RemixAppLanding({ rawSource }: { rawSource?: string }) {
                                     </SelectContent>
                                 </Select>
                                 <Button
-                                    className="gap-2 sm:w-auto"
+                                    className="remix-command-action"
                                     disabled={!effectivePod}
                                     onClick={() => {
                                         if (!effectivePod) return;
@@ -146,29 +166,32 @@ function RemixAppLanding({ rawSource }: { rawSource?: string }) {
                                     <ArrowRight className="h-4 w-4" />
                                 </Button>
                             </div>
-                            <p className="mt-3 text-xs leading-5 text-[var(--text-tertiary)]">
-                                The assistant can inspect what you can access. Private data,
-                                integrations, and hidden workflows are rebuilt only when you
-                                provide access.
-                            </p>
-                        </>
-                    ) : (
-                        <>
-                            <p className="text-sm leading-6 text-[var(--text-secondary)]">
-                                Create a pod for this remix. The source app will follow you
-                                into its first assistant conversation.
-                            </p>
-                            <Button
-                                className="mt-4 gap-2"
-                                onClick={() => router.push(buildCreatePodForRemixHref(source))}
-                            >
-                                Create a pod
-                                <ArrowRight className="h-4 w-4" />
-                            </Button>
-                        </>
-                    )}
-                </div>
-            </section>
-        </PlainPageShell>
+                        ) : (
+                            <div className="remix-command-empty">
+                                <p>
+                                    Create a pod for this remix. The source app will follow
+                                    you into its first assistant conversation.
+                                </p>
+                                <Button
+                                    className="remix-command-action"
+                                    onClick={() =>
+                                        router.push(buildCreatePodForRemixHref(source))
+                                    }
+                                >
+                                    Create a pod
+                                    <ArrowRight className="h-4 w-4" />
+                                </Button>
+                            </div>
+                        )}
+
+                        <p className="github-import-assurance">
+                            <ShieldCheck className="h-3.5 w-3.5" />
+                            Private data, integrations, and hidden workflows are rebuilt
+                            only when you provide access.
+                        </p>
+                    </div>
+                </aside>
+            </div>
+        </main>
     );
 }

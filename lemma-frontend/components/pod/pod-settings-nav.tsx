@@ -17,6 +17,11 @@ export function PodSettingsNav({ podId }: { podId: string }) {
             href: `/pod/${podId}/settings/members`,
         },
         {
+            label: 'Automation',
+            description: 'Every trigger in the pod, and what it wakes up.',
+            href: `/pod/${podId}/settings/automation`,
+        },
+        {
             label: 'Usage',
             description: 'Spend, limits, and model activity for this pod.',
             href: `/pod/${podId}/settings/usage`,

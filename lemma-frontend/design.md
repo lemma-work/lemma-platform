@@ -17,7 +17,7 @@ Brand primary is indigo (`#6366f1` in light mode), the CTA matches (`#6366f1`), 
 - Coral attention: `#df6a45` for human review and needs-response signals.
 - Border-first containment with subtle ring shadows.
 - Operational density in records/tables: sticky table headers, inline editable cells, side sheets, compact metadata.
-- Compact radius in primitives: `2px`, `4px`, `6px`, `10px`, `12px`, `9999px`.
+- Compact radius in primitives: `4px`, `6px`, `8px`, `10px`, `12px`, `9999px`.
 - Larger radius only in softer home/landing/template surfaces.
 - Motion is restrained: fade, slide-up, breathing loader, ambient drift only where it serves atmosphere.
 
@@ -102,7 +102,7 @@ Dark mode preserves the same structure with deep neutral surfaces:
 | Token | Size | Use |
 | --- | --- | --- |
 | `--text-xs` | 12px | Labels, metadata, chips |
-| `--text-sm` | 13px | Dense UI, sidebar, table labels |
+| `--text-sm` | 14px | Dense UI, sidebar, table labels |
 | `--text-base` | 16px | Body baseline |
 | `--text-md` | 18px | Secondary headings |
 | `--text-lg` | 20px | Card/dialog titles |
@@ -112,6 +112,48 @@ Dark mode preserves the same structure with deep neutral surfaces:
 | `--text-4xl` | 44px | Marketing/product hero support |
 | `--text-5xl` | 52px | Large display |
 | `--text-6xl` | 64px | Max display |
+
+### Type Roles — pick by role, never by size
+
+The scale above is the *implementation*. Product UI selects from these roles,
+which each have exactly one correct answer. Reaching past them for a literal
+`font-size` is what produced 53 distinct sizes across the feature stylesheets,
+33 of them inside a single 8px band.
+
+| Role | Class | Size | Weight | Tracking | Use |
+| --- | --- | --- | --- | --- | --- |
+| Eyebrow | `.type-eyebrow` | 12px | 600 | `wider` | Uppercase section labels, kickers |
+| Eyebrow (dense) | `.type-eyebrow-sm` | 11px | 600 | `wider` | Pills, column headers, table meta |
+| Eyebrow (mono) | `.type-eyebrow-mono` | 12px | 500 | `widest` | Technical/status eyebrows |
+| Meta | `.type-meta` | 12px | 400 | `normal` | Counts, timestamps, helper copy |
+| Body | `.type-body` | 14px | 400 | `normal` | Default UI text, descriptions |
+| Body strong | `.type-body-strong` | 14px | 600 | `normal` | Row titles, emphasized body |
+| Title | `.type-title` | 18px | 600 | `snug` | Card, panel, and dialog titles |
+| Page title | `.type-page-title` | 24px | 700 | `tight` | Page headings |
+| Display | `.type-display` | 36px | 700 | `tight` | Onboarding and hero headings |
+
+**Rule.** If no role fits, add a role here — do not write a literal `font-size`
+in a feature stylesheet. `styles/features/**` is audited
+(`rawFontSizeDeclaration`) and any increase fails CI.
+
+`.type-micro-label` and `.type-eyebrow-medium` are deprecated: they differ from
+`.type-eyebrow` only in weight. They still render as they always have, and
+migrate to `.type-eyebrow` during the Phase 3 cleanup with visual QA.
+
+### Density
+
+Spacing comes from `--space-*`; `padding` and `gap` in feature CSS had 0% token
+adoption, which is the main reason comparable surfaces sit at visibly different
+densities. Three densities, chosen by surface — not per element:
+
+| Density | Row padding | Gap | Use |
+| --- | --- | --- | --- |
+| Compact | `--space-2` (8px) | `--space-2` | Tables, ledgers, dense lists, side rails |
+| Standard | `--space-3` (12px) | `--space-3` | Cards, panels, forms, most chrome |
+| Roomy | `--space-5` (20px) | `--space-4` | Empty states, onboarding, hero surfaces |
+
+Pick one density for a surface and hold it. Mixing densities inside a single
+panel is the specific defect that reads as "hand-folded".
 
 ### Leading & Tracking
 
@@ -137,7 +179,17 @@ Dark mode preserves the same structure with deep neutral surfaces:
 
 ### Spacing Scale
 
-The global scale is tokenized:
+The global scale is tokenized. Micro and half steps exist because dense chrome
+genuinely lands there — without them, 71 distinct one-off padding values had
+accumulated in the feature stylesheets:
+
+- `--space-px`: 1px — hairlines, mark insets (never layout)
+- `--space-0-5`: 2px — mark and loader internals
+- `--space-1-5`: 6px — icon-to-label, compact rows
+- `--space-2-5`: 10px — pill interiors
+- `--space-3-5`: 14px — compact panel padding
+
+Integer steps:
 
 - `--space-1`: 4px
 - `--space-2`: 8px
@@ -155,13 +207,21 @@ The global scale is tokenized:
 
 ### Radius Scale
 
+Declared once, in the `@theme` block of `styles/tokens.css`. Tailwind's
+`rounded-*` utilities and `var(--radius-*)` both resolve from there, so a
+utility and a token can never disagree. Radius is theme-independent — never
+redeclare it in `:root` or a `.dark` scope.
+
 | Token | Value | Use |
 | --- | --- | --- |
-| `--radius-sm` | 2px | Tiny marks, loader bars |
-| `--radius-md` | 4px | Checkboxes, tiny pills, selected inner controls |
-| `--radius-lg` | 6px | Buttons, inputs, rows |
-| `--radius-xl` | 10px | Cards, panels |
+| `--radius-xs` | 2px | Brand mark bars, loader bars |
+| `--radius-sm` | 4px | Checkboxes, tiny pills |
+| `--radius-md` | 6px | Buttons, inputs, tabs, nav items |
+| `--radius-lg` | 8px | Dialogs, popovers, table containers, cards |
+| `--radius-xl` | 10px | Cards, panels, table shells |
 | `--radius-2xl` | 12px | Assistant shells, larger panels |
+| `--radius-3xl` | 16px | Soft cards — templates, assistant approval cards |
+| `--radius-4xl` | 24px | Softest surfaces — office/stage chrome |
 | `--radius-full` | 9999px | Pills, avatars, circular buttons |
 
 Actual components also use Tailwind utility radii:
@@ -204,3 +264,57 @@ The product must be usable on 375–430px phones. The shell adapts; complex buil
 - Pinch zoom stays enabled (`viewport` in `app/layout.tsx`); never reintroduce `maximumScale: 1` / `userScalable: false`.
 - Canvas/editor surfaces (flows, Monaco) are view-only below `md`: hide palettes and config asides, disable drag/connect, show a "open on a larger screen to edit" notice.
 - QA every new surface at 375px before shipping: no horizontal scroll on the page body, reachable primary actions, readable text.
+
+## 7. Identity & Wayfinding in the Pod Shell
+
+The pod shell can print a resource's name in four places at once: the workspace
+tab strip, the sidebar, the context bar, and the page body. Left alone they all
+do, and an agent called "Pitch Polish" appears three or four times inside a
+couple of hundred pixels. Deleting a band is the wrong fix — the context bar
+also carries the back link and the actions, so removing it to stop the
+repetition costs real affordances.
+
+### The bands
+
+Each band answers a different question, and is set at a different altitude so
+the appearances that remain read as different kinds of statement rather than as
+repeated headings.
+
+| Band | Question it answers | Altitude | Can it cede? |
+| --- | --- | --- | --- |
+| Workspace tab strip | "What do I have open?" | 14px / 400 | No — a tab without a label is useless |
+| Sidebar row | "Where does this live?" | 12px / 400 | No — nav must mark its active row |
+| Context bar | "What am I acting on?" | 16px / 600 | **Yes** |
+| Page body | "What is it made of?" | — | Must never re-print the name |
+
+The context bar is the only band that can yield, because the other two are
+structurally required and the page body should never have printed the name in
+the first place.
+
+### Who owns the title
+
+`titleOwner` on `ResourceHeader` decides, and the rules are pinned by tests in
+`lib/pods/topbar-title.test.ts`:
+
+- **`'bar'` (default)** — the bar prints the name. Correct for index routes and
+  anything without a tab of its own.
+- **`'page'`** — the route renders its own hero heading, so the bar cedes for
+  as long as that heading is on screen, and takes it back on scroll.
+- **`'tab'`** — the workspace tab strip is already printing this name directly
+  above the bar, so the bar drops to the back link, mode switch, and actions.
+  If the strip stops showing it, the bar takes the title back, so the resource
+  is never left unnamed.
+
+Ceding only fades the title text. The back link, mode switch, `meta`, and
+actions are outside that toggle and stay put — which is the whole reason to
+cede ownership rather than delete the header.
+
+### Rules for new routes
+
+- A detail route that gets a workspace tab should use `titleOwner="tab"`.
+- Never render the display name as a heading in the page body. If the canonical
+  id is genuinely useful, label it (`IDENTIFIER`) and set it at `.type-meta` or
+  mono so it reads as a field, not a title.
+- Never solve duplication by deleting `ResourceHeader`. That loses the back
+  target and the action anchor, and the shell then has nothing to render into
+  its context bar. Hand the title to another band instead.

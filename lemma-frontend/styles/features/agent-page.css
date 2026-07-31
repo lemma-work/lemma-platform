@@ -1,0 +1,618 @@
+/* ---------------------------------------------------------------------------
+   AGENT PAGE — identity, wiring, instructions, and the run dock
+
+   One column that reads top to bottom: who this agent is, how it is wired, how
+   it behaves. The dock on the right is where it actually runs.
+
+   Layered so Tailwind utilities can override these recipes (see primitives.css).
+   --------------------------------------------------------------------------- */
+@layer components {
+/* Named container: everything below sizes against this column, which narrows
+   when the dock opens and has nothing to do with the viewport. */
+.resource-page-scroll {
+  container-type: inline-size;
+  container-name: resource-page;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--bg-canvas);
+}
+
+.resource-page-column {
+  display: grid;
+  gap: var(--space-2-5);
+  margin: 0 auto;
+  max-width: 52rem;
+  padding: var(--space-3) var(--space-3) var(--space-10);
+}
+
+/* Three boxes on the canvas: what this thing is, what it says, and the dock. */
+.resource-card {
+  border: 1px solid var(--card-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--card-bg);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-xs);
+}
+
+.resource-card-eyebrow {
+  margin-bottom: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+/* Identity ------------------------------------------------------------------ */
+
+/* Wraps rather than breaks. As a three-column grid the chips held their full
+   width and crushed the name and description into a one-word-per-line column on
+   a phone; as a flex row with a floor on the text, the chips drop to their own
+   line instead. */
+.agent-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.agent-identity-avatar {
+  display: flex;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xl);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-xs);
+}
+
+button.agent-identity-avatar {
+  cursor: pointer;
+  transition: box-shadow var(--dur-base) var(--ease-out);
+}
+
+button.agent-identity-avatar:hover,
+button.agent-identity-avatar:focus-visible {
+  box-shadow:
+    var(--shadow-xs),
+    0 0 0 2px color-mix(in srgb, var(--action-primary) 30%, transparent);
+}
+
+/* `16rem` is the floor that decides when the chips wrap: below it the text would
+   start breaking mid-word, which is exactly what it used to do. */
+.agent-identity-body {
+  display: grid;
+  flex: 1 1 16rem;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.agent-identity-titles {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* Page text, not a masthead. The name is the most important word here, but it
+   is still a word on a page — the old display size made every agent look like a
+   marketing headline. */
+.agent-identity-name {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: var(--leading-snug);
+}
+
+/* The stored identifier, not a second title — small, monospaced, and quiet. */
+.agent-identity-slug {
+  font-family: var(--font-dm-mono), ui-monospace, monospace;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+/* Editable in place: no border until you reach for it, so the description reads
+   as a sentence about the agent rather than as an empty form field. */
+/* Auto-growing single-field editor: a hidden span holding the same text sets the
+   height of the shared grid cell, and the textarea stretches to fill it. No
+   measuring, so nothing can read back its own output and climb. */
+.agent-identity-description {
+  display: grid;
+  align-self: start;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  margin-left: calc(var(--space-2) * -1);
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+.agent-identity-description > span,
+.agent-identity-description > .agent-identity-description-field {
+  grid-area: 1 / 1;
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.agent-identity-description > span {
+  visibility: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-identity-description > .agent-identity-description-field {
+  border: 0;
+  background: transparent;
+  outline: none;
+  overflow: hidden;
+  resize: none;
+}
+
+.agent-identity-description > .agent-identity-description-field::placeholder {
+  color: var(--text-soft);
+}
+
+.agent-identity-description:hover {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.agent-identity-description:focus-within {
+  border-color: var(--field-border-focus);
+  background: var(--field-bg-focus);
+}
+
+.agent-identity-description-static {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+}
+
+.agent-identity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Gives each chip a real box for the coachmark to anchor to — the pickers
+   inside render their own triggers. */
+.agent-identity-chip-slot {
+  display: inline-flex;
+  align-items: center;
+}
+
+.agent-identity-chip {
+  display: inline-flex;
+  max-width: 12rem;
+  align-items: center;
+  gap: var(--space-1-5);
+  border: 1px solid var(--chip-border);
+  border-radius: var(--radius-md);
+  background: var(--chip-bg);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out);
+}
+
+.agent-identity-chip:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.agent-identity-chip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Wiring -------------------------------------------------------------------- */
+
+.agent-wiring {
+  margin-top: var(--space-3);
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
+}
+
+.agent-wiring-row {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+
+.agent-wiring-row + .agent-wiring-row {
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 40%, transparent);
+}
+
+.agent-wiring-label {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.agent-wiring-value {
+  min-width: 0;
+}
+
+.agent-wiring-text {
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.agent-wiring-arrow {
+  color: var(--text-tertiary);
+}
+
+/* A state of affairs, said once — not a stack of "No X" rows. */
+.agent-wiring-empty {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.agent-wiring-chips {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.agent-wiring-action {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+
+/* Against the column, not the window — the dock narrows this long before a
+   phone does. */
+@container resource-page (max-width: 34rem) {
+  .agent-wiring-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: var(--space-2);
+  }
+
+  .agent-wiring-label {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Instructions -------------------------------------------------------------- */
+
+
+/* Dock ---------------------------------------------------------------------- */
+
+/* The dock is the third box, floating on the same canvas rather than a slab
+   bolted to the edge — so it reads as a peer of the two cards beside it. Width
+   comes from the page, which is what knows whether the split is stacked. */
+.agent-dock-shell {
+  background: var(--bg-canvas);
+  padding: var(--space-3) var(--space-3) var(--space-3) 0;
+}
+
+.agent-dock-shell-stacked {
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.agent-dock {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--card-border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--card-bg);
+  box-shadow: var(--shadow-xs);
+}
+
+.agent-dock-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 60%, transparent);
+  padding: var(--space-2) var(--space-3);
+}
+
+/* The run happens server-side against the saved agent, so a draft in the editor
+   is not what gets tested. This is the warning and the fix in one control. */
+.agent-dock-stale {
+  margin-left: auto;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  color: var(--state-warning);
+  font-size: var(--text-xs);
+  text-align: right;
+  cursor: pointer;
+}
+
+.agent-dock-stale:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--state-warning) 10%, transparent);
+}
+
+.agent-dock-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+
+/* Function code ------------------------------------------------------------- */
+
+/* A code editor has no intrinsic height, so the card gives it one — tall enough
+   to work in, bounded so the wiring above it never scrolls out of reach. */
+.function-code-card {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.function-code-shell {
+  height: clamp(20rem, 52vh, 40rem);
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border-subtle) 66%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-canvas);
+}
+
+/* An inline-editable name: no field chrome until you reach for it. */
+.agent-identity-name-input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  padding: var(--space-0-5) var(--space-1-5);
+  margin-left: calc(var(--space-1-5) * -1);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: 500;
+  line-height: var(--leading-snug);
+  outline: none;
+}
+
+.agent-identity-name-input:hover {
+  background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+}
+
+.agent-identity-name-input:focus {
+  border-color: var(--field-border-focus);
+  background: var(--field-bg-focus);
+}
+
+/* Workflow dock ------------------------------------------------------------- */
+
+.flow-dock-run {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  height: 100%;
+  overflow-y: auto;
+  padding: var(--space-3);
+}
+
+.flow-dock-note {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.flow-dock-latest {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.flow-dock-history-list {
+  display: grid;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+/* A run, stated in three lines instead of four competing columns: what happened,
+   where it got to, and which run it was. */
+.flow-run-compact {
+  display: grid;
+  gap: var(--space-1);
+  width: 100%;
+  border: 1px solid var(--row-border);
+  border-radius: var(--radius-lg);
+  background: var(--row-bg);
+  padding: var(--space-2-5) var(--space-3);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+}
+
+.flow-run-compact:hover {
+  border-color: color-mix(in srgb, var(--action-primary) 26%, var(--row-border));
+  background: var(--row-bg-hover);
+}
+
+.flow-run-compact-head {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.flow-run-compact-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-run-compact-live {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--state-warning);
+  font-size: var(--text-xs);
+}
+
+.flow-run-compact-duration {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-run-compact-detail {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.flow-run-compact-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.flow-dock-history-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+/* Selection toolbar --------------------------------------------------------- */
+
+.markdown-selection-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-overlay);
+  padding: var(--space-1);
+  box-shadow: var(--shadow-lg);
+}
+
+.markdown-selection-item {
+  display: inline-flex;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1-5);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out);
+}
+
+.markdown-selection-item:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.markdown-selection-item[data-active='true'] {
+  background: var(--action-primary-soft);
+  color: var(--action-primary);
+}
+
+.markdown-selection-divider {
+  width: 1px;
+  height: 1rem;
+  background: var(--border-subtle);
+}
+}
+
+/* ---------------------------------------------------------------------------
+   Instruction typography
+
+   In the utilities layer on purpose: Tailwind Typography's `prose` styles live
+   there, and a components-layer rule loses to them no matter how specific it
+   is. The prompt reads at page-text size like the rest of the page — its
+   headings are structure inside a panel, not an essay's display type.
+   --------------------------------------------------------------------------- */
+@layer utilities {
+/* A card already separates itself from the next one. `.inspector-section +
+   .inspector-section` draws a rule and adds top padding for sections stacked
+   bare on a page — inside boxes that lands as a second divider just under the
+   card's own edge. Utilities layer because that is where the rule it undoes
+   lives. */
+.resource-card.inspector-section + .resource-card.inspector-section {
+  border-top: 0;
+  padding-top: var(--space-4);
+}
+
+.agent-instructions .agent-instructions-prose {
+  min-height: 20rem;
+  max-width: none;
+  margin-inline: 0;
+  font-size: var(--text-sm);
+  line-height: 1.65;
+}
+
+.agent-instructions .agent-instructions-prose h1 {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-document-sans), var(--font-body-family);
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: var(--leading-snug);
+}
+
+.agent-instructions .agent-instructions-prose h2 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+}
+
+.agent-instructions .agent-instructions-prose h3,
+.agent-instructions .agent-instructions-prose h4 {
+  margin: var(--space-4) 0 var(--space-1-5);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: var(--leading-snug);
+}
+
+.agent-instructions .agent-instructions-prose p,
+.agent-instructions .agent-instructions-prose ul,
+.agent-instructions .agent-instructions-prose ol,
+.agent-instructions .agent-instructions-prose blockquote {
+  margin-block: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.agent-instructions .agent-instructions-prose li {
+  margin-block: var(--space-1);
+}
+
+.agent-instructions .agent-instructions-prose > *:first-child {
+  margin-top: 0;
+}
+}

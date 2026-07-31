@@ -203,7 +203,6 @@ describe('pod workspace tabs', () => {
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/data/projects')).toBe('route:data');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/datastores/default')).toBe('route:data');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/docs')).toBe('route:files');
-        expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/channels')).toBe('route:surfaces');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/flows')).toBe('route:workflows');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/conversations/new')).toBe('new');
         expect(getActiveWorkspaceTabId('pod-1', '/pod/pod-1/conversations/conv%201')).toBe('conversation:conv 1');

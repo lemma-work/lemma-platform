@@ -85,7 +85,11 @@ export const ConnectorMode = {
   DYNAMIC: 'DYNAMIC',
   FIXED: 'FIXED',
 } as const;
-export const TableAccessMode = {
+/**
+ * How much of a resource a grant opens up. Tables and folders are both granted
+ * this way — read-only, or read and write — so they share one noun.
+ */
+export const AccessMode = {
   READ: 'READ',
   WRITE: 'WRITE',
 } as const;
@@ -121,7 +125,7 @@ type SdkTaskMessage = SdkConversationMessage & {
 };
 export type ToolSet = AgentToolset;
 export type ConnectorMode = (typeof ConnectorMode)[keyof typeof ConnectorMode];
-export type TableAccessMode = (typeof TableAccessMode)[keyof typeof TableAccessMode];
+export type AccessMode = (typeof AccessMode)[keyof typeof AccessMode];
 export type ResourceType = (typeof ResourceType)[keyof typeof ResourceType];
 
 export type {
@@ -232,7 +236,12 @@ export type ResourcePermissionGrant = {
 };
 export type TableAccessEntry = {
   table_name: string;
-  mode: TableAccessMode;
+  mode: AccessMode;
+};
+
+export type FolderAccessEntry = {
+  folder_path: string;
+  mode: AccessMode;
 };
 
 type AgentRuntime = NonNullable<SdkAgent['agent_runtime']>;
@@ -247,7 +256,7 @@ export type Agent = Omit<SdkAgent, 'agent_runtime' | 'input_schema' | 'output_sc
   toolsets?: ToolSet[];
   permissions?: SdkAgentPermissions;
   accessible_connectors: ConnectorAccessConfig[];
-  accessible_folders: string[];
+  accessible_folders: FolderAccessEntry[];
   accessible_tables: TableAccessEntry[];
   agent_names?: string[];
   function_names?: string[];
@@ -306,7 +315,7 @@ export type Function = Omit<SdkFunction, 'config' | 'config_schema' | 'input_sch
   output_schema: FunctionJsonObject;
   permissions?: SdkFunctionPermissions;
   accessible_connectors: ConnectorAccessConfig[];
-  accessible_folders: string[];
+  accessible_folders: FolderAccessEntry[];
   accessible_tables: TableAccessEntry[];
 };
 
@@ -506,7 +515,7 @@ export type CreateAgentData = Omit<SdkCreateAgentInput, 'toolsets'> & {
   tool_sets?: ToolSet[];
   toolsets?: ToolSet[];
   accessible_connectors?: ConnectorAccessConfig[];
-  accessible_folders?: string[];
+  accessible_folders?: FolderAccessEntry[];
   accessible_tables?: TableAccessEntry[];
   accessible_functions?: string[];
   accessible_agents?: string[];
@@ -516,7 +525,7 @@ export type UpdateAgentData = Omit<SdkUpdateAgentInput, 'toolsets'> & {
   tool_sets?: ToolSet[] | null;
   toolsets?: ToolSet[] | null;
   accessible_connectors?: ConnectorAccessConfig[] | null;
-  accessible_folders?: string[] | null;
+  accessible_folders?: FolderAccessEntry[] | null;
   accessible_tables?: TableAccessEntry[] | null;
   accessible_functions?: string[] | null;
   accessible_agents?: string[] | null;
@@ -528,7 +537,7 @@ export type CreateFunctionData = Omit<SdkCreateFunctionRequest, 'config' | 'conf
   input_schema?: FunctionJsonObject;
   output_schema?: FunctionJsonObject;
   accessible_connectors?: ConnectorAccessConfig[];
-  accessible_folders?: string[];
+  accessible_folders?: FolderAccessEntry[];
   accessible_tables?: TableAccessEntry[];
 };
 
@@ -538,7 +547,7 @@ export type UpdateFunctionData = Omit<SdkUpdateFunctionRequest, 'config'> & {
   input_schema?: FunctionJsonObject;
   output_schema?: FunctionJsonObject;
   accessible_connectors?: ConnectorAccessConfig[] | null;
-  accessible_folders?: string[] | null;
+  accessible_folders?: FolderAccessEntry[] | null;
   accessible_tables?: TableAccessEntry[] | null;
 };
 

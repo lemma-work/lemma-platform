@@ -330,9 +330,6 @@ function getWorkspaceRouteKey(section: string) {
         case 'docs':
         case 'files':
             return 'files';
-        case 'channels':
-        case 'surfaces':
-            return 'surfaces';
         case 'flows':
         case 'workflows':
             return 'workflows';

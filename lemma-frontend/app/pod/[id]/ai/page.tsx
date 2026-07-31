@@ -21,7 +21,7 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { EmptyState } from '@/components/shared/empty-state';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceIndexHeader, ResourceIndexShell, ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell, ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
@@ -124,9 +124,8 @@ export default function AgentsPage({
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title="Agents"
-                productIconKind="agents"
                 meta={<ConceptHint concept="agent" />}
                 actions={(
                     canCreateAgent ? <Link href={`/pod/${podId}/agents/new`}>
@@ -149,7 +148,7 @@ export default function AgentsPage({
                     </div>
                     <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
                         {[1, 2, 3].map((item) => (
-                            <div key={`agent-card-skeleton-${item}`} className="surface-panel h-48 space-y-4 p-4">
+                            <div key={`resource-card-skeleton-${item}`} className="surface-panel h-48 space-y-4 p-4">
                                 <div className="lemma-skeleton h-11 w-11 rounded-lg" />
                                 <div className="space-y-2">
                                     <div className="lemma-skeleton h-4 w-32 rounded-md" />

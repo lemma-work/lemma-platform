@@ -65,6 +65,10 @@ from app.core.infrastructure.cache.redis_json_cache import RedisJsonCache
 from app.modules.agent_surfaces.infrastructure.adapters.registry import (
     SurfacePlatformAdapterRegistry,
 )
+from app.modules.agent_surfaces.services.credential_uniqueness import (
+    ensure_unique_org_credential_binding,
+    ensure_unique_telegram_account,
+)
 from app.modules.agent_surfaces.services.event_receiver_service import (
     notify_surface_receiver_config_changed,
 )
@@ -819,49 +823,17 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
         self,
         surface: AgentSurfaceEntity,
     ) -> None:
-        if surface.account_id is not None:
-            conflict = await self.surface_repository.get_account_conflict_in_org(
-                pod_id=surface.pod_id,
-                account_id=surface.account_id,
-                exclude_surface_id=surface.id,
-            )
-            if isinstance(conflict, AgentSurfaceEntity):
-                raise AgentSurfaceValidationError(
-                    "This connected account is already used by another surface in "
-                    "this organization. Delete that surface before reusing the account."
-                )
-            return
-
-        if surface.credential_mode is not SurfaceCredentialMode.SYSTEM:
-            return
-
-        conflict = await self.surface_repository.get_system_credential_conflict_in_org(
-            pod_id=surface.pod_id,
-            platform=surface.surface_type.value,
-            exclude_surface_id=surface.id,
+        await ensure_unique_org_credential_binding(
+            surface, surface_repository=self.surface_repository
         )
-        if isinstance(conflict, AgentSurfaceEntity):
-            raise AgentSurfaceValidationError(
-                f"System {surface.surface_type.value} credentials are already used "
-                "by another surface in this organization. Delete that surface before "
-                "enabling system credentials for another pod."
-            )
 
     async def _ensure_unique_telegram_account(
         self,
         surface: AgentSurfaceEntity,
     ) -> None:
-        if surface.account_id is None:
-            return
-        existing = await self.surface_repository.get_by_platform_and_account_id(
-            platform=SurfacePlatform.TELEGRAM.value,
-            account_id=surface.account_id,
-            exclude_surface_id=surface.id,
+        await ensure_unique_telegram_account(
+            surface, surface_repository=self.surface_repository
         )
-        if existing is not None:
-            raise AgentSurfaceValidationError(
-                "Telegram account is already connected to another surface"
-            )
 
     async def _prepare_telegram_webhook(
         self,

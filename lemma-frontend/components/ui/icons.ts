@@ -197,7 +197,16 @@ export {
 } from '@phosphor-icons/react/ssr';
 
 // Brand glyphs used as icons may be exported here; full logos remain assets.
-export { GithubLogo } from '@phosphor-icons/react/ssr';
+// The social marks below name share destinations, where a generic glyph would
+// leave people guessing which button posts where.
+export {
+    GithubLogo,
+    LinkedinLogo,
+    RedditLogo,
+    TelegramLogo,
+    WhatsappLogo,
+    XLogo,
+} from '@phosphor-icons/react/ssr';
 
 // Product/resource identity glyphs used by the semantic ProductIcon registry.
 export {

@@ -37,7 +37,7 @@
 .edu-label {
     fill: var(--text-secondary);
     font-family: var(--font-mono, monospace);
-    font-size: 10px;
+    font-size: var(--text-2xs);
 }
 
 /* --- Surface: messages travel from channels into the pod --- */
