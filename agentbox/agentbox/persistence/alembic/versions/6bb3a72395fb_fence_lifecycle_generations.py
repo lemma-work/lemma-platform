@@ -51,5 +51,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("allocations", "resource_generation")
-    op.drop_column("sandboxes", "resource_generation")
+    # Dropping the column is the right target state either way - this revision
+    # is what introduces it. The guard only makes the drop tolerant of a
+    # database where it is already gone, matching the upgrade above so neither
+    # direction hard-fails on a half-applied schema. The inspector caches its
+    # reflection, so this needs its own.
+    inspector = sa.inspect(op.get_bind())
+    for table_name in ("allocations", "sandboxes"):
+        columns = {
+            str(column["name"]) for column in inspector.get_columns(table_name)
+        }
+        if "resource_generation" in columns:
+            op.drop_column(table_name, "resource_generation")

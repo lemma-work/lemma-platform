@@ -91,6 +91,29 @@ def test_alembic_adopts_legacy_create_all_schema(tmp_path: Path):
     assert revision == ("6bb3a72395fb",)
 
 
+def test_alembic_downgrade_tolerates_a_half_applied_fence(tmp_path: Path):
+    # The fence upgrade is idempotent, so a database can sit at head with the
+    # column present on one table and absent on the other - an adoption that was
+    # interrupted, or a manual repair. Downgrade has to reach the previous
+    # revision's schema from there rather than failing on the table that has
+    # nothing to drop.
+    database_path = tmp_path / "half-applied.db"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+    config = _config(database_url)
+
+    command.upgrade(config, "head")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("ALTER TABLE allocations DROP COLUMN resource_generation")
+        connection.commit()
+    assert "resource_generation" not in _columns(database_path, "allocations")
+    assert "resource_generation" in _columns(database_path, "sandboxes")
+
+    command.downgrade(config, "24278caff64b")
+
+    assert "resource_generation" not in _columns(database_path, "sandboxes")
+    assert "resource_generation" not in _columns(database_path, "allocations")
+
+
 def test_alembic_adopts_current_create_all_schema(tmp_path: Path):
     database_path = tmp_path / "current.db"
     database_url = f"sqlite+aiosqlite:///{database_path}"
