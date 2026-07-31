@@ -73,7 +73,6 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
         <PodSettingsShell
             podId={podId}
             title="Pod Settings"
-            description="Configure defaults that shape how this pod runs."
         >
             <div className="flex w-full max-w-3xl flex-col gap-5">
             <PodSettingsPanel

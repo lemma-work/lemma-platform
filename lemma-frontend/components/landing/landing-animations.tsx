@@ -3,22 +3,27 @@ import { useEffect, useRef, useState } from "react";
 import type { TerminalLine } from "./landing-data";
 import { fullTerminalLines, terminalScript } from "./landing-data";
 
+/**
+ * Surfaces only — the places you *use* a pod. Claude Code and Codex are what
+ * *builds* it, and they own §6; putting them under "Use it from" made one logo
+ * mean two different things on the same page.
+ */
 const workSurfaces = [
   {
-    label: "WhatsApp",
-    src: "/landing-page/app-logos/whatsapp.svg",
+    label: "Slack",
+    src: "/landing-page/app-logos/slack.svg",
+  },
+  {
+    label: "ChatGPT",
+    src: "/landing-page/app-logos/chatgpt.svg",
   },
   {
     label: "Telegram",
     src: "/landing-page/app-logos/telegram.svg",
   },
   {
-    label: "Claude Code",
-    src: "/harnesslogos/claudecode.png",
-  },
-  {
-    label: "Codex",
-    src: "/harnesslogos/codex.png",
+    label: "WhatsApp",
+    src: "/landing-page/app-logos/whatsapp.svg",
   },
 ] as const;
 
@@ -26,7 +31,7 @@ export function WorkSurfaceStrip() {
   return (
     <div
       className="lp-work-surfaces"
-      aria-label="Use Lemma from WhatsApp, Telegram, Claude Code, Codex, or anywhere you work"
+      aria-label="Use Lemma from Slack, ChatGPT, Telegram, WhatsApp, or anywhere you work"
     >
       <span className="lp-work-surfaces-lead">Use it from</span>
       <span className="lp-work-surface-list" aria-hidden="true">

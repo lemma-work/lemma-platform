@@ -3,17 +3,116 @@ import { ImageResponse } from 'next/og';
 import type { NextRequest } from 'next/server';
 
 import {
-    resolveSocialCardCopy,
+    resolveSocialCardSpec,
     SOCIAL_CARD_COLORS,
     SOCIAL_CARD_HEIGHT,
+    SOCIAL_CARD_LAYERS,
     SOCIAL_CARD_WIDTH,
+    socialCardTitleSize,
 } from '@/lib/share/social-card';
 
 export const runtime = 'edge';
 
+const colors = SOCIAL_CARD_COLORS;
+
+/** Left column is the message; the right plate carries the pod motif. */
+const PLATE_WIDTH = 452;
+const TEXT_WIDTH = SOCIAL_CARD_WIDTH - PLATE_WIDTH;
+
+/**
+ * The Lemma mark — three rising bars. Drawn rather than fetched so the card
+ * stays hermetic on the edge and never renders half a logo on a slow network.
+ */
+function Wordmark() {
+    return (
+        <div style={{ display: 'flex', alignItems: 'flex-end', height: 34 }}>
+            <div style={{ width: 9, height: 13, borderRadius: 2, background: colors.ink }} />
+            <div style={{ width: 9, height: 22, borderRadius: 2, marginLeft: 5, background: colors.ink }} />
+            <div style={{ width: 9, height: 31, borderRadius: 2, marginLeft: 5, background: colors.ink }} />
+            <div
+                style={{
+                    marginLeft: 15,
+                    fontSize: 26,
+                    fontWeight: 700,
+                    letterSpacing: -0.9,
+                    color: colors.ink,
+                }}
+            >
+                Lemma
+            </div>
+        </div>
+    );
+}
+
+/**
+ * The pod, as the product describes it: data at the bottom, then functions,
+ * then agents and workflows, then the apps people actually meet. Tilted into a
+ * shallow stack so it reads as depth at timeline thumbnail size — where a
+ * wireframe mock would dissolve into grey mush.
+ */
+function PodStack({ accent, top }: { accent: string; top: string }) {
+    // The thing being shared rides on top; the rest of the pod stays in the
+    // order the product builds it, so the card always shows what it sits on.
+    const rest = SOCIAL_CARD_LAYERS.filter((layer) => layer.key !== top).reverse();
+    const lead = SOCIAL_CARD_LAYERS.find((layer) => layer.key === top);
+    const layers = lead ? [lead, ...rest] : rest;
+
+    return (
+        <div
+            style={{
+                display: 'flex',
+                flexDirection: 'column',
+                transform: 'skewY(-9deg)',
+            }}
+        >
+            {layers.map((layer, index) => {
+                const isTop = index === 0;
+                return (
+                    <div
+                        key={layer.label}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            width: 262,
+                            height: 70,
+                            marginTop: index === 0 ? 0 : 20,
+                            marginLeft: index * 10,
+                            paddingLeft: 20,
+                            paddingRight: 20,
+                            borderRadius: 16,
+                            background: isTop ? accent : colors.card,
+                            border: `2px solid ${isTop ? accent : colors.border}`,
+                            boxShadow: '0 16px 28px -24px rgba(24, 24, 22, 0.45)',
+                        }}
+                    >
+                        <div
+                            style={{
+                                width: 13,
+                                height: 13,
+                                borderRadius: 7,
+                                background: isTop ? colors.card : layer.color,
+                            }}
+                        />
+                        <div
+                            style={{
+                                marginLeft: 13,
+                                fontSize: 20,
+                                fontWeight: 600,
+                                letterSpacing: -0.3,
+                                color: isTop ? colors.card : colors.inkSoft,
+                            }}
+                        >
+                            {layer.label}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 export function GET(request: NextRequest) {
-    const colors = SOCIAL_CARD_COLORS;
-    const copy = resolveSocialCardCopy({
+    const card = resolveSocialCardSpec({
         variant: request.nextUrl.searchParams.get('variant'),
         title: request.nextUrl.searchParams.get('title'),
         detail: request.nextUrl.searchParams.get('detail'),
@@ -27,156 +126,105 @@ export function GET(request: NextRequest) {
                     width: '100%',
                     height: '100%',
                     display: 'flex',
-                    position: 'relative',
-                    overflow: 'hidden',
                     background: colors.paper,
                     color: colors.ink,
-                    fontFamily: 'Arial, Helvetica, sans-serif',
+                    fontFamily: 'Inter, "Helvetica Neue", Helvetica, Arial, sans-serif',
                 }}
             >
+                {/* Message */}
                 <div
                     style={{
-                        width: 790,
+                        width: TEXT_WIDTH,
                         height: '100%',
-                        padding: '56px 64px 42px',
+                        padding: '64px 56px 56px 72px',
                         display: 'flex',
                         flexDirection: 'column',
                     }}
                 >
-                    <div style={{ display: 'flex', alignItems: 'flex-end', height: 36 }}>
-                        <div style={{ width: 10, height: 14, borderRadius: 2, background: colors.ink }} />
-                        <div style={{ width: 10, height: 24, borderRadius: 2, marginLeft: 5, background: colors.ink }} />
-                        <div style={{ width: 10, height: 34, borderRadius: 2, marginLeft: 5, background: colors.ink }} />
-                        <div style={{ marginLeft: 16, fontSize: 27, fontWeight: 700, letterSpacing: -1 }}>Lemma</div>
+                    <Wordmark />
+
+                    <div
+                        style={{
+                            marginTop: 76,
+                            display: 'flex',
+                            alignItems: 'center',
+                        }}
+                    >
+                        <div style={{ width: 28, height: 3, borderRadius: 2, background: card.accent }} />
+                        <div
+                            style={{
+                                marginLeft: 14,
+                                fontSize: 17,
+                                fontWeight: 700,
+                                letterSpacing: 3.4,
+                                color: card.accent,
+                            }}
+                        >
+                            {card.eyebrow}
+                        </div>
                     </div>
 
                     <div
                         style={{
-                            marginTop: 88,
-                            fontFamily: 'monospace',
-                            color: colors.muted,
-                            fontSize: 18,
+                            marginTop: 26,
+                            maxWidth: 620,
+                            fontSize: socialCardTitleSize(card.title),
                             fontWeight: 700,
-                            letterSpacing: 3,
+                            letterSpacing: -3,
+                            lineHeight: 1.02,
+                            color: colors.ink,
                         }}
                     >
-                        {copy.eyebrow}
+                        {card.title}
                     </div>
+
                     <div
                         style={{
-                            marginTop: 28,
-                            maxWidth: 680,
-                            fontSize: copy.title.length > 34 ? 66 : 78,
-                            fontWeight: 700,
-                            letterSpacing: -3.5,
-                            lineHeight: 0.98,
-                        }}
-                    >
-                        {copy.title}
-                    </div>
-                    <div
-                        style={{
-                            marginTop: 24,
-                            maxWidth: 650,
+                            marginTop: 22,
+                            maxWidth: 580,
+                            fontSize: 26,
+                            lineHeight: 1.3,
                             color: colors.muted,
-                            fontSize: 27,
-                            lineHeight: 1.25,
                         }}
                     >
-                        {copy.detail}
+                        {card.detail}
                     </div>
 
                     <div
                         style={{
                             marginTop: 'auto',
-                            paddingTop: 24,
+                            paddingTop: 22,
                             borderTop: `2px solid ${colors.rule}`,
-                            color: colors.ink,
-                            fontFamily: 'monospace',
-                            fontSize: 16,
+                            display: 'flex',
+                            alignItems: 'center',
                         }}
                     >
-                        {copy.label}
+                        <div
+                            style={{
+                                fontSize: 19,
+                                fontWeight: 500,
+                                letterSpacing: -0.2,
+                                color: colors.inkSoft,
+                            }}
+                        >
+                            {card.label}
+                        </div>
                     </div>
                 </div>
 
+                {/* Pod plate */}
                 <div
                     style={{
-                        width: 410,
+                        width: PLATE_WIDTH,
                         height: '100%',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         background: colors.panel,
+                        borderLeft: `2px solid ${colors.border}`,
                     }}
                 >
-                    <div
-                        style={{
-                            width: 278,
-                            height: 438,
-                            border: `2px solid ${colors.border}`,
-                            borderRadius: 28,
-                            padding: 32,
-                            display: 'flex',
-                            flexDirection: 'column',
-                            background: colors.card,
-                        }}
-                    >
-                        <div style={{ width: 112, height: 14, borderRadius: 7, background: colors.ink }} />
-                        <div style={{ width: 174, height: 8, borderRadius: 4, marginTop: 12, background: colors.placeholder }} />
-                        {[
-                            [colors.greenSoft, colors.greenDot, colors.greenLine],
-                            [colors.blueSoft, colors.blueDot, colors.blueLine],
-                        ].map(([background, dot, line], index) => (
-                            <div
-                                key={background}
-                                style={{
-                                    height: 84,
-                                    marginTop: index === 0 ? 38 : 24,
-                                    padding: 22,
-                                    display: 'flex',
-                                    alignItems: 'flex-start',
-                                    borderRadius: 16,
-                                    background,
-                                    border: `1px solid ${index === 0 ? colors.greenBorder : colors.blueBorder}`,
-                                }}
-                            >
-                                <div style={{ width: 20, height: 20, borderRadius: 10, background: dot }} />
-                                <div style={{ marginLeft: 18, display: 'flex', flexDirection: 'column' }}>
-                                    <div style={{ width: 112, height: 10, borderRadius: 5, background: line }} />
-                                    <div style={{ width: 88, height: 7, borderRadius: 4, marginTop: 10, opacity: 0.45, background: line }} />
-                                </div>
-                            </div>
-                        ))}
-                        <div
-                            style={{
-                                height: 74,
-                                marginTop: 24,
-                                padding: '24px 24px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                borderRadius: 16,
-                                background: colors.ink,
-                            }}
-                        >
-                            <div style={{ width: 104, height: 10, borderRadius: 5, background: colors.card }} />
-                            <div
-                                style={{
-                                    width: 26,
-                                    height: 26,
-                                    marginLeft: 'auto',
-                                    borderRadius: 13,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    background: colors.paper,
-                                    fontSize: 19,
-                                }}
-                            >
-                                →
-                            </div>
-                        </div>
-                    </div>
+                    <PodStack accent={card.accent} top={card.layer} />
                 </div>
             </div>
         ),

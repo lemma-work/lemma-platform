@@ -87,7 +87,7 @@
   border-radius: var(--radius-lg);
   background: transparent;
   box-shadow: none;
-  padding: 8px;
+  padding: var(--space-2);
   backdrop-filter: none;
 }
 
@@ -95,7 +95,7 @@
   border: 1px solid var(--field-border);
   border-radius: var(--radius-lg);
   background: var(--bg-surface);
-  padding: 0.625rem 0.75rem;
+  padding: var(--space-2-5) var(--space-3);
   box-shadow: none;
 }
 

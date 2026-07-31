@@ -26,7 +26,7 @@ import {
 } from '@/components/documents/resumable-folder-upload';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { SectionPrimer } from '@/components/education/section-primer';
-import { ResourceDetailHeader, ResourceIndexHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { QuietEmptyState } from '@/components/shared/empty-state';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
@@ -521,9 +521,8 @@ export function DocumentSpace({ podId }: { podId: string }) {
                         }}
                     />
 
-                    <ResourceIndexHeader
+                    <ResourceHeader
                         title={folderPath ? currentFolderName : 'Docs'}
-                        productIconKind="docs"
                         backHref={folderPath ? folderBackHref : undefined}
                         backLabel={folderPath ? folderBackLabel : undefined}
                         actions={(
@@ -817,9 +816,8 @@ export function DocumentSpace({ podId }: { podId: string }) {
     return (
         <div className="h-full min-h-0 bg-[var(--bg-canvas)]">
             {!isAssistantPresentation ? (
-                <ResourceDetailHeader
+                <ResourceHeader
                     title={selectedFileName || 'Docs'}
-                    productIconKind="docs"
                     backHref={selectedFileBackHref}
                     backLabel={selectedFileBackLabel}
                 />

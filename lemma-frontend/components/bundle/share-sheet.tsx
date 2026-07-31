@@ -19,7 +19,7 @@ import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { showResourceErrorToast } from '@/components/shared/resource-feedback';
 import { BundleProgressBar } from '@/components/bundle/bundle-progress';
 import { AccountVariableField } from '@/components/bundle/account-variable-field';
-import { PodShareCard } from '@/components/bundle/pod-share-card';
+import { SocialCardPanel } from '@/components/share/social-card-panel';
 import {
     getPublish,
     pollExport,
@@ -284,7 +284,15 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
                         {published ? (
                             <div className="mt-4 space-y-3">
                                 {publishedInstallUrl ? (
-                                    <PodShareCard podName={podName} repoUrl={publishedInstallUrl} />
+                                    <SocialCardPanel
+                                        variant="run"
+                                        name={podName}
+                                        url={publishedInstallUrl}
+                                        label={published.repo_url?.replace(/^https?:\/\//, '')}
+                                        // The install route is public and serves this
+                                        // very card in its Open Graph tags.
+                                        unfurls
+                                    />
                                 ) : null}
                                 <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-2)] p-3">
                                     <div className="text-xs text-[var(--text-tertiary)]">Published repository</div>

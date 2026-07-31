@@ -14567,6 +14567,17 @@ var LemmaClient = (() => {
     constructor(client) {
       __publicField(this, "client", client);
     }
+    /**
+     * The connectable-surface catalog for a pod: every platform with its
+     * connector, supported credential modes, the schema to connect an account,
+     * and whether the org can still claim the platform's Lemma-managed
+     * bot/number. Platform-level — no surface need exist.
+     */
+    available(podId) {
+      return this.client.request(
+        () => AgentSurfacesService.agentSurfaceAvailable(podId)
+      );
+    }
     list(podId, options = {}) {
       return this.client.request(
         () => {

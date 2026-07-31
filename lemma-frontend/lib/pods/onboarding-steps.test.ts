@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  codingAgentStarterPrompt,
   defaultWorkspaceName,
+  generatedOrganizationName,
+  hasUsableProfileName,
   nextTeamSetupStep,
   normalizeOnboardingStep,
   podNameForAudience,
   previousOnboardingStep,
   resolveOnboardingStartStep,
   setupStepsForAudience,
+  startPathLaunchConfig,
 } from "@/components/onboarding/account-onboarding-helpers";
 import { workDomainFromEmail } from "@/lib/utils/organization-slugs";
 
@@ -69,20 +73,87 @@ describe("onboarding step paths", () => {
     expect(normalizeOnboardingStep("team", "team", true)).toBe("team");
   });
 
-  it("keeps personal onboarding workspace-free", () => {
-    expect(setupStepsForAudience("personal")).not.toContain("workspace");
+  it("collects identity before direct personal onboarding reaches first value", () => {
+    expect(setupStepsForAudience("personal")).toEqual(["identity", "start"]);
   });
 
-  it("does not resume a persisted boot step", () => {
+  it("only skips the name gate when auth supplied a real profile name", () => {
+    expect(hasUsableProfileName({ full_name: "Ada Lovelace" })).toBe(true);
+    expect(hasUsableProfileName({ first_name: "Ada" })).toBe(true);
+    expect(hasUsableProfileName({ full_name: " ", first_name: null })).toBe(false);
+  });
+
+  it("starts new setup with identity and sends old later drafts to first value", () => {
     expect(resolveOnboardingStartStep("boot", true)).toBe("identity");
-    expect(resolveOnboardingStartStep("boot", false)).toBe("audience");
-    expect(resolveOnboardingStartStep("connect", true)).toBe("connect");
+    expect(resolveOnboardingStartStep("boot", false)).toBe("identity");
+    expect(resolveOnboardingStartStep(undefined, false)).toBe("identity");
+    expect(resolveOnboardingStartStep("connect", false)).toBe("start");
+    expect(resolveOnboardingStartStep("connect", true)).toBe("identity");
+    expect(resolveOnboardingStartStep("identity", false)).toBe("identity");
   });
 
-  it("does not navigate back into the non-resumable boot step", () => {
+  it("navigates from the starting outcome back to identity", () => {
     const steps = setupStepsForAudience("personal");
 
     expect(previousOnboardingStep(steps, "identity")).toBeNull();
-    expect(previousOnboardingStep(steps, "audience")).toBe("identity");
+    expect(previousOnboardingStep(steps, "start")).toBe("identity");
+  });
+
+  it("generates stable human-readable organization names", () => {
+    const generated = generatedOrganizationName("ada@example.com");
+
+    expect(generated).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    expect(generatedOrganizationName("ada@example.com")).toBe(generated);
+    expect(generatedOrganizationName("ada@example.com", 1)).not.toBe(generated);
+  });
+
+  it("turns the Telegram brief into agent instructions and app state", () => {
+    const config = startPathLaunchConfig("telegram", {
+      brief: "Capture voice notes and ask when context is missing.",
+      secondaryBrief: "A searchable logbook of ideas and tasks.",
+    });
+
+    expect(config.intent).toBe("telegram_agent_companion_app");
+    expect(config.message).toContain(
+      "custom operating instructions: Capture voice notes",
+    );
+    expect(config.message).toContain(
+      "companion app should keep this organized: A searchable logbook",
+    );
+  });
+
+  it("frames ChatGPT as an MCP client of durable pod state", () => {
+    const config = startPathLaunchConfig("chatgpt", {
+      brief: "Keep the fundraising pipeline current.",
+    });
+
+    expect(config.intent).toBe("external_ai_pod_mcp");
+    expect(config.message).toContain("pod-scoped Lemma MCP surface");
+    expect(config.message).toContain("durable tables, files, and views");
+    expect(config.message).toContain(
+      "Do not pretend the external connection is complete",
+    );
+  });
+
+  it("gives coding-agent users a pasteable repository-first pathway", () => {
+    const prompt = codingAgentStarterPrompt("claude-code");
+
+    expect(prompt).toContain("First inspect this repository");
+    expect(prompt).toContain("Create or select one pod");
+    expect(prompt).toContain("Do not create duplicates");
+    expect(prompt).toContain("Claude Code session");
+  });
+
+  it("keeps a local-agent skin distinct from the coding build pathway", () => {
+    const config = startPathLaunchConfig("agent-skin", {
+      brief: "Plans, tasks, run status, artifacts, and review state.",
+      secondaryBrief: "Approve plans and retry failed work.",
+      codingAgent: "opencode",
+    });
+
+    expect(config.intent).toBe("local_agent_workspace_skin");
+    expect(config.message).toContain("workspace skin around OpenCode");
+    expect(config.message).toContain("Keep the local coding agent as the executor");
+    expect(config.message).toContain("Approve plans and retry failed work");
   });
 });

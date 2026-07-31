@@ -209,17 +209,14 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canWriteConversations = podAccess.can('conversation.write');
     const canUseAgents = podAccess.canAccessRoute('agents');
     const canUseWorkflows = podAccess.canAccessRoute('workflows');
-    const canUseSchedules = podAccess.canAccessRoute('schedules');
     const canUseConnectors = podAccess.canAccessRoute('connectors');
     const canUseData = podAccess.canAccessRoute('data');
     const canUseDocs = podAccess.canAccessRoute('files');
     const canUseApps = podAccess.canAccessRoute('apps');
-    const canUseSurfaces = podAccess.canAccessRoute('surfaces');
     const canUseSettings = podAccess.canAccessRoute('settings');
     const canCreateAgents = podAccess.can('agent.create');
     const canCreateApps = podAccess.can('app.create');
     const canCreateWorkflows = podAccess.can('workflow.create');
-    const canCreateSchedules = podAccess.can('schedule.create');
     const canCreateTables = podAccess.can('datastore.table.create');
     const canUpdatePod = podAccess.can('pod.update');
     const basePath = `/pod/${podId}`;
@@ -231,10 +228,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const isAppsRoute = isActive(`${basePath}/app`);
     const isConnectorsRoute = isActive(`${basePath}/connectors`);
     const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
-    const isSchedulesRoute = isActive(`${basePath}/schedules`);
     const isConversationRoute = isActive(`${basePath}/conversations`);
     const isPodHome = pathname === basePath || pathname === `${basePath}/`;
-    const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute || isSchedulesRoute;
+    const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute;
     const { data: agentsData } = useAgents(canUseAgents && isAgentsRoute ? podId : undefined);
     const { data: tablesData } = useTables(canUseData && isDataRoute ? podId : undefined);
     const { data: flowsData } = useFlows(canUseWorkflows && isWorkflowsRoute ? podId : undefined);
@@ -278,7 +274,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         canCreateAgents ||
         canCreateApps ||
         canCreateWorkflows ||
-        canCreateSchedules ||
         canCreateTables ||
         canUpdatePod;
     const visibleConversations = canUseConversations ? conversations.slice(0, hasRouteWorktree ? 3 : 7) : [];
@@ -383,25 +378,11 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             visible: canUseDocs,
         },
         {
-            href: `${basePath}/schedules`,
-            label: 'Schedules',
-            kind: 'schedules' as const,
-            active: isActive(`${basePath}/schedules`),
-            visible: canUseSchedules,
-        },
-        {
             href: `${basePath}/connectors`,
             label: 'Connectors',
             kind: 'connectors' as const,
             active: isConnectorsRoute,
             visible: canUseConnectors,
-        },
-        {
-            href: `${basePath}/surfaces`,
-            label: 'Surfaces',
-            kind: 'surfaces' as const,
-            active: isActive(`${basePath}/surfaces`) || isActive(`${basePath}/channels`),
-            visible: canUseSurfaces,
         },
         {
             href: `${basePath}/settings`,
@@ -623,14 +604,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             );
         }
 
-        if (isSchedulesRoute && canUseSchedules) {
-            return (
-                <RouteWorktree>
-                    <WorktreeEmpty label="Schedule list is on the main page" />
-                </RouteWorktree>
-            );
-        }
-
         return null;
     };
 
@@ -769,15 +742,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         >
                                             <ProductIcon kind="workflows" size="xs" />
                                             New workflow
-                                        </DropdownMenu.Item>
-                                    ) : null}
-                                    {canCreateSchedules ? (
-                                        <DropdownMenu.Item
-                                            onSelect={() => router.push(`${basePath}/schedules/new`)}
-                                            className="lemma-menu-row px-2"
-                                        >
-                                            <ProductIcon kind="schedules" size="xs" />
-                                            New schedule
                                         </DropdownMenu.Item>
                                     ) : null}
                                     {canCreateTables ? (

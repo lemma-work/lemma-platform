@@ -361,9 +361,10 @@ export function buildDisplayResourceHref({
                 ? `${podBase}/app/view?page=${encodeURIComponent(name)}`
                 : `${podBase}/app/pages`, conversationId);
         case 'SCHEDULE':
-            return appendAssistantConversation(name
-                ? `${podBase}/schedules?target=${encodeURIComponent(name)}`
-                : `${podBase}/schedules`, conversationId);
+            // A schedule has no page of its own — it is a row on the pod's
+            // automation ledger, and it is edited on the agent or workflow it
+            // wakes up.
+            return appendAssistantConversation(`${podBase}/settings/automation`, conversationId);
         default:
             return null;
     }

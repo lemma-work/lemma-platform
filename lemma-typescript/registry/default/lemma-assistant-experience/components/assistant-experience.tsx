@@ -11,7 +11,13 @@ import {
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { ConversationModel } from "lemma-sdk";
+import {
+  isPlanToolName,
+  latestPlanSummary,
+  planStepsFromToolInvocation,
+  type ConversationModel,
+  type PlanSummaryState,
+} from "lemma-sdk";
 import { cn } from "@/components/lemma/lib/utils";
 import { Button } from "@/components/lemma/ui/button";
 import { Textarea } from "@/components/lemma/ui/textarea";
@@ -58,21 +64,6 @@ type ToolCardResult = Record<string, unknown> & {
   resourceId?: string;
   error?: string;
 };
-
-type PlanStatus = "pending" | "in_progress" | "completed";
-
-export interface PlanStepState {
-  step: string;
-  status: PlanStatus;
-}
-
-export interface PlanSummaryState {
-  steps: PlanStepState[];
-  completedCount: number;
-  inProgressCount: number;
-  running: boolean;
-  activeStep?: string;
-}
 
 export interface DisplayMessageRow {
   id: string;
@@ -185,64 +176,6 @@ export function dedupToolInvocations(message: AssistantRenderableMessage): Assis
   return invocations;
 }
 
-function normalizePlanStatus(rawStatus: unknown): PlanStatus {
-  const status = typeof rawStatus === "string" ? rawStatus.trim().toLowerCase() : "";
-  if (status === "completed" || status === "complete" || status === "done") return "completed";
-  if (status === "in_progress" || status === "in-progress" || status === "running" || status === "active") return "in_progress";
-  return "pending";
-}
-
-function parsePlanSteps(value: unknown): PlanStepState[] {
-  const entries = asArray(value);
-  return entries
-    .map((entry, index) => {
-      const obj = asRecord(entry);
-      const step = asString(obj.step) || asString(obj.title) || `Step ${index + 1}`;
-      if (!step) return null;
-      return {
-        step,
-        status: normalizePlanStatus(obj.status),
-      };
-    })
-    .filter((entry): entry is PlanStepState => entry !== null);
-}
-
-export function latestPlanSummary(messages: AssistantRenderableMessage[]): PlanSummaryState | null {
-  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-    const invocations = dedupToolInvocations(messages[messageIndex]);
-    for (let invocationIndex = invocations.length - 1; invocationIndex >= 0; invocationIndex -= 1) {
-      const invocation = invocations[invocationIndex];
-      if (invocation.toolName.toLowerCase() !== "update_plan") continue;
-
-      const argsObj = asRecord(invocation.args);
-      let steps = parsePlanSteps(argsObj.plan);
-
-      if (steps.length === 0) {
-        const resultObj = asRecord(invocation.result);
-        const outputObj = asRecord(resultObj.output);
-        steps = parsePlanSteps(outputObj.plan ?? resultObj.plan);
-      }
-
-      if (steps.length === 0) continue;
-
-      const completedCount = steps.filter((step) => step.status === "completed").length;
-      const inProgressCount = steps.filter((step) => step.status === "in_progress").length;
-      const activeStep = steps.find((step) => step.status === "in_progress")?.step;
-      const running = invocation.state !== "result" || inProgressCount > 0;
-
-      return {
-        steps,
-        completedCount,
-        inProgressCount,
-        running,
-        activeStep,
-      };
-    }
-  }
-
-  return null;
-}
-
 function formatCommandPreview(cmd: string): string {
   const compact = cmd.replace(/\s+/g, " ").trim();
   return truncateLabel(compact, 64);
@@ -299,8 +232,8 @@ function formatActiveToolSummary(toolName: string, args: ToolCardArgs): string {
     return cmd ? `Running ${formatCommandPreview(cmd)}` : "Running command";
   }
 
-  if (lowerName === "update_plan") {
-    const plan = asArray(toolArg(args, "plan"));
+  if (isPlanToolName(toolName)) {
+    const plan = planStepsFromToolInvocation({ toolName, args });
     return `Updating plan (${plan.length} step${plan.length === 1 ? "" : "s"})`;
   }
 
@@ -310,11 +243,9 @@ function formatActiveToolSummary(toolName: string, args: ToolCardArgs): string {
 }
 
 function formatToolResultSummary(toolName: string, args: ToolCardArgs, result: ToolCardResult): string | null {
-  const lowerName = toolName.toLowerCase();
-
-  if (lowerName === "update_plan") {
-    const plan = asArray(toolArg(args, "plan"));
-    const completed = plan.filter((step) => asRecord(step).status === "completed").length;
+  if (isPlanToolName(toolName)) {
+    const plan = planStepsFromToolInvocation({ toolName, args, result });
+    const completed = plan.filter((step) => step.status === "completed").length;
     if (plan.length > 0) {
       return `${completed}/${plan.length} complete`;
     }
@@ -789,6 +720,10 @@ export function PlanSummaryStrip({ plan, onHide }: { plan: PlanSummaryState; onH
       {plan.activeStep ? (
         <div className="mt-1.5 text-xs text-foreground/70 truncate" title={plan.activeStep}>
           {plan.running ? "Running:" : "Current:"} {plan.activeStep}
+        </div>
+      ) : plan.nextStep ? (
+        <div className="mt-1.5 text-xs text-foreground/70 truncate" title={plan.nextStep}>
+          Next: {plan.nextStep}
         </div>
       ) : null}
 
@@ -1317,7 +1252,11 @@ function ToolActivityRollup({
   const [isExpanded, setIsExpanded] = useState(false);
   const toolParts = detailParts.filter((part): part is Extract<AssistantMessagePart, { type: "tool" }> => part.type === "tool");
   const reasoningParts = detailParts.filter((part): part is Extract<AssistantMessagePart, { type: "reasoning" }> => part.type === "reasoning");
-  const totalThoughtDurationMs = reasoningParts.reduce((total, part) => total + (part.durationMs ?? 0), 0);
+  const hasCompleteThoughtDuration = reasoningParts.length > 0
+    && reasoningParts.every((part) => typeof part.durationMs === "number" && part.durationMs > 0);
+  const totalThoughtDurationMs = hasCompleteThoughtDuration
+    ? reasoningParts.reduce((total, part) => total + (part.durationMs ?? 0), 0)
+    : 0;
   const shouldCollapse = detailParts.length > 1;
 
   const activeInvocation = [...toolParts]
@@ -1820,7 +1759,16 @@ export function AssistantExperienceView({
     () => thinkingLabelsFromSummary(activeToolBanner?.summary),
     [activeToolBanner?.summary],
   );
-  const planSummary = useMemo(() => latestPlanSummary(controllerMessages), [controllerMessages]);
+  const detectedPlanSummary = useMemo(() => latestPlanSummary(controllerMessages), [controllerMessages]);
+  const planSummary = detectedPlanSummary?.isComplete ? null : detectedPlanSummary;
+  const latestUserMessageId = useMemo(
+    () => [...controllerMessages].reverse().find((message) => message.role === "user")?.id ?? null,
+    [controllerMessages],
+  );
+  const planIdentity = planSummary?.steps.map((step) => step.step).join("\u0000") ?? null;
+  useEffect(() => {
+    setIsPlanHidden(false);
+  }, [activeConversationId, latestUserMessageId, planIdentity]);
   const lastMessageHasContent = useMemo(() => {
     if (controllerMessages.length === 0) return false;
     const lastMsg = controllerMessages[controllerMessages.length - 1];
@@ -2204,7 +2152,7 @@ export function AssistantExperienceView({
                 onClick={() => setIsPlanHidden(false)}
                 className="h-7 px-2 text-xs"
               >
-                Show plan ({controller.completedActions.length}/{controller.completedActions.length + controller.pendingActions.length})
+                Show plan ({planSummary.completedCount}/{planSummary.steps.length})
               </Button>
             ) : (
               <PlanSummaryStrip

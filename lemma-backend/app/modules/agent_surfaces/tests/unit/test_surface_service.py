@@ -15,6 +15,7 @@ from app.modules.agent_surfaces.domain.entities import (
 )
 from app.modules.agent_surfaces.domain.errors import (
     AgentSurfaceAlreadyExistsError,
+    AgentSurfaceCredentialConflictError,
     AgentSurfaceNotFoundError,
     AgentSurfaceValidationError,
 )
@@ -356,18 +357,22 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
 
     config = SurfaceConfig()
     repo.create.side_effect = lambda entity: entity
-    repo.get_system_credential_conflict_in_org.return_value = _surface_entity(
+    holder = _surface_entity(
         surface_type=SurfacePlatform.WHATSAPP,
+        name="whatsapp",
         config=config,
         account_id=None,
     )
+    repo.get_system_credential_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, None, None)
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.surface_service.settings.api_url",
         "https://api.example.test",
     )
 
-    with pytest.raises(AgentSurfaceValidationError, match="System WHATSAPP credentials"):
+    with pytest.raises(
+        AgentSurfaceCredentialConflictError, match="System WHATSAPP credentials"
+    ) as raised:
         await service.create_surface(
         platform=SurfacePlatform.WHATSAPP,
             pod_id=uuid4(),
@@ -375,6 +380,12 @@ async def test_create_system_surface_rejects_org_level_credential_conflict(monke
             config=config,
         )
 
+    # The setup UI names and links the pod holding the claim, so the conflict
+    # travels as data, not just prose.
+    assert raised.value.details == {
+        "kind": "SYSTEM",
+        "conflicting_surface": {"pod_id": str(holder.pod_id), "name": "whatsapp"},
+    }
     repo.create.assert_not_awaited()
 
 
@@ -389,18 +400,22 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
     account_id = uuid4()
     config = SurfaceConfig()
     repo.create.side_effect = lambda entity: entity
-    repo.get_account_conflict_in_org.return_value = _surface_entity(
+    holder = _surface_entity(
         surface_type=SurfacePlatform.SLACK,
+        name="slack",
         config=config,
         account_id=account_id,
     )
+    repo.get_account_conflict_in_org.return_value = holder
     enricher.resolve_binding.return_value = (None, "T123", "U-BOT")
     monkeypatch.setattr(
         "app.modules.agent_surfaces.services.surface_service.settings.api_url",
         "https://api.example.test",
     )
 
-    with pytest.raises(AgentSurfaceValidationError, match="connected account"):
+    with pytest.raises(
+        AgentSurfaceCredentialConflictError, match="connected account"
+    ) as raised:
         await service.create_surface(
         platform=SurfacePlatform.SLACK,
             pod_id=uuid4(),
@@ -409,6 +424,10 @@ async def test_create_account_surface_rejects_org_level_account_conflict(monkeyp
             account_id=account_id,
         )
 
+    assert raised.value.details == {
+        "kind": "ACCOUNT",
+        "conflicting_surface": {"pod_id": str(holder.pod_id), "name": "slack"},
+    }
     repo.create.assert_not_awaited()
 
 

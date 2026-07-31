@@ -535,9 +535,15 @@ async def list_available_surfaces(
     pod_id: UUID,
     user: CurrentUser,
     connector_service: ConnectorServiceDep,
+    service: AgentSurfaceService = Depends(get_surface_service),
 ) -> AvailableSurfacesResponse:
     """The connectable-surface catalog: every surface platform with its connector,
-    supported credential modes, and the schema to connect an account. Platform-
-    level (no surface need exist); the pod scopes authorization only."""
-    del user, pod_id
-    return await build_available_surfaces(connector_service=connector_service)
+    supported credential modes, the schema to connect an account, and whether this
+    pod's org can still claim the platform's Lemma-managed bot/number. Otherwise
+    platform-level — no surface need exist."""
+    del user
+    return await build_available_surfaces(
+        connector_service=connector_service,
+        pod_id=pod_id,
+        surface_repository=service.surface_repository,
+    )

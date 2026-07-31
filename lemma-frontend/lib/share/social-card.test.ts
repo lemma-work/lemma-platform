@@ -9,9 +9,9 @@ import {
 describe('social-card', () => {
     it('keeps the site promise concise', () => {
         expect(resolveSocialCardCopy({ variant: 'site' })).toEqual({
-            eyebrow: 'LEMMA',
-            title: 'Run it on Lemma.',
-            detail: 'Run your apps and agents. Bring your team.',
+            eyebrow: 'THE RUNTIME FOR AGENT-BUILT SOFTWARE',
+            title: "The software you need doesn't exist yet.",
+            detail: 'Your coding agent can write it. Lemma makes it something your team can actually use.',
             label: 'lemma.work',
         });
     });

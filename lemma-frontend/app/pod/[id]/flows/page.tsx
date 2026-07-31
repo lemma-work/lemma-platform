@@ -28,7 +28,7 @@ import { SectionPrimer } from '@/components/education/section-primer';
 import { EmptyState, QuietEmptyState } from '@/components/shared/empty-state';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { Button } from '@/components/ui/button';
-import { ResourceIndexHeader, ResourceIndexShell, ResourceMetricButton } from '@/components/pod/resource-layout';
+import { ResourceHeader, ResourceIndexShell, ResourceMetricButton } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { getFunctionNodeName } from '@/lib/utils/flow-node-config';
@@ -326,9 +326,8 @@ export default function FlowsIndexPage({
     if (loadingFlows || loadingFunctions) {
         return (
             <ResourceIndexShell>
-                <ResourceIndexHeader
+                <ResourceHeader
                     title="Workflows"
-                    productIconKind="workflows"
                     meta={<ConceptHint concept="flow" />}
                     actions={(
                         <div className="flex items-center gap-2">
@@ -382,9 +381,8 @@ export default function FlowsIndexPage({
 
     return (
         <ResourceIndexShell>
-            <ResourceIndexHeader
+            <ResourceHeader
                 title="Workflows"
-                productIconKind="workflows"
                 meta={<ConceptHint concept="flow" />}
                 actions={(
                     <div className="flex items-center gap-2">

@@ -1,13 +1,11 @@
-'use client';
-
-import { use } from 'react';
 import { redirect } from 'next/navigation';
 
-export default function PodChannelsPage({
+/** Long-retired name for surfaces, which now live inside agents. */
+export default async function LegacyChannelsRedirect({
     params,
 }: {
     params: Promise<{ id: string }>;
 }) {
-    const { id: podId } = use(params);
-    redirect(`/pod/${podId}/surfaces`);
+    const { id: podId } = await params;
+    redirect(`/pod/${podId}/ai`);
 }

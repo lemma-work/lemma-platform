@@ -23,6 +23,18 @@ import { AgentSurfacesService } from "../openapi_client/services/AgentSurfacesSe
 export class PodSurfacesNamespace {
   constructor(private readonly client: GeneratedClientAdapter) {}
 
+  /**
+   * The connectable-surface catalog for a pod: every platform with its
+   * connector, supported credential modes, the schema to connect an account,
+   * and whether the org can still claim the platform's Lemma-managed
+   * bot/number. Platform-level — no surface need exist.
+   */
+  available(podId: string) {
+    return this.client.request(() =>
+      AgentSurfacesService.agentSurfaceAvailable(podId),
+    );
+  }
+
   list(
     podId: string,
     options: {

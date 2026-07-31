@@ -324,6 +324,21 @@ class SurfaceConnectDescriptor(BaseModel):
     supports_org_custom_oauth: bool = False
 
 
+class SurfaceSystemClaim(BaseModel):
+    """Whether this org can still put the platform's Lemma-managed bot/number
+    behind a surface.
+
+    The shared identity is claimable exactly once per organization, so the setup
+    UI can render the option as unavailable *before* the user commits instead of
+    discovering it as a failed save. ``claimed_by_pod_id`` is the pod holding the
+    claim — always a pod in the caller's own org, so linking to it leaks nothing
+    they can't already see."""
+
+    available: bool
+    claimed_by_pod_id: UUID | None = None
+    claimed_by_surface_name: str | None = None
+
+
 class AvailableSurface(BaseModel):
     """One connectable surface platform. ``supported_credential_modes`` is the
     single source of truth for how it can be set up: ``[CUSTOM]`` means an account
@@ -340,6 +355,13 @@ class AvailableSurface(BaseModel):
     supported_credential_modes: list[SurfaceCredentialMode]
     connector_available: bool = True
     connect: SurfaceConnectDescriptor | None = None
+    # Only meaningful when SYSTEM is in supported_credential_modes; None means
+    # the platform has no Lemma-managed identity to claim in the first place.
+    system_claim: SurfaceSystemClaim | None = None
+    # Whether this deployment can provision a dedicated bot for the user through
+    # a manager bot (Telegram). Lets the setup UI offer that path only where it
+    # actually works, instead of failing once the user has committed to it.
+    managed_setup_available: bool = False
 
 
 class AvailableSurfacesResponse(BaseModel):

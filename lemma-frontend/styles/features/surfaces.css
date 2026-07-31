@@ -8,7 +8,7 @@
 .surfaces-page-shell {
   display: flex;
   flex-direction: column;
-  gap: 3rem;
+  gap: var(--space-12);
 }
 
 .surfaces-create-shell {
@@ -19,8 +19,8 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 1.5rem;
-  padding: 0.25rem 0 1.5rem;
+  gap: var(--space-6);
+  padding: var(--space-1) 0 var(--space-6);
   border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 30%, transparent);
 }
 
@@ -28,7 +28,7 @@
   max-width: 46rem;
   color: var(--text-primary);
   font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, sans-serif;
-  font-size: 3rem;
+  font-size: var(--text-4xl);
   font-weight: 400;
   line-height: 1.05;
   letter-spacing: 0;
@@ -46,13 +46,13 @@
 .surfaces-hero-meta {
   display: flex;
   flex-shrink: 0;
-  gap: 0.875rem;
+  gap: var(--space-3-5);
   color: var(--text-tertiary);
   font-size: var(--text-sm);
 }
 
 .surfaces-hero-meta span + span {
-  padding-left: 0.875rem;
+  padding-left: var(--space-3-5);
   border-left: 1px solid color-mix(in srgb, var(--border-subtle) 42%, transparent);
 }
 
@@ -61,7 +61,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .surfaces-section-heading h1,
@@ -86,23 +86,23 @@
   width: 100%;
   max-width: 52rem;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .surfaces-platform-list {
   display: grid;
   width: 100%;
-  gap: 0.75rem;
+  gap: var(--space-3);
 }
 
 .surface-platform-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 1rem;
+  gap: var(--space-4);
   align-items: center;
   width: 100%;
   min-height: 5.25rem;
-  padding: 0.875rem;
+  padding: var(--space-3-5);
   border: 1px solid color-mix(in srgb, var(--border-subtle) 66%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
@@ -119,7 +119,7 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .surface-platform-switch {
@@ -148,9 +148,9 @@
    in-card "add" action. */
 .surface-platform-group {
   display: grid;
-  gap: 0.75rem;
+  gap: var(--space-3);
   width: 100%;
-  padding: 0.875rem;
+  padding: var(--space-3-5);
   border: 1px solid color-mix(in srgb, var(--border-subtle) 66%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--surface-1) 92%, transparent);
@@ -165,15 +165,15 @@
 
 .surface-instance-list {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
 .surface-instance-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 1rem;
+  gap: var(--space-4);
   align-items: center;
-  padding: 0.5rem 0.625rem;
+  padding: var(--space-2) var(--space-2-5);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--surface-2) 32%, transparent);
 }
@@ -192,10 +192,10 @@
 .surface-ledger-row {
   display: grid;
   grid-template-columns: minmax(13rem, 0.95fr) minmax(0, 1.35fr) auto;
-  gap: 1rem;
+  gap: var(--space-4);
   align-items: center;
   min-height: 5rem;
-  padding: 0.875rem 0;
+  padding: var(--space-3-5) 0;
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 34%, transparent);
 }
 
@@ -207,7 +207,7 @@
 .surfaces-loading-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
   min-height: 4rem;
   color: var(--text-secondary);
   font-size: var(--text-sm);
@@ -216,7 +216,7 @@
 .surfaces-builder {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: var(--space-6);
 }
 
 .surfaces-builder-grid {
@@ -224,7 +224,7 @@
   width: 100%;
   min-width: 0;
   grid-template-columns: minmax(0, 1fr) 18rem;
-  gap: 3rem;
+  gap: var(--space-12);
   align-items: start;
 }
 
@@ -239,14 +239,14 @@
   display: block;
   width: 100%;
   min-width: 0;
-  padding: 1.75rem 0 0;
+  padding: var(--space-7) 0 0;
   border-top: 0;
 }
 
 .surface-builder-step-heading {
   display: none;
   align-items: center;
-  gap: 0.625rem;
+  gap: var(--space-2-5);
   min-width: 0;
 }
 
@@ -285,8 +285,8 @@
   width: 100%;
   min-height: 5.25rem;
   min-width: 0;
-  gap: 0.75rem;
-  padding: 0.875rem;
+  gap: var(--space-3);
+  padding: var(--space-3-5);
   border: 0;
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 32%, transparent);
   border-right: 1px solid color-mix(in srgb, var(--border-subtle) 32%, transparent);
@@ -388,7 +388,7 @@
 .surfaces-platform-title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-2);
   color: var(--text-primary);
   font-size: var(--text-sm);
   font-weight: 400;
@@ -409,7 +409,7 @@
   width: 100%;
   min-width: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .surface-experience-grid {
@@ -418,7 +418,7 @@
   max-width: 56rem;
   min-width: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1.25rem;
+  gap: var(--space-5);
 }
 
 .surface-choice-list {
@@ -434,8 +434,8 @@
   min-height: 4.25rem;
   min-width: 0;
   align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.875rem 0.75rem;
+  gap: var(--space-3);
+  padding: var(--space-3-5) var(--space-3);
   border: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 32%, transparent);
   border-radius: 0;
@@ -510,7 +510,7 @@
   max-width: 52rem;
   min-width: 0;
   flex-direction: column;
-  gap: 0.875rem;
+  gap: var(--space-3-5);
 }
 
 .surface-step-stack-wide {
@@ -521,14 +521,14 @@
 .surface-review-panel {
   min-width: 0;
   border-top: 1px solid color-mix(in srgb, var(--border-subtle) 34%, transparent);
-  padding: 1rem 0 0;
+  padding: var(--space-4) 0 0;
 }
 
 .surface-field-panel-heading {
   display: flex;
   min-width: 0;
   align-items: flex-start;
-  gap: 0.75rem;
+  gap: var(--space-3);
   margin-bottom: 0.875rem;
 }
 
@@ -552,11 +552,11 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 0.625rem;
+  gap: var(--space-2-5);
   min-height: 2.75rem;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--surface-2) 34%, transparent);
-  padding: 0.75rem;
+  padding: var(--space-3);
   color: var(--text-secondary);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
@@ -570,11 +570,11 @@
   display: grid;
   min-width: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.875rem 1rem;
+  gap: var(--space-3-5) var(--space-4);
 }
 
 .surface-handler-grid .surface-field-panel {
-  padding-top: 0.875rem;
+  padding-top: var(--space-3-5);
 }
 
 .surface-review-panel {
@@ -591,7 +591,7 @@
 
 .surface-review-grid div {
   min-width: 0;
-  padding: 0.875rem 0.75rem;
+  padding: var(--space-3-5) var(--space-3);
   border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 32%, transparent);
 }
 
@@ -627,7 +627,7 @@
 }
 
 .surface-draft-panel {
-  padding: 0.875rem;
+  padding: var(--space-3-5);
 }
 
 .surface-draft-panel + .surface-draft-panel {
@@ -638,14 +638,14 @@
   max-width: 42rem;
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--surface-2) 34%, transparent);
-  padding: 1rem;
+  padding: var(--space-4);
 }
 
 .surfaces-builder-footer {
   display: flex;
   justify-content: flex-end;
   align-items: flex-end;
-  gap: 1rem;
+  gap: var(--space-4);
   width: 100%;
   margin-top: 2.25rem;
   padding-right: 0;
@@ -689,7 +689,7 @@
   }
 
   .surfaces-hero-title {
-    font-size: 2.25rem;
+    font-size: var(--text-3xl);
   }
 
   .surface-ledger-row,
@@ -733,7 +733,7 @@
   }
 
   .pod-home-work-column {
-    padding: 0 1.125rem;
+    padding: 0 var(--space-4);
   }
 
   .pod-home-work-column:first-child {
@@ -778,7 +778,7 @@
   margin-inline: auto;
   color: var(--lemma-markdown-text);
   font-family: var(--font-document-sans), var(--font-body-family);
-  font-size: 14.75px;
+  font-size: var(--text-sm);
   font-weight: 400;
   line-height: 1.62;
 }
@@ -809,7 +809,7 @@
   margin: 0 0 0.72em;
   color: var(--lemma-markdown-heading);
   font-family: var(--font-landing-serif), Georgia, serif;
-  font-size: 1.78rem;
+  font-size: var(--text-2xl);
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.18;
@@ -820,7 +820,7 @@
   margin: 1.65rem 0 0.5rem;
   color: var(--lemma-markdown-heading);
   font-family: var(--font-document-sans), var(--font-body-family);
-  font-size: 1.02rem;
+  font-size: var(--text-base);
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1.32;
@@ -830,7 +830,7 @@
   margin: 1.35rem 0 0.38rem;
   color: var(--lemma-markdown-muted);
   font-family: var(--font-document-sans), var(--font-body-family);
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.035em;
   line-height: 1.35;
@@ -843,7 +843,7 @@
   margin: 1.2rem 0 0.3rem;
   color: var(--lemma-markdown-heading);
   font-family: var(--font-document-sans), var(--font-body-family);
-  font-size: 0.9rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0;
   line-height: 1.4;
@@ -876,20 +876,20 @@
 }
 
 .lemma-markdown-editor.prose code {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--lemma-markdown-code-bg);
-  padding: 0.12em 0.35em;
+  padding: var(--space-1) var(--space-1-5);
   font-family: var(--font-mono-family);
-  font-size: 0.86em;
+  font-size: var(--text-sm);
   font-weight: 400;
 }
 
 .lemma-markdown-editor.prose pre {
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: var(--lemma-markdown-code-bg);
   font-family: var(--font-mono-family);
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   line-height: 1.65;
 }
 
@@ -904,7 +904,7 @@
 }
 
 .lemma-markdown-editor.prose .lemma-markdown-table {
-  font-size: 0.9em;
+  font-size: var(--text-sm);
   line-height: 1.55;
 }
 
@@ -913,5 +913,268 @@
   height: 100vh;
   height: 100dvh;
   background: var(--card-bg);
+}
+
+/* ---------------------------------------------------------------------------
+   Surface setup modal.
+
+   Journey states are narrow on purpose — each one asks a single question, and
+   the old full-width dialog is what made setup read like a settings page.
+   Settings for a surface that already works get the wider variant.
+   --------------------------------------------------------------------------- */
+
+.surface-modal {
+  max-width: 28rem;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.surface-modal.is-wide {
+  max-width: 34rem;
+}
+
+.surface-modal-header {
+  display: grid;
+  gap: var(--space-1-5);
+}
+
+.surface-modal-promise {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.surface-modal-body {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+.surface-modal-footer {
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* Says why the primary verb is unavailable, right beside it — a disabled button
+   with no explanation is the failure this design is trying to remove. */
+.surface-modal-blocker {
+  margin-right: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  text-align: left;
+}
+
+.surface-modal-error {
+  display: flex;
+  gap: var(--space-2);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--state-error) 10%, transparent);
+  padding: var(--space-2-5) var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+/* Identity fork ------------------------------------------------------------ */
+
+.surface-choice-stack {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.surface-identity-option {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: flex-start;
+  gap: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  padding: var(--space-3-5);
+  text-align: left;
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out);
+}
+
+.surface-identity-option:hover:not(:disabled),
+.surface-identity-option:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.surface-identity-option.is-selected {
+  border-color: var(--action-primary);
+  background: color-mix(in srgb, var(--action-primary) 6%, var(--card-bg));
+}
+
+/* Unavailable options stay visible: hiding one makes the org's own state
+   unexplainable ("why is there no Lemma bot?"). */
+.surface-identity-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.surface-identity-option-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: var(--leading-snug);
+}
+
+.surface-identity-option-hint {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  font-weight: 400;
+}
+
+.surface-identity-option-link {
+  margin-top: -0.25rem;
+  padding-inline: 0.875rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Journey ------------------------------------------------------------------ */
+
+.surface-journey {
+  display: grid;
+  gap: var(--space-3-5);
+}
+
+.surface-journey-step {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-2-5);
+}
+
+.surface-journey-step.is-optional {
+  opacity: 0.75;
+}
+
+.surface-step-number {
+  display: inline-flex;
+  height: 1.125rem;
+  width: 1.125rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.3125rem;
+  border-radius: var(--radius-full, 999px);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: 1;
+}
+
+/* The resolved verdict for a credential the modal could check before saving. */
+.surface-verdict {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-top: 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.surface-verdict.is-valid {
+  color: var(--state-success);
+}
+
+.surface-verdict.is-invalid {
+  color: var(--state-error);
+}
+
+/* Reach card --------------------------------------------------------------- */
+
+.surface-reach-card {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-3-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--card-bg);
+  padding: var(--space-3-5);
+}
+
+.surface-reach-qr {
+  display: flex;
+  height: 6rem;
+  width: 6rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  padding: var(--space-1-5);
+  color: var(--text-primary);
+}
+
+.surface-copy-field {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--field-bg);
+  padding: var(--space-1-5) var(--space-2-5);
+  text-align: left;
+}
+
+/* Cross-org default picker ------------------------------------------------- */
+
+.surface-default-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-1-5) var(--space-2);
+  text-align: left;
+}
+
+.surface-default-option:hover {
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+}
+
+.surface-radio {
+  display: inline-block;
+  height: 0.875rem;
+  width: 0.875rem;
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+}
+
+.surface-default-option.is-selected .surface-radio {
+  border-color: var(--action-primary);
+  border-width: 4px;
+}
+
+@media (max-width: 640px) {
+  /* One question per state reads fine at any width, but the dialog itself
+     should sit at the bottom where a thumb is. */
+  .surface-modal {
+    top: auto;
+    bottom: 0;
+    max-width: none;
+    width: 100vw;
+    transform: translate(-50%, 0);
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
 }
 }

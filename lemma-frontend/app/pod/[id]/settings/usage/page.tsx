@@ -35,7 +35,6 @@ function PodUsagePageContent({ params }: { params: Promise<{ id: string }> }) {
         <PodSettingsShell
             podId={podId}
             title="Pod Settings"
-            description="Track spend, tokens, and recent model activity inside this pod."
         >
             <div className="w-full max-w-5xl">
                 {organizationId ? (
