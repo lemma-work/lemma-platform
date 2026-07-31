@@ -76,6 +76,11 @@ jobs:
             agentbox:
               - 'agentbox/**'
               - 'agentbox-client/**'
+              # agentbox/uv.lock pins lemma-sdk as an editable path dependency on
+              # ../lemma-python, so a version bump there makes the lock stale and
+              # `uv sync --locked` fail. Without this the job would not run on
+              # that change and the rot would surface on some later, unrelated PR.
+              - 'lemma-python/**'
               - '.github/workflows/ci.yml'
 
   agentbox:
