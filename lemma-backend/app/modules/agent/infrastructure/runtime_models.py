@@ -1,4 +1,4 @@
-"""Persistence models for Agent Host identity and harness discovery."""
+"""Persistence models for Agent Host identity, discovery, and dispatch."""
 
 from __future__ import annotations
 
@@ -7,17 +7,19 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     ForeignKey,
     Index,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
+from app.core.infrastructure.db.base import Base, UUIDAuditBase, UUIDCreatedBase
 
 
 class AgentHostPairingModel(UUIDCreatedBase):
@@ -140,4 +142,98 @@ class AgentHostHarnessModel(UUIDAuditBase):
 
     host: Mapped[AgentHostModel] = relationship(
         "AgentHostModel", foreign_keys=[host_id]
+    )
+
+
+class AgentHostCommandModel(UUIDCreatedBase):
+    """Durable at-least-once command for an Agent Host."""
+
+    __tablename__ = "agent_host_commands"
+    __table_args__ = (
+        # Drives the competitive FOR UPDATE SKIP LOCKED handout.
+        Index("ix_agent_host_command_poll", "host_id", "state", "created_at"),
+        Index("ix_agent_host_command_run", "run_id", "lease_epoch"),
+    )
+
+    host_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    lease_epoch: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rejection: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+
+class AgentHostRunLeaseModel(Base):
+    """The single dispatch fence for one agent run.
+
+    ``run_id`` is the primary key, which is what makes double-dispatch
+    structurally impossible rather than merely guarded in application code.
+    There is no ack-watermark column: run events travel a per-run Redis Stream
+    whose last entry is the watermark.
+    """
+
+    __tablename__ = "agent_host_run_leases"
+    __table_args__ = (
+        # Also serves host_id-only lookups.
+        Index("ix_agent_host_run_lease_host_state", "host_id", "state"),
+        Index(
+            "ix_agent_host_run_lease_expiry",
+            "lease_expires_at",
+            postgresql_where=text(
+                "state NOT IN ('WAITING_INPUT','SUCCEEDED','FAILED',"
+                "'CANCELLED','DISPATCH_UNKNOWN')"
+            ),
+        ),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    host_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agent_hosts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    harness_id: Mapped[UUID] = mapped_column(
+        ForeignKey("agent_host_harnesses.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    runtime_profile_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_runtime_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    lease_epoch: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    terminal_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )

@@ -21,10 +21,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.infrastructure.db.base import UUIDAuditBase, UUIDCreatedBase
-
-# Imported for its side effect: Agent Host tables must be registered on the
-# shared metadata for migrations and create_all to see them.
-from app.modules.agent.infrastructure import runtime_models as _runtime_models  # noqa: F401
 from app.modules.agent.domain.entities import (
     Agent as AgentEntity,
     AgentRun as AgentRunEntity,
@@ -139,11 +135,26 @@ class AgentRuntimeProfileModel(UUIDAuditBase):
             unique=True,
             postgresql_where=text("scope = 'PERSONAL'"),
         ),
+        # Holds for legacy rows too: a NULL runtime_type takes the first
+        # branch, which only requires harness_id to be NULL.
+        CheckConstraint(
+            "(runtime_type IS DISTINCT FROM 'HARNESS' AND harness_id IS NULL) OR "
+            "(runtime_type = 'HARNESS' AND harness_id IS NOT NULL)",
+            name="ck_agent_runtime_profile_harness_binding",
+        ),
     )
 
     organization_id: Mapped[UUID] = mapped_column(
         ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    # Nullable during the Agent Host rollout: legacy daemon profiles predate
+    # runtime_type and are filtered out in code rather than backfilled.
+    runtime_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    harness_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_host_harnesses.id", ondelete="RESTRICT"),
+        nullable=True,
         index=True,
     )
     user_id: Mapped[UUID | None] = mapped_column(
