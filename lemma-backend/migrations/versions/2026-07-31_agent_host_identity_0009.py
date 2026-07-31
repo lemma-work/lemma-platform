@@ -5,18 +5,21 @@ This is the single migration for the whole Agent Host feature: identity
 runtime-profile columns that bind a profile to a harness. Deployments therefore
 apply one revision, not a chain of them.
 
-It is deliberately additive — no drops, deletes, or renames. The legacy local
-daemon keeps its tables and columns and keeps working; the daemon is retired in
+It is additive apart from the redundant per-table ``id`` indexes listed in
+``_TABLES_WITH_REDUNDANT_ID_INDEX``, which the downgrade recreates exactly.
+
+The legacy local daemon keeps its tables and columns here; it is retired in
 code, and its now-unused ``agent_runtime_daemons`` table and the obsolete
 ``protocol``/``kind``/``daemon_id``/``profile_metadata`` columns are left in
 place for a later, unrelated cleanup. Leaving an empty table behind costs
-nothing and buys a lossless downgrade plus a main branch that stays releasable
-at every commit of the rollout.
+nothing and keeps the main branch releasable at every commit of the rollout.
 
 Run events are not journaled here. They travel a per-run Redis Stream, so there
 is no ``agent_host_events`` table and no ack-watermark column on the lease: the
-stream's last entry is the watermark, and a host that resends after a Redis
-flush is deduplicated by sequence.
+stream's last entry is the watermark. Redis has no persistence in this
+deployment, so losing the stream is not fully recoverable - the host resends
+what it still holds and the backend adopts that sequence rather than refusing
+it, which is a resync, not a replay from the beginning.
 
 Revision ID: 0009_agent_host
 Revises: 0008_function_execution
@@ -63,30 +66,12 @@ def _audit_columns() -> list[sa.Column]:
 # maintained on every insert and could never be chosen over the PK index. The
 # bases no longer set it; this drops the ones already in the schema.
 #
-# The drop is derived at runtime so it matches whatever a given environment
-# actually has: single-column, non-unique, non-primary indexes on `id`.
-_REDUNDANT_ID_INDEXES = sa.text(
-    """
-    SELECT c.relname AS index_name, t.relname AS table_name
-      FROM pg_index x
-      JOIN pg_class c ON c.oid = x.indexrelid
-      JOIN pg_class t ON t.oid = x.indrelid
-      JOIN pg_namespace n ON n.oid = t.relnamespace
-     WHERE n.nspname = current_schema()
-       AND NOT x.indisprimary
-       AND NOT x.indisunique
-       AND x.indnatts = 1
-       AND (SELECT attname FROM pg_attribute
-             WHERE attrelid = t.oid AND attnum = x.indkey[0]) = 'id'
-    """
-)
-
-
-def _drop_redundant_id_indexes() -> None:
-    for index_name, _table in op.get_bind().execute(_REDUNDANT_ID_INDEXES):
-        op.execute(sa.text(f'DROP INDEX IF EXISTS "{index_name}"'))
-
-
+# Drop and restore both iterate the SAME pinned list below. An earlier version
+# derived the drop from pg_index at runtime, which would have removed any
+# single-column index on a column named `id` anywhere in the schema - including
+# tables this feature knows nothing about - while the restore only recreated
+# the pinned ones. That asymmetry made the downgrade lossy for anything the
+# authors had not seen.
 # The exact set of tables carrying ix_<table>_id at revision 0008. Pinned
 # rather than derived, so a downgrade restores precisely what was there:
 # five tables with an id primary key never had the duplicate.
@@ -133,6 +118,11 @@ _TABLES_WITH_REDUNDANT_ID_INDEX = (
     "workflow_flows",
     "workflow_run_waits",
 )
+
+
+def _drop_redundant_id_indexes() -> None:
+    for table_name in _TABLES_WITH_REDUNDANT_ID_INDEX:
+        op.execute(sa.text(f'DROP INDEX IF EXISTS "ix_{table_name}_id"'))
 
 
 def _restore_redundant_id_indexes() -> None:

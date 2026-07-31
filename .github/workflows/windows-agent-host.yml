@@ -1,12 +1,9 @@
 name: Windows Agent Host smoke
 
-# Validates that the lemma CLI's user-daemon works on a real Windows kernel —
-# the install path plus the `lemma agent-host` command surface. The daemon this
-# job used to exercise is gone; Agent Host replaces it and has its own Windows
-# service path (schtasks), so Windows coverage still matters.
-# lifecycle. This exercises the Windows-specific code that cannot be run on the
-# Linux/macOS dev machines: the detached process-group spawn and the ctypes
-# process-liveness probe.
+# Validates that the lemma CLI works on a real Windows kernel — the `uv tool
+# install` path plus the `lemma agent-host` command surface. This exercises the
+# Windows-specific code that cannot be run on the Linux/macOS dev machines:
+# console encoding, path handling, and the Agent Host service paths (schtasks).
 #
 # Triggers:
 #   * push to main           — post-merge gate (only when CLI files change)

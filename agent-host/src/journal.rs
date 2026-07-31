@@ -553,37 +553,119 @@ impl Journal {
         Ok(batches)
     }
 
+    /// Record the backend's watermark, keeping the acknowledged events until
+    /// the run terminalizes.
+    ///
+    /// The acknowledged copy is what makes a resend possible. The event stream
+    /// on the server side is transient transport with no persistence: after a
+    /// flush, eviction, or restart its watermark drops back to zero and it
+    /// expects sequence 1 again. Deleting on acknowledgement threw away the
+    /// only copy that could answer that, so the run could never be replayed and
+    /// stayed permanently rejected. Retention is bounded by the run's own
+    /// lifetime, not by the journal's.
     pub fn acknowledge_events(&self, target_id: Uuid, ack: &EventAck) -> Result<(), JournalError> {
-        let connection = self.connection()?;
-        let exists: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM runs WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3)",
-            params![
-                target_id.to_string(),
-                ack.run_id.to_string(),
-                i64::from(ack.lease_epoch)
-            ],
-            |row| row.get(0),
-        )?;
-        if !exists {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state: Option<String> = transaction
+            .query_row(
+                "SELECT state FROM runs WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3",
+                params![
+                    target_id.to_string(),
+                    ack.run_id.to_string(),
+                    i64::from(ack.lease_epoch)
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(state) = state else {
             return Err(JournalError::AckMismatch);
-        }
-        // The backend acknowledgment is the durable handoff boundary. Keeping
-        // a second acknowledged copy locally grows the SQLite journal forever
-        // without contributing to replay or recovery.
-        connection.execute(
+        };
+        transaction.execute(
             r#"
-            DELETE FROM event_outbox
+            UPDATE event_outbox
+               SET acknowledged_at=?5
              WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
-                   AND sequence<=?4
+                   AND sequence<=?4 AND acknowledged_at IS NULL
             "#,
             params![
                 target_id.to_string(),
                 ack.run_id.to_string(),
                 i64::from(ack.lease_epoch),
-                i64::try_from(ack.acked_through).unwrap_or(i64::MAX)
+                i64::try_from(ack.acked_through).unwrap_or(i64::MAX),
+                Utc::now().to_rfc3339()
             ],
         )?;
+        // A terminal run will never be replayed: the server refuses events for
+        // one, so its acknowledged rows have no further purpose.
+        if enum_parse::<RunState>(&state).is_ok_and(RunState::is_terminal) {
+            transaction.execute(
+                r#"
+                DELETE FROM event_outbox
+                 WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
+                       AND acknowledged_at IS NOT NULL
+                "#,
+                params![
+                    target_id.to_string(),
+                    ack.run_id.to_string(),
+                    i64::from(ack.lease_epoch)
+                ],
+            )?;
+        }
+        transaction.commit()?;
         Ok(())
+    }
+
+    /// Make every retained event for one run pending again.
+    ///
+    /// Used when the server rejects a batch because its stream no longer holds
+    /// the history the sequence numbers assume. Resending from the start is
+    /// safe: the server deduplicates by sequence and keeps the first write.
+    /// Returns how many events were re-queued.
+    pub fn rewind_acknowledgements(
+        &self,
+        target_id: Uuid,
+        run_id: Uuid,
+        lease_epoch: u32,
+    ) -> Result<u64, JournalError> {
+        let changed = self.connection()?.execute(
+            r#"
+            UPDATE event_outbox SET acknowledged_at=NULL
+             WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
+                   AND acknowledged_at IS NOT NULL
+            "#,
+            params![
+                target_id.to_string(),
+                run_id.to_string(),
+                i64::from(lease_epoch)
+            ],
+        )?;
+        Ok(u64::try_from(changed).unwrap_or_default())
+    }
+
+    /// Give up on delivering one run's events.
+    ///
+    /// The rows are marked delivered without ever reaching the server, so a run
+    /// whose stream the server keeps refusing stops blocking its own terminal
+    /// checkpoint and stops being retried on every flush. Returns how many
+    /// events were dropped.
+    pub fn discard_events(
+        &self,
+        target_id: Uuid,
+        run_id: Uuid,
+        lease_epoch: u32,
+    ) -> Result<u64, JournalError> {
+        let changed = self.connection()?.execute(
+            r#"
+            DELETE FROM event_outbox
+             WHERE target_id=?1 AND run_id=?2 AND lease_epoch=?3
+            "#,
+            params![
+                target_id.to_string(),
+                run_id.to_string(),
+                i64::from(lease_epoch)
+            ],
+        )?;
+        Ok(u64::try_from(changed).unwrap_or_default())
     }
 
     pub fn cleanup_retained(&self, now: DateTime<Utc>) -> Result<u64, JournalError> {
@@ -1044,7 +1126,10 @@ mod tests {
             journal.pending_events(target, 256).unwrap()[0].events[0].sequence,
             3
         );
-        let retained: i64 = journal
+    }
+
+    fn stored_events(journal: &Journal, target: Uuid) -> i64 {
+        journal
             .connection()
             .unwrap()
             .query_row(
@@ -1052,8 +1137,150 @@ mod tests {
                 params![target.to_string()],
                 |row| row.get(0),
             )
+            .unwrap()
+    }
+
+    fn ack_through(journal: &Journal, target: Uuid, run_id: Uuid, sequence: u64) {
+        journal
+            .acknowledge_events(
+                target,
+                &EventAck {
+                    run_id,
+                    lease_epoch: 1,
+                    acked_through: sequence,
+                },
+            )
             .unwrap();
-        assert_eq!(retained, 1);
+    }
+
+    fn append_three(journal: &Journal, target: Uuid, run_id: Uuid) {
+        for index in 0..3 {
+            let mut payload = JsonMap::new();
+            payload.insert("index".into(), serde_json::Value::from(index));
+            journal
+                .append_event(
+                    target,
+                    run_id,
+                    1,
+                    EventType::AgentMessageChunk,
+                    None,
+                    payload,
+                )
+                .unwrap();
+        }
+    }
+
+    /// The server's event stream is transient and unbacked by persistence, so
+    /// a live run has to stay replayable from here after the stream is lost.
+    #[test]
+    fn acknowledged_events_are_retained_until_the_run_terminalizes() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        append_three(&journal, target, spec.agent_run_id);
+
+        ack_through(&journal, target, spec.agent_run_id, 3);
+        assert!(journal.pending_events(target, 256).unwrap().is_empty());
+        assert_eq!(
+            stored_events(&journal, target),
+            3,
+            "an active run must keep a replayable copy of its acknowledged events"
+        );
+
+        // Once the run is terminal the server refuses its events outright, so
+        // the retained copy has nothing left to answer.
+        journal
+            .checkpoint(
+                target,
+                spec.agent_run_id,
+                1,
+                RunState::Succeeded,
+                &JsonMap::new(),
+            )
+            .unwrap();
+        ack_through(&journal, target, spec.agent_run_id, 3);
+        assert_eq!(stored_events(&journal, target), 0);
+    }
+
+    #[test]
+    fn rewinding_acknowledgements_replays_a_run_from_its_first_event() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        append_three(&journal, target, spec.agent_run_id);
+        ack_through(&journal, target, spec.agent_run_id, 3);
+        assert!(journal.pending_events(target, 256).unwrap().is_empty());
+
+        let replayed = journal
+            .rewind_acknowledgements(target, spec.agent_run_id, 1)
+            .unwrap();
+
+        assert_eq!(replayed, 3);
+        let batches = journal.pending_events(target, 256).unwrap();
+        assert_eq!(
+            batches[0]
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "a resend has to start at sequence 1, which is what an emptied \
+             server stream expects"
+        );
+    }
+
+    #[test]
+    fn discarding_events_unblocks_a_run_the_server_keeps_refusing() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        append_three(&journal, target, spec.agent_run_id);
+        journal
+            .checkpoint(
+                target,
+                spec.agent_run_id,
+                1,
+                RunState::Failed,
+                &JsonMap::new(),
+            )
+            .unwrap();
+        // Undeliverable events would otherwise hold back the terminal
+        // checkpoint, which is the only way Lemma learns the run ended.
+        assert!(journal.pending_control(target).unwrap().1.is_empty());
+
+        assert_eq!(
+            journal
+                .discard_events(target, spec.agent_run_id, 1)
+                .unwrap(),
+            3
+        );
+
+        assert!(journal.pending_events(target, 256).unwrap().is_empty());
+        let (_, checkpoints, _) = journal.pending_control(target).unwrap();
+        assert_eq!(checkpoints.len(), 1);
+        assert_eq!(checkpoints[0].state, RunState::Failed);
+    }
+
+    #[test]
+    fn acknowledging_an_unknown_run_is_rejected() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        assert!(matches!(
+            journal.acknowledge_events(
+                target,
+                &EventAck {
+                    run_id: Uuid::new_v4(),
+                    lease_epoch: 1,
+                    acked_through: 1,
+                },
+            ),
+            Err(JournalError::AckMismatch)
+        ));
     }
 
     #[test]

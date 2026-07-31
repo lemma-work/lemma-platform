@@ -19,7 +19,15 @@ from app.modules.agent.domain.agent_host import (
     AgentHostCommandState,
     AgentHostRunState,
 )
-from app.modules.agent.infrastructure.agent_host_repository_common import utcnow
+from app.modules.agent.domain.value_objects import TERMINAL_AGENT_RUN_STATUSES
+from app.modules.agent.infrastructure.agent_host_repository_common import (
+    DEFAULT_COMMAND_TTL_SECONDS,
+    utcnow,
+)
+from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.repository_status import (
+    run_status_values_for_db,
+)
 from app.modules.agent.infrastructure.runtime_models import (
     AgentHostCommandModel,
     AgentHostPairingModel,
@@ -35,6 +43,24 @@ _DISPATCH_RETENTION = timedelta(days=30)
 # How long an accepted-but-silent host has to reconnect before its run is
 # declared unknown rather than retried.
 DEFAULT_RECOVERY_GRACE_SECONDS = 120
+
+# Legacy rows carry lower-cased statuses, so the comparison goes through the
+# same helper every other status query uses rather than the enum values alone.
+_TERMINAL_AGENT_RUN_STATUS_VALUES = run_status_values_for_db(
+    TERMINAL_AGENT_RUN_STATUSES
+)
+_NON_TERMINAL_HOST_RUN_STATES = [
+    state.value
+    for state in AgentHostRunState
+    if state not in TERMINAL_AGENT_HOST_RUN_STATES
+]
+# Command states that mean a CANCEL_RUN for this lease is already on its way or
+# has already landed, so a sweep must not stack another one every tick.
+_LIVE_COMMAND_STATES = (
+    AgentHostCommandState.QUEUED.value,
+    AgentHostCommandState.DELIVERED.value,
+    AgentHostCommandState.ACKNOWLEDGED.value,
+)
 
 
 async def expire_unaccepted_run(
@@ -129,6 +155,98 @@ async def reconcile_expired_run(
     lease.updated_at = timestamp
     await session.flush()
     return lease
+
+
+async def cancel_abandoned_host_runs(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[UUID]:
+    """Stop host runs whose Lemma run has already ended. Returns hosts to poke.
+
+    Nothing else closes this gap. When the worker driving a run dies — OOM,
+    eviction, a task timeout — the run is finalized FAILED by the shielded write
+    or by ``reconcile_orphaned_agent_runs``, but the lease and the ACP agent on
+    the user's machine know nothing about it. The agent keeps thinking, keeps
+    calling tools against the pod, and keeps spending tokens for a turn Lemma
+    has already reported as failed.
+
+    Matching on "the agent run is terminal but its lease is not" is exact rather
+    than time-based, so it catches that within one sweep of the finalization
+    regardless of how long the run had been going.
+    """
+    timestamp = now or utcnow()
+    already_cancelling = (
+        select(AgentHostCommandModel.run_id)
+        .where(
+            AgentHostCommandModel.run_id == AgentHostRunLeaseModel.run_id,
+            AgentHostCommandModel.kind == AgentHostCommandKind.CANCEL_RUN.value,
+            AgentHostCommandModel.lease_epoch == AgentHostRunLeaseModel.lease_epoch,
+            AgentHostCommandModel.state.in_(_LIVE_COMMAND_STATES),
+        )
+        .exists()
+    )
+    result = await session.execute(
+        select(AgentHostRunLeaseModel)
+        .join(AgentRunModel, AgentRunModel.id == AgentHostRunLeaseModel.run_id)
+        .where(
+            AgentHostRunLeaseModel.state.in_(_NON_TERMINAL_HOST_RUN_STATES),
+            AgentRunModel.status.in_(_TERMINAL_AGENT_RUN_STATUS_VALUES),
+            ~already_cancelling,
+        )
+        .order_by(AgentHostRunLeaseModel.updated_at.asc())
+        .limit(limit)
+        .with_for_update(of=AgentHostRunLeaseModel, skip_locked=True)
+    )
+    host_ids: list[UUID] = []
+    for lease in result.scalars():
+        session.add(
+            AgentHostCommandModel(
+                host_id=lease.host_id,
+                run_id=lease.run_id,
+                kind=AgentHostCommandKind.CANCEL_RUN.value,
+                lease_epoch=lease.lease_epoch,
+                payload={"agent_run_id": str(lease.run_id)},
+                state=AgentHostCommandState.QUEUED.value,
+                expires_at=timestamp
+                + timedelta(seconds=DEFAULT_COMMAND_TTL_SECONDS),
+            )
+        )
+        host_ids.append(lease.host_id)
+    await session.flush()
+    return host_ids
+
+
+async def reconcile_expired_leases(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    limit: int = 200,
+) -> int:
+    """Advance every lease whose heartbeat has lapsed. Returns how many moved.
+
+    ``reconcile_expired_run`` is normally driven by the harness watching its own
+    run. A worker that dies takes that watcher with it, and the lease then sits
+    non-terminal forever — never swept by retention, which only collects
+    terminalized rows. This is the sweep that finishes them.
+    """
+    timestamp = now or utcnow()
+    result = await session.execute(
+        select(AgentHostRunLeaseModel.run_id)
+        .where(
+            AgentHostRunLeaseModel.lease_expires_at < timestamp,
+            AgentHostRunLeaseModel.state.in_(_NON_TERMINAL_HOST_RUN_STATES),
+        )
+        .order_by(AgentHostRunLeaseModel.lease_expires_at.asc())
+        .limit(limit)
+    )
+    reconciled = 0
+    for run_id in result.scalars():
+        await expire_unaccepted_run(session, run_id=run_id, now=timestamp)
+        await reconcile_expired_run(session, run_id=run_id, now=timestamp)
+        reconciled += 1
+    return reconciled
 
 
 async def cleanup_retained_state(

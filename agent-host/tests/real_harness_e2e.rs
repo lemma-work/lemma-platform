@@ -28,6 +28,8 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+mod support;
+
 const HOST_SECRET: &str = "real-control-e2e-host-secret";
 
 #[derive(Default)]
@@ -226,6 +228,262 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
         "Codex image artifact is not a PNG"
     );
     println!("codex native image: {} bytes", bytes.len());
+}
+
+/// Runs one real agent through a paired Agent Host wired to `control`.
+///
+/// This is the same in-process `HostRuntime` the paired smoke test uses, but
+/// pointed at `support::ControlPlane` so the run's MCP endpoint and its
+/// permission decisions can be scripted.
+async fn paired_real_run(
+    agent: &str,
+    prompt: &str,
+    mcp: Value,
+    answer: support::PermissionAnswer,
+    budget: Duration,
+) -> (TempDir, support::ControlPlane) {
+    let source = HostPaths::under(agent_host_data_directory());
+    let directory = TempDir::new().unwrap();
+    let control = support::ControlPlane::start(agent, prompt, mcp, answer).await;
+    let host = support::InProcessHost::start(
+        directory.path(),
+        &control,
+        &source.adapters,
+        PathBuf::from(env!("CARGO_BIN_EXE_lemma-agent-host")),
+    )
+    .await;
+    control
+        .wait_for("the real agent's run to finish", budget, |control| {
+            assert!(!host.is_finished(), "the Agent Host runtime exited early");
+            control.saw_terminal()
+        })
+        .await;
+    host.shutdown().await;
+    (directory, control)
+}
+
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn real_agents_discover_and_call_a_lemma_mcp_tool() {
+    // The hermetic suite proves the host wires an MCP bridge correctly and that
+    // an agent which uses it reaches Lemma. This proves the remaining half that
+    // only a real provider can: that a commercial agent, handed the `lemma`
+    // server through ACP, actually discovers `lemma_*` tools and calls one.
+    //
+    // Lemma itself is still a stand-in; the endpoint here speaks the same
+    // stateless JSON-RPC-over-HTTP contract `app/mcp_server.py` mounts.
+    for agent in configured_agents() {
+        let endpoint = support::LemmaMcpEndpoint::start(support::McpTransport::StatelessJson).await;
+        let (_directory, control) = paired_real_run(
+            &agent,
+            concat!(
+                "Call the Lemma MCP tool named lemma_echo with the argument ",
+                "text set to exactly LEMMA_REAL_MCP_OK. Do not use any other ",
+                "tool and do not write files. Reply with exactly the text the ",
+                "tool returned."
+            ),
+            endpoint.run_configuration(),
+            support::PermissionAnswer::AllowOnce,
+            Duration::from_secs(300),
+        )
+        .await;
+
+        let methods = endpoint.methods();
+        assert!(
+            methods.iter().any(|method| method == "tools/list"),
+            "{agent} never listed Lemma's tools; methods={methods:?}"
+        );
+        let call = endpoint
+            .requests()
+            .into_iter()
+            .find(|record| record.method == "tools/call")
+            .unwrap_or_else(|| panic!("{agent} never called a Lemma tool; methods={methods:?}"));
+        assert_eq!(
+            call.params["name"], "lemma_echo",
+            "{agent} called the wrong Lemma tool"
+        );
+        assert_eq!(
+            call.agent_run_id.as_deref(),
+            Some(control.run_id.to_string().as_str()),
+            "{agent}'s tool call was not attributed to its run"
+        );
+        assert!(
+            control.assistant_text().contains("LEMMA_REAL_MCP_OK"),
+            "{agent} did not report the Lemma tool result: {:?}",
+            control.assistant_text()
+        );
+        println!("{agent}: LEMMA_REAL_MCP_TOOL_CALL_OK");
+    }
+}
+
+/// A per-run file outside every adapter's sandbox, plus the shell command that
+/// writes it.
+///
+/// The trigger matters and was chosen from observed behaviour, not guessed.
+/// Codex runs sandboxed commands — including `printf` in the workspace and even
+/// `curl` to the public internet — without asking anyone, so a prompt like
+/// "print this token" proves nothing about approvals. What Codex *does*
+/// escalate is a write outside its workspace sandbox, and Claude Code asks for
+/// any Bash at all, so a write to a private directory under `$HOME` is the one
+/// action both adapters put behind a permission request.
+///
+/// Using a real filesystem effect rather than the agent's prose is deliberate:
+/// a model can claim it ran a command, but it cannot fabricate the file.
+struct GatedWrite {
+    directory: PathBuf,
+    path: PathBuf,
+    token: String,
+}
+
+impl GatedWrite {
+    fn new(agent: &str) -> Self {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .expect("HOME is required to place a file outside the provider sandbox");
+        let directory = home.join(".lemma-agent-host-e2e");
+        let token = format!("LEMMA-GATED-{}", Uuid::new_v4().simple());
+        Self {
+            path: directory.join(format!("{agent}-{token}.txt")),
+            directory,
+            token,
+        }
+    }
+
+    fn prompt(&self) -> String {
+        format!(
+            "Run this exact shell command and nothing else: \
+             `mkdir -p {directory} && printf %s {token} > {path}`. \
+             Then reply with exactly DONE.",
+            directory = self.directory.display(),
+            token = self.token,
+            path = self.path.display(),
+        )
+    }
+
+    /// Did the gated command actually run?
+    fn happened(&self) -> bool {
+        std::fs::read_to_string(&self.path).is_ok_and(|body| body.trim() == self.token)
+    }
+}
+
+impl Drop for GatedWrite {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        // Only succeeds once the last concurrent run has cleaned up.
+        let _ = std::fs::remove_dir(&self.directory);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires authenticated local agents, spends real provider quota, and writes a self-cleaning file under $HOME"]
+async fn a_real_agents_native_tool_waits_for_lemmas_approval() {
+    // The approval round trip against each real adapter's own permission shape.
+    // The command cannot run unless Lemma's decision reached the parked ACP
+    // responder, so the file existing afterwards is proof that the agent was
+    // released and continued rather than being cancelled or left hanging.
+    for agent in configured_agents() {
+        let gated = GatedWrite::new(&agent);
+        assert!(!gated.happened(), "the gated file must not exist up front");
+        let (_directory, control) = paired_real_run(
+            &agent,
+            &gated.prompt(),
+            json!({
+                "server_name": "lemma_tools",
+                "url": "https://unused.invalid/mcp",
+                "authorization": "Bearer unused-real-permission-e2e",
+            }),
+            support::PermissionAnswer::AllowOnce,
+            Duration::from_secs(300),
+        )
+        .await;
+
+        let requests = control.permission_requests();
+        assert!(
+            !requests.is_empty(),
+            "{agent} wrote outside its sandbox without ever asking Lemma; a \
+             harness that never parks a request is not gated at all"
+        );
+        // Lemma renders these as approval cards and addresses its decision to
+        // the request id, so a request missing either is unanswerable.
+        for request in &requests {
+            assert!(
+                request.object_id.is_some(),
+                "{agent}'s permission request has no id for a decision to name"
+            );
+            assert!(
+                request.payload.contains_key("options"),
+                "{agent}'s permission request offered no options to choose between"
+            );
+        }
+        assert!(
+            gated.happened(),
+            "{agent} never ran the approved command, so the approval did not \
+             reach it; answer={:?}",
+            control.assistant_text()
+        );
+        println!(
+            "{agent}: LEMMA_REAL_PERMISSION_APPROVED_OK ({} request(s))",
+            requests.len()
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_real_agents_denied_tool_is_stopped_without_waiting_out_the_timeout() {
+    // A denial has to travel the same path an approval does, and it has to
+    // actually stop the tool. If the decision never arrived the agent would
+    // block for the full thirty-minute permission timeout, which a user cannot
+    // tell apart from a hung run.
+    for agent in configured_agents() {
+        let gated = GatedWrite::new(&agent);
+        let started = std::time::Instant::now();
+        let (_directory, control) = paired_real_run(
+            &agent,
+            &gated.prompt(),
+            json!({
+                "server_name": "lemma_tools",
+                "url": "https://unused.invalid/mcp",
+                "authorization": "Bearer unused-real-permission-e2e",
+            }),
+            support::PermissionAnswer::Deny,
+            Duration::from_secs(300),
+        )
+        .await;
+
+        assert!(
+            !control.permission_requests().is_empty(),
+            "{agent} never asked, so there was nothing to deny"
+        );
+        // A blocked command is also what a host that denies everything by
+        // itself produces, so require that Lemma got to decide while the agent
+        // was still waiting.
+        let decisions = control.decisions();
+        assert!(
+            !decisions.is_empty() && decisions.iter().any(|decision| !decision.saw_terminal),
+            "{agent}'s run was already over before Lemma answered, so this \
+             denial did not come from Lemma: {decisions:?}"
+        );
+        assert!(!gated.happened(), "{agent} ran the command Lemma refused");
+        assert!(
+            started.elapsed() < Duration::from_secs(300),
+            "{agent} waited out the permission timeout instead of being denied"
+        );
+        let terminal = control
+            .events()
+            .into_iter()
+            .find(|event| event.event_type == EventType::Terminal)
+            .unwrap();
+        assert_ne!(
+            terminal.payload["state"], "DISPATCH_UNKNOWN",
+            "{agent}'s denied run must reach a definite outcome"
+        );
+        println!(
+            "{agent}: LEMMA_REAL_PERMISSION_DENIED_OK in {:?} ({})",
+            started.elapsed(),
+            terminal.payload["state"]
+        );
+    }
 }
 
 #[derive(Clone)]

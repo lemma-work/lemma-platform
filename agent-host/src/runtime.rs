@@ -1,6 +1,6 @@
 //! Multi-target Agent Host supervisor.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,13 +18,14 @@ use uuid::Uuid;
 
 use crate::acp::{AcpCallbacks, AcpDriver, AcpRunRequest, AgentDriver};
 use crate::adapters::{AdapterManifest, ResolvedAdapter};
-use crate::api::{PublishedHarness, TargetClient};
+use crate::api::{ApiError, PublishedHarness, TargetClient};
 use crate::config::{HostConfig, HostPaths, TargetConfig};
 use crate::journal::{AcceptOutcome, Checkpoint, Journal};
 use crate::permissions::{PermissionDecision, PermissionGate};
 use crate::protocol::{
     Command, CommandKind, CommandRejection, EventType, HarnessCapabilities, HarnessHealth,
-    HarnessSnapshot, HostCapacity, HostStatus, JsonMap, RejectionCode, RunSpec, RunState,
+    HarnessSnapshot, HostCapacity, HostStatus, JsonMap, PollResponse, RejectionCode, RunCheckpoint,
+    RunSpec, RunState,
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -36,6 +37,14 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
 // Long enough for someone to actually see and answer the prompt; bounded so a
 // forgotten one cannot pin an adapter open for the run's whole deadline.
 const PERMISSION_DECISION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+// How many times one run's event batch may be rejected outright before the
+// host stops trying to deliver that run's transcript. The first rejection is
+// answered with a full replay, so this allows exactly one repair attempt.
+const MAX_EVENT_REJECTIONS: u32 = 2;
+// How many extra requests one poll may spend bisecting a control batch the
+// server refuses. Comfortably above the ceiling for the 256 updates a poll can
+// carry, so the bound only ever bites on a batch that is refused wholesale.
+const MAX_CONTROL_PROBES: u32 = 12;
 const GENERATED_ARTIFACT_DIRECTORY: &str = ".lemma-artifacts";
 const MAX_GENERATED_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_GENERATED_IMAGES: usize = 10;
@@ -200,6 +209,57 @@ async fn shutdown_signal() -> std::io::Result<()> {
     }
 }
 
+/// The control updates one poll carries up: command acknowledgements, run
+/// checkpoints, and command rejections.
+///
+/// They travel together on the request that is also the host's capacity
+/// heartbeat and the only way commands come back down, which is why a batch the
+/// server refuses has to be narrowed rather than retried whole.
+#[derive(Clone, Debug, Default)]
+struct ControlBatch {
+    command_ids: Vec<Uuid>,
+    checkpoints: Vec<RunCheckpoint>,
+    rejections: Vec<CommandRejection>,
+}
+
+impl ControlBatch {
+    fn len(&self) -> usize {
+        self.command_ids.len() + self.checkpoints.len() + self.rejections.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The updates in `start..end`, reading the three kinds as one sequence:
+    /// acknowledgements, then checkpoints, then rejections.
+    ///
+    /// Addressing the batch by range is what lets a refusal be bisected down to
+    /// the single update the server objects to.
+    fn slice(&self, start: usize, end: usize) -> Self {
+        let commands = self.command_ids.len();
+        let checkpoints = self.checkpoints.len();
+        let bound =
+            |index: usize, offset: usize, length: usize| index.saturating_sub(offset).min(length);
+        Self {
+            command_ids: self.command_ids[bound(start, 0, commands)..bound(end, 0, commands)]
+                .to_vec(),
+            checkpoints: self.checkpoints
+                [bound(start, commands, checkpoints)..bound(end, commands, checkpoints)]
+                .to_vec(),
+            rejections: self.rejections[bound(start, commands + checkpoints, self.rejections.len())
+                ..bound(end, commands + checkpoints, self.rejections.len())]
+                .to_vec(),
+        }
+    }
+
+    fn absorb(&mut self, other: Self) {
+        self.command_ids.extend(other.command_ids);
+        self.checkpoints.extend(other.checkpoints);
+        self.rejections.extend(other.rejections);
+    }
+}
+
 struct TargetWorker {
     target: TargetConfig,
     client: TargetClient,
@@ -214,6 +274,13 @@ struct TargetWorker {
     harnesses: BTreeMap<Uuid, PublishedHarness>,
     active_runs: HashMap<Uuid, JoinHandle<anyhow::Result<()>>>,
     permissions: PermissionGate,
+    /// Runs whose event batches Lemma has rejected, and how often. Kept per
+    /// run so one unhappy run cannot stop the target's poll loop.
+    event_rejections: HashMap<Uuid, u32>,
+    /// Runs whose liveness checkpoints Lemma refuses. Their leases are left to
+    /// the server's own expiry recovery; their terminal states are not given up
+    /// on, so a run is never abandoned mid-flight by this.
+    refused_heartbeats: HashSet<Uuid>,
     draining: bool,
     refresh_due: std::time::Instant,
 }
@@ -249,6 +316,8 @@ impl TargetWorker {
             harnesses: BTreeMap::new(),
             active_runs: HashMap::new(),
             permissions: PermissionGate::new(),
+            event_rejections: HashMap::new(),
+            refused_heartbeats: HashSet::new(),
             draining,
             refresh_due: std::time::Instant::now(),
         })
@@ -279,8 +348,6 @@ impl TargetWorker {
                 retry = (retry * 2).min(RETRY_MAX);
                 continue;
             }
-            let (command_ids, checkpoints, rejections) =
-                self.journal.pending_control(self.target.target_id)?;
             let available =
                 u16::try_from(self.global_capacity.available_permits()).unwrap_or(u16::MAX);
             let active = self.max_runs.saturating_sub(available);
@@ -289,26 +356,11 @@ impl TargetWorker {
                 active_runs: active,
                 available_runs: if self.draining { 0 } else { available },
             };
-            match self
-                .client
-                .poll(
-                    capacity,
-                    command_ids.clone(),
-                    checkpoints.clone(),
-                    rejections.clone(),
-                )
-                .await
-            {
+            match self.poll_target(capacity).await {
                 Ok(response) => {
                     retry = RETRY_MIN;
                     self.journal
                         .update_target_state(self.target.target_id, "ONLINE", None)?;
-                    self.journal.mark_control_applied(
-                        self.target.target_id,
-                        &command_ids,
-                        &checkpoints,
-                        &rejections,
-                    )?;
                     if response.host_status == HostStatus::Revoked {
                         anyhow::bail!("target revoked this Agent Host");
                     }
@@ -334,11 +386,14 @@ impl TargetWorker {
                     }
                 }
                 Err(error) => {
-                    if error.is_unauthorized() {
+                    if error
+                        .downcast_ref::<ApiError>()
+                        .is_some_and(ApiError::is_unauthorized)
+                    {
                         self.cancel_all(
                             "Lemma rejected this Agent Host; the target may have been revoked",
                         )?;
-                        return Err(error.into());
+                        return Err(error);
                     }
                     self.note_offline(&error.to_string())?;
                     self.wait_retry(retry).await;
@@ -562,7 +617,11 @@ impl TargetWorker {
         let run_id = command
             .run_id
             .ok_or_else(|| anyhow::anyhow!("cancel command has no run ID"))?;
-        if let Some(handle) = self.active_runs.remove(&run_id) {
+        // Abort, but keep the handle: `abort` only requests cancellation, and
+        // the task can still finish its current poll -- which is long enough to
+        // park a permission request. `reap_finished` abandons the run again
+        // once the task is provably gone, which is what closes that window.
+        if let Some(handle) = self.active_runs.get(&run_id) {
             handle.abort();
         }
         // Anything the run left parked is now unanswerable.
@@ -668,12 +727,247 @@ impl TargetWorker {
         Ok(())
     }
 
-    async fn flush_events(&self) -> anyhow::Result<()> {
-        for batch in self.journal.pending_events(self.target.target_id, 1024)? {
-            let ack = self.client.append_events(&batch).await?;
-            self.journal
-                .acknowledge_events(self.target.target_id, &ack)?;
+    /// The control updates due for delivery, minus the ones Lemma refuses.
+    ///
+    /// A refused run keeps its *terminal* checkpoint in the batch: giving up on
+    /// a run's last word is the one thing that would leave it unresolved.
+    fn control_batch(&self) -> anyhow::Result<ControlBatch> {
+        let (command_ids, mut checkpoints, rejections) =
+            self.journal.pending_control(self.target.target_id)?;
+        checkpoints.retain(|checkpoint| {
+            checkpoint.state.is_terminal() || !self.refused_heartbeats.contains(&checkpoint.run_id)
+        });
+        Ok(ControlBatch {
+            command_ids,
+            checkpoints,
+            rejections,
+        })
+    }
+
+    async fn poll_control(
+        &self,
+        capacity: &HostCapacity,
+        batch: &ControlBatch,
+    ) -> Result<PollResponse, ApiError> {
+        self.client
+            .poll(
+                capacity.clone(),
+                batch.command_ids.clone(),
+                batch.checkpoints.clone(),
+                batch.rejections.clone(),
+            )
+            .await
+    }
+
+    /// Poll Lemma, bisecting the control batch around anything it refuses.
+    ///
+    /// One poll carries the whole host's control updates, and that same request
+    /// is the capacity heartbeat and the only way commands -- cancellations
+    /// included -- come back down. Failing it outright over a single update the
+    /// server objects to would take the entire host offline until it restarts,
+    /// with every run's lease expiring underneath it while its provider carried
+    /// on working. So a refusal is bisected instead: probing halves of the
+    /// undelivered range narrows to the one update at fault in a logarithmic
+    /// number of requests, delivers everything either side of it, and ends at a
+    /// poll the server accepts. The heartbeat can no longer be held hostage by
+    /// anything the host is trying to report.
+    ///
+    /// A probe only ever covers updates that have not been accepted yet, so
+    /// nothing is delivered twice, and every response's commands are carried
+    /// through rather than discarded with the attempt that produced them.
+    async fn poll_target(&mut self, capacity: HostCapacity) -> anyhow::Result<PollResponse> {
+        let batch = self.control_batch()?;
+        let total = batch.len();
+        // Everything below this index has been accepted, or given up on.
+        let mut delivered = 0;
+        let mut settled = ControlBatch::default();
+        let mut commands = Vec::new();
+        let mut budget = MAX_CONTROL_PROBES;
+
+        let mut response = loop {
+            let attempt = batch.slice(delivered, total);
+            match self.poll_control(&capacity, &attempt).await {
+                Ok(response) => {
+                    settled.absorb(attempt);
+                    break response;
+                }
+                // An empty batch carries nothing to blame, and a failure that
+                // is not a rejection is about the target, not its payload.
+                Err(error) if attempt.is_empty() || !error.is_request_rejected() => {
+                    return Err(error.into());
+                }
+                Err(error) => {
+                    if budget == 0 {
+                        // Out of probes. Land the heartbeat with an empty batch
+                        // and leave the rest pending for the next cycle.
+                        delivered = total;
+                        continue;
+                    }
+                    // Invariant: `low..high` holds at least one refused update.
+                    let (mut low, mut high) = (delivered, total);
+                    while high - low > 1 && budget > 0 {
+                        budget -= 1;
+                        let middle = low + (high - low) / 2;
+                        let probe = batch.slice(low, middle);
+                        match self.poll_control(&capacity, &probe).await {
+                            Ok(mut accepted) => {
+                                commands.append(&mut accepted.commands);
+                                settled.absorb(probe);
+                                low = middle;
+                            }
+                            Err(refusal) if refusal.is_request_rejected() => high = middle,
+                            Err(refusal) => return Err(refusal.into()),
+                        }
+                    }
+                    if high - low == 1 {
+                        settled.absorb(self.refuse_control(&batch.slice(low, high), &error));
+                    }
+                    delivered = high;
+                }
+            }
+        };
+
+        self.journal.mark_control_applied(
+            self.target.target_id,
+            &settled.command_ids,
+            &settled.checkpoints,
+            &settled.rejections,
+        )?;
+        commands.append(&mut response.commands);
+        response.commands = commands;
+        Ok(response)
+    }
+
+    /// Decide what to do with the single control update Lemma refused, and
+    /// return whatever the host is done trying to deliver.
+    ///
+    /// Only a run's *liveness* checkpoint is given up on. Its lease then
+    /// expires and the server's own recovery resolves the run, which is the
+    /// path built for a host that stops reporting. Everything else -- a run's
+    /// terminal state above all, but also command acknowledgements and command
+    /// rejections -- carries information the server cannot reconstruct, so it
+    /// stays pending and is retried on every later cycle. Retrying costs a
+    /// bounded handful of extra requests per poll and blocks nothing, because
+    /// the narrowing lets the rest of the batch through regardless.
+    fn refuse_control(&mut self, batch: &ControlBatch, error: &ApiError) -> ControlBatch {
+        let detail = redact_error(&error.to_string());
+        let mut settled = ControlBatch::default();
+        for checkpoint in &batch.checkpoints {
+            if checkpoint.state.is_terminal() {
+                tracing::error!(
+                    run_id = %checkpoint.run_id,
+                    state = ?checkpoint.state,
+                    error = %detail,
+                    "Lemma refused this run's final state; it stays queued for retry"
+                );
+                continue;
+            }
+            self.refused_heartbeats.insert(checkpoint.run_id);
+            settled.checkpoints.push(checkpoint.clone());
+            tracing::error!(
+                run_id = %checkpoint.run_id,
+                state = ?checkpoint.state,
+                error = %detail,
+                "Lemma refused this run's heartbeat; leaving its lease to server-side recovery"
+            );
         }
+        for command_id in &batch.command_ids {
+            tracing::error!(
+                %command_id,
+                error = %detail,
+                "Lemma refused this command acknowledgement; it stays queued for retry"
+            );
+        }
+        for rejection in &batch.rejections {
+            tracing::error!(
+                command_id = %rejection.command_id,
+                error = %detail,
+                "Lemma refused this command rejection; it stays queued for retry"
+            );
+        }
+        settled
+    }
+
+    /// Hand journaled events to Lemma, keeping each run's failures to itself.
+    ///
+    /// Only a target-level failure -- unreachable, unauthenticated, throttled,
+    /// server fault -- is returned as an error. A batch Lemma rejects on its own
+    /// merits belongs to exactly one run, so it is contained there: the caller
+    /// must still poll, because the poll is what heartbeats the lease of every
+    /// *other* run on this host.
+    async fn flush_events(&mut self) -> anyhow::Result<()> {
+        let target_id = self.target.target_id;
+        // Runs whose remaining batches this pass must leave alone, because the
+        // journal no longer matches the batches read at the top of the loop.
+        let mut stale = HashSet::new();
+        for batch in self.journal.pending_events(target_id, 1024)? {
+            let Some(first) = batch.events.first() else {
+                continue;
+            };
+            let (run_id, lease_epoch) = (first.run_id, first.lease_epoch);
+            if stale.contains(&run_id) {
+                continue;
+            }
+            if self.event_rejections.get(&run_id).copied().unwrap_or(0) >= MAX_EVENT_REJECTIONS {
+                let dropped = self
+                    .journal
+                    .discard_events(target_id, run_id, lease_epoch)?;
+                stale.insert(run_id);
+                tracing::warn!(
+                    %run_id,
+                    dropped,
+                    "dropping events Lemma will not accept for this run"
+                );
+                continue;
+            }
+            match self.client.append_events(&batch).await {
+                Ok(ack) => {
+                    self.event_rejections.remove(&run_id);
+                    self.journal.acknowledge_events(target_id, &ack)?;
+                }
+                Err(error) if error.is_request_rejected() => {
+                    stale.insert(run_id);
+                    self.reject_run_events(run_id, lease_epoch, &error)?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Contain a run whose event batch Lemma refused.
+    ///
+    /// The first refusal is treated as a lost server-side stream, which is the
+    /// only recoverable cause: the stream is transient and its watermark drops
+    /// to zero when it is evicted, so it starts expecting sequence 1 again from
+    /// a run that is far past it. Replaying the run's retained events answers
+    /// exactly that, and is safe against every other cause because the server
+    /// keeps the first write for a sequence it already holds.
+    fn reject_run_events(
+        &mut self,
+        run_id: Uuid,
+        lease_epoch: u32,
+        error: &crate::api::ApiError,
+    ) -> anyhow::Result<()> {
+        let rejections = self.event_rejections.entry(run_id).or_default();
+        *rejections += 1;
+        if *rejections >= MAX_EVENT_REJECTIONS {
+            tracing::error!(
+                %run_id,
+                error = %redact_error(&error.to_string()),
+                "Lemma rejected this run's events after a replay; giving up on its transcript"
+            );
+            return Ok(());
+        }
+        let replayed =
+            self.journal
+                .rewind_acknowledgements(self.target.target_id, run_id, lease_epoch)?;
+        tracing::warn!(
+            %run_id,
+            replayed,
+            error = %redact_error(&error.to_string()),
+            "Lemma rejected this run's events; replaying its journaled history"
+        );
         Ok(())
     }
 
@@ -686,9 +980,13 @@ impl TargetWorker {
         for run_id in finished {
             if let Some(handle) = self.active_runs.remove(&run_id)
                 && let Err(error) = handle.await
+                && !error.is_cancelled()
             {
                 tracing::error!(%run_id, %error, "agent run task terminated unexpectedly");
             }
+            // The task is provably gone, so nothing can answer a request it
+            // left parked -- including one it parked while being aborted.
+            self.permissions.abandon_run(run_id);
         }
     }
 
@@ -700,8 +998,6 @@ impl TargetWorker {
             if let Err(error) = self.flush_events().await {
                 tracing::warn!(%error, "could not flush Agent Host events during shutdown");
             }
-            let (command_ids, checkpoints, rejections) =
-                self.journal.pending_control(self.target.target_id)?;
             let capacity = HostCapacity {
                 max_runs: self.max_runs,
                 active_runs: self.max_runs.saturating_sub(
@@ -709,22 +1005,7 @@ impl TargetWorker {
                 ),
                 available_runs: 0,
             };
-            if let Ok(response) = self
-                .client
-                .poll(
-                    capacity,
-                    command_ids.clone(),
-                    checkpoints.clone(),
-                    rejections.clone(),
-                )
-                .await
-            {
-                self.journal.mark_control_applied(
-                    self.target.target_id,
-                    &command_ids,
-                    &checkpoints,
-                    &rejections,
-                )?;
+            if let Ok(response) = self.poll_target(capacity).await {
                 for command in response.commands {
                     if command.kind == CommandKind::CancelRun {
                         let _ = self.handle_cancel(&command);
@@ -750,6 +1031,7 @@ impl TargetWorker {
             if let Some(handle) = self.active_runs.remove(&run_id) {
                 handle.abort();
             }
+            self.permissions.abandon_run(run_id);
             if let Some(run) = self.journal.get_run(self.target.target_id, run_id)?
                 && !run.state.is_terminal()
             {
@@ -1124,6 +1406,607 @@ fn redact_error(value: &str) -> String {
         }
     }
     redacted.chars().take(2048).collect()
+}
+
+#[cfg(test)]
+mod target_worker_tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use axum::extract::State;
+    use axum::http::StatusCode;
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use chrono::Utc;
+    use tokio::net::TcpListener;
+    use tokio::sync::{Semaphore, watch};
+    use uuid::Uuid;
+
+    use super::TargetWorker;
+    use crate::acp::{AcpCallbacks, AcpProbeOutcome, AcpRunOutcome, AcpRunRequest, AgentDriver};
+    use crate::adapters::{AdapterManifest, ResolvedAdapter};
+    use crate::config::{HostPaths, TargetConfig};
+    use crate::journal::Journal;
+    use crate::permissions::PermissionDecision;
+    use crate::protocol::{
+        Command, CommandKind, EventAck, EventBatch, EventType, HostCapacity, HostStatus, JsonMap,
+        PollRequest, PollResponse, RunSpec, RunState,
+    };
+
+    fn capacity() -> HostCapacity {
+        HostCapacity {
+            max_runs: 2,
+            active_runs: 0,
+            available_runs: 2,
+        }
+    }
+
+    /// A driver that is never asked to do anything; the worker needs one to
+    /// exist, not to run.
+    struct IdleDriver;
+
+    #[async_trait::async_trait]
+    impl AgentDriver for IdleDriver {
+        async fn probe(
+            &self,
+            _adapter: ResolvedAdapter,
+            _scratch_directory: PathBuf,
+        ) -> anyhow::Result<AcpProbeOutcome> {
+            anyhow::bail!("the flush tests never probe")
+        }
+
+        async fn run(
+            &self,
+            _request: AcpRunRequest,
+            _callbacks: Arc<dyn AcpCallbacks>,
+        ) -> anyhow::Result<AcpRunOutcome> {
+            anyhow::bail!("the flush tests never run an agent")
+        }
+    }
+
+    #[derive(Default)]
+    struct StubState {
+        /// Runs whose batches the stub refuses, as Lemma does when its
+        /// transient event stream no longer holds the sequences a batch
+        /// assumes.
+        refused: Mutex<Vec<Uuid>>,
+        accepted: Mutex<Vec<(Uuid, u64)>>,
+        /// Runs whose checkpoints the stub refuses, standing in for any reason
+        /// a future server might reject one update out of a poll's batch.
+        refused_checkpoints: Mutex<Vec<Uuid>>,
+        applied_checkpoints: Mutex<Vec<(Uuid, RunState)>>,
+        polls: Mutex<u32>,
+        /// Commands handed out one per poll, to prove none are lost while a
+        /// refused control batch is being narrowed.
+        undelivered_commands: Mutex<Vec<Command>>,
+    }
+
+    async fn poll(
+        State(state): State<Arc<StubState>>,
+        Json(request): Json<PollRequest>,
+    ) -> Result<Json<PollResponse>, StatusCode> {
+        *state.polls.lock().unwrap() += 1;
+        let refused = state.refused_checkpoints.lock().unwrap().clone();
+        if request
+            .checkpoints
+            .iter()
+            .any(|checkpoint| refused.contains(&checkpoint.run_id))
+        {
+            return Err(StatusCode::CONFLICT);
+        }
+        state.applied_checkpoints.lock().unwrap().extend(
+            request
+                .checkpoints
+                .iter()
+                .map(|checkpoint| (checkpoint.run_id, checkpoint.state)),
+        );
+        let command = state.undelivered_commands.lock().unwrap().pop();
+        Ok(Json(PollResponse {
+            protocol_version: crate::PROTOCOL_VERSION,
+            host_status: HostStatus::Online,
+            commands: command.into_iter().collect(),
+            poll_after_ms: 0,
+        }))
+    }
+
+    async fn append_events(
+        State(state): State<Arc<StubState>>,
+        Json(batch): Json<EventBatch>,
+    ) -> Result<Json<EventAck>, StatusCode> {
+        let first = batch.events.first().expect("batches are never empty");
+        if state.refused.lock().unwrap().contains(&first.run_id) {
+            // The same 409 the backend raises for `event sequence gap`.
+            return Err(StatusCode::CONFLICT);
+        }
+        let last = batch.events.last().expect("batches are never empty");
+        state
+            .accepted
+            .lock()
+            .unwrap()
+            .push((first.run_id, last.sequence));
+        Ok(Json(EventAck {
+            run_id: first.run_id,
+            lease_epoch: first.lease_epoch,
+            acked_through: last.sequence,
+        }))
+    }
+
+    struct Harness {
+        worker: TargetWorker,
+        stub: Arc<StubState>,
+        journal: Journal,
+        target_id: Uuid,
+        _directory: tempfile::TempDir,
+        _shutdown: watch::Sender<bool>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    impl Harness {
+        async fn new() -> Self {
+            let stub = Arc::<StubState>::default();
+            let app = Router::new()
+                .route("/agent-host/events:append", post(append_events))
+                .route("/agent-host/poll", post(poll))
+                .with_state(Arc::clone(&stub));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            let directory = tempfile::TempDir::new().unwrap();
+            let paths = HostPaths::under(directory.path());
+            paths.ensure().unwrap();
+            let journal = Journal::open(&paths.journal).unwrap();
+            let target_id = Uuid::new_v4();
+            let target = TargetConfig {
+                target_id,
+                name: "stub".into(),
+                base_url: url::Url::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+                host_id: Uuid::new_v4(),
+                user_id: Uuid::new_v4(),
+                organization_id: None,
+                host_secret: "test-secret".into(),
+                enabled: true,
+                allow_insecure_http: true,
+                draining: false,
+                refresh_generation: 0,
+            };
+            let (shutdown_tx, shutdown_rx) = watch::channel(false);
+            let worker = TargetWorker::new(
+                target,
+                "installation".into(),
+                paths,
+                journal.clone(),
+                AdapterManifest::builtin().unwrap(),
+                Arc::new(IdleDriver),
+                PathBuf::from("/nonexistent-bridge"),
+                Arc::new(Semaphore::new(2)),
+                2,
+                shutdown_rx,
+            )
+            .unwrap();
+            Self {
+                worker,
+                stub,
+                journal,
+                target_id,
+                _directory: directory,
+                _shutdown: shutdown_tx,
+                server,
+            }
+        }
+
+        /// Journal a run with `count` events, as a live run would.
+        fn seed_run(&self, count: u64) -> Uuid {
+            let run_id = Uuid::new_v4();
+            let spec = RunSpec {
+                agent_run_id: run_id,
+                conversation_id: Uuid::new_v4(),
+                harness_id: Uuid::new_v4(),
+                profile_revision: "revision".into(),
+                model_name: None,
+                config_selections: JsonMap::new(),
+                system_prompt: String::new(),
+                prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+                context: JsonMap::new(),
+                mcp: serde_json::json!({}),
+                run_deadline: Utc::now() + chrono::Duration::minutes(5),
+            };
+            let command = Command {
+                command_id: Uuid::new_v4(),
+                kind: CommandKind::StartRun,
+                created_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::minutes(1),
+                run_id: Some(run_id),
+                lease_epoch: Some(1),
+                payload: serde_json::to_value(&spec).unwrap(),
+            };
+            self.journal
+                .accept_start(self.target_id, &command, &spec, "codex", "1.0")
+                .unwrap();
+            for _ in 0..count {
+                self.journal
+                    .append_event(
+                        self.target_id,
+                        run_id,
+                        1,
+                        EventType::AgentMessageChunk,
+                        None,
+                        JsonMap::new(),
+                    )
+                    .unwrap();
+            }
+            run_id
+        }
+
+        fn accepted(&self) -> HashMap<Uuid, u64> {
+            let mut highest = HashMap::new();
+            for (run_id, sequence) in self.stub.accepted.lock().unwrap().iter() {
+                let entry = highest.entry(*run_id).or_insert(0);
+                *entry = (*entry).max(*sequence);
+            }
+            highest
+        }
+
+        fn pending(&self, run_id: Uuid) -> Vec<u64> {
+            self.journal
+                .pending_events(self.target_id, 1024)
+                .unwrap()
+                .into_iter()
+                .flat_map(|batch| batch.events)
+                .filter(|event| event.run_id == run_id)
+                .map(|event| event.sequence)
+                .collect()
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            self.server.abort();
+        }
+    }
+
+    /// The finding: one run Lemma refuses used to abort the whole flush and
+    /// make the caller skip its poll, which is the lease heartbeat for every
+    /// other run on the host.
+    #[tokio::test]
+    async fn a_refused_run_neither_stops_the_flush_nor_fails_it() {
+        let mut harness = Harness::new().await;
+        let poisoned = harness.seed_run(3);
+        let healthy = harness.seed_run(2);
+        harness.stub.refused.lock().unwrap().push(poisoned);
+
+        harness
+            .worker
+            .flush_events()
+            .await
+            .expect("a run Lemma refuses is not a target-level failure");
+
+        assert_eq!(
+            harness.accepted().get(&healthy),
+            Some(&2),
+            "the healthy run's events must still reach Lemma"
+        );
+        assert!(harness.pending(healthy).is_empty());
+    }
+
+    /// A refusal is answered by replaying the run's journaled history, which is
+    /// what an emptied server-side stream needs to see.
+    #[tokio::test]
+    async fn a_refusal_replays_the_run_from_its_first_event() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(3);
+        harness.worker.flush_events().await.unwrap();
+        assert_eq!(harness.accepted().get(&run_id), Some(&3));
+        assert!(harness.pending(run_id).is_empty());
+
+        // Lemma loses the stream: it now refuses a batch that starts above the
+        // sequence it expects.
+        harness.stub.refused.lock().unwrap().push(run_id);
+        harness
+            .journal
+            .append_event(
+                harness.target_id,
+                run_id,
+                1,
+                EventType::AgentMessageChunk,
+                None,
+                JsonMap::new(),
+            )
+            .unwrap();
+
+        harness.worker.flush_events().await.unwrap();
+
+        assert_eq!(
+            harness.pending(run_id),
+            vec![1, 2, 3, 4],
+            "the acknowledged events have to survive locally to be replayable"
+        );
+    }
+
+    /// A run Lemma keeps refusing is given up on rather than left to block the
+    /// flush loop, and its terminal checkpoint stops being held hostage.
+    #[tokio::test]
+    async fn a_run_lemma_keeps_refusing_is_eventually_dropped() {
+        let mut harness = Harness::new().await;
+        let poisoned = harness.seed_run(3);
+        let healthy = harness.seed_run(1);
+        harness.stub.refused.lock().unwrap().push(poisoned);
+
+        for _ in 0..3 {
+            harness.worker.flush_events().await.unwrap();
+        }
+
+        assert!(
+            harness.pending(poisoned).is_empty(),
+            "the undeliverable run must stop being retried forever"
+        );
+        assert_eq!(harness.accepted().get(&healthy), Some(&1));
+    }
+
+    /// An unreachable or unauthenticated target is not one run's problem, so it
+    /// still surfaces as a failure that puts the worker into its retry path.
+    #[tokio::test]
+    async fn a_target_level_failure_still_fails_the_flush() {
+        let mut harness = Harness::new().await;
+        harness.seed_run(1);
+        harness.server.abort();
+        // Let the listener actually close before the flush tries to use it.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(harness.worker.flush_events().await.is_err());
+    }
+
+    /// The poll is the lease heartbeat for every run on the host and the only
+    /// way commands come back down, and it carries every run's checkpoint in
+    /// one batch. One refused checkpoint used to fail that whole request, which
+    /// the worker read as the target being offline -- so every other run's
+    /// lease expired underneath it while its provider kept working.
+    #[tokio::test]
+    async fn a_refused_checkpoint_does_not_hold_back_every_other_run() {
+        let mut harness = Harness::new().await;
+        let healthy = harness.seed_run(0);
+        let poisoned = harness.seed_run(0);
+        harness
+            .stub
+            .refused_checkpoints
+            .lock()
+            .unwrap()
+            .push(poisoned);
+
+        let response = harness
+            .worker
+            .poll_target(capacity())
+            .await
+            .expect("one refused checkpoint is not the target going offline");
+
+        assert_eq!(response.host_status, HostStatus::Online);
+        let applied = harness.stub.applied_checkpoints.lock().unwrap().clone();
+        assert!(
+            applied.iter().any(|(run_id, _)| *run_id == healthy),
+            "the healthy run's checkpoint must still be applied, got {applied:?}"
+        );
+        assert!(applied.iter().all(|(run_id, _)| *run_id != poisoned));
+        assert!(
+            harness.worker.refused_heartbeats.contains(&poisoned),
+            "the refused run must be named, not left to poison every later poll"
+        );
+    }
+
+    /// Narrowing must not lose commands: a cancellation handed back by one of
+    /// the probing requests still has to reach the caller.
+    #[tokio::test]
+    async fn commands_survive_a_narrowed_poll() {
+        let mut harness = Harness::new().await;
+        harness.seed_run(0);
+        let poisoned = harness.seed_run(0);
+        harness
+            .stub
+            .refused_checkpoints
+            .lock()
+            .unwrap()
+            .push(poisoned);
+        let cancel = Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::CancelRun,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::minutes(1),
+            run_id: Some(Uuid::new_v4()),
+            lease_epoch: Some(1),
+            payload: serde_json::Value::Null,
+        };
+        harness
+            .stub
+            .undelivered_commands
+            .lock()
+            .unwrap()
+            .push(cancel.clone());
+
+        let response = harness.worker.poll_target(capacity()).await.unwrap();
+
+        assert_eq!(
+            response
+                .commands
+                .iter()
+                .map(|command| command.command_id)
+                .collect::<Vec<_>>(),
+            vec![cancel.command_id],
+            "a command delivered by a probing request must not be dropped with it"
+        );
+    }
+
+    /// Once the offender is named, later polls carry the batch in one request
+    /// again -- the narrowing is a repair, not a permanent tax.
+    #[tokio::test]
+    async fn a_named_offender_stops_costing_extra_requests() {
+        let mut harness = Harness::new().await;
+        harness.seed_run(0);
+        let poisoned = harness.seed_run(0);
+        harness
+            .stub
+            .refused_checkpoints
+            .lock()
+            .unwrap()
+            .push(poisoned);
+
+        harness.worker.poll_target(capacity()).await.unwrap();
+        let after_repair = *harness.stub.polls.lock().unwrap();
+        harness.worker.poll_target(capacity()).await.unwrap();
+
+        assert_eq!(
+            *harness.stub.polls.lock().unwrap() - after_repair,
+            1,
+            "a later poll must cost exactly one request"
+        );
+    }
+
+    /// The bisect addresses three lists as one sequence, so the index
+    /// arithmetic is load-bearing: an off-by-one would drop a control update.
+    #[test]
+    fn slicing_reads_the_three_control_lists_as_one_sequence() {
+        let runs = [Uuid::new_v4(), Uuid::new_v4()];
+        let batch = super::ControlBatch {
+            command_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+            checkpoints: runs
+                .iter()
+                .map(|run_id| crate::protocol::RunCheckpoint {
+                    run_id: *run_id,
+                    lease_epoch: 1,
+                    state: RunState::Running,
+                    detail: JsonMap::new(),
+                })
+                .collect(),
+            rejections: vec![crate::protocol::CommandRejection {
+                command_id: Uuid::new_v4(),
+                run_id: Uuid::new_v4(),
+                lease_epoch: 1,
+                code: crate::protocol::RejectionCode::InvalidCommand,
+                retryable: false,
+                detail: None,
+            }],
+        };
+        assert_eq!(batch.len(), 5);
+
+        // Every single-element window addresses exactly one update, and the
+        // windows tile the batch without gaps or repeats.
+        let windows = (0..batch.len())
+            .map(|index| batch.slice(index, index + 1))
+            .collect::<Vec<_>>();
+        assert!(windows.iter().all(|window| window.len() == 1));
+        let mut rebuilt = super::ControlBatch::default();
+        for window in windows {
+            rebuilt.absorb(window);
+        }
+        assert_eq!(rebuilt.command_ids, batch.command_ids);
+        assert_eq!(rebuilt.checkpoints.len(), 2);
+        assert_eq!(rebuilt.rejections.len(), 1);
+
+        // A window straddling two kinds carries the tail of one and the head
+        // of the next.
+        let straddle = batch.slice(1, 4);
+        assert_eq!(straddle.command_ids, vec![batch.command_ids[1]]);
+        assert_eq!(straddle.checkpoints.len(), 2);
+        assert!(straddle.rejections.is_empty());
+
+        assert!(batch.slice(0, 0).is_empty());
+        assert_eq!(batch.slice(0, batch.len()).len(), batch.len());
+    }
+
+    /// A target that refuses even an empty poll is genuinely unreachable, and
+    /// must still put the worker into its offline retry path.
+    #[tokio::test]
+    async fn a_target_that_refuses_everything_still_fails_the_poll() {
+        let mut harness = Harness::new().await;
+        harness.server.abort();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        assert!(harness.worker.poll_target(capacity()).await.is_err());
+    }
+
+    /// The run task parks a permission request and is then dropped -- exactly
+    /// what `spawn_run`'s deadline `timeout` does to an ACP handler that is
+    /// waiting on a decision. `wait`'s own cleanup never runs in that case, so
+    /// the worker has to sweep the run when it reaps the task.
+    #[tokio::test]
+    async fn a_run_that_ends_without_being_cancelled_leaves_nothing_parked() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let gate = harness.worker.permissions.clone();
+        let handle = tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(20),
+                gate.wait(run_id, "call-1".to_owned(), Duration::from_secs(600)),
+            )
+            .await;
+            Ok(())
+        });
+        harness.worker.active_runs.insert(run_id, handle);
+        while !harness.worker.active_runs[&run_id].is_finished() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            harness.worker.permissions.parked(),
+            1,
+            "the dropped handler is expected to leave its request behind"
+        );
+
+        harness.worker.reap_finished().await;
+
+        assert_eq!(harness.worker.permissions.parked(), 0);
+    }
+
+    /// `abort` only requests cancellation, so the run task can still park one
+    /// more request after `handle_cancel` has swept the gate. Keeping the
+    /// handle until it is reaped is what closes that window.
+    #[tokio::test]
+    async fn cancelling_a_run_sweeps_a_request_parked_on_the_way_out() {
+        let mut harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let handle = tokio::spawn(async move {
+            std::future::pending::<()>().await;
+            Ok(())
+        });
+        harness.worker.active_runs.insert(run_id, handle);
+
+        let cancel = Command {
+            command_id: Uuid::new_v4(),
+            kind: CommandKind::CancelRun,
+            created_at: Utc::now(),
+            expires_at: Utc::now() + chrono::Duration::minutes(1),
+            run_id: Some(run_id),
+            lease_epoch: Some(1),
+            payload: serde_json::Value::Null,
+        };
+        harness.worker.handle_cancel(&cancel).unwrap();
+
+        // The aborted task gets one more poll before the runtime drops it,
+        // which is long enough to register a request nobody will answer.
+        let gate = harness.worker.permissions.clone();
+        let late = tokio::spawn(async move {
+            gate.wait(run_id, "late".to_owned(), Duration::from_secs(600))
+                .await
+        });
+        while harness.worker.permissions.parked() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        for _ in 0..100 {
+            harness.worker.reap_finished().await;
+            if harness.worker.permissions.parked() == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let decision = tokio::time::timeout(Duration::from_secs(5), late)
+            .await
+            .expect("a request parked during cancellation must not wait for its timeout")
+            .unwrap();
+        assert_eq!(decision, PermissionDecision::Deny);
+    }
 }
 
 #[cfg(test)]
