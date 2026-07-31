@@ -65,7 +65,7 @@ class RunToolAssembler:
         # TODO is conversation-scoped (its list lives in conversation metadata), so
         # it isn't a static singleton in the registry — build it per conversation
         # here. Included in the assembled list so BOTH the in-process LEMMA harness
-        # and the daemon MCP path expose write_todos, and only when the agent's
+        # and the remote MCP path expose write_todos, and only when the agent's
         # toolsets actually include TODO.
         if (
             conversation is not None

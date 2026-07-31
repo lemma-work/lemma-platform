@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.6.8",
+    VERSION: "0.6.9",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10598,19 +10598,207 @@ var LemmaClient = (() => {
     });
   };
 
-  // src/openapi_client/services/AgentRuntimeService.ts
-  var AgentRuntimeService = class {
+  // src/openapi_client/services/AgentHostService.ts
+  var AgentHostService = class {
     /**
-     * List Available Agent Harnesses
-     * @returns AgentHarnessListResponse Successful Response
+     * Append Agent Host Events
+     * Append one ordered batch to the run's stream.
+     *
+     * There is no second lane to publish on: every event type travels the one
+     * ordered stream, and the ack watermark is the stream's last entry.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostEventAck Successful Response
      * @throws ApiError
      */
-    static agentRuntimeHarnessesList() {
+    static agentHostEventsAppend(requestBody, authorization) {
       return request(OpenAPI, {
-        method: "GET",
-        url: "/agent-runtime/harnesses"
+        method: "POST",
+        url: "/agent-host/events:append",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
       });
     }
+    /**
+     * Publish Agent Host Harnesses
+     * Replace this host's harness snapshots with the reported set.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostHarnessPublishResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostHarnessesPublish(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "PUT",
+        url: "/agent-host/harnesses",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Complete Agent Host Pairing
+     * Consume a pairing code and issue the host secret, shown exactly once.
+     * @param requestBody
+     * @returns AgentHostPairingCompleted Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingComplete(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/pairings:complete",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Poll Agent Host Commands
+     * Long-poll for commands, carrying the host's control updates up.
+     *
+     * This owns its own units of work rather than the request-scoped one: the
+     * idle wait below can hold the connection open for 25 seconds, and a
+     * transaction must not stay open across it.
+     * @param requestBody
+     * @param authorization
+     * @returns AgentHostPollResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostPoll(requestBody, authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/poll",
+        headers: {
+          "authorization": authorization
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Self Revoke Agent Host
+     * Let a host retire its own credential, e.g. on uninstall.
+     * @param authorization
+     * @returns AgentHostResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostSelfRevoke(authorization) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/agent-host/revoke",
+        headers: {
+          "authorization": authorization
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Create Agent Host Pairing
+     * Mint a short-lived pairing code for a machine this user controls.
+     * @param requestBody
+     * @returns AgentHostPairingCreated Successful Response
+     * @throws ApiError
+     */
+    static agentHostPairingCreate(requestBody) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/me/runtime/agent-host-pairings",
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Hosts
+     * @returns AgentHostListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostList() {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/runtime/agent-hosts"
+      });
+    }
+    /**
+     * Revoke Agent Host
+     * Revoke a host, invalidating its secret immediately.
+     * @param hostId
+     * @returns AgentHostResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostRevoke(hostId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/me/runtime/agent-hosts/{host_id}",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * List Agent Host Harnesses
+     * @param hostId
+     * @returns AgentHostHarnessListResponse Successful Response
+     * @throws ApiError
+     */
+    static agentHostHarnessesList(hostId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/me/runtime/agent-hosts/{host_id}/harnesses",
+        path: {
+          "host_id": hostId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
+  // src/namespaces/agent-host.ts
+  var AgentHostNamespace = class {
+    constructor(client) {
+      __publicField(this, "client", client);
+    }
+    list() {
+      return this.client.request(() => AgentHostService.agentHostList());
+    }
+    createPairing(request2) {
+      return this.client.request(() => AgentHostService.agentHostPairingCreate(request2));
+    }
+    listHarnesses(hostId) {
+      return this.client.request(() => AgentHostService.agentHostHarnessesList(hostId));
+    }
+    revoke(hostId) {
+      return this.client.request(() => AgentHostService.agentHostRevoke(hostId));
+    }
+  };
+
+  // src/openapi_client/services/AgentRuntimeService.ts
+  var AgentRuntimeService = class {
     /**
      * List Available Agent Runtime Profiles
      * @param orgId
@@ -16028,6 +16216,7 @@ var LemmaClient = (() => {
       __publicField(this, "functions");
       __publicField(this, "agents");
       __publicField(this, "agentRuntime");
+      __publicField(this, "agentHost");
       __publicField(this, "conversations");
       __publicField(this, "workflows");
       __publicField(this, "apps");
@@ -16076,6 +16265,7 @@ var LemmaClient = (() => {
       this.functions = new FunctionsNamespace(this._generated, podIdFn);
       this.agents = new AgentsNamespace(this._generated, podIdFn, () => this.conversations);
       this.agentRuntime = new AgentRuntimeNamespace(this._generated);
+      this.agentHost = new AgentHostNamespace(this._generated);
       this.conversations = new ConversationsNamespace(this._http, podIdFn);
       this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
       this.apps = new AppsNamespace(this._generated, this._http, podIdFn);

@@ -110,6 +110,7 @@ class _AgentHostRunConfig:
     config_selections: JsonObject
     wait_timeout_seconds: int
     fallback_profile_id: str | None
+    model_name: str | None
 
 
 def _agent_host_run_config(options: HarnessOptions) -> _AgentHostRunConfig:
@@ -122,6 +123,12 @@ def _agent_host_run_config(options: HarnessOptions) -> _AgentHostRunConfig:
     # selections are revalidated by the repository.
     str(config["harness_snapshot_revision"])
     fallback_profile_id = config.get("fallback_profile_id")
+    # The model comes from the profile snapshot rather than options.model_name,
+    # which substitutes a "default" placeholder when nothing is pinned. Agent
+    # Host rejects any model the harness does not advertise, so an unpinned
+    # profile must send no model and let the harness use its own default.
+    raw_model = profile.get("provider_model_name") or profile.get("model_name")
+    model_name = str(raw_model).strip() if raw_model else None
     return _AgentHostRunConfig(
         harness_id=harness_id,
         runtime_profile_id=runtime_profile_id,
@@ -133,6 +140,7 @@ def _agent_host_run_config(options: HarnessOptions) -> _AgentHostRunConfig:
         fallback_profile_id=(
             str(fallback_profile_id) if fallback_profile_id is not None else None
         ),
+        model_name=model_name or None,
     )
 
 
@@ -445,7 +453,7 @@ class RemoteHarness:
                 conversation_id=conversation.id,
                 harness_id=run_config.harness_id,
                 profile_revision=harness.config_revision,
-                model_name=options.model_name,
+                model_name=run_config.model_name,
                 config_selections=run_config.config_selections,
                 system_prompt=str(
                     prompt.get("system_prompt")

@@ -36,7 +36,7 @@ class _FakeHttpResponse:
 
 def _email_ctx(platform: str) -> SimpleNamespace:
     """A run context on an email surface with pause support available (so only
-    the email guard, not the daemon guard, can trigger the fallback)."""
+    the email guard, not the pause-signal guard, can trigger the fallback)."""
     return SimpleNamespace(
         deps=SimpleNamespace(
             agent_run_id=uuid4(),

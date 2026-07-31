@@ -1,4 +1,4 @@
-"""Round-2: default-server bootstrap, daemon wss derivation, session selection."""
+"""Round-2: default-server bootstrap and session selection."""
 
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from lemma_sdk.config import (
     resolve_base_url,
 )
 
-from lemma_cli.daemon.config import daemon_ws_url
 from lemma_cli.cli_core.context import render_session_selection
 from lemma_cli.cli_core.state import CliState
 
@@ -76,17 +75,6 @@ def test_migration_skips_when_lemma_cloud_already_present(tmp_path):
     # never clobber an existing lemma-cloud; leave the legacy default in place
     assert "default" in loaded["servers"]
     assert loaded["servers"]["lemma-cloud"]["base_url"] == "c"
-
-
-def test_daemon_ws_url_scheme_derivation():
-    assert daemon_ws_url("https://api.lemma.work") == (
-        "wss://api.lemma.work/me/agent-runtime/daemon/ws"
-    )
-    assert daemon_ws_url("http://localhost:8711/") == (
-        "ws://localhost:8711/me/agent-runtime/daemon/ws"
-    )
-    # Bare host (no scheme) assumes TLS.
-    assert daemon_ws_url("api.lemma.work").startswith("wss://api.lemma.work/")
 
 
 def test_local_server_discovers_dynamic_desktop_endpoints(tmp_path, monkeypatch):

@@ -20,10 +20,18 @@ from pydantic import HttpUrl
 from app.core.config import reveal_secret, settings
 from app.core.domain.errors import DomainError
 from app.core.log.log import get_logger
+from app.modules.agent.domain.agent_host import (
+    AgentHostHarnessHealth,
+    AgentHostStatus,
+    effective_agent_host_status,
+    validate_agent_host_model,
+    validate_agent_host_selections,
+)
 from app.modules.agent.domain.runtime_profiles import (
     AnthropicCompatibleRuntimeConfig,
     AgentRuntimeProfile,
     ApiKeyRuntimeCredentials,
+    HarnessRuntimeConfig,
     OpenAICompatibleRuntimeConfig,
     RuntimeModelCapability,
     RuntimeModelCatalogEntry,
@@ -33,9 +41,13 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeProfileStatus,
     reveal_credentials,
 )
-from app.modules.agent.domain.value_objects import AgentRuntimeConfig, HarnessKind
+from app.modules.agent.domain.value_objects import (
+    AgentRuntimeConfig,
+    HarnessKind,
+    JsonObject,
+)
+from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepository
 from app.modules.agent.infrastructure.repositories import (
-    AgentRuntimeDaemonRepository,
     AgentRuntimeProfileRepository,
 )
 
@@ -159,15 +171,6 @@ def _openai_compat_model_capabilities(
     return capabilities
 
 
-USER_DAEMON_PROFILE_PROTOCOLS = {
-    HarnessKind.CODEX: RuntimeProfileProtocol.CODEX_APP_SERVER,
-    HarnessKind.CLAUDE_CODE: RuntimeProfileProtocol.CLAUDE_CODE,
-    HarnessKind.OPENCODE: RuntimeProfileProtocol.OPENCODE,
-    HarnessKind.CURSOR: RuntimeProfileProtocol.CURSOR,
-    HarnessKind.ANTIGRAVITY: RuntimeProfileProtocol.ANTIGRAVITY,
-}
-
-
 @dataclass(slots=True)
 class ResolvedAgentRuntime:
     profile: AgentRuntimeProfile
@@ -187,8 +190,8 @@ class ResolvedAgentRuntime:
             "profile_id": self.profile.id,
             "profile_name": self.profile.name,
             "user_id": str(self.profile.user_id) if self.profile.user_id else None,
-            "daemon_id": str(self.profile.daemon_id)
-            if self.profile.daemon_id
+            "harness_id": str(self.profile.harness_id)
+            if self.profile.harness_id
             else None,
             "scope": self.profile.scope.value,
             "protocol": self.profile.protocol.value,
@@ -204,10 +207,10 @@ class AgentRuntimeProfileService:
     def __init__(
         self,
         repository: AgentRuntimeProfileRepository | None = None,
-        daemon_repository: AgentRuntimeDaemonRepository | None = None,
+        host_repository: AgentHostRepository | None = None,
     ):
         self.repository = repository
-        self.daemon_repository = daemon_repository
+        self.host_repository = host_repository
 
     def system_profiles(self) -> list[AgentRuntimeProfile]:
         profile = _system_lemma_profile()
@@ -231,76 +234,116 @@ class AgentRuntimeProfileService:
             )
         return profiles
 
-    async def create_user_daemon_profile(
+    async def create_agent_host_profile(
         self,
         *,
         organization_id: UUID,
         user_id: UUID,
-        daemon_id: UUID,
-        harness_kind: HarnessKind,
+        harness_id: UUID,
         name: str,
         scope: RuntimeProfileScope = RuntimeProfileScope.ORGANIZATION,
         description: str | None = None,
         default_model_name: str | None = None,
+        config_selections: JsonObject | None = None,
+        host_wait_timeout_seconds: int = 300,
     ) -> AgentRuntimeProfile:
+        """Bind a runtime profile to one harness on one paired Agent Host.
+
+        The harness must be live and READY at save time: a profile written
+        against an offline or unhealthy harness would only fail later, at
+        dispatch, with far less context about what went wrong.
+        """
         if self.repository is None:
             raise RuntimeError("Runtime profile repository is required")
-        if self.daemon_repository is None:
-            raise RuntimeError("Runtime daemon repository is required")
-        if harness_kind not in USER_DAEMON_PROFILE_PROTOCOLS:
-            raise ValueError("Unsupported user daemon harness kind")
+        if self.host_repository is None:
+            raise RuntimeError("Agent Host repository is required")
         if scope not in {
             RuntimeProfileScope.ORGANIZATION,
             RuntimeProfileScope.PERSONAL,
         }:
-            raise ValueError(
-                "User daemon profile scope must be ORGANIZATION or PERSONAL"
-            )
+            raise ValueError("Agent Host profile scope must be ORGANIZATION or PERSONAL")
 
-        normalized_name = name.strip()
-        if not normalized_name:
-            raise ValueError("Profile name cannot be empty")
-
-        daemon = await self.daemon_repository.get_for_user(
-            daemon_id=daemon_id,
+        normalized_name = _normalize_profile_name(name)
+        harness = await self._require_ready_harness(
+            harness_id=harness_id,
+            organization_id=organization_id,
             user_id=user_id,
+            scope=scope,
         )
-        if daemon is None:
-            raise ValueError("Daemon is not available for the current user")
-
-        detected_catalog = _daemon_harness_model_catalog(
-            harness_catalog=getattr(daemon, "harness_catalog", {}) or {},
-            harness_kind=harness_kind,
+        config_options = list(harness.config_options or [])
+        selections = validate_agent_host_selections(
+            config_options=config_options,
+            selections=config_selections or {},
         )
-        if detected_catalog is None:
-            raise ValueError(
-                f"{harness_kind.value} is not available from daemon {daemon_id}"
-            )
-        model_catalog = _user_daemon_model_catalog(detected_catalog)
-        model_names = [entry.name for entry in model_catalog]
-        selected_default_model = _select_user_daemon_default_model(
-            requested_model_name=default_model_name,
-            model_names=model_names,
+        selected_model = validate_agent_host_model(
+            config_options=config_options,
+            model_name=default_model_name,
         )
         profile = AgentRuntimeProfile(
             id=str(uuid4()),
             organization_id=organization_id,
-            user_id=user_id,
-            daemon_id=daemon_id,
+            user_id=user_id if scope is RuntimeProfileScope.PERSONAL else None,
+            harness_id=harness_id,
             scope=scope,
             kind=RuntimeProfileKind.HARNESS,
-            protocol=USER_DAEMON_PROFILE_PROTOCOLS[harness_kind],
+            protocol=RuntimeProfileProtocol.AGENT_HOST,
             name=normalized_name,
             description=description.strip() if description else None,
-            default_model_name=selected_default_model,
-            model_catalog=model_catalog,
-            config={},
+            default_model_name=selected_model,
+            model_catalog=_agent_host_model_catalog(
+                config_options,
+                # ``images`` is the one harness capability the server branches
+                # on: it is what puts view_image in the run's toolset.
+                supports_images=bool(
+                    (harness.capabilities or {}).get("images") is True
+                ),
+            ),
+            config=HarnessRuntimeConfig(
+                harness_snapshot_revision=harness.config_revision,
+                config_selections=selections,
+                host_wait_timeout_seconds=host_wait_timeout_seconds,
+            ),
             status=RuntimeProfileStatus.ACTIVE,
             metadata={
-                "source": "USER_DAEMON",
+                "source": "AGENT_HOST",
+                "harness_key": harness.harness_key,
             },
         )
         return await self.repository.create(profile)
+
+    async def _require_ready_harness(
+        self,
+        *,
+        harness_id: UUID,
+        organization_id: UUID,
+        user_id: UUID,
+        scope: RuntimeProfileScope,
+    ):
+        assert self.host_repository is not None
+        harness = await self.host_repository.get_harness(harness_id=harness_id)
+        if harness is None:
+            raise ValueError("Agent Host harness is not available")
+        host = await self.host_repository.get_for_user(
+            host_id=harness.host_id,
+            user_id=user_id,
+        )
+        if host is None or host.revoked_at is not None:
+            raise ValueError("Agent Host harness is not owned by the current user")
+        if host.organization_id not in {None, organization_id}:
+            raise ValueError("Agent Host is paired to a different organization")
+        if (
+            scope is RuntimeProfileScope.ORGANIZATION
+            and host.organization_id != organization_id
+        ):
+            raise ValueError("Shared Agent Host profiles require an organization pairing")
+        if (
+            effective_agent_host_status(host.status, host.last_seen_at)
+            is not AgentHostStatus.ONLINE
+        ):
+            raise ValueError("Agent Host is offline or not accepting new runs")
+        if harness.health != AgentHostHarnessHealth.READY.value:
+            raise ValueError(f"Agent Host harness is not ready: {harness.health}")
+        return harness
 
     async def create_openai_compatible_profile(
         self,
@@ -447,7 +490,7 @@ class AgentRuntimeProfileService:
                 )
             raise RuntimeError(f"Agent runtime profile {profile_id!r} is not available")
         model = _selected_model(profile, runtime.model_name)
-        if model is None:
+        if model is None and profile.kind is not RuntimeProfileKind.HARNESS:
             raise RuntimeError(
                 f"Agent runtime profile {profile_id!r} has no selectable model"
             )
@@ -598,110 +641,47 @@ def _display_model_name(model_name: str) -> str:
     return model_name.replace("-", " ").replace("_", " ").title()
 
 
-def _user_daemon_model_catalog(
-    detected_models: list[dict[str, Any]],
+def _agent_host_model_catalog(
+    config_options: list[Any],
+    *,
+    supports_images: bool = False,
 ) -> list[RuntimeModelCatalogEntry]:
-    """Build the saved profile's model catalog from the daemon's entries.
+    """Advertise the models the harness itself offers, verbatim.
 
-    Always leads with a ``default`` entry (the account's standard-context
-    default), then carries each detected model through with its display name,
-    provider model id, and metadata so the picker can advertise them.
+    Agent Host rejects a model the harness does not list, so these names are
+    passed straight through as the provider model name — Lemma never renames or
+    invents one. A harness with no ``model`` option yields an empty catalog and
+    the profile pins no model, which lets the harness use its own default.
     """
-    entries = [_default_daemon_model_entry()]
-    seen = {"default"}
-    for item in detected_models:
-        name = str(item.get("name") or "").strip()
-        if not name or name in seen:
+    capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
+    if supports_images:
+        capabilities.append(RuntimeModelCapability.VISION)
+    entries: list[RuntimeModelCatalogEntry] = []
+    seen: set[str] = set()
+    for raw_option in config_options:
+        if not isinstance(raw_option, dict):
             continue
-        seen.add(name)
-        provider_model_name = (
-            str(item.get("provider_model_name") or name).strip() or name
-        )
-        display_name = str(item.get("display_name") or "").strip() or name
-        metadata = item.get("metadata")
-        entries.append(
-            RuntimeModelCatalogEntry(
-                name=name,
-                display_name=display_name,
-                provider_model_name=provider_model_name,
-                capabilities=[
-                    RuntimeModelCapability.TEXT,
-                    RuntimeModelCapability.TOOLS,
-                ],
-                metadata=metadata if isinstance(metadata, dict) else {},
+        if str(raw_option.get("category") or "").strip() != "model":
+            continue
+        for item in raw_option.get("options") or []:
+            if isinstance(item, dict):
+                name = str(item.get("value") or item.get("id") or "").strip()
+                display_name = str(item.get("name") or "").strip() or name
+            else:
+                name = str(item).strip()
+                display_name = name
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            entries.append(
+                RuntimeModelCatalogEntry(
+                    name=name,
+                    display_name=display_name,
+                    provider_model_name=name,
+                    capabilities=list(capabilities),
+                )
             )
-        )
     return entries
-
-
-def _default_daemon_model_entry() -> RuntimeModelCatalogEntry:
-    return RuntimeModelCatalogEntry(
-        name="default",
-        display_name="Default",
-        provider_model_name="default",
-        capabilities=[
-            RuntimeModelCapability.TEXT,
-            RuntimeModelCapability.TOOLS,
-        ],
-        metadata={"context_window": "standard"},
-    )
-
-
-def _daemon_harness_model_catalog(
-    *,
-    harness_catalog: object,
-    harness_kind: HarnessKind,
-) -> list[dict[str, Any]] | None:
-    """Structured model entries reported by the daemon for a harness.
-
-    Prefers the daemon's ``model_catalog`` (name/display_name/
-    provider_model_name/metadata); falls back to the flat ``models`` string
-    list for daemons that predate the structured catalog. Returns ``None`` when
-    the harness is unavailable.
-    """
-    if not isinstance(harness_catalog, dict):
-        return None
-    entry = harness_catalog.get(harness_kind.value)
-    if not isinstance(entry, dict):
-        return None
-    if entry.get("available") is False:
-        return None
-    raw_catalog = entry.get("model_catalog")
-    if isinstance(raw_catalog, list):
-        structured = [
-            item
-            for item in raw_catalog
-            if isinstance(item, dict) and str(item.get("name") or "").strip()
-        ]
-        if structured:
-            return structured
-    # Back-compat: older daemons only report a flat ``models`` list of strings.
-    raw_models = entry.get("models")
-    if not isinstance(raw_models, list):
-        return []
-    return [
-        {
-            "name": model,
-            "display_name": model,
-            "provider_model_name": model,
-            "metadata": {},
-        }
-        for model in raw_models
-        if isinstance(model, str) and model.strip()
-    ]
-
-
-def _select_user_daemon_default_model(
-    *,
-    requested_model_name: str | None,
-    model_names: list[str],
-) -> str:
-    if requested_model_name is None:
-        return "default"
-    normalized = requested_model_name.strip()
-    if normalized not in model_names:
-        raise ValueError("default_model_name must be one of the detected model names")
-    return normalized
 
 
 def _normalize_profile_name(name: str) -> str:

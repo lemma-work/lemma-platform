@@ -7,13 +7,14 @@ SHELL := /bin/bash
 #   make dev           start infra + backend + frontend (hot-reload)
 #   make dev-public    same, with an ephemeral public Cloudflare API URL
 #   make dev RELOAD=1  same, with uvicorn --reload on the backend
+#   make agent-host    build, pair, and run the local Agent Host against make dev
 #   make stop          stop backend/frontend processes
 #   make stop-all      also stop infra containers
 #   make test          run all component test suites
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init dev dev-public agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
         _ensure-native-connectors \
         test-dev-workflow \
@@ -38,6 +39,8 @@ CLI_DIR       := lemma-cli
 PYTHON_DIR    := lemma-python
 TS_DIR        := lemma-typescript
 AGENTBOX_DIR  := agentbox
+AGENT_HOST_DIR := agent-host
+AGENT_HOST_BIN := $(abspath $(AGENT_HOST_DIR)/target/debug/lemma-agent-host)
 
 PID_FILE      := .dev-pids
 BACKEND_PID_FILE  := $(BACKEND_DIR)/.dev-backend.pid
@@ -227,6 +230,7 @@ help:
 	@echo "    make dev                start infra + backend + frontend"
 	@echo "    make dev-public         start with an ephemeral public API tunnel"
 	@echo "    make dev RELOAD=1       same, with uvicorn --reload on the backend"
+	@echo "    make agent-host         build, pair, and run the local Agent Host"
 	@echo "    make stop               stop app and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
 	@echo "    make logs               tail infrastructure container logs"
@@ -464,6 +468,9 @@ dev:
 	@echo "  API docs  →  $(DEV_BACKEND_URL)/scalar"
 	@echo "  AgentBox  →  $(DEV_AGENTBOX_URL)"
 	@echo ""
+	@echo "  Run local Codex/Claude Code/OpenCode/Cursor against this stack:"
+	@echo "    make agent-host        (one-time pairing, then it keeps running)"
+	@echo ""
 	@echo "  Debug and safe request-access logs are enabled."
 	@echo "  Press Ctrl-C or run 'make stop' to stop."
 	@echo ""
@@ -509,6 +516,36 @@ dev-public:
 		status=$$?; $(MAKE) --no-print-directory stop; wait 2>/dev/null || true; exit $$status; \
 	}; \
 	wait
+
+# Agent Host is deliberately NOT started by `make dev`. It is a separate,
+# durable, per-user process that holds a pairing credential bound to a
+# signed-in Lemma user, so it cannot be started unattended by a target that has
+# no session; it is a Rust binary whose first build would add minutes to every
+# `make dev` and hard-fail for anyone without a Rust toolchain; and it is meant
+# to outlive individual dev-stack restarts rather than be swept by `make stop`.
+# So `make dev` prints one line pointing here, and this target is that one line.
+agent-host:
+	@command -v cargo >/dev/null 2>&1 || \
+		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@echo "→ Building Agent Host…"
+	@cd $(AGENT_HOST_DIR) && cargo build --quiet
+	@echo "→ Pairing with $(DEV_BACKEND_URL) (no-op if already paired)…"
+	@# `lemma agent-host connect` mints a pairing code from the CLI's own login
+	@# and consumes it immediately, so pairing is this one command. It picks up
+	@# the binary just built from agent-host/target/debug.
+	@cd $(CLI_DIR) && uv run lemma agent-host connect --url $(DEV_BACKEND_URL) || { \
+		echo "  ✗ Pairing failed. Run 'cd $(CLI_DIR) && uv run lemma auth login' first."; \
+		exit 1; \
+	}
+	@echo ""
+	@echo "  Agent Host is serving. Next:"
+	@echo "    cd $(CLI_DIR) && uv run lemma agent-host harnesses   # copy a harness_id"
+	@echo "    cd $(CLI_DIR) && uv run lemma runtime profiles create AGENT_HOST \\"
+	@echo "        --name 'Codex on my laptop' --harness-id <harness_id>"
+	@echo ""
+	@echo "  Press Ctrl-C to stop."
+	@echo ""
+	@$(AGENT_HOST_BIN) serve
 
 _prepare-dev:
 	@$(MAKE) --no-print-directory stop 2>/dev/null || true

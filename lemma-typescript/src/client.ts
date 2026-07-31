@@ -6,6 +6,7 @@ import {
 import { AuthManager, type AuthState, type AuthListener } from "./auth.js";
 import { GeneratedClientAdapter } from "./generated.js";
 import { HttpClient } from "./http.js";
+import { AgentHostNamespace } from "./namespaces/agent-host.js";
 import { AgentRuntimeNamespace } from "./namespaces/agent-runtime.js";
 import { AgentsNamespace } from "./namespaces/agents.js";
 import { ConversationsNamespace } from "./namespaces/conversations.js";
@@ -58,6 +59,7 @@ export class LemmaClient {
   readonly functions: FunctionsNamespace;
   readonly agents: AgentsNamespace;
   readonly agentRuntime: AgentRuntimeNamespace;
+  readonly agentHost: AgentHostNamespace;
   readonly conversations: ConversationsNamespace;
   readonly workflows: WorkflowsNamespace;
   readonly apps: AppsNamespace;
@@ -114,6 +116,7 @@ export class LemmaClient {
     this.functions = new FunctionsNamespace(this._generated, podIdFn);
     this.agents = new AgentsNamespace(this._generated, podIdFn, () => this.conversations);
     this.agentRuntime = new AgentRuntimeNamespace(this._generated);
+    this.agentHost = new AgentHostNamespace(this._generated);
     this.conversations = new ConversationsNamespace(this._http, podIdFn);
     this.workflows = new WorkflowsNamespace(this._generated, this._http, podIdFn);
     this.apps = new AppsNamespace(this._generated, this._http, podIdFn);

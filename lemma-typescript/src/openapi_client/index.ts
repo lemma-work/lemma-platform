@@ -13,8 +13,6 @@ export type { AccountResponseSchema } from './models/AccountResponseSchema.js';
 export type { AddColumnRequest } from './models/AddColumnRequest.js';
 export type { AgentActionResponse } from './models/AgentActionResponse.js';
 export type { AgentDetailResponse } from './models/AgentDetailResponse.js';
-export type { AgentHarnessInfo } from './models/AgentHarnessInfo.js';
-export type { AgentHarnessListResponse } from './models/AgentHarnessListResponse.js';
 export type { AgentHostCapacity } from './models/AgentHostCapacity.js';
 export type { AgentHostCommand } from './models/AgentHostCommand.js';
 export { AgentHostCommandKind } from './models/AgentHostCommandKind.js';
@@ -102,6 +100,7 @@ export type { ConversationListResponse } from './models/ConversationListResponse
 export type { ConversationResponse } from './models/ConversationResponse.js';
 export { ConversationStatus } from './models/ConversationStatus.js';
 export { ConversationType } from './models/ConversationType.js';
+export type { CreateAgentHostRuntimeProfileRequest } from './models/CreateAgentHostRuntimeProfileRequest.js';
 export type { CreateAgentRequest } from './models/CreateAgentRequest.js';
 export type { CreateAnthropicCompatibleRuntimeProfileRequest } from './models/CreateAnthropicCompatibleRuntimeProfileRequest.js';
 export type { CreateAppFromWidgetRequest } from './models/CreateAppFromWidgetRequest.js';
@@ -113,7 +112,6 @@ export type { CreateOpenAICompatibleRuntimeProfileRequest } from './models/Creat
 export type { CreateRecordRequest } from './models/CreateRecordRequest.js';
 export type { CreateScheduleRequest } from './models/CreateScheduleRequest.js';
 export type { CreateTableRequest } from './models/CreateTableRequest.js';
-export type { CreateUserDaemonRuntimeProfileRequest } from './models/CreateUserDaemonRuntimeProfileRequest.js';
 export type { DatastoreCountResponse } from './models/DatastoreCountResponse.js';
 export { DatastoreDataType } from './models/DatastoreDataType.js';
 export type { DatastoreFileUploadRequest } from './models/DatastoreFileUploadRequest.js';

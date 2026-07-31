@@ -114,7 +114,7 @@
         },
         "interaction_fallback": {
           "default": false,
-          "description": "True when a daemon runtime could not pause and the model must ask the question conversationally instead.",
+          "description": "True when a remote harness runtime could not pause and the model must ask the question conversationally instead.",
           "type": "boolean"
         }
       },
@@ -2371,7 +2371,7 @@
         },
         "interaction_fallback": {
           "default": false,
-          "description": "True when a daemon runtime could not pause and the model must ask for confirmation conversationally instead.",
+          "description": "True when a remote harness runtime could not pause and the model must ask for confirmation conversationally instead.",
           "type": "boolean"
         }
       },

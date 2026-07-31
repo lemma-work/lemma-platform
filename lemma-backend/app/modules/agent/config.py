@@ -48,14 +48,6 @@ class AgentSettings(BaseSettings):
         default=None,
         description="Optional model used to generate conversation titles.",
     )
-    daemon_ws_ping_stale_after_seconds: float = Field(
-        default=90.0,
-        description="Close a user-daemon websocket after this many seconds without a ping.",
-    )
-    daemon_reconnect_grace_seconds: float = Field(
-        default=120.0,
-        description="Time allowed for a disconnected daemon to reattach an in-flight run.",
-    )
     local_agent_runtime_config_path: str = Field(
         default_factory=_default_local_runtime_config_path,
         description="Local file containing the persisted system agent runtime default.",

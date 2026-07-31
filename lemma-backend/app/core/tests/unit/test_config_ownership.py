@@ -9,8 +9,6 @@ def test_global_settings_exclude_module_owned_controls() -> None:
         "agent_context_brief_cache_ttl_seconds",
         "function_run_poll_interval_seconds",
         "conversation_title_model",
-        "daemon_ws_ping_stale_after_seconds",
-        "daemon_reconnect_grace_seconds",
         "local_agent_runtime_config_path",
         "icon_upload_max_bytes",
         "icon_max_dimension_pixels",

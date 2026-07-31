@@ -550,103 +550,6 @@
         "title": "AgentDetailResponse",
         "type": "object"
       },
-      "AgentHarnessInfo": {
-        "properties": {
-          "availability_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Availability Status"
-          },
-          "available": {
-            "default": true,
-            "title": "Available",
-            "type": "boolean"
-          },
-          "daemon_display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Display Name"
-          },
-          "daemon_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Id"
-          },
-          "daemon_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Status"
-          },
-          "display_name": {
-            "title": "Display Name",
-            "type": "string"
-          },
-          "harness_kind": {
-            "$ref": "#/components/schemas/HarnessKind"
-          },
-          "model_catalog": {
-            "items": {
-              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
-            },
-            "title": "Model Catalog",
-            "type": "array"
-          },
-          "models": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Models",
-            "type": "array"
-          }
-        },
-        "required": [
-          "harness_kind",
-          "display_name"
-        ],
-        "title": "AgentHarnessInfo",
-        "type": "object"
-      },
-      "AgentHarnessListResponse": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/AgentHarnessInfo"
-            },
-            "title": "Items",
-            "type": "array"
-          }
-        },
-        "required": [
-          "items"
-        ],
-        "title": "AgentHarnessListResponse",
-        "type": "object"
-      },
       "AgentHostCapacity": {
         "properties": {
           "active_runs": {
@@ -1970,51 +1873,6 @@
             "title": "Config",
             "type": "object"
           },
-          "daemon_display_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Display Name"
-          },
-          "daemon_harness_available": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Harness Available"
-          },
-          "daemon_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Id"
-          },
-          "daemon_status": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Daemon Status"
-          },
           "default_model_name": {
             "anyOf": [
               {
@@ -2039,6 +1897,18 @@
               }
             ],
             "title": "Description"
+          },
+          "harness_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Id"
           },
           "has_credentials": {
             "default": false,
@@ -4064,6 +3934,65 @@
         "title": "ConversationType",
         "type": "string"
       },
+      "CreateAgentHostRuntimeProfileRequest": {
+        "properties": {
+          "config_selections": {
+            "additionalProperties": true,
+            "title": "Config Selections",
+            "type": "object"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "harness_id": {
+            "format": "uuid",
+            "title": "Harness Id",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope",
+            "default": "ORGANIZATION"
+          },
+          "source": {
+            "const": "AGENT_HOST",
+            "default": "AGENT_HOST",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "harness_id",
+          "name"
+        ],
+        "title": "CreateAgentHostRuntimeProfileRequest",
+        "type": "object"
+      },
       "CreateAgentRequest": {
         "properties": {
           "agent_runtime": {
@@ -4847,64 +4776,6 @@
           "columns"
         ],
         "title": "CreateTableRequest",
-        "type": "object"
-      },
-      "CreateUserDaemonRuntimeProfileRequest": {
-        "properties": {
-          "daemon_id": {
-            "format": "uuid",
-            "title": "Daemon Id",
-            "type": "string"
-          },
-          "default_model_name": {
-            "anyOf": [
-              {
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Model Name"
-          },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
-          },
-          "harness_kind": {
-            "$ref": "#/components/schemas/HarnessKind"
-          },
-          "name": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Name",
-            "type": "string"
-          },
-          "scope": {
-            "$ref": "#/components/schemas/RuntimeProfileScope",
-            "default": "ORGANIZATION"
-          },
-          "source": {
-            "const": "USER_DAEMON",
-            "default": "USER_DAEMON",
-            "title": "Source",
-            "type": "string"
-          }
-        },
-        "required": [
-          "daemon_id",
-          "harness_kind",
-          "name"
-        ],
-        "title": "CreateUserDaemonRuntimeProfileRequest",
         "type": "object"
       },
       "DataStoreWorkflowStartConfigInput": {
@@ -7600,14 +7471,10 @@
         "type": "string"
       },
       "HarnessKind": {
-        "description": "Runtime framework used to execute an agent.",
+        "description": "Runtime framework used to execute an agent.\n\nTwo kinds, not one per coding tool: ``LEMMA`` runs in-process, ``HARNESS``\ndispatches through Agent Host. Which tool Agent Host runs is identified by\n``harness_id`` on the runtime profile, so the retired per-tool values\n(``CODEX``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``, ``ANTIGRAVITY``) went\naway with the local daemon that needed them.\n\nNo stored row is read back through this enum \u2014 a persisted runtime profile\nnames a ``RuntimeProfileProtocol``, and the kind is derived from that \u2014 so\ndropping those values cannot fail a history read. Back-compat for retired\n*protocols* is handled where it belongs, in the profile repository.",
         "enum": [
           "LEMMA",
-          "CODEX",
-          "CLAUDE_CODE",
-          "OPENCODE",
-          "CURSOR",
-          "ANTIGRAVITY"
+          "HARNESS"
         ],
         "title": "HarnessKind",
         "type": "string"
@@ -10919,16 +10786,13 @@
         "type": "string"
       },
       "RuntimeProfileProtocol": {
+        "description": "How a profile reaches its runtime.\n\nThe retired local daemon needed one protocol per coding tool\n(``CODEX_APP_SERVER``, ``CLAUDE_CODE``, ``OPENCODE``, ``CURSOR``,\n``ANTIGRAVITY``). Agent Host needs one: the tool is identified by the\nprofile's ``harness_id``. Stored rows can still carry a retired value, so\nthe profile repository skips protocols this enum no longer knows rather\nthan failing the whole listing.",
         "enum": [
           "OPENAI_COMPATIBLE",
           "ANTHROPIC_COMPATIBLE",
           "AZURE_OPENAI",
           "GOOGLE_VERTEX",
-          "CODEX_APP_SERVER",
-          "CLAUDE_CODE",
-          "OPENCODE",
-          "CURSOR",
-          "ANTIGRAVITY"
+          "AGENT_HOST"
         ],
         "title": "RuntimeProfileProtocol",
         "type": "string"
@@ -16004,7 +15868,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.8"
+    "version": "0.6.9"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16327,34 +16191,6 @@
           "resource": "agent.host",
           "result": "entity",
           "verb": "self_revoke"
-        }
-      }
-    },
-    "/agent-runtime/harnesses": {
-      "get": {
-        "operationId": "agent.runtime.harnesses.list",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentHarnessListResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          }
-        },
-        "summary": "List Available Agent Harnesses",
-        "tags": [
-          "agent_runtime"
-        ],
-        "x-lemma": {
-          "kind": "query",
-          "paginates": false,
-          "resource": "agent.runtime.harnesses",
-          "result": "collection",
-          "verb": "list"
         }
       }
     },
@@ -17513,15 +17349,15 @@
               "schema": {
                 "discriminator": {
                   "mapping": {
+                    "AGENT_HOST": "#/components/schemas/CreateAgentHostRuntimeProfileRequest",
                     "ANTHROPIC_COMPATIBLE": "#/components/schemas/CreateAnthropicCompatibleRuntimeProfileRequest",
-                    "OPENAI_COMPATIBLE": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest",
-                    "USER_DAEMON": "#/components/schemas/CreateUserDaemonRuntimeProfileRequest"
+                    "OPENAI_COMPATIBLE": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest"
                   },
                   "propertyName": "source"
                 },
                 "oneOf": [
                   {
-                    "$ref": "#/components/schemas/CreateUserDaemonRuntimeProfileRequest"
+                    "$ref": "#/components/schemas/CreateAgentHostRuntimeProfileRequest"
                   },
                   {
                     "$ref": "#/components/schemas/CreateOpenAICompatibleRuntimeProfileRequest"

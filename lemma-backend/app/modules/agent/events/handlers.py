@@ -42,11 +42,8 @@ from app.modules.agent.domain.events import (
     AgentRunStartedEvent,
     AgentRunStopRequestedEvent,
 )
-from app.modules.agent.config import agent_settings
 from app.modules.agent.domain.value_objects import AgentRunStatus
-from app.modules.agent.domain.value_objects import HarnessKind
 from app.modules.agent.infrastructure.harnesses import (
-    DaemonHarness,
     HarnessRegistry,
     PydanticAIHarness,
     RemoteHarness,
@@ -87,28 +84,12 @@ def provide_uow_factory() -> UnitOfWorkFactory:
 
 
 def build_harness_registry() -> HarnessRegistry:
-    reconnect_grace_seconds = agent_settings.daemon_reconnect_grace_seconds
     return HarnessRegistry(
         [
             PydanticAIHarness(),
             # One harness for every Agent Host tool; which one runs is decided
             # by the profile's harness_id, not by the registry.
             RemoteHarness(provide_uow_factory()),
-            DaemonHarness(
-                HarnessKind.CODEX, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.CLAUDE_CODE, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.OPENCODE, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.CURSOR, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
-            DaemonHarness(
-                HarnessKind.ANTIGRAVITY, reconnect_grace_seconds=reconnect_grace_seconds
-            ),
         ]
     )
 
