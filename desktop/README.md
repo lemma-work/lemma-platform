@@ -79,16 +79,31 @@ Build Desktop sidecars:
 desktop/scripts/build-sidecar.sh
 ```
 
-To iterate on Local settings without building a DMG every time, use the
-isolated dev launcher:
+To run Desktop local mode against the code you are editing:
+
+```bash
+desktop/scripts/dev-local.sh --source
+```
+
+locald supervises the backend out of `lemma-backend/` through `uv run` and the
+frontend through `next dev`, so the workspace is your working tree rather than
+the last release. The managed runtime, ports, health checks and restart policy
+are the packaged ones — a dev run that exercised a different supervisor would
+prove nothing about the real one.
+
+It borrows the VM guest artifacts from an installed release (the one thing a
+checkout cannot build on demand) read-only; override the location with
+`LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`. To run a released pack instead, pass its
+path:
 
 ```bash
 desktop/scripts/dev-local.sh /absolute/path/to/local-runtime
 ```
 
-It rebuilds the native sidecars, gracefully replaces the prior isolated dev
-daemon, and keeps its state under `/tmp/lemma-desktop-dev` so an installed
-Lemma daemon cannot capture the dev UI.
+Either way it rebuilds the native sidecars, gracefully replaces the prior
+isolated dev daemon, and keeps its state under `/tmp/lemma-desktop-dev` so an
+installed Lemma daemon cannot capture the dev UI — and so a dev session never
+adopts or corrupts a real install's Agent Host identity.
 
 For source-level installer testing, prepare an exact manifest and archives and
 set:
@@ -103,6 +118,12 @@ Packaged releases ignore development port overrides and do not enable arbitrary
 local artifacts.
 
 ## Build the PR test DMG
+
+The DMG from CI's **macOS desktop build + codesign** job is *not* an installer.
+That job proves the app compiles and codesigns; it stages a placeholder manifest
+with unresolvable URLs, so its app refuses to install and says so. Its artifact
+is named `lemma-desktop-macos-buildcheck-<sha>`. Use the workflow below for
+anything you intend to run.
 
 Run the **Release Local Images** workflow on the PR branch with:
 

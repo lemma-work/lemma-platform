@@ -633,7 +633,13 @@ jobs:
         working-directory: desktop
         run: cargo test --locked
 
-      - name: Stage CI online runtime manifest
+      # Placeholder on purpose: this job proves the app builds and codesigns,
+      # it does not produce an installer. The URLs are unresolvable and the
+      # digests are zero, and `artifact_source` says so out loud so the app can
+      # refuse with a useful message instead of a connection error. The
+      # installable PR DMG comes from release-local-images.yml with
+      # publish: false -- see desktop/README.md.
+      - name: Stage CI build-check runtime manifest
         shell: bash
         run: |
           set -euo pipefail
@@ -644,6 +650,7 @@ jobs:
             '{
               schema_version: 1,
               version: $version,
+              artifact_source: "ci-build-check",
               host_packs: {
                 "aarch64-apple-darwin": {
                   url: "https://downloads.example.invalid/lemma-host-pack.zip",
@@ -724,10 +731,10 @@ jobs:
             grep -F "Signature=adhoc" <<< "${signature_info}"
           fi
 
-      - name: Upload macOS DMG
+      - name: Upload macOS build-check DMG
         uses: actions/upload-artifact@v4
         with:
-          name: lemma-desktop-macos-${{ github.sha }}
+          name: lemma-desktop-macos-buildcheck-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
           if-no-files-found: error
           retention-days: 7
