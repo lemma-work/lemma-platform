@@ -4,7 +4,7 @@ requires-python = "==3.14.*"
 
 [[package]]
 name = "agentbox"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -70,7 +70,7 @@ dev = [
 
 [[package]]
 name = "agentbox-client"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "../agentbox-client" }
 dependencies = [
     { name = "httpx" },
@@ -594,7 +594,7 @@ wheels = [
 
 [[package]]
 name = "lemma-sdk"
-version = "0.7.3"
+version = "0.7.0"
 source = { editable = "../lemma-python" }
 dependencies = [
     { name = "attrs" },

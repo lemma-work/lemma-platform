@@ -683,12 +683,12 @@ wheels = [
 
 [[package]]
 name = "lemma-pod-bundle"
-version = "0.1.0"
+version = "0.7.0"
 source = { directory = "../../../lemma-pod-bundle" }
 
 [[package]]
 name = "lemma-sdk"
-version = "0.7.3"
+version = "0.7.0"
 source = { directory = "../../../lemma-python" }
 dependencies = [
     { name = "attrs" },
