@@ -14,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
+import { SettingsList, SettingsRow } from '@/components/settings/settings-kit';
 import {
     useAgentHostHarnesses,
     useAgentHosts,
@@ -267,35 +268,41 @@ function ProvidersSection({
                 hint="Lemma's built-in models, or connect your own OpenAI- or Anthropic-compatible key."
             />
             <div className="flex flex-col gap-2">
-                {providers.map((profile) => {
-                    const status = providerStatusLabel(profile);
-                    const modelCount = profile.model_catalog?.length ?? 0;
-                    const isSystem = profile.scope === RuntimeProfileScope.SYSTEM;
-                    const scope = scopeBadge(profile.scope);
-                    return (
-                        <div key={profile.id} className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] px-4 py-3">
-                            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)] text-[var(--text-secondary)]">
-                                {isSystem ? <Sparkles className="size-4 text-[var(--delight)]" /> : <KeyRound className="size-4" />}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium text-[var(--text-primary)]">{profile.name}</div>
-                                <div className="text-xs text-[var(--text-tertiary)]">
-                                    {isSystem ? 'Built in' : 'Your key'}
-                                    {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
+                <SettingsList>
+                    {providers.map((profile) => {
+                        const status = providerStatusLabel(profile);
+                        const modelCount = profile.model_catalog?.length ?? 0;
+                        const isSystem = profile.scope === RuntimeProfileScope.SYSTEM;
+                        const scope = scopeBadge(profile.scope);
+                        return (
+                            <SettingsRow key={profile.id}>
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)] text-[var(--text-secondary)]">
+                                        {isSystem ? <Sparkles className="size-4 text-[var(--delight)]" /> : <KeyRound className="size-4" />}
+                                    </span>
+                                    <div className="min-w-0">
+                                        <div className="truncate text-sm font-medium text-[var(--text-primary)]">{profile.name}</div>
+                                        <div className="text-xs text-[var(--text-tertiary)]">
+                                            {isSystem ? 'Built in' : 'Your key'}
+                                            {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                            {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
-                            {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
-                            <StatusBadge label={status.label} tone={status.tone} />
-                            <ProfileRowActions
-                                profile={profile}
-                                organizationId={organizationId}
-                                onEdit={() => setDialog({ mode: 'edit', profile })}
-                                onRefresh={onRefresh}
-                            />
-                        </div>
-                    );
-                })}
+                                <div className="flex shrink-0 items-center gap-2">
+                                    {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
+                                    {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
+                                    <StatusBadge label={status.label} tone={status.tone} />
+                                    <ProfileRowActions
+                                        profile={profile}
+                                        organizationId={organizationId}
+                                        onEdit={() => setDialog({ mode: 'edit', profile })}
+                                        onRefresh={onRefresh}
+                                    />
+                                </div>
+                            </SettingsRow>
+                        );
+                    })}
+                </SettingsList>
 
                 <div className="mt-1">
                     <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-tertiary)]">Connect a provider</p>
@@ -362,42 +369,48 @@ function CodingAgentsSection({
                         None yet. Add one from a paired computer below.
                     </p>
                 ) : null}
-                {profiles.map((profile) => {
-                    const logo = harnessLogo(profileHarnessKey(profile));
-                    const modelCount = profile.model_catalog?.length ?? 0;
-                    const scope = scopeBadge(profile.scope);
-                    const availability = runtimeAvailabilityLabel(profile);
-                    return (
-                        <div key={profile.id} className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] px-4 py-3">
-                            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
-                                {logo ? (
-                                    <Image src={logo} alt="" width={18} height={18} className="size-4.5 object-contain" />
-                                ) : (
-                                    <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
-                                )}
-                            </span>
-                            <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-medium text-[var(--text-primary)]">{profile.name}</div>
-                                <div className="text-xs text-[var(--text-tertiary)]">
-                                    {profile.default_model_name ?? 'Agent picks the model'}
-                                    {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
+                <SettingsList>
+                    {profiles.map((profile) => {
+                        const logo = harnessLogo(profileHarnessKey(profile));
+                        const modelCount = profile.model_catalog?.length ?? 0;
+                        const scope = scopeBadge(profile.scope);
+                        const availability = runtimeAvailabilityLabel(profile);
+                        return (
+                            <SettingsRow key={profile.id}>
+                                <div className="flex min-w-0 items-center gap-3">
+                                    <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
+                                        {logo ? (
+                                            <Image src={logo} alt="" width={18} height={18} className="size-4.5 object-contain" />
+                                        ) : (
+                                            <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
+                                        )}
+                                    </span>
+                                    <div className="min-w-0">
+                                        <div className="truncate text-sm font-medium text-[var(--text-primary)]">{profile.name}</div>
+                                        <div className="text-xs text-[var(--text-tertiary)]">
+                                            {profile.default_model_name ?? 'Agent picks the model'}
+                                            {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
-                            {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
-                            {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
-                            <StatusBadge
-                                label={availability ?? 'Active'}
-                                tone={availability ? 'muted' : 'ok'}
-                            />
-                            <ProfileRowActions
-                                profile={profile}
-                                organizationId={organizationId}
-                                onEdit={() => setDialog({ mode: 'edit', profile })}
-                                onRefresh={onRefresh}
-                            />
-                        </div>
-                    );
-                })}
+                                <div className="flex shrink-0 items-center gap-2">
+                                    {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
+                                    {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
+                                    <StatusBadge
+                                        label={availability ?? 'Active'}
+                                        tone={availability ? 'muted' : 'ok'}
+                                    />
+                                    <ProfileRowActions
+                                        profile={profile}
+                                        organizationId={organizationId}
+                                        onEdit={() => setDialog({ mode: 'edit', profile })}
+                                        onRefresh={onRefresh}
+                                    />
+                                </div>
+                            </SettingsRow>
+                        );
+                    })}
+                </SettingsList>
             </div>
 
             <HarnessProfileDialog
