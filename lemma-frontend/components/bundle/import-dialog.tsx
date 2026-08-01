@@ -12,7 +12,6 @@ import {
     FileArchive,
     Files,
     Github,
-    Loader2,
     PanelsTopLeft,
     Plug,
     Share2,
@@ -48,6 +47,7 @@ import {
     type PlanStep,
     type StepAction,
 } from '@/lib/hooks/use-pod-bundle';
+import { StepLoader } from '@/components/brand/loader';
 
 type Step = 'source' | 'planning' | 'review' | 'applying' | 'done' | 'error';
 type SourceMode = 'upload' | 'github';
@@ -278,7 +278,7 @@ function InstallGroupRow({
                 ) : complete ? (
                     <CheckCircle2 className="h-4 w-4" />
                 ) : active ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <StepLoader size="sm" />
                 ) : (
                     <span />
                 )}
@@ -296,7 +296,7 @@ function StepRow({ step }: { step: PlanStep }) {
         <div className="flex items-center gap-2 py-1.5 text-sm">
             <span className="flex h-4 w-4 shrink-0 items-center justify-center">
                 {running ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--action-primary)]" />
+                    <StepLoader size="xs" className="text-[var(--action-primary)]" />
                 ) : done ? (
                     <CheckCircle2 className="h-3.5 w-3.5 text-[var(--state-success)]" />
                 ) : failed ? (
@@ -844,7 +844,7 @@ export function ImportDialog({
                                 <p className="text-sm text-[var(--state-error)]">{errorMessage}</p>
                             ) : null}
 
-                            <Button className="w-full" onClick={handleStart} loading={busy} loadingLabel="Preparing…">
+                            <Button variant="primary" className="w-full" onClick={handleStart} loading={busy} loadingLabel="Preparing…">
                                 Continue
                                 <ArrowRight className="ml-2 h-4 w-4" />
                             </Button>
@@ -870,7 +870,7 @@ export function ImportDialog({
                                     <li data-state={isFetchingBundle ? 'active' : 'complete'}>
                                         <span>
                                             {isFetchingBundle ? (
-                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                <StepLoader size="sm" />
                                             ) : (
                                                 <CheckCircle2 className="h-4 w-4" />
                                             )}
@@ -883,7 +883,7 @@ export function ImportDialog({
                                     <li data-state={isFetchingBundle ? 'pending' : 'active'}>
                                         <span>
                                             {!isFetchingBundle ? (
-                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                <StepLoader size="sm" />
                                             ) : null}
                                         </span>
                                         <div>
@@ -1069,7 +1069,7 @@ export function ImportDialog({
                                     ) : null}
                                 </div>
 
-                                <Button
+                                <Button variant="primary"
                                     className="w-full"
                                     onClick={handleApply}
                                     loading={busy}
@@ -1163,7 +1163,7 @@ export function ImportDialog({
                                         <strong>Next</strong>
                                         <span>Open the pod, confirm the app works, then invite someone into it.</span>
                                     </div>
-                                    <Button onClick={handleFinish}>
+                                    <Button variant="primary" onClick={handleFinish}>
                                         {isCreateNew || openPodOnComplete ? 'Open pod' : 'Done'}
                                         <ArrowRight className="ml-2 h-4 w-4" />
                                     </Button>
@@ -1189,7 +1189,7 @@ export function ImportDialog({
                                 <Button variant="secondary" className="flex-1" onClick={() => handleOpenChange(false)}>
                                     Close
                                 </Button>
-                                <Button
+                                <Button variant="secondary"
                                     className="flex-1"
                                     onClick={() => {
                                         setErrorMessage(null);

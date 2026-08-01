@@ -32,7 +32,7 @@ export function BundleProgressBar({ done, total, label, className }: BundleProgr
                 <div
                     className={cn(
                         'h-full rounded-full bg-[var(--action-primary)] transition-[width] duration-300 ease-out',
-                        pct === null && 'w-1/3 animate-pulse',
+                        pct === null && 'w-1/3 lemma-live-pulse',
                     )}
                     /* eslint-disable-next-line no-restricted-syntax -- Runtime progress scale is data-driven geometry. */
                     style={pct !== null ? { width: `${pct}%` } : undefined}

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Folder, Loader2 } from '@/components/ui/icons';
+import { Folder } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import type { DatastoreFile } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
 
 const FOLDER_UPLOAD_STORAGE_KEY = 'lemma:pod-folder-upload-history:v1';
 const MAX_FOLDER_UPLOAD_HISTORY = 20;
@@ -716,14 +717,14 @@ export function FolderUploadProgress({
                                 {activeFolderUpload.completedFiles + activeFolderUpload.failedFiles}/{activeFolderUpload.totalFiles}
                             </span>
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="h-6 px-2 text-xs"
                                 onClick={onStop}
                                 disabled={stoppingFolderUploadId === activeFolderUpload.id}
                             >
                                 {stoppingFolderUploadId === activeFolderUpload.id
-                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ? <StepLoader size="xs" />
                                     : 'Stop upload'}
                             </Button>
                         </div>
@@ -750,7 +751,7 @@ export function FolderUploadProgress({
                                 {recentFolderUpload.completedFiles}/{recentFolderUpload.totalFiles}
                             </span>
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="h-6 px-2 text-xs"
                                 onClick={() => onDismiss(recentFolderUpload.id)}
@@ -778,7 +779,7 @@ export function FolderUploadProgress({
                     {recentFolderUpload.status === 'interrupted' ? (
                         <div className="mt-2">
                             <Button
-                                variant="outline"
+                                variant="secondary"
                                 size="sm"
                                 className="h-7 text-xs"
                                 onClick={onResume}
@@ -847,10 +848,10 @@ export function FolderUploadConfirmDialog({
                     </div>
                 ) : null}
                 <DialogFooter>
-                    <Button variant="ghost" onClick={onCancel}>
+                    <Button variant="quiet" onClick={onCancel}>
                         Cancel
                     </Button>
-                    <Button
+                    <Button variant="primary"
                         onClick={onConfirm}
                         disabled={isFolderUploading || disabled || !pendingFolderUploadConfirmation}
                     >
@@ -867,7 +868,7 @@ export function UploadFolderButton({
     disabled,
     onClick,
     label = 'Upload folder',
-    variant = 'outline',
+    variant = 'secondary',
     className,
     labelClassName,
 }: {
@@ -875,7 +876,7 @@ export function UploadFolderButton({
     disabled?: boolean;
     onClick: () => void;
     label?: string;
-    variant?: 'ghost' | 'outline';
+    variant?: 'quiet' | 'secondary';
     className?: string;
     labelClassName?: string;
 }) {
@@ -890,7 +891,7 @@ export function UploadFolderButton({
             aria-label={label}
             title={label}
         >
-            {isFolderUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Folder className="h-4 w-4" />}
+            {isFolderUploading ? <StepLoader size="sm" /> : <Folder className="h-4 w-4" />}
             <span className={labelClassName}>{label}</span>
         </Button>
     );

@@ -6,7 +6,6 @@ import { useQueryClient } from '@tanstack/react-query';
 import {
     AlertTriangle,
     ArrowLeft,
-    Loader2,
     MessageCircle,
     MoreHorizontal,
     Send,
@@ -65,6 +64,7 @@ import { getSurfaceStatus } from '@/lib/utils/surfaces';
 import type { AssistantSurface, Account } from '@/lib/types';
 import type { SurfaceBehaviorConfigInput, SurfaceCredentialMode, SurfacePlatform } from 'lemma-sdk';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
 
 /**
  * Setting up one surface, as a short sequence of states rather than a form.
@@ -478,7 +478,7 @@ export function SurfaceModal({
                                 <DropdownMenuTrigger asChild>
                                     <Button
                                         type="button"
-                                        variant="ghost"
+                                        variant="quiet"
                                         size="icon"
                                         className="ml-auto mr-7 h-7 w-7 rounded"
                                         aria-label="More actions"
@@ -562,7 +562,7 @@ export function SurfaceModal({
                     {step === 'setup' && existingSurface ? (
                         isLoadingSetup ? (
                             <p className="surface-verdict">
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Checking what’s left…
+                                <StepLoader size="xs" /> Checking what’s left…
                             </p>
                         ) : hasOutstandingSetup ? (
                             <div className="grid gap-4">
@@ -628,7 +628,7 @@ export function SurfaceModal({
                     {canGoBack ? (
                         <Button
                             type="button"
-                            variant="ghost"
+                            variant="quiet"
                             size="sm"
                             onClick={() => setStep(step === 'message' ? 'configure' : 'identity')}
                             disabled={isBusy}
@@ -640,17 +640,17 @@ export function SurfaceModal({
                     ) : null}
                     {blocker ? <span className="surface-modal-blocker">{blocker}</span> : null}
                     {step === 'live' ? null : (
-                        <Button type="button" variant="outline" onClick={onClose} disabled={isBusy}>
+                        <Button type="button" variant="secondary" onClick={onClose} disabled={isBusy}>
                             {step === 'provisioning' ? 'Close' : 'Cancel'}
                         </Button>
                     )}
                     {primary ? (
-                        <Button
+                        <Button variant="primary"
                             type="button"
                             onClick={() => void primary.run()}
                             disabled={isBusy || Boolean(blocker)}
                         >
-                            {isBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            {isBusy ? <StepLoader size="sm" className="mr-2" /> : null}
                             {primary.label}
                         </Button>
                     ) : null}

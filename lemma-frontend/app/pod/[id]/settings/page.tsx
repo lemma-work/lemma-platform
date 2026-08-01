@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { use, useState } from 'react';
 import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Info, Loader2, Settings2 } from '@/components/ui/icons';
+import { Info, Settings2 } from '@/components/ui/icons';
 
 import { toast } from 'sonner';
 
@@ -20,6 +20,7 @@ import {
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod, useUpdatePod } from '@/lib/hooks/use-pods';
 import { PodJoinPolicy } from '@/lib/types';
+import { FieldRowsSkeleton } from '@/components/shared/loading';
 
 export default function PodSettingsPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -61,10 +62,8 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
 
     if (isLoadingPod) {
         return (
-            <div className="context-shell flex min-h-full items-center justify-center bg-transparent">
-                <div className="surface-panel px-5 py-4">
-                    <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-                </div>
+            <div className="context-shell min-h-full bg-transparent">
+                <FieldRowsSkeleton rows={5} className="max-w-2xl" />
             </div>
         );
     }

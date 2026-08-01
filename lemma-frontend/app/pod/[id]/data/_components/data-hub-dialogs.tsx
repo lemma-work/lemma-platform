@@ -1,12 +1,12 @@
 'use client';
 
-import { Loader2 } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 
 import type { PendingFolderUploadConfirmation } from '../_lib/folder-upload';
+import { StepLoader } from '@/components/brand/loader';
 
 export interface FolderUploadConfirmDialogProps {
     pendingFolderUploadConfirmation: PendingFolderUploadConfirmation | null;
@@ -63,10 +63,10 @@ export function FolderUploadConfirmDialog({
                     </div>
                 )}
                 <DialogFooter>
-                    <Button variant="ghost" onClick={onCancel}>
+                    <Button variant="quiet" onClick={onCancel}>
                         Cancel
                     </Button>
-                    <Button
+                    <Button variant="primary"
                         onClick={() => void onConfirm()}
                         disabled={isFolderUploading || isUploading || !pendingFolderUploadConfirmation}
                     >
@@ -117,11 +117,11 @@ export function NewMarkdownFileDialog({
                     />
                 </div>
                 <DialogFooter>
-                    <Button variant="ghost" onClick={onCancel}>
+                    <Button variant="quiet" onClick={onCancel}>
                         Cancel
                     </Button>
-                    <Button onClick={() => void onCreate()} disabled={isUploading}>
-                        {isUploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : 'Create'}
+                    <Button variant="primary" onClick={() => void onCreate()} disabled={isUploading}>
+                        {isUploading ? <StepLoader size="sm" className="mr-2" /> : 'Create'}
                     </Button>
                 </DialogFooter>
             </DialogContent>

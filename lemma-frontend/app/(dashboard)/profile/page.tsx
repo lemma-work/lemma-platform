@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import { CheckCircle2, MessageCircle, Plus, Settings, Smartphone, User, Volume2 } from "@/components/ui/icons";
 import { useOrganization } from "@/components/dashboard/org-context";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
-import { StepLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +21,7 @@ import {
     setSoundFeedbackPreference,
     type SoundFeedbackPreference,
 } from "@/lib/feedback/sound-feedback";
+import { StepLoader } from "@/components/brand/loader";
 
 export default function ProfilePage() {
     const { data: profile, isLoading, refetch: refetchProfile } = useProfile();
@@ -137,14 +137,14 @@ export default function ProfilePage() {
                             </SelectContent>
                         </Select>
                         {currentOrg ? (
-                            <Button asChild variant="outline" size="sm" className="h-9 shrink-0 px-3">
+                            <Button asChild variant="secondary" size="sm" className="h-9 shrink-0 px-3">
                                 <Link href={`/organizations/${currentOrg.id}/settings/members`}>
                                     <Settings className="mr-1.5 h-3.5 w-3.5" />
                                     Manage
                                 </Link>
                             </Button>
                         ) : null}
-                        <Button asChild variant="ghost" size="icon" className="h-9 w-9 shrink-0" title="New organization">
+                        <Button asChild variant="quiet" size="icon" className="h-9 w-9 shrink-0" title="New organization">
                             <Link href="/organizations/new" aria-label="Create organization">
                                 <Plus className="h-4 w-4" />
                             </Link>
@@ -225,7 +225,7 @@ export default function ProfilePage() {
                             {!profile?.mobile_verified_at && telegramLoginEnabled ? (
                                 <Button
                                     type="button"
-                                    variant="outline"
+                                    variant="secondary"
                                     size="sm"
                                     onClick={() => {
                                         const start = new URL(buildApiUrl("/auth/telegram/start"));
@@ -255,7 +255,7 @@ export default function ProfilePage() {
                                 </span>
                             ) : null}
                         </div>
-                        <Button
+                        <Button variant="primary"
                             type="submit"
                             disabled={updateProfile.isPending || !hasChanges || !isMobileNumberValid}
                             loading={updateProfile.isPending}

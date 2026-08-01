@@ -83,8 +83,8 @@ export function ModelsSettings({
                     its credentials ever leaving that machine.
                 </p>
                 {onRefresh ? (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => void onRefresh()} disabled={isRefreshing} className="shrink-0 gap-1.5">
-                        <RefreshCw className={cn('size-3.5', isRefreshing && 'animate-spin')} />
+                    <Button type="button" variant="quiet" size="sm" onClick={() => void onRefresh()} disabled={isRefreshing} className="shrink-0 gap-1.5">
+                        <RefreshCw className={cn('size-3.5', isRefreshing && 'lemma-spin')} />
                         Recheck
                     </Button>
                 ) : null}
@@ -290,8 +290,8 @@ function ConnectProviderForm({
                 </Field>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-                <Button type="button" size="sm" onClick={() => void save()} loading={createRuntime.isPending} loadingLabel="Connecting">
+                <Button type="button" variant="quiet" size="sm" onClick={onClose}>Cancel</Button>
+                <Button variant="primary" type="button" size="sm" onClick={() => void save()} loading={createRuntime.isPending} loadingLabel="Connecting">
                     Connect
                 </Button>
             </div>
@@ -383,7 +383,7 @@ function AgentHostsSection({
                                     className="w-64"
                                 />
                             </Field>
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 size="sm"
                                 onClick={() => void pair()}
@@ -425,7 +425,7 @@ function PairingInstructions({
         <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
             <div className="flex items-start justify-between gap-3">
                 <div className="text-sm font-medium text-[var(--text-primary)]">Run these on that computer</div>
-                <Button type="button" variant="ghost" size="sm" onClick={() => void copy()} className="gap-1.5">
+                <Button type="button" variant="quiet" size="sm" onClick={() => void copy()} className="gap-1.5">
                     <Copy className="size-3.5" />
                     Copy
                 </Button>
@@ -445,7 +445,7 @@ function PairingInstructions({
                     This code works once, and expires{' '}
                     {Number.isNaN(expiresAt.valueOf()) ? 'shortly' : expiresAt.toLocaleTimeString()}.
                 </p>
-                <Button type="button" size="sm" onClick={onDone}>
+                <Button variant="secondary" type="button" size="sm" onClick={onDone}>
                     I ran them
                 </Button>
             </div>
@@ -495,17 +495,17 @@ function AgentHostCard({
                 <StatusBadge label={agentHostStatusLabel(host.status)} tone={online ? 'ok' : 'muted'} />
                 <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     size="sm"
                     onClick={() => void harnesses.refetch()}
                     disabled={harnesses.isFetching}
                     aria-label={`Recheck ${host.display_name}`}
                 >
-                    <RefreshCw className={cn('size-4', harnesses.isFetching && 'animate-spin')} />
+                    <RefreshCw className={cn('size-4', harnesses.isFetching && 'lemma-spin')} />
                 </Button>
                 <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     size="sm"
                     onClick={() => void disconnect()}
                     loading={revoke.isPending}

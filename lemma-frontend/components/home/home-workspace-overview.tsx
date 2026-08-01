@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { ResourceIcon } from '@/components/shared/resource-icon';
+import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
 import { useDeletePod, type AccessiblePod } from '@/lib/hooks/use-pods';
 
@@ -71,7 +72,7 @@ export function HomeWorkspaceOverview({
                                 <span />
                             )}
                             {showCreateAction ? (
-                                <Button asChild size="sm" className="w-full gap-2 px-4 sm:w-auto">
+                                <Button variant="primary" asChild size="sm" className="w-full gap-2 px-4 sm:w-auto">
                                     <Link href="/create-pod">
                                         <Plus className="h-4 w-4" />
                                         New Pod
@@ -90,13 +91,13 @@ export function HomeWorkspaceOverview({
                             {Array.from({ length: 4 }).map((_, index) => (
                                 <div
                                     key={index}
-                                    className="flex min-h-[6.25rem] animate-pulse items-center gap-4 border-b border-[color:color-mix(in_srgb,var(--row-border)_48%,transparent)] px-4 py-5 last:border-b-0 sm:px-5"
+                                    className="flex min-h-[6.25rem] items-center gap-4 border-b border-[color:color-mix(in_srgb,var(--row-border)_48%,transparent)] px-4 py-5 last:border-b-0 sm:px-5"
                                 >
-                                    <div className="h-12 w-12 rounded-lg bg-[var(--bg-subtle)]" />
+                                    <Skeleton shape="block" className="h-12 w-12 rounded-lg" />
                                     <div className="min-w-0 flex-1 space-y-2">
-                                        <div className="h-4 w-56 max-w-full rounded bg-[var(--bg-subtle)]" />
-                                        <div className="h-3 w-80 max-w-full rounded bg-[var(--bg-subtle)]" />
-                                        <div className="h-3 w-64 max-w-full rounded bg-[var(--bg-subtle)]" />
+                                        <Skeleton shape="block" className="h-4 w-56 max-w-full" />
+                                        <Skeleton className="h-3 w-80 max-w-full" />
+                                        <Skeleton className="h-3 w-64 max-w-full" />
                                     </div>
                                 </div>
                             ))}

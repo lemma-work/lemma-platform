@@ -11,6 +11,7 @@ import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell, ResourceMetric, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
+import { AsyncRegion, ListSkeleton } from '@/components/shared/loading';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -57,26 +58,6 @@ export default function FunctionsIndexPage({
         );
     };
 
-    if (isLoading) {
-        return (
-            <div className="context-shell min-h-full bg-transparent">
-                <div className="mb-8 space-y-3">
-                    <div className="h-5 w-24 animate-pulse rounded bg-[var(--bg-muted)]" />
-                    <div className="h-10 w-72 animate-pulse rounded bg-[var(--bg-muted)]" />
-                    <div className="h-4 w-full max-w-2xl animate-pulse rounded bg-[var(--bg-subtle)]" />
-                </div>
-
-                <div className="mb-6 h-10 w-full max-w-sm animate-pulse rounded-md bg-[var(--bg-subtle)]" />
-
-                <div className="space-y-3">
-                    {[1, 2, 3].map((item) => (
-                        <div key={item} className="h-24 animate-pulse rounded-lg bg-[color:color-mix(in_srgb,var(--surface-2)_34%,transparent)]" />
-                    ))}
-                </div>
-            </div>
-        );
-    }
-
     return (
         <ResourceIndexShell>
             <ResourceHeader
@@ -87,14 +68,14 @@ export default function FunctionsIndexPage({
                 actions={(
                     <>
                         <Link href={`/pod/${podId}/flows`}>
-                            <Button variant="ghost" className="functions-index-peer-button gap-2 bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-canvas)] hover:text-[var(--text-primary)]" size="sm">
+                            <Button variant="quiet" className="functions-index-peer-button gap-2 bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-canvas)] hover:text-[var(--text-primary)]" size="sm">
                                 <Workflow className="h-4 w-4" />
                                 Workflows
                             </Button>
                         </Link>
                         {canCreateFunction ? (
                             <Link href={`/pod/${podId}/functions/new`}>
-                                <Button className="gap-2" size="sm">
+                                <Button variant="secondary" className="gap-2" size="sm">
                                     <Plus className="h-4 w-4" />
                                     New Function
                                 </Button>
@@ -106,30 +87,36 @@ export default function FunctionsIndexPage({
 
             <SectionPrimer concept="function" className="mb-4" />
 
-            {functions.length > 0 ? (
-                <ResourceMetricStrip className="lemma-index-tabs-left">
-                    <ResourceMetric label="Functions" value={functions.length} active />
-                </ResourceMetricStrip>
-            ) : null}
+            {/* The strip stays put across all three states — its label is known
+                before the query is, and the count says `—` until it isn't. */}
+            <ResourceMetricStrip className="lemma-index-tabs-left">
+                <ResourceMetric label="Functions" value={isLoading ? undefined : functions.length} active />
+            </ResourceMetricStrip>
 
-            {functions.length === 0 ? (
-                <EmptyState
-                    variant="panel"
-                    icon={<Zap className="h-5 w-5" />}
-                    title="No functions yet"
-                    description={canCreateFunction
-                        ? "Add a reusable capability that agents and workflows can call when the pod needs to act."
-                        : "Functions created for this pod will appear here when you have access to them."}
-                    action={canCreateFunction ? (
-                        <Link href={`/pod/${podId}/functions/new`}>
-                            <Button size="sm" className="gap-2">
-                                <Plus className="h-4 w-4" />
-                                New function
-                            </Button>
-                        </Link>
-                    ) : null}
-                />
-            ) : (
+            <AsyncRegion
+                isLoading={isLoading}
+                isEmpty={functions.length === 0}
+                label="Loading functions"
+                skeleton={<ListSkeleton rows={5} />}
+                empty={(
+                    <EmptyState
+                        variant="region"
+                        icon={<Zap className="h-5 w-5" />}
+                        title="No functions yet"
+                        description={canCreateFunction
+                            ? "Add a reusable capability that agents and workflows can call when the pod needs to act."
+                            : "Functions created for this pod will appear here when you have access to them."}
+                        action={canCreateFunction ? (
+                            <Link href={`/pod/${podId}/functions/new`}>
+                                <Button variant="primary" size="sm" className="gap-2">
+                                    <Plus className="h-4 w-4" />
+                                    New function
+                                </Button>
+                            </Link>
+                        ) : null}
+                    />
+                )}
+            >
                 <div className="lemma-index-list">
                     {filteredFunctions.map((fn) => (
                         <FunctionRow
@@ -142,9 +129,8 @@ export default function FunctionsIndexPage({
                             onDelete={setFunctionPendingDelete}
                         />
                     ))}
-
                 </div>
-            )}
+            </AsyncRegion>
             <DestructiveConfirmationDialog
                 open={Boolean(functionPendingDelete)}
                 onOpenChange={(open) => {

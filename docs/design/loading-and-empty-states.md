@@ -1,6 +1,6 @@
 # Loading is a fill, not a screen
 
-**Status:** Scoped, not started · **Surface area:** `lemma-frontend` only — no backend changes
+**Status:** Implemented (P0–P3) · **Surface area:** `lemma-frontend` only — no backend changes
 
 ## The change in one sentence
 
@@ -85,6 +85,39 @@ On top of that, four independent queries (`useFlows`, `useFunctions`, runs,
 re-flows the tab row. `attentionCount = loadingWaits ? 0 : …` (`:379`) renders a
 literal **0** while its query is in flight, then jumps to the real number — the
 UI states a fact it does not know yet.
+
+### Pod home — four looks for one page
+
+The worst of them, because the first one blanked the page for data it never read:
+
+1. `PodPage` gated the whole route on `usePod(podId)` and rendered a bare centred
+   loader. Nothing on that branch used the pod record, and the shell above had
+   already resolved it — a blank screen in front of a composer that is static
+   markup.
+2. The composer painted, with `PodHomePanelsSkeleton` below it during a
+   deliberate 600 ms defer.
+3. `PodAgentWorkflowKanban` mounted and ran its *own* five queries, rendering the
+   real "Activity" heading over an **empty** panel with a spinner in the status
+   pill — and a pill reading "0 scheduled" before it knew.
+4. Content.
+
+On a fresh pod it was worse still: the skeleton appeared and then vanished
+without becoming anything, because a fresh pod shows the starter section and no
+activity region at all.
+
+### Documents — the same cascade, three deep
+
+Opening a document is three waits in a row, and each drew its own placeholder at
+its own size:
+
+1. The viewer's JS chunk — the `dynamic()` `loading:` fallback, at one height.
+2. The file record — `DocumentViewer`'s own `isLoadingDoc` branch, a **fresh
+   mount** at a different height, so the shimmer restarted too.
+3. The rendered preview — `isLoadingPreview`, a third shape, and the header band
+   appeared at this point so everything below it shifted down.
+
+The docs list had the shorter version of it: an `h-28` centred "Loading docs"
+caption replaced by a list of `h-11` rows.
 
 ### Table — a four-stage cascade
 
@@ -182,7 +215,7 @@ Corollaries:
 | `components/shared/loading/async-region.tsx` | `<AsyncRegion status skeleton empty>` — owns the 120 ms delay, 400 ms floor, min-height lock, and crossfade. The only place any screen branches on load state. |
 | [loader.tsx](../../lemma-frontend/components/brand/loader.tsx) | Delete `LoadingState` and `LoadingSkeleton` — generic centered boxes that match no real screen. Keep `StepLoader` / `InlineLoader` as motion atoms for buttons and inline text; keep `PageLoader` for cold boot at `/` only. |
 | [providers.tsx](../../lemma-frontend/app/providers.tsx) | Add `placeholderData: keepPreviousData` for list queries. |
-| `app/pod/[id]/loading.tsx` (+ peers) | Route-level boundaries so nav responds on click. |
+| A `loading.tsx` per route | Route-level boundaries so nav responds on click — **one per page, not one for the segment**. See below. |
 | [pod/[id]/layout.tsx](../../lemma-frontend/app/pod/[id]/layout.tsx) `:525`, `:1035` | Replace both full-screen `PageLoader` returns with the real shell — sidebar and topbar frames render, only the content pane skeletonizes. |
 | [resource-layout.tsx](../../lemma-frontend/components/pod/resource-layout.tsx) | `ResourceHeader` accepts a title before data resolves; memoize so `actions` stops re-firing `setTopbar` every render; stop clearing to `{}` on unmount mid-navigation. |
 
@@ -194,6 +227,86 @@ Corollaries:
 | Workflows | Same treatment. Counts resolve to `—`, never `0`. One settle gate for the tab row instead of four re-flows. |
 | Table | Delete the duplicate skeleton at `data/page.tsx:1257` — the view owns it. Record loading becomes fixed-count row skeletons inside the real `<tbody>`, so the frame height never changes. Remove "Loading records...". Files pane gets the same row-skeleton treatment. |
 | Agent detail | Replace the bare spinner with the settled shell: header declared up front, identity/wiring/instructions as skeletons in place, dock closed. Attach the ResizeObserver to the skeleton shell so the split decides before first paint. |
+| Documents | One `DocumentSkeleton`, built from the viewer's own shell, serves the chunk wait and the record wait; once the record lands the real header takes over and only the body keeps `DocumentBodySkeleton`. Three waits, one visible load. The docs list waits as `h-11` rows. |
+| Pod home | The `usePod` gate is deleted — the composer paints immediately. `PodHomeActivitySkeleton` is the single fill for both the defer window and the kanban's own fetch, replacing the heading-over-an-empty-panel. Nothing renders in that region until we know whether this pod has one. |
+
+Two rules fell out of these, and they generalise:
+
+**A sequence of waits is still one load to the reader.** Where two are
+unavoidable — a code-split chunk followed by a fetch, a deferred mount followed
+by that component's own queries — they must render the *same component*, or the
+second reads as a new screen. Watch for it wherever `dynamic()` has a `loading:`
+fallback in front of something that fetches, and wherever a parent and its child
+both hold a gate over the same region.
+
+**Don't gate a screen on data it doesn't read.** Both the pod home and the pod
+shell blanked themselves waiting for a record that only decided something further
+down. If removing the query would not change what renders, it must not decide
+*whether* anything renders.
+
+## Route boundaries are per page, not per segment
+
+The first version of this work put a single `loading.tsx` at `app/pod/[id]/`
+holding a card-grid skeleton. In Next's App Router that file is inherited by
+every nested route, so clicking **Functions** (a list), **Settings** (a form),
+the **flow editor** (a canvas), or the **pod home** (a composer) all flashed
+three cards first — the same shape mismatch this document is about, promoted to
+the *first* thing you see on every navigation, and applied to a dozen pages at
+once.
+
+A route boundary is the one skeleton a reader sees before anything else about the
+page exists. It has to be that page's shape.
+
+So every route declares its own, and what is shared is a vocabulary of page
+*kinds* in [route-skeletons.tsx](../../lemma-frontend/components/pod/route-skeletons.tsx)
+— not one skeleton stretched over all of them:
+
+| Kind | Routes |
+| --- | --- |
+| `PodIndexCardsSkeleton` | agents, workflows, connectors, recipes, app pages |
+| `PodIndexListSkeleton` | functions, triggers |
+| `PodDetailSkeleton` | pod assistant, recipe detail |
+| `PodBuilderSkeleton` | new agent / workflow / function |
+| `PodEditorSkeleton` | flow editor, function editor |
+| `PodSettingsSkeleton` | settings, members, usage |
+| `PodConversationSkeleton` | conversations index and detail |
+| `PodHomeSkeleton` | pod home — a composer, and nothing else until we know if there is an activity region |
+| purpose-built | data (table workbench), files (list), agent detail, run detail |
+| deliberately empty | `app/view`, `widgets/view` — the live surface is owned by the shell's keep-alive host above the router, so a skeleton here would paint over something already running |
+
+Card indexes and lists genuinely repeat, and sharing a shape between them is
+right. Forms, canvases, transcripts, and the composer home do not, and each pays
+for its own. All 26 non-redirect pod routes have a boundary of their own; the 8
+redirect-only routes need none, because a server redirect never renders.
+
+The rule to keep: **a segment-level `loading.tsx` is a default that silently
+applies to children you haven't thought about.** If you add one, either every
+child overrides it or the segment genuinely has one shape.
+
+### The shell must not guess the page's shape either
+
+The same mistake had a second home. `PodShellSkeleton` and the layout's
+access-check branch both drew a three-card index skeleton into the content pane,
+so a cold load of a conversation URL went:
+
+1. shell skeleton — **card grid**
+2. access check — **card grid again**, a fresh mount, shimmer restarting
+3. the route's own `PodConversationSkeleton` — a transcript
+4. the conversation
+
+Two loading states describing a page that was never coming, before the right one
+appeared. Fixed by taking page shape away from the shell entirely:
+
+- `PodShellSkeleton` draws the frame — nav slot, tab bar, context bar — and
+  leaves the **content pane empty**. It does not know what it is about to hold.
+- The access check no longer swaps `children` for a skeleton. `children` render
+  while it resolves, which is what lets the route's own boundary fill the pane
+  with the correct shape. Nothing leaks: the page's queries run through the same
+  access hooks, and the denial branch still takes over when the answer lands.
+
+Generalised: **only the thing that knows the shape may draw the shape.** A
+layout, a shell, or a shared boundary that renders a skeleton on behalf of a page
+it cannot identify will always be wrong for most of them.
 
 ### P1 — messages
 
@@ -208,15 +321,64 @@ Corollaries:
 
 ### P2 — sweep
 
-Replace the 97 `animate-spin` and 34 `animate-pulse` sites with `Button loading`
-(already supported), `InlineLoader`, or `Skeleton`. Add an ESLint rule banning
-both class names outside `components/shared/loading/`.
+All 97 `animate-spin` and 34 `animate-pulse` sites are gone. They sorted into
+four buckets, and the split is the point — three of them were never loading at
+all:
+
+| Was | Is | Why |
+| --- | --- | --- |
+| A placeholder for content | `Skeleton` / a shape from `components/shared/loading` | Content is coming; show its shape |
+| An action in flight | `<Button loading>` / `StepLoader` | The control owns its own busy state |
+| "This is running right now" | `.lemma-live-pulse` | Liveness, not loading — a status dot outlives any fetch |
+| A refresh control turning | `.lemma-spin` | An affordance; the content never left |
+
+Two supporting fixes fell out of it. `StepLoader`'s bars were hard-coded to
+`--action-primary`, so `text-current` inside a primary button did nothing —
+they now take `currentColor`, with the brand colour as a zero-specificity
+default. And its heights moved behind `:where()` so a caller can pass `h-3.5`
+and sit flush with the icons beside it, instead of growing a status row by 4px
+the moment a step starts running.
+
+An ESLint rule (`no-restricted-syntax`, string literals *and* template strings)
+now rejects both class names anywhere in the app.
 
 ### P3 — empty states
 
-Collapse six components to `EmptyState` (one axis: `inline | region | page`) plus
-`QuietEmptyState`. Drop the dashed border on region empties so the container's
-border does not change when data arrives.
+Six components collapsed to two: `EmptyState` with one axis — `inline | region |
+page` — and `QuietEmptyState` for the one-line case. `InlineEmptyState`,
+`SidebarEmptyState`, and `RecoveryState` are gone; `compact`/`panel` merged into
+`region` and `full` became `page`.
+
+The dashed border went with them. A region empty now takes the same solid,
+quiet border as the cards it will be replaced by, so the container's outline is
+the same in all three states.
+
+## What changed on the way
+
+Two things the audit did not predict:
+
+- **Skeletons were nearly invisible, and then they were outlined.**
+  `.lemma-skeleton` mixed `--surface-2` *toward transparent*, and on a white card
+  `--surface-2` is already only a ~3% step — placeholders were faintest on
+  exactly the surfaces that use them most. The fill is now tinted off
+  `--text-primary`, which reads on any surface in either theme.
+
+  That exposed a second problem the old faintness had hidden: every placeholder
+  also carried a 1px border, so once the fill was visible the border read as a
+  light ring around a darker shape, and a paragraph of placeholder lines became a
+  stack of little boxes. **A skeleton has no border.** It stands in for a line of
+  text or a filled control, and neither of those has an outline. Borders belong
+  to the containers a skeleton sits inside — the card, the table frame, the tab
+  strip, the shell's left edge — which are real chrome and stay put when data
+  lands. That distinction is the rule: the frame is drawn because it is still
+  there afterwards; the fill is not.
+- **The design-audit baseline is stale, but not from this work.** The strict
+  gate passes at 0 across every enforced counter. `design:audit:test` fails
+  because `scripts/audit-design-system.mjs` has uncommitted changes that add a
+  `multiplePrimaryButtons` counter the committed baseline predates, plus a
+  `font-size` in `styles/primitives.css` from the same in-flight work.
+  Regenerating the baseline would fold that unrelated drift into a snapshot, so
+  it is left alone.
 
 ## How we will know it worked
 

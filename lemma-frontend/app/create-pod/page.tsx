@@ -13,7 +13,7 @@ import {
   type OnboardingStartDetails,
   type OnboardingStartPath,
 } from "@/components/onboarding/account-onboarding-helpers";
-import { LoadingState } from "@/components/brand/loader";
+import { WaitingScreen } from "@/components/shared/loading";
 import { FIRST_RUN_DELIGHT } from "@/lib/recipes/recipes";
 import {
   normalizeRemixSource,
@@ -98,10 +98,9 @@ function CreatePodScreen() {
   if (isLoading) {
     return (
       <main className="setup-shell flex min-h-screen items-center justify-center px-4">
-        <LoadingState
+        <WaitingScreen
           title="Opening create"
           description="Finding your current organization."
-          shape="lines"
           className="w-full max-w-lg"
         />
       </main>

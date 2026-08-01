@@ -12,9 +12,10 @@ import {
 import type { Column } from '@/lib/types';
 import { useFileUpload } from '@/lib/hooks/use-files';
 import { useDatastoreQuery, useTable, useCreateRecord } from '@/lib/hooks/use-datastores';
-import { Check, Upload, X, FileIcon, Loader2 } from '@/components/ui/icons';
+import { Check, Upload, X, FileIcon } from '@/components/ui/icons';
 import { useQueryClient } from '@tanstack/react-query';
 import { sanitizeRecordPayload } from '@/lib/utils/datastore-records';
+import { StepLoader } from '@/components/brand/loader';
 
 type ExtendedColumn = Column;
 
@@ -105,10 +106,10 @@ export function RecordEditor({ columns, record, onSave, onClose, podId, datastor
                 </div>
 
                 <div className="flex items-center justify-end gap-2 border-t border-[color:var(--border-subtle)] bg-[var(--bg-subtle)] px-5 py-4">
-                    <Button variant="ghost" onClick={onClose}>
+                    <Button variant="quiet" onClick={onClose}>
                         Cancel
                     </Button>
-                    <Button type="submit" form="record-form">
+                    <Button variant="primary" type="submit" form="record-form">
                         {record ? 'Update Record' : 'Create Record'}
                     </Button>
                 </div>
@@ -309,7 +310,7 @@ function ForeignKeyField({
     const inputClass = "w-full rounded-md border border-[color:var(--field-border)] bg-[var(--field-bg)] px-3 py-2 text-sm text-[var(--text-primary)] transition-gentle hover:border-[color:var(--field-border-hover)] focus-ring";
 
     if (isLoading) {
-        return <div className="flex items-center gap-2 p-2 text-xs text-[var(--text-tertiary)]"><Loader2 className="h-3 w-3 animate-spin" /> Loading...</div>;
+        return <div className="flex items-center gap-2 p-2 text-xs text-[var(--text-tertiary)]"><StepLoader size="xs" /> Loading...</div>;
     }
 
     return (
@@ -396,7 +397,7 @@ function FileField({ value, onChange, podId }: { value: unknown; onChange: (val:
                 </div>
                 <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     size="icon"
                     className="hover-state-error h-6 w-6 text-[var(--text-tertiary)] hover:text-[var(--state-error)]"
                     onClick={() => onChange('')}
@@ -421,7 +422,7 @@ function FileField({ value, onChange, podId }: { value: unknown; onChange: (val:
                 className={`flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-[color:var(--row-border)] bg-[var(--row-bg)] px-4 py-3 text-sm text-[var(--text-secondary)] transition-gentle hover:bg-[var(--row-bg-hover)] hover:border-[color:var(--field-border-hover)] ${!podId ? 'cursor-not-allowed opacity-50' : ''}`}
             >
                 {isUploading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <StepLoader size="sm" />
                 ) : (
                     <Upload className="w-4 h-4" />
                 )}
