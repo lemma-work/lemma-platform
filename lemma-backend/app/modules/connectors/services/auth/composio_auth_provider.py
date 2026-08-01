@@ -17,6 +17,7 @@ from app.modules.connectors.domain.connector import AuthScheme, ConnectorEntity
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.ports import ConnectorRepositoryPort
 from app.modules.connectors.services.auth.auth_provider import AuthProviderInterface
+from app.core.concurrency.offload import run_blocking
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -179,7 +180,7 @@ class ComposioAuthProvider(AuthProviderInterface):
         AuthScheme.NOAUTH: "NO_AUTH",
     }
 
-    def _resolve_auth_config_id(
+    async def _resolve_auth_config_id(
         self,
         connector: ConnectorEntity,
         composio: Any,
@@ -203,9 +204,12 @@ class ComposioAuthProvider(AuthProviderInterface):
             }
         else:
             options = {"type": "use_composio_managed_auth"}
-        auth_config = composio.auth_configs.create(
-            toolkit=self._toolkit_slug(connector),
-            options=options,
+        auth_config = await run_blocking(
+            lambda: composio.auth_configs.create(
+                toolkit=self._toolkit_slug(connector),
+                options=options,
+            ),
+            limiter="external_http",
         )
         return auth_config.id
 
@@ -228,7 +232,7 @@ class ComposioAuthProvider(AuthProviderInterface):
             )
 
         composio = self._composio_client_factory()
-        auth_config_id = self._resolve_auth_config_id(
+        auth_config_id = await self._resolve_auth_config_id(
             connector,
             composio,
             custom_auth_scheme=self._CUSTOM_AUTH_SCHEME.get(scheme, "API_KEY"),
@@ -239,10 +243,13 @@ class ComposioAuthProvider(AuthProviderInterface):
         else:
             config = composio_auth_scheme.api_key(credentials)
 
-        connection_request = composio.connected_accounts.initiate(
-            user_id=str(user_id),
-            auth_config_id=auth_config_id,
-            config=config,
+        connection_request = await run_blocking(
+            lambda: composio.connected_accounts.initiate(
+                user_id=str(user_id),
+                auth_config_id=auth_config_id,
+                config=config,
+            ),
+            limiter="external_http",
         )
 
         return ComposioCredentials(connection_id=connection_request.id)
@@ -256,14 +263,17 @@ class ComposioAuthProvider(AuthProviderInterface):
     ) -> Tuple[str, str]:
         composio = self._composio_client_factory()
 
-        auth_config_id = self._resolve_auth_config_id(connector, composio)
+        auth_config_id = await self._resolve_auth_config_id(connector, composio)
 
         redirect_url = f"{redirect_uri}?state={state}"
 
-        connection_request = composio.connected_accounts.initiate(
-            user_id=str(user_id),
-            auth_config_id=auth_config_id,
-            callback_url=redirect_url,
+        connection_request = await run_blocking(
+            lambda: composio.connected_accounts.initiate(
+                user_id=str(user_id),
+                auth_config_id=auth_config_id,
+                callback_url=redirect_url,
+            ),
+            limiter="external_http",
         )
 
         if not connection_request.redirect_url:
@@ -291,7 +301,10 @@ class ComposioAuthProvider(AuthProviderInterface):
         connected_account_id = connected_account_id_list[0]
 
         composio = self._composio_client_factory()
-        connection_account = composio.connected_accounts.get(connected_account_id)
+        connection_account = await run_blocking(
+            lambda: composio.connected_accounts.get(connected_account_id),
+            limiter="external_http",
+        )
 
         status = str(getattr(connection_account, "status", "") or "").upper()
         if status in _TERMINAL_CONNECTION_STATES:
@@ -330,7 +343,10 @@ class ComposioAuthProvider(AuthProviderInterface):
             )
 
         composio = self._composio_client_factory()
-        connection_account = composio.connected_accounts.get(credentials.connection_id)
+        connection_account = await run_blocking(
+            lambda: composio.connected_accounts.get(credentials.connection_id),
+            limiter="external_http",
+        )
 
         state_value = connection_account.state.val
         access_token = getattr(state_value, "access_token", None)
@@ -363,4 +379,7 @@ class ComposioAuthProvider(AuthProviderInterface):
             )
 
         composio = self._composio_client_factory()
-        composio.connected_accounts.delete(credentials.connection_id)
+        await run_blocking(
+            lambda: composio.connected_accounts.delete(credentials.connection_id),
+            limiter="external_http",
+        )

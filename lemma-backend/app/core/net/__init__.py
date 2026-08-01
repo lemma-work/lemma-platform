@@ -1,0 +1,1 @@
+"""Shared outbound HTTP plumbing."""

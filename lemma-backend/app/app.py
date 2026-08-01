@@ -185,6 +185,16 @@ async def lifespan(app: FastAPI):
                     pass
             await close_streaq_job_queue()
             await close_message_bus()
+            # Outbound connector plumbing: the shared HTTP pool and any engines
+            # opened against customer databases. Closed explicitly so a reload
+            # does not leak sockets into the next process.
+            from app.core.net.http_client import close_shared_http_client
+            from app.modules.connectors.infrastructure.adapters.sql_executor import (
+                dispose_shared_sql_engines,
+            )
+
+            await close_shared_http_client()
+            await dispose_shared_sql_engines()
             await close_redis_json_caches()
             await close_redis_clients()
             await close_engine()

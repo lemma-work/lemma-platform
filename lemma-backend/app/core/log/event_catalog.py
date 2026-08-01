@@ -270,6 +270,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.lemma_auth_provider.refresh_token_not_found_s.diagnostic': EventSpec('debug', frozenset()),
     'connectors.lemma_operation_gateway.calling_s_native_operation_s.observed': EventSpec('debug', frozenset({'connector_id', 'operation_name'})),
     'connectors.lemma_operation_gateway.skipping_token_autofill_s_because.observed': EventSpec('debug', frozenset({'operation_name'})),
+    'connectors.mcp_executor.calling_mcp_tool.observed': EventSpec('debug', frozenset({'connector_id', 'tool_name'})),
+    'connectors.openapi_http_executor.calling_http_operation.observed': EventSpec('debug', frozenset({'connector_id', 'http_method', 'mode', 'operation_name'})),
     'connectors.schema_compiler.rejected_connector_schema_snippet.diagnostic': EventSpec('debug', frozenset({'error_type'})),
     'crypto.keys.ignoring_unparsable_secret_encryption_keyset.diagnostic': EventSpec('debug', frozenset()),
     'crypto.rotation.reencrypt_s_scanned_d_migrated.observed': EventSpec('debug', frozenset()),

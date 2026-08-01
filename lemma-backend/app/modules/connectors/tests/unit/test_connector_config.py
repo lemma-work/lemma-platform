@@ -23,6 +23,30 @@ EXPECTED = [
         45.0,
         5.0,
     ),
+    (
+        "connector_discovery_timeout_seconds",
+        "CONNECTOR_DISCOVERY_TIMEOUT_SECONDS",
+        25.0,
+        5.0,
+    ),
+    (
+        "connector_spec_max_bytes",
+        "CONNECTOR_SPEC_MAX_BYTES",
+        8 * 1024 * 1024,
+        1024,
+    ),
+    (
+        "connector_credential_refresh_skew_seconds",
+        "CONNECTOR_CREDENTIAL_REFRESH_SKEW_SECONDS",
+        120.0,
+        30.0,
+    ),
+    (
+        "connector_sql_engine_cache_size",
+        "CONNECTOR_SQL_ENGINE_CACHE_SIZE",
+        32,
+        4,
+    ),
     ("connector_encryption_key", "CONNECTOR_ENCRYPTION_KEY", None, "sentinel"),
 ]
 

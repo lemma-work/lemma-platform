@@ -223,6 +223,22 @@ class Settings(BaseSettings):
         default=200,
         description="Maximum pooled Redis connections per process",
     )
+    outbound_http_max_connections: int = Field(
+        default=100,
+        description=(
+            "Ceiling on concurrent connections held by the shared outbound HTTP "
+            "client (connector execution, spec fetches, file downloads). Bounds "
+            "how hard one process can hammer upstreams."
+        ),
+    )
+    outbound_http_max_keepalive: int = Field(
+        default=20,
+        description=(
+            "Idle connections the shared outbound client keeps warm. This is "
+            "what makes repeat calls to the same provider skip the TCP/TLS "
+            "handshake entirely."
+        ),
+    )
     desktop_auth_create_limit: int = Field(
         default=100,
         ge=0,
