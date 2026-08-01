@@ -595,6 +595,11 @@ impl TargetWorker {
                 RunState::Accepted,
                 &JsonMap::new(),
             )?;
+            // `poll_target` snapshots the control batch when it builds the
+            // request, so a checkpoint written a moment later waits out the
+            // whole 25s long poll. Measured at 10-24s between a command being
+            // delivered and the host reporting it accepted.
+            events_ready.notify_one();
             if !spec.mcp.is_object() {
                 terminal_failure(
                     &journal,
@@ -703,6 +708,10 @@ impl TargetWorker {
                     )?;
                 }
             }
+            // However this run ended - success, failure, deadline - its
+            // terminal checkpoint is upstream-bound and must not wait for the
+            // current long poll either.
+            events_ready.notify_one();
             Ok(())
         });
         self.active_runs.insert(run_id, handle);
