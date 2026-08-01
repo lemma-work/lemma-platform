@@ -1,3 +1,4 @@
+import { COMPANY_DESCRIPTION, COMPANY_LEGAL_NAME } from '@/lib/company';
 import { config } from '@/lib/config';
 
 export type LegalListItem = {
@@ -23,7 +24,7 @@ export const privacyPolicy: LegalDocument = {
     title: 'Privacy Policy',
     description:
         'This page explains what information Lemma collects, why we use it, when we share it, and the choices you have when you use the product.',
-    effectiveDate: 'April 20, 2026',
+    effectiveDate: 'July 31, 2026',
     summary: [
         'We collect the account, workspace, usage, and billing information needed to run Lemma reliably.',
         'We use that information to provide the service, secure it, improve it, and communicate with you.',
@@ -32,7 +33,7 @@ export const privacyPolicy: LegalDocument = {
     sections: [
         {
             title: 'What This Policy Covers',
-            body: 'This privacy policy applies to Lemma websites, product surfaces, hosted workspaces, support interactions, and related communications. If your team uses Lemma through an organization account, your workspace administrators may also have access to certain account and usage information needed to operate the workspace.',
+            body: `Lemma is operated by ${COMPANY_DESCRIPTION} ("we", "us"). This privacy policy applies to Lemma websites, product surfaces, hosted workspaces, support interactions, and related communications. If your team uses Lemma through an organization account, your workspace administrators may also have access to certain account and usage information needed to operate the workspace.`,
         },
         {
             title: 'Information We Collect',
@@ -107,7 +108,7 @@ export const privacyPolicy: LegalDocument = {
         },
         {
             title: 'Contact',
-            body: `Questions about this policy can be sent to ${config.SUPPORT_EMAIL}.`,
+            body: `Lemma is a product of ${COMPANY_LEGAL_NAME} Questions about this policy can be sent to ${config.SUPPORT_EMAIL}.`,
         },
     ],
 };
@@ -116,7 +117,7 @@ export const termsOfService: LegalDocument = {
     title: 'Terms of Service',
     description:
         'These terms govern your access to Lemma websites, hosted product surfaces, APIs, and related services.',
-    effectiveDate: 'April 20, 2026',
+    effectiveDate: 'July 31, 2026',
     summary: [
         'Use Lemma lawfully and only in ways you are authorized to use it.',
         'You are responsible for your account, your workspace activity, and the content you bring into the product.',
@@ -125,7 +126,7 @@ export const termsOfService: LegalDocument = {
     sections: [
         {
             title: 'Using Lemma',
-            body: 'By accessing or using Lemma, you agree to these terms. If you are using the service on behalf of an organization, you represent that you have authority to bind that organization to these terms.',
+            body: `These terms are an agreement between you and ${COMPANY_DESCRIPTION}, which operates Lemma. By accessing or using Lemma, you agree to them. If you are using the service on behalf of an organization, you represent that you have authority to bind that organization to these terms.`,
         },
         {
             title: 'Accounts and Workspace Responsibility',
@@ -151,7 +152,7 @@ export const termsOfService: LegalDocument = {
         },
         {
             title: 'Our Service and Intellectual Property',
-            body: 'Lemma and its related software, designs, interfaces, branding, and documentation are owned by Lemma or its licensors and are protected by applicable law. These terms do not grant you ownership of the service itself, only the limited right to use it under these terms.',
+            body: `Lemma and its related software, designs, interfaces, branding, and documentation are owned by ${COMPANY_LEGAL_NAME} or its licensors and are protected by applicable law. These terms do not grant you ownership of the service itself, only the limited right to use it under these terms.`,
         },
         {
             title: 'Suspension and Termination',
@@ -159,7 +160,7 @@ export const termsOfService: LegalDocument = {
         },
         {
             title: 'Disclaimers and Limitation of Liability',
-            body: 'Lemma is provided on an “as is” and “as available” basis to the fullest extent permitted by law. To the fullest extent permitted by law, Lemma will not be liable for indirect, incidental, special, consequential, exemplary, or punitive damages, or for loss of profits, revenues, data, goodwill, or business opportunities arising from or related to your use of the service.',
+            body: `Lemma is provided on an “as is” and “as available” basis to the fullest extent permitted by law. To the fullest extent permitted by law, ${COMPANY_LEGAL_NAME} will not be liable for indirect, incidental, special, consequential, exemplary, or punitive damages, or for loss of profits, revenues, data, goodwill, or business opportunities arising from or related to your use of the service.`,
         },
         {
             title: 'Updates to the Service or Terms',
@@ -167,7 +168,7 @@ export const termsOfService: LegalDocument = {
         },
         {
             title: 'Contact',
-            body: `Questions about these terms can be sent to ${config.SUPPORT_EMAIL}.`,
+            body: `Lemma is a product of ${COMPANY_LEGAL_NAME} Questions about these terms can be sent to ${config.SUPPORT_EMAIL}.`,
         },
     ],
 };

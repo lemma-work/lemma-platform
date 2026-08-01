@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import "./auth/auth-portal.css";
 import { Providers } from "./providers";
+import { COMPANY_LEGAL_NAME } from "@/lib/company";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -78,6 +79,9 @@ export const metadata: Metadata = {
     template: "%s | Lemma",
   },
   applicationName: "Lemma",
+  publisher: COMPANY_LEGAL_NAME,
+  creator: COMPANY_LEGAL_NAME,
+  authors: [{ name: COMPANY_LEGAL_NAME, url: "https://lemma.work" }],
   description:
     "Run your apps and agents. Bring your team.",
   keywords: [

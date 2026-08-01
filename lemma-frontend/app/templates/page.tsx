@@ -4,6 +4,7 @@ import Link from 'next/link';
 
 import { Logo } from '@/components/brand/logo';
 import { ArrowRight, Check, Github } from '@/components/ui/icons';
+import { copyrightNotice } from '@/lib/company';
 import {
     PUBLIC_TEMPLATES,
     templateCoverPath,
@@ -138,6 +139,7 @@ export default function TemplatesPage() {
                         <Link href="/docs">Docs</Link>
                         <a href="https://github.com/lemma-work/lemma-platform">GitHub</a>
                     </nav>
+                    <p className="templates-gallery-footer-legal">{copyrightNotice()}</p>
                 </footer>
             </div>
         </main>
