@@ -207,11 +207,6 @@ FunctionResourceEditorDep = require_resource_action(
     resource_type=ResourceType.FUNCTION,
     name_param="function_name",
 )
-FunctionResourceAdminDep = require_resource_action(
-    Permissions.FUNCTION_DELETE,
-    resource_type=ResourceType.FUNCTION,
-    name_param="function_name",
-)
 FunctionResourceDeleteDep = require_resource_admin_or_creator(
     Permissions.FUNCTION_DELETE,
     resource_type=ResourceType.FUNCTION,

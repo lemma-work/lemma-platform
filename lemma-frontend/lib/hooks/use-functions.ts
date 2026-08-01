@@ -117,6 +117,44 @@ function toSdkFunctionPayload<T extends CreateFunctionData | UpdateFunctionData>
     return rest;
 }
 
+export type FunctionAccessFields = Pick<
+    CreateFunctionData | UpdateFunctionData,
+    'accessible_connectors' | 'accessible_folders' | 'accessible_tables'
+>;
+
+export function carriesAccess(data: FunctionAccessFields): boolean {
+    return data.accessible_connectors !== undefined
+        || data.accessible_folders !== undefined
+        || data.accessible_tables !== undefined;
+}
+
+function sameEntries<T>(
+    current: T[] | null | undefined,
+    next: T[] | null | undefined,
+    toKey: (entry: T) => string,
+): boolean {
+    // An absent field isn't a change — the caller simply isn't touching it.
+    // An explicit null is: it clears the wiring, so it compares as empty.
+    if (next === undefined) return true;
+    const left = (current || []).map(toKey).sort();
+    const right = (next || []).map(toKey).sort();
+    return left.length === right.length && left.every((key, index) => key === right[index]);
+}
+
+/**
+ * The same shape as the agent editor's check, and for the same reason: a
+ * normalized function always carries its `accessible_*` fields as arrays, so
+ * testing them for presence marked every save as an access change and sent
+ * every save through the permissions endpoint.
+ */
+export function functionAccessChanged(fn: FunctionType, next: FunctionAccessFields): boolean {
+    const unchanged =
+        sameEntries(fn.accessible_tables, next.accessible_tables, (table) => `${table.table_name}:${table.mode}`)
+        && sameEntries(fn.accessible_folders, next.accessible_folders, (folder) => `${folder.folder_path}:${folder.mode}`)
+        && sameEntries(fn.accessible_connectors, next.accessible_connectors, (app) => `${app.app_name}:${app.mode}:${app.account_id ?? ''}`);
+    return !unchanged;
+}
+
 function normalizeFunction(raw: Record<string, unknown>): FunctionType {
     const configValue =
         (raw.config as Record<string, unknown> | null | undefined) ??
@@ -234,15 +272,17 @@ export const useUpdateFunction = () => {
     return useMutation({
         mutationFn: async ({ podId, name, data }: { podId: string; name: string; data: UpdateFunctionData }) => {
             const client = getLemmaClient(podId);
+            // Read the pre-update wiring before the update lands, so the
+            // comparison is against what the server currently holds.
+            const current = carriesAccess(data)
+                ? queryClient.getQueryData<FunctionType>(['functions', podId, name])
+                    ?? normalizeFunction(await client.functions.get(name) as unknown as Record<string, unknown>)
+                : undefined;
             const response = await client.functions.update(
                 name,
                 toSdkFunctionPayload(data) as Parameters<typeof client.functions.update>[1],
             );
-            if (
-                data.accessible_connectors !== undefined ||
-                data.accessible_folders !== undefined ||
-                data.accessible_tables !== undefined
-            ) {
+            if (current && functionAccessChanged(current, data)) {
                 const grants = await buildResourceGrants(client, data);
                 await client.functions.permissions.replace(name, { grants: grants as never });
             }
