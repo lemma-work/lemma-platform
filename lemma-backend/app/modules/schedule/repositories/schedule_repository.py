@@ -5,7 +5,6 @@ from typing import Any, List, Optional
 from uuid import UUID
 
 from sqlalchemy import delete, func, or_, select, update
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.domain.message_bus import MessageBus
@@ -40,18 +39,9 @@ class ScheduleRepository(ScheduleRepositoryInterface):
 
     def __init__(
         self,
-        uow: SqlAlchemyUnitOfWork | None = None,
-        session: AsyncSession | None = None,
+        uow: SqlAlchemyUnitOfWork,
         message_bus: MessageBus | None = None,
     ):
-        # Backward compatibility: first positional arg may be AsyncSession.
-        if isinstance(uow, AsyncSession):
-            session = uow
-            uow = None
-        if uow is None:
-            if session is None:
-                raise ValueError("Either uow or session must be provided")
-            uow = SqlAlchemyUnitOfWork(session)
         self.uow = uow
         self.session = uow.session
         if message_bus is not None:
@@ -123,6 +113,36 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         result = await self.session.execute(stmt)
         row = result.one_or_none()
         return self._to_entity_with_allowed_actions(row[0], row[1]) if row else None
+
+    async def get_for_update(self, schedule_id: UUID) -> ScheduleEntity | None:
+        """Lock a schedule while applying a target outcome and breaker update."""
+        model = await self.session.scalar(
+            select(Schedule).where(Schedule.id == schedule_id).with_for_update()
+        )
+        return model.to_entity() if model is not None else None
+
+    async def deactivate_if_active(self, schedule_id: UUID) -> bool:
+        """Deactivate once; callers hold the schedule row lock."""
+        changed = await self.session.scalar(
+            update(Schedule)
+            .where(Schedule.id == schedule_id, Schedule.is_active.is_(True))
+            .values(is_active=False)
+            .returning(Schedule.id)
+        )
+        return changed is not None
+
+    async def lock_breaker_candidates(self, threshold: int) -> list[ScheduleEntity]:
+        """Lock active schedules whose persisted failure streak already tripped."""
+        rows = await self.session.scalars(
+            select(Schedule)
+            .where(
+                Schedule.is_active.is_(True),
+                Schedule.consecutive_failures >= threshold,
+            )
+            .order_by(Schedule.id)
+            .with_for_update()
+        )
+        return [row.to_entity() for row in rows.all()]
 
     async def get_by_name(
         self,
@@ -387,12 +407,12 @@ class ScheduleRepository(ScheduleRepositoryInterface):
                 config = entity.datastore_config
             except ValueError:
                 logger.debug(
-                    'schedule.schedule_repository.datastore_schedule_s_has_invalid.diagnostic'
+                    "schedule.schedule_repository.datastore_schedule_s_has_invalid.diagnostic"
                 )
                 continue
             if config is None or not config.operations:
                 logger.debug(
-                    'schedule.schedule_repository.datastore_schedule_s_declares_no.diagnostic'
+                    "schedule.schedule_repository.datastore_schedule_s_declares_no.diagnostic"
                 )
                 continue
             if operation_value in config.operations:
@@ -442,9 +462,8 @@ class ScheduleRepository(ScheduleRepositoryInterface):
         )
 
     async def set_consecutive_failures(self, schedule_id: UUID, count: int) -> None:
-        """Set the streak derived from distinct terminal schedule runs."""
         await self.session.execute(
             update(Schedule)
             .where(Schedule.id == schedule_id)
-            .values(consecutive_failures=max(0, count))
+            .values(consecutive_failures=count)
         )

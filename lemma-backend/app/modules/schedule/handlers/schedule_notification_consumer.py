@@ -58,30 +58,59 @@ def render_schedule_paused_email(
     schedule_id: UUID,
     consecutive_failures: int,
     review_url: str,
+    reason: str = "consecutive_failures",
 ) -> tuple[str, RenderedEmail]:
     display_name = humanize_name(schedule_name) if schedule_name else None
     display_name = display_name or f"Schedule {schedule_id}"
+    copy = {
+        "SCHEDULE_TOO_FREQUENT": (
+            "was paused because it runs too frequently",
+            "Lemma paused this scheduled automation because its recurring frequency exceeds the configured minimum interval.",
+        ),
+        "SCHEDULE_ONE_TIME_MISSED": (
+            "was paused because its one-time execution was missed",
+            "Lemma paused this one-time automation because its scheduled timestamp has already passed.",
+        ),
+        "SCHEDULE_REJECTED": (
+            "was paused because the scheduler rejected it",
+            "Lemma paused this scheduled automation because the scheduler could not accept its configuration.",
+        ),
+        "SCHEDULE_VALIDATION_ERROR": (
+            "was paused because its configuration is invalid",
+            "Lemma paused this scheduled automation because its time configuration is invalid.",
+        ),
+    }.get(
+        reason,
+        (
+            "was paused after repeated failures",
+            "Lemma automatically paused this scheduled automation after repeated failed runs.",
+        ),
+    )
+    summary, explanation = copy
+    details = [
+        EmailDetail("Schedule", display_name),
+        EmailDetail("Schedule ID", str(schedule_id)),
+    ]
+    if reason == "consecutive_failures":
+        details.insert(
+            1, EmailDetail("Consecutive failures", str(consecutive_failures))
+        )
     rendered = render_transactional_email(
-        preheader=f"{display_name} was paused after repeated failures.",
+        preheader=f"{display_name} {summary}.",
         eyebrow="Automation paused",
         heading=f"{display_name} needs attention.",
         body=(
-            "Lemma automatically paused this scheduled automation after repeated "
-            "failed runs.",
+            explanation,
             "Review the underlying error, then re-enable the schedule when the "
             "cause has been addressed.",
         ),
         action=EmailAction("Review schedule", review_url),
-        details=(
-            EmailDetail("Schedule", display_name),
-            EmailDetail("Consecutive failures", str(consecutive_failures)),
-            EmailDetail("Schedule ID", str(schedule_id)),
-        ),
+        details=tuple(details),
         footer=(
             "You are receiving this because you created this scheduled automation.",
         ),
     )
-    return f"{display_name} was paused after repeated failures", rendered
+    return f"{display_name} {summary}", rendered
 
 
 @reliable_redis_stream_subscriber(
@@ -126,6 +155,7 @@ async def on_schedule_deactivated(
             schedule_id=parsed.schedule_id,
             consecutive_failures=parsed.consecutive_failures,
             review_url=review_url,
+            reason=parsed.reason,
         )
 
         await EmailSender.from_settings().send_email(

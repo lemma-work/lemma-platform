@@ -23,6 +23,9 @@ from app.modules.agent.infrastructure.repositories import (
     AgentRepository,
     ConversationRepository,
 )
+from app.modules.agent.infrastructure.conversation_idempotency_store import (
+    create_conversation_for_id,
+)
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
 )
@@ -43,11 +46,10 @@ class AgentControlAdapter(AgentPort):
         input_data: dict[str, Any],
         pod_id: UUID,
         user_id: UUID,
+        conversation_id: UUID | None = None,
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, Any] | None = None,
-        origin_type: str | None = None,
-        origin_id: UUID | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get_by_pod_and_name(
             pod_id=pod_id,
@@ -59,20 +61,24 @@ class AgentControlAdapter(AgentPort):
         metadata = {**(conversation_metadata or {}), "source": source}
         if workflow_run_id is not None:
             metadata["workflow_run_id"] = str(workflow_run_id)
+        entity_values: dict[str, Any] = {
+            "user_id": user_id,
+            "pod_id": pod_id,
+            "organization_id": await self._get_pod_organization_id(pod_id),
+            "agent_id": agent.id,
+            "title": f"Workflow run: {agent.name}",
+            "type": ConversationType.TASK,
+            "metadata": metadata,
+        }
+        if conversation_id is not None:
+            entity_values["id"] = conversation_id
         entity = Conversation(
-            user_id=user_id,
-            pod_id=pod_id,
-            organization_id=await self._get_pod_organization_id(pod_id),
-            agent_id=agent.id,
-            title=f"Workflow run: {agent.name}",
-            type=ConversationType.TASK,
-            metadata=metadata,
-            origin_type=origin_type,
-            origin_id=origin_id,
+            **entity_values,
         )
-        if origin_type is not None or origin_id is not None:
-            conversation, created = (
-                await self.conversation_repo.create_conversation_once(entity)
+        if conversation_id is not None:
+            conversation, created = await create_conversation_for_id(
+                self.uow.session,
+                entity,
             )
             if not created:
                 return conversation.id
@@ -120,11 +126,10 @@ class AgentControlAdapter(AgentPort):
         input_data: dict[str, Any],
         pod_id: UUID,
         user_id: UUID,
+        conversation_id: UUID | None = None,
         workflow_run_id: UUID | None = None,
         source: str = "WORKFLOW_RUN",
         conversation_metadata: dict[str, Any] | None = None,
-        origin_type: str | None = None,
-        origin_id: UUID | None = None,
     ) -> UUID:
         agent = await self.agent_repo.get(agent_id)
         if agent is None or agent.pod_id != pod_id:
@@ -134,11 +139,10 @@ class AgentControlAdapter(AgentPort):
             input_data=input_data,
             pod_id=pod_id,
             user_id=user_id,
+            conversation_id=conversation_id,
             workflow_run_id=workflow_run_id,
             source=source,
             conversation_metadata=conversation_metadata,
-            origin_type=origin_type,
-            origin_id=origin_id,
         )
 
     async def get_conversation_status(self, conversation_id: UUID) -> dict[str, Any]:

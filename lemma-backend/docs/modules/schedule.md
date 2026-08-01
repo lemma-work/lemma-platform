@@ -21,7 +21,9 @@ or surfaces; target modules decide how to execute the fire.
 `schedules` stores target, active state, type-specific config, optional filter
 instruction/schema, and external scheduler metadata. `schedule_runs` is the
 durable idempotency/delivery ledger keyed by schedule plus source event; it
-records attempts, target run, payload, and terminal outcome. Supported logical
+records the run's single user owner, attempts, target run, payload, and terminal
+outcome. RLS datastore events assign that ownership to the row owner; other
+schedule sources assign it to the schedule owner. Supported logical
 types include time/cron or once, webhook, datastore, and application-triggered
 schedules. APScheduler owns the concrete time job store.
 

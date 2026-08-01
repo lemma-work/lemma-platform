@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+from uuid import UUID
 
 from app.modules.schedule.domain.interfaces import (
     ScheduleEventFilter,
@@ -33,6 +34,7 @@ class ScheduleProcessor:
         *,
         schedule: ScheduleEntity | None = None,
         payload: Dict[str, Any],
+        user_id: UUID,
         metadata: Optional[Dict[str, Any]] = None,
         source_event_id: str | None = None,
     ) -> bool:
@@ -58,9 +60,13 @@ class ScheduleProcessor:
                 logger.debug("schedule.schedule_processor.s_filtered_out_llm.observed")
                 return False
 
+        if not source_event_id:
+            raise ValueError("source_event_id is required to publish a schedule fire")
+
         await self.event_publisher.publish_schedule_fired(
             schedule=schedule,
             payload=payload,
+            user_id=user_id,
             metadata=metadata,
             llm_output=llm_output,
             source_event_id=source_event_id,

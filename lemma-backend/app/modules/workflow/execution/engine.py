@@ -17,6 +17,7 @@ from app.core.authorization.permissions import Permissions
 from app.core.authorization.service import AuthorizationDataService
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.workflow.domain.context import TriggerContext, normalize_node_output
+from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.errors import (
     WorkflowAccessDeniedError,
     WorkflowConflictError,
@@ -25,18 +26,20 @@ from app.modules.workflow.domain.errors import (
 )
 from app.modules.workflow.domain.schema_template import defaults_from_schema
 from app.modules.workflow.domain.workflow import WorkflowEntity
-from app.modules.workflow.domain.run import WorkflowRunEntity, WorkflowRunStatus
+from app.modules.workflow.domain.run import (
+    TERMINAL_STATUSES,
+    WorkflowRunEntity,
+    WorkflowRunStatus,
+)
 from app.modules.workflow.domain.wait import (
     WaitRequest,
     WorkflowRunWaitEntity,
     WorkflowRunWaitType,
 )
 from app.modules.workflow.execution.stepper import RunStepper, StepResult
-from app.modules.workflow.infrastructure.adapters import (
-    AgentControlAdapter,
-    FunctionControlAdapter,
-    ScheduleControlAdapter,
-)
+from app.composition.workflow_agent import AgentControlAdapter
+from app.composition.workflow_function import FunctionControlAdapter
+from app.composition.workflow_scheduler import ScheduleControlAdapter
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRepository,
     SqlAlchemyWorkflowRunRepository,
@@ -127,6 +130,7 @@ class WorkflowEngine:
         flow_id: UUID,
         user_id: UUID,
         *,
+        run_id: UUID | None = None,
         trigger: TriggerContext | None = None,
         schedule_event_id: str | None = None,
         ctx: Context | None = None,
@@ -152,6 +156,12 @@ class WorkflowEngine:
 
         entry_node_id = self._entry_node_id(flow)
 
+        if run_id is not None:
+            existing = await self.run_repo.get(run_id)
+            if existing is not None:
+                self._validate_reserved_run(existing, flow_id=flow.id, user_id=user_id)
+                return existing
+
         if schedule_event_id is not None:
             existing = await self.run_repo.find_by_schedule_event(
                 flow_id=flow.id,
@@ -162,6 +172,7 @@ class WorkflowEngine:
                 return existing
 
         run = WorkflowRunEntity.create(
+            run_id=run_id,
             flow_id=flow.id,
             pod_id=flow.pod_id,
             user_id=user_id,
@@ -179,12 +190,29 @@ class WorkflowEngine:
         # in-memory `run` rather than create()'s return value, which is a summary
         # entity missing the execution context/stack/step history the stepper needs.
         try:
-            await self.run_repo.create(run)
+            if run_id is None:
+                await self.run_repo.create(run)
+            else:
+                async with self.uow.session.begin_nested():
+                    await self.run_repo.create(run)
         except IntegrityError as exc:
-            if schedule_event_id is None:
-                raise
+            if run_id is not None:
+                existing = await self.run_repo.get(run_id)
+                if existing is not None:
+                    self._validate_reserved_run(
+                        existing, flow_id=flow.id, user_id=user_id
+                    )
+                    return existing
+            if schedule_event_id is not None:
+                existing = await self.run_repo.find_by_schedule_event(
+                    flow_id=flow.id,
+                    user_id=user_id,
+                    schedule_event_id=schedule_event_id,
+                )
+                if existing is not None:
+                    return existing
             raise WorkflowConflictError(
-                "Workflow run already exists for this schedule event"
+                "Workflow run identity already exists"
             ) from exc
 
         result = await self._stepper(ctx).advance(run, flow)
@@ -193,6 +221,7 @@ class WorkflowEngine:
         # (final node, status, step history, context) before committing.
         run = await self.run_repo.update(run)
         await self._persist_wait(run, result)
+        self._collect_terminal_event(run)
         await self.uow.commit()
 
         return run
@@ -250,6 +279,7 @@ class WorkflowEngine:
 
         run = await self.run_repo.update(run)
         await self._persist_wait(run, result)
+        self._collect_terminal_event(run)
         await self.uow.commit()
         return run
 
@@ -300,6 +330,7 @@ class WorkflowEngine:
 
         run = await self.run_repo.update(run)
         await self._persist_wait(run, result)
+        self._collect_terminal_event(run)
         await self.uow.commit()
         return run
 
@@ -329,6 +360,7 @@ class WorkflowEngine:
             run.record_node_output(wait.node_id, {**normalized, "error": error})
         run.fail(error, node_id=wait.node_id)
         run = await self.run_repo.update(run)
+        self._collect_terminal_event(run)
         await self.uow.commit()
         return run
 
@@ -370,6 +402,7 @@ class WorkflowEngine:
         except ValueError as exc:
             raise WorkflowConflictError(str(exc)) from exc
         run = await self.run_repo.update(run)
+        self._collect_terminal_event(run)
         await self.uow.commit()
         logger.debug("workflow.run.cancelled", run_id=str(run.id))
         return run
@@ -420,6 +453,34 @@ class WorkflowEngine:
         )
 
     # -- internals ---------------------------------------------------------------
+
+    @staticmethod
+    def _validate_reserved_run(
+        run: WorkflowRunEntity,
+        *,
+        flow_id: UUID,
+        user_id: UUID,
+    ) -> None:
+        if run.flow_id != flow_id or run.user_id != user_id:
+            raise WorkflowConflictError(
+                "Reserved workflow run ID belongs to a different target or owner"
+            )
+
+    def _collect_terminal_event(self, run: WorkflowRunEntity) -> None:
+        if run.status not in TERMINAL_STATUSES:
+            return
+        if run.completed_at is None:
+            raise RuntimeError(f"Terminal workflow run {run.id} has no completed_at")
+        self.uow.collect_events(
+            [
+                WorkflowRunTerminalEvent(
+                    run_id=run.id,
+                    status=run.status,
+                    error=run.error,
+                    completed_at=run.completed_at,
+                )
+            ]
+        )
 
     def _entry_node_id(self, flow: WorkflowEntity) -> str:
         if not flow.nodes:

@@ -13,6 +13,8 @@ from types import TracebackType
 from typing import Generic, TypeVar
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from app.core.domain.uow import IUnitOfWork
 
 
@@ -90,4 +92,26 @@ class PassthroughEventInbox:
     async def process(self, consumer, event, handler):
         del consumer, event
         await handler()
+        return True
+
+
+class ValidationTerminalEventInbox:
+    """Inbox double mirroring the real ValidationError policy.
+
+    ``SqlAlchemyEventInbox.process`` marks a handler that raises
+    ``ValidationError`` TERMINAL and acks, so an unparseable event is dropped
+    once instead of being redelivered forever by the reclaim subscriber. Use
+    this (not ``PassthroughEventInbox``) to assert a consumer parses its event
+    *inside* the inbox, where that policy can apply.
+    """
+
+    def __init__(self) -> None:
+        self.terminal: list[str] = []
+
+    async def process(self, consumer, event, handler):
+        del event
+        try:
+            await handler()
+        except ValidationError as exc:
+            self.terminal.append(f"{consumer}:{type(exc).__name__}")
         return True

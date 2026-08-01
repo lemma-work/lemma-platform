@@ -52,7 +52,7 @@ dependencies = [
     "fastembed>=0.7.4",
     "agentbox-client",
     "pypdfium2>=5.10.1",
-    "pillow>=12.0.0",
+    "pillow>=12.3.0",
     "lemma-pod-bundle",
 ]
 

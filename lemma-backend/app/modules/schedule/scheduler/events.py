@@ -43,6 +43,7 @@ class SchedulerEventEmitter:
     async def emit_scheduled_job_event(
         self,
         schedule_id: UUID,
+        user_id: UUID | None = None,
         payload: Dict[str, Any] | None = None,
         *,
         scheduled_at: datetime,
@@ -51,6 +52,8 @@ class SchedulerEventEmitter:
 
         Args:
             schedule_id: The schedule ID that was scheduled
+            user_id: Owner of the resulting run; absent only on workflow wait
+                timers persisted before ownership existed
             payload: Optional payload data
         """
         if not self._started:
@@ -60,7 +63,7 @@ class SchedulerEventEmitter:
         source_event_id = f"cron:{schedule_id}:{scheduled_at.isoformat()}"
         event = ScheduleFired(
             schedule_id=schedule_id,
-            user_id=UUID("00000000-0000-0000-0000-000000000000"),
+            user_id=user_id,
             schedule_type=ScheduleType.TIME,
             payload=payload or {},
             scheduled_at=scheduled_at,

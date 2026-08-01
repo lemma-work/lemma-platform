@@ -108,6 +108,8 @@ class WebhookHandler:
         await self.event_publisher.publish_schedule_fired(
             schedule=schedule,
             payload=payload,
+            # A webhook fire has no row owner; the schedule owner runs it.
+            user_id=schedule.user_id,
             metadata=metadata,
             source_event_id=source_event_id,
         )

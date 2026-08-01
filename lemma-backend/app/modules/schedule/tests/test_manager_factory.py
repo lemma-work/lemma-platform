@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from app.modules.connectors.domain.connector import ConnectorEntity, AuthProvider
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
-from app.modules.schedule.infrastructure.schedule_managers.composio import (
+from app.composition.schedule_connectors import (
     ComposioScheduleManager,
-)
-from app.modules.schedule.infrastructure.schedule_managers.manager_factory import (
     ManagersFactory,
 )
 
