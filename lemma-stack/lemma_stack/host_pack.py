@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -26,18 +27,55 @@ def _required_file(root: Path, label: str, candidates: tuple[str, ...]) -> Path:
     raise AdminError(f"host pack is missing {label}; expected one of: {expected}")
 
 
-def build_manifest(
-    pack_root: Path,
-    paths: LocalPaths,
-    config: TOMLDocument,
-    release: ReleaseManifest,
-    *,
-    provider: str | None = None,
-) -> dict[str, Any]:
-    root = pack_root.expanduser().resolve()
-    if not root.is_dir():
-        raise AdminError(f"host pack root does not exist: {root}")
+def _required_dir(root: Path, label: str, relative: str) -> Path:
+    path = root / relative
+    if not path.is_dir():
+        raise AdminError(f"source checkout is missing {label}: {path}")
+    return path.resolve()
 
+
+@dataclass(frozen=True)
+class _Bindings:
+    """Everything about a manifest that depends on *where the code lives*.
+
+    A released host pack ships its own interpreter, its own Node, and a built
+    Next server. A developer's checkout has none of those and uses ``uv`` and
+    ``next dev`` instead. Those are the only differences: ports, environment,
+    the managed-runtime block, health checks and restart policy are all
+    identical, so they are rendered once from these bindings rather than
+    duplicated into a second code path. A dev run that does not exercise the
+    same supervisor proves nothing about the packaged one.
+    """
+
+    # Argv prefix that runs the backend's Python, e.g. the packed interpreter
+    # or ``uv run --project …``.
+    python: list[str]
+    backend_dir: Path
+    # Where AgentBox's own Alembic history is rooted, and what its config is
+    # called there. A pack flattens both projects into `backend/` and renames
+    # the config to `agentbox-alembic.ini`; a checkout keeps AgentBox in its own
+    # directory under its own `alembic.ini`, whose `script_location` is relative
+    # to that directory.
+    agentbox_dir: Path
+    agentbox_config: str
+    frontend_command: list[str]
+    frontend_dir: Path
+    # Where the backend finds assets that are baked into a pack but scattered
+    # across sibling projects in a checkout.
+    browser_sdk: Path
+    browser_ui: Path
+    skills: Path
+    # Where the backend keeps the key that encrypts stored secrets.
+    #
+    # A packaged install holds real provider credentials and belongs in the OS
+    # keychain. A checkout cannot use it: the backend is a ``uv run`` child of
+    # locald with no GUI session, so macOS answers with a "keychain cannot be
+    # found" dialog and the run stalls before anything works. Source mode uses
+    # an in-config key, which is throwaway anyway.
+    secret_key_provider: str
+
+
+def _packaged_bindings(root: Path) -> _Bindings:
     python = _required_file(
         root,
         "backend Python",
@@ -67,7 +105,83 @@ def build_manifest(
         ),
     )
     backend_dir = (root / "backend").resolve()
-    frontend_dir = (root / "frontend").resolve()
+    return _Bindings(
+        python=[str(python)],
+        backend_dir=backend_dir,
+        frontend_command=[str(node), str(frontend_launcher), str(frontend_server)],
+        frontend_dir=(root / "frontend").resolve(),
+        browser_sdk=backend_dir / "assets/browser-sdk/lemma-client.js",
+        browser_ui=backend_dir / "assets/browser-sdk/lemma-ui.js",
+        skills=backend_dir / "assets/lemma-skills",
+        agentbox_dir=backend_dir,
+        agentbox_config="agentbox-alembic.ini",
+        secret_key_provider="keychain",
+    )
+
+
+def _source_bindings(root: Path) -> _Bindings:
+    """Run the working tree instead of a released pack.
+
+    ``uv`` and ``node`` come from the developer's PATH, which is the point:
+    there is nothing to build or stage before local mode runs the code being
+    edited. The frontend uses the same launcher as a pack so that
+    ``runtime-config.js`` — locald's frontend health check — is still written
+    by exactly one piece of code.
+    """
+    backend_dir = _required_dir(root, "the backend project", "lemma-backend")
+    frontend_dir = _required_dir(root, "the frontend project", "lemma-frontend")
+    launcher = _required_file(
+        root,
+        "frontend launcher",
+        ("desktop/runtime/frontend-launcher.mjs",),
+    )
+    return _Bindings(
+        python=["uv", "run", "--project", str(backend_dir), "python"],
+        backend_dir=backend_dir,
+        frontend_command=["node", str(launcher), "--dev", str(frontend_dir)],
+        frontend_dir=frontend_dir,
+        browser_sdk=root / "lemma-typescript/public/lemma-client.js",
+        browser_ui=root / "lemma-typescript/public/lemma-ui.js",
+        skills=root / "lemma-skills",
+        # The backend depends on AgentBox, so its interpreter can run AgentBox's
+        # migrations; only the working directory and config name differ.
+        agentbox_dir=_required_dir(root, "the AgentBox project", "agentbox"),
+        agentbox_config="alembic.ini",
+        secret_key_provider="static",
+    )
+
+
+def build_manifest(
+    pack_root: Path | None,
+    paths: LocalPaths,
+    config: TOMLDocument,
+    release: ReleaseManifest,
+    *,
+    provider: str | None = None,
+    source_root: Path | None = None,
+) -> dict[str, Any]:
+    """Render the manifest locald supervises.
+
+    ``source_root`` renders the same manifest against a developer's checkout
+    rather than a released pack, so desktop local mode runs the code being
+    edited. Only the paths differ; see :class:`_Bindings`.
+    """
+    if source_root is not None:
+        root = source_root.expanduser().resolve()
+        if not root.is_dir():
+            raise AdminError(f"source root does not exist: {root}")
+        bindings = _source_bindings(root)
+    elif pack_root is not None:
+        root = pack_root.expanduser().resolve()
+        if not root.is_dir():
+            raise AdminError(f"host pack root does not exist: {root}")
+        bindings = _packaged_bindings(root)
+    else:
+        raise AdminError("build_manifest needs either a pack root or a source root")
+
+    python = bindings.python
+    backend_dir = bindings.backend_dir
+    frontend_dir = bindings.frontend_dir
     selected_provider = provider or store.provider(config)
 
     backend_env = render.host_backend_env(
@@ -77,15 +191,16 @@ def build_manifest(
         workspace_image=release.image("agentbox_workspace").pull_ref,
         function_image=release.image("agentbox_function").pull_ref,
     )
-    browser_sdk = backend_dir / "assets/browser-sdk/lemma-client.js"
-    browser_ui = backend_dir / "assets/browser-sdk/lemma-ui.js"
-    skills = backend_dir / "assets/lemma-skills"
+    browser_sdk = bindings.browser_sdk
+    browser_ui = bindings.browser_ui
+    skills = bindings.skills
     if browser_sdk.is_file():
         backend_env["BROWSER_SDK_PATH"] = str(browser_sdk)
     if browser_ui.is_file():
         backend_env["BROWSER_UI_PATH"] = str(browser_ui)
     if skills.is_dir():
         backend_env["LEMMA_SKILLS_ROOT"] = str(skills)
+    backend_env["SECRET_KEY_PROVIDER"] = bindings.secret_key_provider
 
     managed_runtime = None
     if selected_provider == "lemma_local":
@@ -116,7 +231,7 @@ def build_manifest(
             {
                 "id": "migrations",
                 "command": [
-                    str(python),
+                    *python,
                     "-m",
                     "alembic",
                     "-c",
@@ -133,15 +248,15 @@ def build_manifest(
             {
                 "id": "agentbox-migrations",
                 "command": [
-                    str(python),
+                    *python,
                     "-m",
                     "alembic",
                     "-c",
-                    "agentbox-alembic.ini",
+                    bindings.agentbox_config,
                     "upgrade",
                     "head",
                 ],
-                "cwd": str(backend_dir),
+                "cwd": str(bindings.agentbox_dir),
                 "env": backend_env,
                 "timeout_seconds": 300,
                 "max_attempts": 3,
@@ -152,7 +267,7 @@ def build_manifest(
             {
                 "id": "backend",
                 "command": [
-                    str(python),
+                    *python,
                     "-m",
                     "uvicorn",
                     "local_app:app",
@@ -178,11 +293,7 @@ def build_manifest(
             },
             {
                 "id": "frontend",
-                "command": [
-                    str(node),
-                    str(frontend_launcher),
-                    str(frontend_server),
-                ],
+                "command": list(bindings.frontend_command),
                 "cwd": str(frontend_dir),
                 "env": render.host_frontend_env(config),
                 "dependencies": ["backend"],

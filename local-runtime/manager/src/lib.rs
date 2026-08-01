@@ -477,7 +477,7 @@ impl ManagedRuntime {
         *guard = None;
         remove_if_present(&self.vm_process_marker)?;
         let log = fs::read(self.config.local_root.join("logs/vz.log")).unwrap_or_default();
-        let detail = first_diagnostic(&log, "VM helper exited without a diagnostic");
+        let detail = last_diagnostic(&log, "the runtime log holds no explanation");
         Ok(Some(io::Error::other(format!(
             "Lemma's private runtime exited ({status}): {detail}"
         ))))
@@ -772,10 +772,10 @@ fn terminate_verified_process(pid: u32) -> io::Result<()> {
         }
         thread::sleep(Duration::from_millis(50));
     }
-    return Err(io::Error::new(
+    Err(io::Error::new(
         io::ErrorKind::TimedOut,
         "terminated VM helper was not reaped",
-    ));
+    ))
 }
 
 fn remove_if_present(path: &Path) -> io::Result<()> {
@@ -888,12 +888,41 @@ fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {
     Ok(())
 }
 
+/// Lines that mean "still booting", not "went wrong".
+///
+/// The host dials the guest's control socket before guestd is listening, so a
+/// normal boot always writes several of these. They are the *first* thing in
+/// `vz.log`, which is why quoting the first line reported a healthy boot's retry
+/// as the cause of an exit that happened minutes later.
+fn is_boot_retry(line: &str) -> bool {
+    line.contains("guest connect failed")
+}
+
 fn first_diagnostic(value: &[u8], fallback: &str) -> String {
     let value = String::from_utf8_lossy(value);
     let diagnostic = value
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
+        .unwrap_or(fallback);
+    diagnostic
+        .strip_prefix("lemma-runtime: ")
+        .unwrap_or(diagnostic)
+        .to_owned()
+}
+
+/// Why the runtime most recently complained.
+///
+/// An exit is explained by what the log said last, not first. Boot retries are
+/// skipped entirely: if they are all there is, the log holds no explanation and
+/// saying so is more honest than quoting one.
+fn last_diagnostic(value: &[u8], fallback: &str) -> String {
+    let value = String::from_utf8_lossy(value);
+    let diagnostic = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !is_boot_retry(line))
+        .next_back()
         .unwrap_or(fallback);
     diagnostic
         .strip_prefix("lemma-runtime: ")
@@ -928,6 +957,31 @@ fn decode_wsl_output(value: &[u8]) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn an_exit_is_explained_by_the_last_complaint_not_the_first_boot_retry() {
+        // Every healthy boot dials the guest before guestd is listening, so
+        // these are always the first lines in the log. Quoting them made an
+        // exit minutes later read as though a connection reset had caused it.
+        let log = b"lemma-vz: guest connect failed: Connection reset by peer\n\
+                    lemma-vz: guest connect failed: Connection reset by peer\n\
+                    lemma-vz: disk image is corrupt\n" as &[u8];
+        assert_eq!(
+            last_diagnostic(log, "fallback"),
+            "lemma-vz: disk image is corrupt"
+        );
+    }
+
+    #[test]
+    fn a_log_of_only_boot_retries_explains_nothing_and_says_so() {
+        let log = b"lemma-vz: guest connect failed: Connection reset by peer\n\
+                    lemma-vz: guest connect failed: Connection reset by peer\n"
+            as &[u8];
+        assert_eq!(
+            last_diagnostic(log, "the runtime log holds no explanation"),
+            "the runtime log holds no explanation"
+        );
+    }
 
     #[test]
     fn capability_is_stable_private_and_not_in_command_arguments() {

@@ -45,6 +45,79 @@ struct HostSecrets {
     agentbox_api_key: String,
 }
 
+/// Where the code a manifest points at actually lives.
+///
+/// A released pack ships its own interpreter, its own Node, and a built Next
+/// server. A developer's checkout has none of those and uses `uv` and
+/// `next dev`. Those are the only differences — ports, environment, the
+/// managed-runtime block, health checks and restart policy are identical — so
+/// they are rendered once from here instead of forking the renderer. A dev run
+/// that exercised a different supervisor would prove nothing about this one.
+struct Bindings {
+    /// Argv prefix that runs the backend's Python.
+    python: Vec<String>,
+    backend_dir: PathBuf,
+    /// Where AgentBox's own Alembic history is rooted, and what its config is
+    /// called there. A pack flattens both projects into `backend/` and renames
+    /// the config to `agentbox-alembic.ini`; a checkout keeps AgentBox in its
+    /// own directory under its own `alembic.ini`, whose `script_location` is
+    /// relative to that directory.
+    agentbox_dir: PathBuf,
+    agentbox_config: &'static str,
+    frontend_command: Vec<String>,
+    frontend_dir: PathBuf,
+    /// Assets that are baked into a pack but live in sibling projects in a
+    /// checkout.
+    browser_sdk: PathBuf,
+    browser_ui: PathBuf,
+    skills: PathBuf,
+    /// `next dev` must not be told it is a production build.
+    node_env: &'static str,
+    /// Where the backend keeps the key that encrypts stored secrets.
+    ///
+    /// A packaged install holds real provider credentials and belongs in the
+    /// OS keychain. A checkout cannot use it: the backend is a `uv run` child
+    /// of locald with no GUI session, so macOS answers with a "keychain cannot
+    /// be found" dialog and the run stalls before anything works. Source mode
+    /// uses an in-config key derived from this installation's own secret, which
+    /// is throwaway anyway — the whole dev root is under /tmp.
+    secret_key_provider: &'static str,
+}
+
+/// A checkout to run instead of a released pack, and the release whose pinned
+/// infrastructure images it should run against.
+///
+/// Selected by `LEMMA_LOCALD_SOURCE_ROOT`; set only by
+/// `desktop/scripts/dev-local.sh --source`. A packaged app never sets it, and
+/// the renderer behaves exactly as before when it is absent.
+struct SourceLayout {
+    root: PathBuf,
+    release_manifest: PathBuf,
+}
+
+fn source_layout() -> io::Result<Option<SourceLayout>> {
+    let Some(root) = std::env::var_os("LEMMA_LOCALD_SOURCE_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    else {
+        return Ok(None);
+    };
+    let release_manifest = std::env::var_os("LEMMA_LOCALD_SOURCE_RELEASE_MANIFEST")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            invalid(
+                "LEMMA_LOCALD_SOURCE_ROOT needs LEMMA_LOCALD_SOURCE_RELEASE_MANIFEST: a \
+                 checkout has no release.json, but its infrastructure and AgentBox images \
+                 are still pinned ones",
+            )
+        })?;
+    Ok(Some(SourceLayout {
+        root,
+        release_manifest,
+    }))
+}
+
 pub(crate) fn prepare(
     paths: &LocalPaths,
     pack_root: &Path,
@@ -52,35 +125,16 @@ pub(crate) fn prepare(
 ) -> io::Result<PathBuf> {
     crate::host_process::reclaim_persisted_installation_processes(&paths.root)?;
     let ports = load_or_allocate(paths)?;
-    let manifest = build(paths, pack_root, &material, ports)?;
+    let source = source_layout()?;
+    let manifest = build(paths, pack_root, &material, ports, source.as_ref())?;
     let destination = paths.root.join("host-pack.json");
     write_private_atomic(&destination, &serde_json::to_vec_pretty(&manifest)?)?;
     Ok(destination)
 }
 
-fn build(
-    paths: &LocalPaths,
-    pack_root: &Path,
-    material: &ManagedManifestMaterial,
-    ports: NetworkPorts,
-) -> io::Result<Value> {
-    validate_hex_secret("postgres password", &material.postgres_password)?;
-    validate_hex_secret("Redis password", &material.redis_password)?;
-    let root = pack_root.canonicalize().map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!(
-                "native host pack is unavailable at {}: {error}",
-                pack_root.display()
-            ),
-        )
-    })?;
-    if !root.is_dir() {
-        return Err(invalid("native host pack root is not a directory"));
-    }
-
+fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
     let python = required_file(
-        &root,
+        root,
         "backend Python",
         &[
             "backend/python/bin/python3",
@@ -89,17 +143,17 @@ fn build(
         ],
     )?;
     let node = required_file(
-        &root,
+        root,
         "frontend Node.js",
         &["frontend/node/bin/node", "frontend/node/node.exe"],
     )?;
     let frontend_launcher = required_file(
-        &root,
+        root,
         "frontend launcher",
         &["frontend/frontend-launcher.mjs"],
     )?;
     let frontend_server = required_file(
-        &root,
+        root,
         "Next.js standalone server",
         &[
             "frontend/server.js",
@@ -108,15 +162,128 @@ fn build(
         ],
     )?;
     let backend_dir = root.join("backend");
-    let frontend_dir = root.join("frontend");
+    Ok(Bindings {
+        python: vec![path_text(&python)?],
+        frontend_command: vec![
+            path_text(&node)?,
+            path_text(&frontend_launcher)?,
+            path_text(&frontend_server)?,
+        ],
+        browser_sdk: backend_dir.join("assets/browser-sdk/lemma-client.js"),
+        browser_ui: backend_dir.join("assets/browser-sdk/lemma-ui.js"),
+        skills: backend_dir.join("assets/lemma-skills"),
+        agentbox_dir: backend_dir.clone(),
+        agentbox_config: "agentbox-alembic.ini",
+        backend_dir,
+        frontend_dir: root.join("frontend"),
+        node_env: "production",
+        secret_key_provider: "keychain",
+    })
+}
 
-    let release: Value = read_json(&root.join("release.json"), "native release manifest")?;
+fn source_bindings(root: &Path) -> io::Result<Bindings> {
+    source_bindings_with(root, &resolve_on_path("uv")?, &resolve_on_path("node")?)
+}
+
+/// The layout half of source mode, with the toolchain already located.
+///
+/// Split out so what a checkout *is* can be described without a machine that
+/// has `uv` and `node` installed — a CI runner has neither, and a test about
+/// where secrets live should not need them.
+fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::Result<Bindings> {
+    let backend_dir = required_dir(root, "the backend project", "lemma-backend")?;
+    let frontend_dir = required_dir(root, "the frontend project", "lemma-frontend")?;
+    // The backend depends on AgentBox, so its interpreter can run AgentBox's
+    // migrations; only the working directory and config name differ.
+    let agentbox_dir = required_dir(root, "the AgentBox project", "agentbox")?;
+    let launcher = required_file(
+        root,
+        "frontend launcher",
+        &["desktop/runtime/frontend-launcher.mjs"],
+    )?;
+    Ok(Bindings {
+        // `uv` and `node` come from PATH, which is the point: there is nothing
+        // to stage before local mode runs the code being edited. Resolved to
+        // absolute paths so locald can identify the processes it spawns.
+        python: vec![
+            path_text(uv)?,
+            "run".to_owned(),
+            "--project".to_owned(),
+            path_text(&backend_dir)?,
+            "python".to_owned(),
+        ],
+        frontend_command: vec![
+            path_text(node)?,
+            path_text(&launcher)?,
+            "--dev".to_owned(),
+            path_text(&frontend_dir)?,
+        ],
+        browser_sdk: root.join("lemma-typescript/public/lemma-client.js"),
+        browser_ui: root.join("lemma-typescript/public/lemma-ui.js"),
+        skills: root.join("lemma-skills"),
+        agentbox_dir,
+        agentbox_config: "alembic.ini",
+        backend_dir,
+        frontend_dir,
+        node_env: "development",
+        secret_key_provider: "static",
+    })
+}
+
+fn build(
+    paths: &LocalPaths,
+    pack_root: &Path,
+    material: &ManagedManifestMaterial,
+    ports: NetworkPorts,
+    source: Option<&SourceLayout>,
+) -> io::Result<Value> {
+    validate_hex_secret("postgres password", &material.postgres_password)?;
+    validate_hex_secret("Redis password", &material.redis_password)?;
+
+    // A checkout carries no release.json or pack.json of its own: its app code
+    // is local, but the infrastructure and AgentBox images it runs against are
+    // still the pinned ones, borrowed from an installed release.
+    let (bindings, release_path) = match source {
+        Some(layout) => {
+            let root = layout.root.canonicalize().map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "source root is unavailable at {}: {error}",
+                        layout.root.display()
+                    ),
+                )
+            })?;
+            (source_bindings(&root)?, layout.release_manifest.clone())
+        }
+        None => {
+            let root = pack_root.canonicalize().map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "native host pack is unavailable at {}: {error}",
+                        pack_root.display()
+                    ),
+                )
+            })?;
+            if !root.is_dir() {
+                return Err(invalid("native host pack root is not a directory"));
+            }
+            (packaged_bindings(&root)?, root.join("release.json"))
+        }
+    };
+    let backend_dir = bindings.backend_dir.clone();
+    let frontend_dir = bindings.frontend_dir.clone();
+
+    let release: Value = read_json(&release_path, "native release manifest")?;
     let release_version = required_string(&release, "version", "native release manifest")?;
-    let pack: Value = read_json(&root.join("pack.json"), "native host pack marker")?;
-    if pack.get("release").and_then(Value::as_str) != Some(release_version.as_str()) {
-        return Err(invalid(
-            "native host pack marker does not match its release",
-        ));
+    if source.is_none() {
+        let pack: Value = read_json(&pack_root.join("pack.json"), "native host pack marker")?;
+        if pack.get("release").and_then(Value::as_str) != Some(release_version.as_str()) {
+            return Err(invalid(
+                "native host pack marker does not match its release",
+            ));
+        }
     }
     let workspace_image = pull_ref(
         release.pointer("/images/agentbox_workspace"),
@@ -171,6 +338,19 @@ fn build(
     }
 
     let secrets = load_or_create_host_secrets(&paths.root.join("host.secrets.json"))?;
+    // Derived from this installation's own secret rather than stored separately,
+    // the same way the runtime credential key below is: stable across restarts
+    // so encrypted rows stay readable, distinct from every other key by its
+    // domain string, and gone when the data directory is. SHA-256 into url-safe
+    // base64 is exactly a Fernet key. Only source mode uses it; see
+    // `Bindings::secret_key_provider`.
+    let secret_encryption_key = URL_SAFE.encode(Sha256::digest(
+        [
+            secrets.agentbox_api_key.as_bytes(),
+            b"lemma-secret-encryption-v1",
+        ]
+        .concat(),
+    ));
     let runtime_key = URL_SAFE.encode(Sha256::digest(
         [
             secrets.agentbox_api_key.as_bytes(),
@@ -204,7 +384,10 @@ fn build(
         // Desktop stores backend encryption material in the signed-in user's
         // OS vault. Never fall back to the deterministic local-development key
         // for a packaged installation.
-        ("SECRET_KEY_PROVIDER", "keychain".to_owned()),
+        (
+            "SECRET_KEY_PROVIDER",
+            bindings.secret_key_provider.to_owned(),
+        ),
         (
             "DATABASE_URL",
             format!(
@@ -339,21 +522,24 @@ fn build(
         ("ENABLE_TELEGRAM_POLLING_MODE", "true".to_owned()),
         ("ENABLE_SLACK_SOCKET_MODE", "true".to_owned()),
     ]);
-    let browser_sdk = backend_dir.join("assets/browser-sdk/lemma-client.js");
-    let browser_ui = backend_dir.join("assets/browser-sdk/lemma-ui.js");
-    let skills = backend_dir.join("assets/lemma-skills");
+    if bindings.secret_key_provider == "static" {
+        backend_env.insert("SECRET_ENCRYPTION_KEY", secret_encryption_key);
+    }
+    let browser_sdk = &bindings.browser_sdk;
+    let browser_ui = &bindings.browser_ui;
+    let skills = &bindings.skills;
     if browser_sdk.is_file() {
-        backend_env.insert("BROWSER_SDK_PATH", path_text(&browser_sdk)?);
+        backend_env.insert("BROWSER_SDK_PATH", path_text(browser_sdk)?);
     }
     if browser_ui.is_file() {
-        backend_env.insert("BROWSER_UI_PATH", path_text(&browser_ui)?);
+        backend_env.insert("BROWSER_UI_PATH", path_text(browser_ui)?);
     }
     if skills.is_dir() {
-        backend_env.insert("LEMMA_SKILLS_ROOT", path_text(&skills)?);
+        backend_env.insert("LEMMA_SKILLS_ROOT", path_text(skills)?);
     }
 
     let frontend_env = BTreeMap::from([
-        ("NODE_ENV", "production".to_owned()),
+        ("NODE_ENV", bindings.node_env.to_owned()),
         ("PORT", frontend_port.to_string()),
         ("HOSTNAME", "127.0.0.1".to_owned()),
         ("NEXT_PUBLIC_API_URL", backend_origin),
@@ -402,7 +588,7 @@ fn build(
         "setup": [
             {
                 "id": "migrations",
-                "command": [path_text(&python)?, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+                "command": argv(&bindings.python, &["-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]),
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env,
                 "timeout_seconds": 300,
@@ -411,8 +597,8 @@ fn build(
             },
             {
                 "id": "agentbox-migrations",
-                "command": [path_text(&python)?, "-m", "alembic", "-c", "agentbox-alembic.ini", "upgrade", "head"],
-                "cwd": path_text(&backend_dir)?,
+                "command": argv(&bindings.python, &["-m", "alembic", "-c", bindings.agentbox_config, "upgrade", "head"]),
+                "cwd": path_text(&bindings.agentbox_dir)?,
                 "env": backend_env,
                 "timeout_seconds": 300,
                 "max_attempts": 5,
@@ -422,7 +608,7 @@ fn build(
         "services": [
             {
                 "id": "backend",
-                "command": [path_text(&python)?, "-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", backend_port.to_string(), "--ws", "websockets-sansio"],
+                "command": argv(&bindings.python, &["-m", "uvicorn", "local_app:app", "--host", "127.0.0.1", "--port", &backend_port.to_string(), "--ws", "websockets-sansio"]),
                 "cwd": path_text(&backend_dir)?,
                 "env": backend_env,
                 "dependencies": [],
@@ -436,7 +622,7 @@ fn build(
             },
             {
                 "id": "frontend",
-                "command": [path_text(&node)?, path_text(&frontend_launcher)?, path_text(&frontend_server)?],
+                "command": bindings.frontend_command.clone(),
                 "cwd": path_text(&frontend_dir)?,
                 "env": frontend_env,
                 "dependencies": ["backend"],
@@ -450,6 +636,47 @@ fn build(
             },
         ],
     }))
+}
+
+/// Join an interpreter prefix to the arguments that follow it.
+///
+/// A packaged pack's prefix is one absolute path; a checkout's is
+/// `uv run --project <dir> python`. Callers should not have to care which.
+fn argv(prefix: &[String], rest: &[&str]) -> Vec<String> {
+    let mut command = prefix.to_vec();
+    command.extend(rest.iter().map(|value| (*value).to_owned()));
+    command
+}
+
+/// Resolve a PATH tool to an absolute path, the way a pack's own binaries are.
+///
+/// Not cosmetic. `record_child` identifies a spawned process with
+/// `ps -o comm=`, which reports exactly the argv[0] it was launched with, and
+/// then canonicalizes it. Spawned as bare `uv`, that is the string "uv" and the
+/// canonicalize fails with ENOENT — so locald tears the process back down with
+/// "could not record ownership of backend" and local mode never starts.
+fn resolve_on_path(tool: &str) -> io::Result<PathBuf> {
+    let path = std::env::var_os("PATH").ok_or_else(|| invalid("PATH is not set"))?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(tool))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            invalid(format!(
+                "source mode needs {tool} on PATH; it runs the checkout directly"
+            ))
+        })?
+        .canonicalize()
+}
+
+fn required_dir(root: &Path, label: &str, relative: &str) -> io::Result<PathBuf> {
+    let candidate = root.join(relative);
+    if candidate.is_dir() {
+        return candidate.canonicalize();
+    }
+    Err(invalid(format!(
+        "source checkout is missing {label}: {}",
+        candidate.display()
+    )))
 }
 
 fn required_file(root: &Path, label: &str, candidates: &[&str]) -> io::Result<PathBuf> {
@@ -727,6 +954,11 @@ mod tests {
             manifest["services"][0]["env"]["SECRET_KEY_PROVIDER"],
             "keychain"
         );
+        // A packaged install must never carry the key in its own config; the
+        // keychain is the point.
+        assert!(manifest["services"][0]["env"]
+            .get("SECRET_ENCRYPTION_KEY")
+            .is_none());
         assert!(paths.root.join("state/cache/tldextract").is_dir());
         assert!(paths.root.join("state/cache/fastembed").is_dir());
         assert_eq!(
@@ -836,8 +1068,47 @@ mod tests {
                 bridge_executable: PathBuf::from("/signed/lemma-runtime"),
             },
             load_or_allocate(&paths).unwrap(),
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));
+    }
+
+    #[test]
+    fn a_checkout_never_reaches_for_the_keychain() {
+        // The source-mode backend is a `uv run` child of locald with no GUI
+        // session. Asking macOS for the login keychain there does not fail
+        // quietly — it puts up "a keychain cannot be found to store
+        // secret-encryption-keyset" and the whole run stalls behind a dialog.
+        let root = tempfile::tempdir().unwrap();
+        for directory in ["lemma-backend", "lemma-frontend", "agentbox"] {
+            fs::create_dir_all(root.path().join(directory)).unwrap();
+        }
+        fs::create_dir_all(root.path().join("desktop/runtime")).unwrap();
+        fs::write(
+            root.path().join("desktop/runtime/frontend-launcher.mjs"),
+            "",
+        )
+        .unwrap();
+
+        // Named rather than resolved: a CI runner has neither tool installed,
+        // and where secrets live does not depend on them.
+        let source = source_bindings_with(
+            root.path(),
+            Path::new("/usr/bin/uv"),
+            Path::new("/usr/bin/node"),
+        )
+        .unwrap();
+        assert_eq!(source.secret_key_provider, "static");
+
+        let pack = tempfile::tempdir().unwrap();
+        // A packaged install holds real provider credentials and must keep them
+        // in the OS keychain, so the two must not converge.
+        assert_ne!(
+            source.secret_key_provider,
+            packaged_bindings(pack.path())
+                .map(|bindings| bindings.secret_key_provider)
+                .unwrap_or("keychain")
+        );
     }
 }

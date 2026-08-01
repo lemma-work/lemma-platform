@@ -14,6 +14,7 @@ import type {
 import {
     HARNESS_DEFAULT_VALUE,
     formatAgentRuntime,
+    canConfigureHarnessProfile,
     harnessConfigControls,
     harnessProfileChanges,
     hydrateRuntimeModel,
@@ -215,6 +216,29 @@ describe('runtimeAvailabilityLabel', () => {
     it('stays quiet on a status this build does not know', () => {
         expect(runtimeAvailabilityLabel(harnessProfile('SOMETHING_NEW'))).toBeNull();
         expect(runtimeAvailabilityLabel(harnessProfile(null))).toBeNull();
+    });
+});
+
+describe('canConfigureHarnessProfile', () => {
+    it('lets the model and settings be changed on a reachable computer', () => {
+        expect(canConfigureHarnessProfile({ availability_status: 'READY' })).toBe(true);
+    });
+
+    it('withholds them while that computer cannot be reached', () => {
+        // The backend validates a model or config change against what the
+        // harness advertises right now, so an offline machine cannot take one.
+        // Renaming is unaffected and stays available in the dialog.
+        expect(canConfigureHarnessProfile({ availability_status: 'OFFLINE' })).toBe(false);
+        expect(canConfigureHarnessProfile({ availability_status: 'NOT_INSTALLED' })).toBe(false);
+        expect(canConfigureHarnessProfile({ availability_status: 'UNAVAILABLE' })).toBe(false);
+    });
+
+    it('treats an unreported status as usable rather than guessing offline', () => {
+        // Two backend call sites build the service without a host repository and
+        // leave this null. Reading that as offline would disable a control the
+        // user can in fact save.
+        expect(canConfigureHarnessProfile({ availability_status: null })).toBe(true);
+        expect(canConfigureHarnessProfile({})).toBe(true);
     });
 });
 

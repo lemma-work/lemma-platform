@@ -229,10 +229,7 @@ impl HostConfig {
             if target.base_url.scheme() != "https" {
                 anyhow::ensure!(
                     target.allow_insecure_http
-                        && matches!(
-                            target.base_url.host_str(),
-                            Some("localhost" | "127.0.0.1" | "::1")
-                        ),
+                        && crate::api::is_loopback_host(target.base_url.host_str()),
                     "target {} must use HTTPS (HTTP is allowed only for an explicitly opted-in loopback target)",
                     target.name
                 );

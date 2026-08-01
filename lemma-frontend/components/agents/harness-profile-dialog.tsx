@@ -31,6 +31,7 @@ import {
 import {
     HARNESS_DEFAULT_VALUE,
     agentHostHarnessModelCount,
+    canConfigureHarnessProfile,
     harnessConfigControls,
     harnessProfileChanges,
     liveConfigSelections,
@@ -187,6 +188,12 @@ export function HarnessProfileDialog({
     const loadingHarness = isEdit && detail.isLoading;
     const optionCount = agentHostHarnessModelCount(harness?.config_options ?? []);
 
+    // The model and config selections are the only two fields whose edit reaches
+    // the paired computer, so they are the only two withheld when it is
+    // unreachable. Renaming still saves. Creation never lands here while offline
+    // — the Models page withholds the button entirely.
+    const configurable = profile === null || canConfigureHarnessProfile(profile);
+
     return (
         <Dialog open={Boolean(target)} onOpenChange={(open) => { if (!open && !pending) onClose(); }}>
             <DialogContent className="gap-5">
@@ -232,9 +239,20 @@ export function HarnessProfileDialog({
                         <p className="text-sm text-[var(--text-tertiary)]">Reading this agent&apos;s settings…</p>
                     ) : null}
 
+                    {!configurable ? (
+                        <p className="text-sm text-[var(--text-tertiary)]">
+                            That computer is offline, so its model and settings can&apos;t be changed
+                            right now. The name and description still save.
+                        </p>
+                    ) : null}
+
                     {modelNames.length ? (
                         <DialogField label="Default model" hint={`${optionCount} available`}>
-                            <Select value={defaultModel} onValueChange={(value) => edit({ defaultModel: value })}>
+                            <Select
+                                value={defaultModel}
+                                disabled={!configurable}
+                                onValueChange={(value) => edit({ defaultModel: value })}
+                            >
                                 <SelectTrigger>
                                     <SelectValue />
                                 </SelectTrigger>
@@ -252,6 +270,7 @@ export function HarnessProfileDialog({
                         <DialogField key={control.id} label={control.label} hint={control.description ?? undefined}>
                             <Select
                                 value={selections[control.selectionKey] ?? HARNESS_DEFAULT_VALUE}
+                                disabled={!configurable}
                                 onValueChange={(value) =>
                                     edit({ selections: { ...selections, [control.selectionKey]: value } })
                                 }

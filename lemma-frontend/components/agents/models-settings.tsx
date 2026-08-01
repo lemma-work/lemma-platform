@@ -770,7 +770,15 @@ function AgentHostHarnessRow({
                 <StatusBadge label={health.label} tone={usable ? 'ok' : 'muted'} />
             </div>
             {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
-            {!savedProfile && health.ready ? (
+            {/*
+             * Offered only when the computer can actually take the profile.
+             * Creating one binds it to a live harness — the backend reads the
+             * host's config options to validate the selections — so offering
+             * this against a sleeping laptop meant taking the user through the
+             * whole dialog and then failing on save. Everything else on this
+             * row still renders while offline; only creating is withheld.
+             */}
+            {!savedProfile && usable ? (
                 <div className="mt-2">
                     <Button
                         type="button"

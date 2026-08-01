@@ -34,6 +34,9 @@ use interprocess::local_socket::GenericNamespaced;
 use interprocess::local_socket::{prelude::*, Name, RecvHalf, SendHalf};
 
 const DEFAULT_HOSTED_URL: &str = "https://lemma.work";
+/// Port `cargo tauri dev` serves `frontendDist` on. A packaged build has no
+/// equivalent — it serves the same files from `tauri://localhost`.
+const DEV_ASSET_PORT: u16 = 1430;
 const MAX_INSTALL_LOG_BYTES: u64 = 1024 * 1024;
 // Must match locald's handshake revision. This prevents a newly installed
 // Desktop hotfix from silently reusing an older durable daemon with the same
@@ -1788,8 +1791,27 @@ fn main_window_showing_native_splash(app: &AppHandle) -> bool {
         .is_some_and(|url| native_splash_url(&url))
 }
 
+/// Where a bundled page lives for the build we are actually running.
+///
+/// A packaged app serves its own assets from `tauri://localhost`. Under
+/// `cargo tauri dev` there is no such origin: the CLI serves `frontendDist`
+/// over a loopback asset server on a fixed port, which is why
+/// `trusted_control_url` and `trusted_native_asset_url` below both carry the
+/// same development exception. The splash needs it too — navigating to
+/// `tauri://localhost/index.html` in a dev build lands on nothing, so the
+/// window sits white until the workspace URL replaces it a minute later, and
+/// every startup and install stage the splash exists to show is invisible.
+fn native_asset_url(path: &str) -> String {
+    if cfg!(debug_assertions) {
+        format!("http://127.0.0.1:{DEV_ASSET_PORT}/{path}")
+    } else {
+        format!("tauri://localhost/{path}")
+    }
+}
+
 fn native_splash_url(url: &tauri::Url) -> bool {
-    url.scheme() == "tauri" && matches!(url.path(), "/" | "/index.html")
+    let path = matches!(url.path(), "/" | "/index.html");
+    path && trusted_native_asset_url(url)
 }
 
 fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
@@ -1797,7 +1819,7 @@ fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
 }
 
 fn show_splash(app: &AppHandle) {
-    let _ = open_app_window(app, "tauri://localhost/index.html");
+    let _ = open_app_window(app, &native_asset_url("index.html"));
 }
 
 fn show_control_center(app: &AppHandle) -> Result<(), String> {
@@ -2224,26 +2246,18 @@ fn is_control_window_label(label: &str) -> bool {
 }
 
 fn trusted_control_url(url: &tauri::Url) -> bool {
-    let bundled = url.scheme() == "tauri"
-        && matches!(url.host_str(), None | Some("localhost"))
-        && url.path() == "/control.html";
-    // WebviewUrl::App is served by Tauri's fixed loopback asset server during
-    // `cargo tauri dev`. Keep this narrow exception out of release builds and
-    // accept only the exact asset host, port, and path used by the dev runner.
-    let development = cfg!(debug_assertions)
-        && url.scheme() == "http"
-        && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
-        && url.port() == Some(1430)
-        && url.path() == "/control.html";
-    bundled || development
+    trusted_native_asset_url(url) && url.path() == "/control.html"
 }
 
 fn trusted_native_asset_url(url: &tauri::Url) -> bool {
     let bundled = url.scheme() == "tauri" && matches!(url.host_str(), None | Some("localhost"));
+    // WebviewUrl::App is served by Tauri's fixed loopback asset server during
+    // `cargo tauri dev`. Keep this narrow exception out of release builds and
+    // accept only the exact asset host and port used by the dev runner.
     let development = cfg!(debug_assertions)
         && url.scheme() == "http"
         && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
-        && url.port() == Some(1430);
+        && url.port() == Some(DEV_ASSET_PORT);
     bundled || development
 }
 
@@ -2896,7 +2910,14 @@ fn navigation_disposition(
 ) -> NavigationDisposition {
     if is_desktop_browser_auth_url(url) {
         NavigationDisposition::OpenExternal
-    } else if url.scheme() == "tauri" {
+    } else if trusted_native_asset_url(url) {
+        // Our own bundled pages, whichever origin this build serves them from.
+        // Testing `scheme() == "tauri"` alone was right for a packaged app and
+        // silently wrong for a dev one: `cargo tauri dev` serves those same
+        // files over loopback http, and the local-mode branch below denies
+        // every local http destination that is not the workspace. So the
+        // splash was refused before it could paint, and the window stayed white
+        // until the workspace URL replaced it a minute later.
         NavigationDisposition::Allow
     } else if !matches!(url.scheme(), "http" | "https") {
         NavigationDisposition::Deny
@@ -4035,6 +4056,78 @@ mod tests {
         ));
         assert!(!native_splash_url(
             &tauri::Url::parse("tauri://localhost/control.html").unwrap()
+        ));
+    }
+
+    #[test]
+    fn the_splash_is_reachable_in_the_build_we_are_running() {
+        // `tauri://localhost` does not exist under `cargo tauri dev` — the CLI
+        // serves frontendDist over loopback instead. Navigating there anyway
+        // left the window white on "index.html not found" until the workspace
+        // URL replaced it a minute later, so every startup stage the splash
+        // exists to show went unseen.
+        let splash = tauri::Url::parse(&native_asset_url("index.html")).unwrap();
+        assert!(
+            native_splash_url(&splash),
+            "the URL show_splash navigates to must be recognised as the splash: {splash}"
+        );
+        assert!(
+            trusted_native_asset_url(&splash),
+            "and must be a trusted native asset origin: {splash}"
+        );
+        if cfg!(debug_assertions) {
+            assert_eq!(splash.port(), Some(DEV_ASSET_PORT));
+        } else {
+            assert_eq!(splash.scheme(), "tauri");
+        }
+    }
+
+    #[test]
+    fn the_splash_survives_the_navigation_gate_in_local_mode() {
+        // Local mode denies local http destinations that are not the workspace,
+        // which is what kept a dev build's splash off the screen: it is served
+        // over loopback http, so it looked exactly like the thing that rule
+        // exists to block.
+        let splash = tauri::Url::parse(&native_asset_url("index.html")).unwrap();
+        assert_eq!(
+            navigation_disposition(
+                &splash,
+                "local",
+                "http://app.lemma.localhost:52501",
+                "http://app.lemma.localhost:52502",
+            ),
+            NavigationDisposition::Allow,
+            "the splash must be allowed to load: {splash}"
+        );
+    }
+
+    #[test]
+    fn local_mode_still_denies_a_local_destination_that_is_not_ours() {
+        // The allowance above must not become a hole: an arbitrary loopback
+        // port is still refused in local mode.
+        assert_eq!(
+            navigation_disposition(
+                &tauri::Url::parse("http://127.0.0.1:9999/").unwrap(),
+                "local",
+                "http://app.lemma.localhost:52501",
+                "http://app.lemma.localhost:52502",
+            ),
+            NavigationDisposition::Deny
+        );
+    }
+
+    #[test]
+    fn the_dev_asset_origin_is_still_refused_for_anything_but_bundled_pages() {
+        // The development exception widens the trusted origin; it must not
+        // widen what a *remote* page can reach.
+        assert!(!trusted_native_asset_url(
+            &tauri::Url::parse("http://127.0.0.1:3000/index.html").unwrap()
+        ));
+        assert!(!trusted_control_url(
+            &tauri::Url::parse(&native_asset_url("index.html")).unwrap()
+        ));
+        assert!(trusted_control_url(
+            &tauri::Url::parse(&native_asset_url("control.html")).unwrap()
         ));
     }
 
