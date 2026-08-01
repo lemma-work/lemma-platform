@@ -1218,6 +1218,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "futures-util",
  "getrandom 0.3.4",
  "hex",
  "predicates",

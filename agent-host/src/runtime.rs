@@ -12,7 +12,7 @@ use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -325,6 +325,12 @@ struct TargetWorker {
     refused_heartbeats: HashSet<Uuid>,
     draining: bool,
     refresh_due: std::time::Instant,
+    /// Enriched harnesses from probes that ran off the poll loop's critical
+    /// path. Drained each iteration so a slow probe never delays a heartbeat.
+    probed: (
+        mpsc::UnboundedSender<Vec<PublishedHarness>>,
+        mpsc::UnboundedReceiver<Vec<PublishedHarness>>,
+    ),
 }
 
 impl TargetWorker {
@@ -362,6 +368,7 @@ impl TargetWorker {
             refused_heartbeats: HashSet::new(),
             draining,
             refresh_due: std::time::Instant::now(),
+            probed: mpsc::unbounded_channel(),
         })
     }
 
@@ -374,14 +381,11 @@ impl TargetWorker {
             }
             self.reap_finished().await;
             self.apply_local_controls()?;
+            while let Ok(published) = self.probed.1.try_recv() {
+                self.store_published(published);
+            }
             if self.refresh_due <= std::time::Instant::now() {
-                if let Err(error) = self.refresh_harnesses().await {
-                    tracing::warn!(
-                        target = %self.target.name,
-                        %error,
-                        "harness refresh failed"
-                    );
-                }
+                self.refresh_harnesses();
                 self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
             }
             if let Err(error) = self.flush_events().await {
@@ -733,40 +737,98 @@ impl TargetWorker {
         Ok(())
     }
 
-    async fn refresh_harnesses(&mut self) -> anyhow::Result<()> {
-        let mut snapshots = self.manifest.discover();
-        for snapshot in &mut snapshots {
-            if snapshot.health != HarnessHealth::Ready {
-                continue;
+    /// Publish what this machine can run, cheaply first and fully second.
+    ///
+    /// This is the first thing the worker loop does, and until it returns the
+    /// host has not polled once - so it has no heartbeat, the workspace reports
+    /// it OFFLINE, and creating a profile against it is refused. Probing is
+    /// what makes that slow: every probe spawns the agent, runs an ACP
+    /// `initialize` and `session/new`, and waits up to 20s. Serially, over four
+    /// adapters with one that times out, a cold start took 47s to first
+    /// heartbeat, measured.
+    ///
+    /// So the cheap half - which adapters exist and resolve - is published on
+    /// its own first, and the probes then run concurrently rather than one
+    /// after another. The machine appears with its agents almost immediately;
+    /// their config options arrive a moment later.
+    fn refresh_harnesses(&mut self) {
+        let client = self.client.clone();
+        let sender = self.probed.0.clone();
+        // Everything the spawned work needs, taken before the task is built:
+        // it outlives this borrow of `self`.
+        let manifest = self.manifest.clone();
+        let driver = Arc::clone(&self.driver);
+        let probe_root = self.paths.root.join("probe");
+        let discover_manifest = manifest.clone();
+        let discover_client = client.clone();
+        let discover_sender = sender.clone();
+        let build_probes = move |discovered: Vec<HarnessSnapshot>| {
+            discovered.into_iter().map(move |mut snapshot| {
+                let manifest = manifest.clone();
+                let driver = Arc::clone(&driver);
+                let scratch = probe_root.join(&snapshot.harness_key);
+                async move {
+                    if snapshot.health != HarnessHealth::Ready {
+                        return snapshot;
+                    }
+                    let Ok(adapter) = manifest.resolve(&snapshot.harness_key) else {
+                        return snapshot;
+                    };
+                    match tokio::time::timeout(
+                        Duration::from_secs(20),
+                        driver.probe(adapter, scratch),
+                    )
+                    .await
+                    {
+                        Ok(Ok(probe)) => {
+                            snapshot.config_options = probe.config_options;
+                            snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
+                            snapshot.config_revision = snapshot_revision(&snapshot);
+                        }
+                        Ok(Err(error)) => {
+                            snapshot.health = HarnessHealth::ProbeFailed;
+                            snapshot.stale_reason = Some(redact_error(&error.to_string()));
+                        }
+                        Err(_) => {
+                            snapshot.health = HarnessHealth::ProbeFailed;
+                            snapshot.stale_reason = Some("ACP probe timed out".to_owned());
+                        }
+                    }
+                    snapshot
+                }
+            })
+        };
+        // Spawned, never awaited. Discovery runs each adapter's binary just to
+        // read its version, and probing then opens a whole ACP session per
+        // adapter. Doing either before the first poll left the host with no
+        // heartbeat for 47 seconds, so the workspace called a working machine
+        // OFFLINE and refused to bind a profile to it.
+        tokio::spawn(async move {
+            let discovered = discover_manifest.discover();
+            match discover_client.publish_harnesses(discovered.clone()).await {
+                Ok(published) => {
+                    let _ = discover_sender.send(published);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "publishing discovered harnesses failed");
+                    return;
+                }
             }
-            let Ok(adapter) = self.manifest.resolve(&snapshot.harness_key) else {
-                continue;
-            };
-            let scratch = self.paths.root.join("probe").join(&snapshot.harness_key);
-            match tokio::time::timeout(Duration::from_secs(20), self.driver.probe(adapter, scratch))
-                .await
-            {
-                Ok(Ok(probe)) => {
-                    snapshot.config_options = probe.config_options;
-                    snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
-                    snapshot.config_revision = snapshot_revision(snapshot);
+            let enriched = futures_util::future::join_all(build_probes(discovered)).await;
+            match client.publish_harnesses(enriched).await {
+                Ok(published) => {
+                    let _ = sender.send(published);
                 }
-                Ok(Err(error)) => {
-                    snapshot.health = HarnessHealth::ProbeFailed;
-                    snapshot.stale_reason = Some(redact_error(&error.to_string()));
-                }
-                Err(_) => {
-                    snapshot.health = HarnessHealth::ProbeFailed;
-                    snapshot.stale_reason = Some("ACP probe timed out".to_owned());
-                }
+                Err(error) => tracing::warn!(%error, "publishing probed harnesses failed"),
             }
-        }
-        let published = self.client.publish_harnesses(snapshots).await?;
+        });
+    }
+
+    fn store_published(&mut self, published: Vec<PublishedHarness>) {
         self.harnesses = published
             .into_iter()
             .map(|harness| (harness.id, harness))
             .collect();
-        Ok(())
     }
 
     /// The control updates due for delivery, minus the ones Lemma refuses.

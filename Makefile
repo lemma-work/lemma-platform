@@ -14,7 +14,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init dev dev-public agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
         _ensure-native-connectors \
         test-dev-workflow \
@@ -530,16 +530,28 @@ dev-public:
 # `make dev` and hard-fail for anyone without a Rust toolchain; and it is meant
 # to outlive individual dev-stack restarts rather than be swept by `make stop`.
 # So `make dev` prints one line pointing here, and this target is that one line.
+stop-agent-host:
+	@# The managed background service first: it is what re-appears on its own.
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		launchctl bootout gui/$$(id -u)/ai.lemma.agent-host >/dev/null 2>&1 || true; \
+	else \
+		systemctl --user stop lemma-agent-host >/dev/null 2>&1 || true; \
+	fi
+	@pkill -f 'lemma-agent-host serve' >/dev/null 2>&1 || true
+
 agent-host:
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Building Agent Host…"
 	@cd $(AGENT_HOST_DIR) && cargo build --quiet
-	@# Two hosts polling the same target fight over one credential, and the
-	@# loser's shutdown writes available_runs=0 — which the server reads as
-	@# DRAINING, so the workspace shows a healthy machine as unavailable. Only
-	@# ever run the binary this target just built.
-	@pkill -f 'lemma-agent-host serve' >/dev/null 2>&1 || true
+	@# Only ever run the binary this target just built. Two hosts polling the
+	@# same target fight over one credential, and the loser's shutdown writes
+	@# available_runs=0 — which the server reads as DRAINING, so the workspace
+	@# shows a healthy machine as unavailable. The background service counts:
+	@# `lemma agent-host connect` installs a launchd/systemd job pinned to a
+	@# downloaded release, which then runs alongside this one, speaking an
+	@# older protocol against the same pairing.
+	@$(MAKE) --no-print-directory stop-agent-host
 	@echo "→ Pairing with $(DEV_BACKEND_URL) (no-op if already paired)…"
 	@# `lemma agent-host connect` mints a pairing code from the CLI's own login
 	@# and consumes it immediately, so pairing is this one command.
