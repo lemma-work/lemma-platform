@@ -138,6 +138,10 @@ async fn main() -> anyhow::Result<()> {
         .map_or_else(HostPaths::platform_default, Ok)?;
     match cli.command {
         Command::Serve => {
+            // Exactly one host per data directory. Two would poll the same
+            // pairing, split commands between them, and each mark the machine
+            // draining as it exits.
+            let _single = paths.lock_single_instance()?;
             let config = HostConfig::load_or_create(&paths)?;
             HostRuntime::new(config, paths)?.serve().await
         }

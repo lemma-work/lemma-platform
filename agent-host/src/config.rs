@@ -13,6 +13,21 @@ pub struct HostPaths {
     pub journal: PathBuf,
     pub log: PathBuf,
     pub adapters: PathBuf,
+    pub lock: PathBuf,
+}
+
+/// Proof that this process is the only Agent Host for its data directory.
+///
+/// One process serves every paired workspace, so two of them mean two pollers
+/// on one credential: whichever wins a command runs it, and whichever exits
+/// first reports `available_runs = 0` and marks the machine DRAINING. The
+/// symptoms are a workspace that flaps between online and unavailable and
+/// dispatch latency that looks random. Held for the lifetime of `serve`; the
+/// operating system drops it if the process dies, so there is no stale PID to
+/// clean up.
+#[derive(Debug)]
+pub struct SingleInstance {
+    _file: std::fs::File,
 }
 
 impl HostPaths {
@@ -48,12 +63,40 @@ impl HostPaths {
             journal: root.join("journal.sqlite3"),
             log: root.join("agent-host.log"),
             adapters: root.join("adapters"),
+            lock: root.join("agent-host.lock"),
             root,
         }
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.root)
+    }
+
+    /// Take the single-instance lock, or explain who already holds it.
+    ///
+    /// `File::try_lock` is an advisory OS lock: `Err(WouldBlock)` means another
+    /// process holds it, and it is released automatically when that process
+    /// dies — so unlike a PID file there is nothing stale to clean up after a
+    /// crash.
+    pub fn lock_single_instance(&self) -> anyhow::Result<SingleInstance> {
+        self.ensure()?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&self.lock)?;
+        // fs4 rather than the std inherent method: that one is stable only
+        // from 1.89 and this crate supports 1.88.
+        if fs4::FileExt::try_lock(&file).is_err() {
+            anyhow::bail!(
+                "another Agent Host is already serving {}. Stop it first \
+                 (`lemma agent-host stop`, or quit the other process); running two \
+                 against one workspace makes them fight over the same pairing.",
+                self.root.display()
+            );
+        }
+        Ok(SingleInstance { _file: file })
     }
 }
 
@@ -202,6 +245,34 @@ impl HostConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn a_second_agent_host_cannot_serve_the_same_data_directory() {
+        // Two hosts share one pairing: commands split between them at random,
+        // and whichever exits first reports available_runs=0 and marks the
+        // machine draining. The workspace then flaps and dispatch latency looks
+        // random, which is exactly what it did.
+        let directory = TempDir::new().unwrap();
+        let paths = HostPaths::under(directory.path());
+
+        let first = paths
+            .lock_single_instance()
+            .expect("first host takes the lock");
+
+        let second = paths.lock_single_instance();
+        assert!(second.is_err(), "a second host was allowed to serve");
+        let message = second.unwrap_err().to_string();
+        assert!(
+            message.contains("already serving"),
+            "unhelpful message: {message}"
+        );
+
+        // Releasing it lets the next process in, so a restart is not blocked by
+        // its predecessor.
+        drop(first);
+        assert!(paths.lock_single_instance().is_ok());
+    }
 
     #[test]
     fn rejects_remote_plain_http() {

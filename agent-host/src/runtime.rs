@@ -29,6 +29,9 @@ use crate::protocol::{
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// How long a queued command waits for the first harness publish before it is
+/// rejected. Generous: probing every adapter can genuinely take this long.
+const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(60);
 const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
@@ -325,6 +328,7 @@ struct TargetWorker {
     refused_heartbeats: HashSet<Uuid>,
     draining: bool,
     refresh_due: std::time::Instant,
+    events_ready: Arc<tokio::sync::Notify>,
     /// Enriched harnesses from probes that ran off the poll loop's critical
     /// path. Drained each iteration so a slow probe never delays a heartbeat.
     probed: (
@@ -368,6 +372,7 @@ impl TargetWorker {
             refused_heartbeats: HashSet::new(),
             draining,
             refresh_due: std::time::Instant::now(),
+            events_ready: Arc::new(tokio::sync::Notify::new()),
             probed: mpsc::unbounded_channel(),
         })
     }
@@ -402,7 +407,20 @@ impl TargetWorker {
                 active_runs: active,
                 available_runs: if self.draining { 0 } else { available },
             };
-            match self.poll_target(capacity).await {
+            // The poll blocks for up to 25s server-side. A run finishing inside
+            // that window used to have its output sit in the journal until the
+            // poll returned — the agent answered in 8s and the conversation
+            // still waited 20+. Abandon the wait as soon as a run has something
+            // to send; the next iteration flushes it and polls again.
+            let events_ready = Arc::clone(&self.events_ready);
+            let polled = tokio::select! {
+                result = self.poll_target(capacity) => Some(result),
+                () = events_ready.notified() => None,
+            };
+            let Some(polled) = polled else {
+                continue;
+            };
+            match polled {
                 Ok(response) => {
                     retry = RETRY_MIN;
                     self.journal
@@ -412,6 +430,15 @@ impl TargetWorker {
                     }
                     if response.host_status == HostStatus::UpgradeRequired {
                         anyhow::bail!("target requires a newer Agent Host protocol");
+                    }
+                    if !response.commands.is_empty() {
+                        // Harnesses now publish off the poll path, so the very
+                        // first commands can arrive before that publish lands.
+                        // Rejecting them as HARNESS_NOT_FOUND is permanent and
+                        // wrong: the machine has the agent, it just has not said
+                        // so yet. Wait for the publish instead — bounded, and
+                        // only when there is work that needs it.
+                        self.await_first_harnesses().await;
                     }
                     for command in response.commands {
                         if let Err(error) = self.handle_command(&command) {
@@ -465,6 +492,28 @@ impl TargetWorker {
         self.target.draining = current.draining;
         self.target.refresh_generation = current.refresh_generation;
         Ok(())
+    }
+
+    /// Block until the first harness publish lands, at most once and bounded.
+    ///
+    /// Only ever called when a command is in hand: the heartbeat must never
+    /// wait on discovery, which is the whole reason publishing moved off the
+    /// poll path.
+    async fn await_first_harnesses(&mut self) {
+        if !self.harnesses.is_empty() {
+            return;
+        }
+        let deadline = tokio::time::Instant::now() + FIRST_HARNESS_WAIT;
+        while self.harnesses.is_empty() {
+            match tokio::time::timeout_at(deadline, self.probed.1.recv()).await {
+                Ok(Some(published)) => self.store_published(published),
+                Ok(None) => return,
+                Err(_) => {
+                    tracing::warn!("no harnesses published yet; the command will be rejected");
+                    return;
+                }
+            }
+        }
     }
 
     fn handle_command(&mut self, command: &Command) -> anyhow::Result<()> {
@@ -531,6 +580,7 @@ impl TargetWorker {
         let mcp_bridge_executable = self.mcp_bridge_executable.clone();
         let paths = self.paths.clone();
         let permissions = self.permissions.clone();
+        let events_ready = Arc::clone(&self.events_ready);
         let run_id = spec.agent_run_id;
         let handle = tokio::spawn(async move {
             let _permit = permit;
@@ -578,6 +628,7 @@ impl TargetWorker {
                 lease_epoch,
                 provider_seen: AtomicBool::new(false),
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
+                events_ready: Arc::clone(&events_ready),
             });
             let remaining = (spec.run_deadline - Utc::now())
                 .to_std()
@@ -760,8 +811,6 @@ impl TargetWorker {
         let driver = Arc::clone(&self.driver);
         let probe_root = self.paths.root.join("probe");
         let discover_manifest = manifest.clone();
-        let discover_client = client.clone();
-        let discover_sender = sender.clone();
         let build_probes = move |discovered: Vec<HarnessSnapshot>| {
             discovered.into_iter().map(move |mut snapshot| {
                 let manifest = manifest.clone();
@@ -803,17 +852,16 @@ impl TargetWorker {
         // adapter. Doing either before the first poll left the host with no
         // heartbeat for 47 seconds, so the workspace called a working machine
         // OFFLINE and refused to bind a profile to it.
+        //
+        // Published exactly once, after probing. An earlier revision published
+        // the unprobed snapshots first so the agents would appear sooner — but
+        // an unprobed snapshot has no `config_options`, and publishing it
+        // *replaced* the probed ones. Every saved `config_selections` key then
+        // failed validation as "unknown configuration selection". Getting the
+        // machine online is what the poll does; the harnesses can wait for
+        // their probe.
         tokio::spawn(async move {
             let discovered = discover_manifest.discover();
-            match discover_client.publish_harnesses(discovered.clone()).await {
-                Ok(published) => {
-                    let _ = discover_sender.send(published);
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "publishing discovered harnesses failed");
-                    return;
-                }
-            }
             let enriched = futures_util::future::join_all(build_probes(discovered)).await;
             match client.publish_harnesses(enriched).await {
                 Ok(published) => {
@@ -1209,6 +1257,11 @@ struct JournalCallbacks {
     lease_epoch: u32,
     provider_seen: AtomicBool,
     stream_segments: std::sync::Mutex<StreamSegments>,
+    /// Raised whenever this run journals an event, so the poll loop stops
+    /// waiting and flushes. Without it a run's output sits in the journal until
+    /// the current 25s long poll returns — the agent answered in eight seconds
+    /// and the conversation still waited twenty.
+    events_ready: Arc<tokio::sync::Notify>,
 }
 
 /// Accumulated per-kind streamed text awaiting a full-text upsert.
@@ -1255,6 +1308,7 @@ impl JournalCallbacks {
             None,
             payload,
         )?;
+        self.events_ready.notify_one();
         Ok(())
     }
 
@@ -1318,6 +1372,7 @@ impl AcpCallbacks for JournalCallbacks {
                     object_id,
                     payload,
                 )?;
+                self.events_ready.notify_one();
             }
             _ => {
                 self.flush_stream_segments()?;
@@ -1329,6 +1384,7 @@ impl AcpCallbacks for JournalCallbacks {
                     object_id,
                     payload,
                 )?;
+                self.events_ready.notify_one();
             }
         }
         Ok(())
@@ -2169,6 +2225,7 @@ mod stream_upsert_tests {
             lease_epoch: 1,
             provider_seen: AtomicBool::new(true),
             stream_segments: std::sync::Mutex::new(StreamSegments::default()),
+            events_ready: Arc::new(tokio::sync::Notify::new()),
         };
         (directory, callbacks, run_id)
     }
