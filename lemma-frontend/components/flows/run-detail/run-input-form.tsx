@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, XCircle } from '@/components/ui/icons';
+import { XCircle } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { WorkflowNode } from '@/lib/types';
 import { formDefaults, isRecord } from '../run-format';
+import { StepLoader } from '@/components/brand/loader';
 
 export function RunInputForm({
     nodeId,
@@ -142,8 +143,8 @@ export function RunInputForm({
                         {error}
                     </div>
                 ) : null}
-                <Button type="submit" size="sm" className="gap-2" disabled={isSubmitting}>
-                    {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                <Button variant="primary" type="submit" size="sm" className="gap-2" disabled={isSubmitting}>
+                    {isSubmitting ? <StepLoader size="sm" /> : null}
                     {nextNodeLabel ? `Continue to ${nextNodeLabel}` : 'Submit and continue'}
                 </Button>
             </form>

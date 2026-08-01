@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { ArrowLeft, ArrowUpRight } from '@/components/ui/icons';
 import { Logo } from '@/components/brand/logo';
+import { copyrightNotice } from '@/lib/company';
 import { config } from '@/lib/config';
 import type { LegalDocument } from '@/lib/data/legal';
 
@@ -154,7 +155,7 @@ export function LegalPage({ document }: LegalPageProps) {
 
             <footer className="border-t border-[var(--row-border)] px-5 py-8 sm:px-8 lg:px-10">
                 <div className="mx-auto flex max-w-[1180px] flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-sm text-[var(--text-secondary)]">© {new Date().getFullYear()} Lemma. All rights reserved.</p>
+                    <p className="text-sm text-[var(--text-secondary)]">{copyrightNotice()} All rights reserved.</p>
                     <div className="flex flex-wrap items-center gap-5">
                         {footerLinks.map((link) => (
                             <Link

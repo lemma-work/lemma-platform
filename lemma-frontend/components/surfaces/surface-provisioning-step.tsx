@@ -1,10 +1,11 @@
 'use client';
 
-import { AlertTriangle, CheckCircle2, ExternalLink, Loader2 } from '@/components/ui/icons';
+import { AlertTriangle, CheckCircle2, ExternalLink } from '@/components/ui/icons';
 import QRCode from 'react-qr-code';
 
 import { Button } from '@/components/ui/button';
 import type { TelegramManagedBotSetupResponse } from 'lemma-sdk';
+import { StepLoader } from '@/components/brand/loader';
 
 /**
  * Waiting while Telegram hands the user a bot of their own.
@@ -38,7 +39,7 @@ export function SurfaceProvisioningStep({
                             ? 'That setup expired before it finished.'
                             : 'Telegram couldn’t finish creating the bot.')}
                 </p>
-                <Button type="button" variant="outline" size="sm" className="w-fit" onClick={onRetry}>
+                <Button type="button" variant="secondary" size="sm" className="w-fit" onClick={onRetry}>
                     Start again
                 </Button>
             </div>
@@ -57,7 +58,7 @@ export function SurfaceProvisioningStep({
     return (
         <div className="grid gap-3">
             <p className="surface-verdict">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <StepLoader size="xs" />
                 Waiting for you to name it in Telegram…
             </p>
 
@@ -71,7 +72,7 @@ export function SurfaceProvisioningStep({
                             Telegram will ask for a name and a username. Scan this on your phone or
                             open it here — this window updates by itself when you’re done.
                         </p>
-                        <Button type="button" size="xs" variant="outline" className="mt-2" asChild>
+                        <Button type="button" size="xs" variant="secondary" className="mt-2" asChild>
                             <a href={launchUrl} target="_blank" rel="noreferrer">
                                 Open Telegram <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
                             </a>

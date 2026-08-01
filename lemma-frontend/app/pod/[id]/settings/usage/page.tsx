@@ -1,12 +1,12 @@
 'use client';
 
 import { use } from 'react';
-import { Loader2 } from '@/components/ui/icons';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { UsageOverview } from '@/components/usage/usage-overview';
 import { usePod } from '@/lib/hooks/use-pods';
+import { FieldRowsSkeleton } from '@/components/shared/loading';
 
 export default function PodUsagePage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -23,10 +23,8 @@ function PodUsagePageContent({ params }: { params: Promise<{ id: string }> }) {
 
     if (isLoading) {
         return (
-            <div className="context-shell flex min-h-full items-center justify-center bg-transparent">
-                <div className="surface-panel px-5 py-4">
-                    <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-                </div>
+            <div className="context-shell min-h-full bg-transparent">
+                <FieldRowsSkeleton rows={5} className="max-w-2xl" />
             </div>
         );
     }

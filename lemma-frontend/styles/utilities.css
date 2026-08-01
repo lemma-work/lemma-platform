@@ -14,6 +14,14 @@
       0 0 0 2px color-mix(in srgb, var(--action-primary) 9%, transparent);
   }
 
+  /* Same treatment for wrappers that own the border around a bare input, so the
+     container lights up when the input inside it takes focus. */
+  .custom-focus-ring-within:focus-within {
+    border-color: color-mix(in srgb, var(--action-primary) 28%, var(--border-default));
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--action-primary) 9%, transparent);
+  }
+
   /* ── TRANSITION GENTLE
      Standard multi-property transition for interactive elements.
      Covers the most common transitioned properties. */
@@ -1997,6 +2005,14 @@
 
   /* ── BRAND LOADER — Step Rise
      Individual bars used by <StepLoader />. Animated via step-rise keyframe. */
+  /* `:where()` keeps this at zero specificity so a `text-*` utility on the same
+     element wins. The bars take `currentColor`, which is what lets the loader
+     sit inside a primary button or a tertiary status line and be the right
+     colour without a second variant. */
+  :where(.lemma-step-loader) {
+    color: var(--action-primary);
+  }
+
   .lemma-step-loader {
     display: inline-flex;
     align-items: flex-end;
@@ -2005,28 +2021,43 @@
 
   .lemma-step-loader-xs {
     gap: 3px;
-    height: 18px;
   }
 
   .lemma-step-loader-sm {
     gap: 4px;
-    height: 24px;
   }
 
   .lemma-step-loader-md {
     gap: 5px;
-    height: 36px;
   }
 
   .lemma-step-loader-lg {
     gap: 6px;
+  }
+
+  /* Heights at zero specificity, so a caller can pass `h-3.5` and have the
+     loader match the icons it sits beside. A status row whose height changes the
+     moment a step starts running is the same jerk in miniature. */
+  :where(.lemma-step-loader-xs) {
+    height: 18px;
+  }
+
+  :where(.lemma-step-loader-sm) {
+    height: 24px;
+  }
+
+  :where(.lemma-step-loader-md) {
+    height: 36px;
+  }
+
+  :where(.lemma-step-loader-lg) {
     height: 48px;
   }
 
   .lemma-step-bar {
     display: block;
     border-radius: 2px;
-    background: var(--action-primary);
+    background: currentColor;
     animation: step-rise 1.8s var(--ease-out) infinite;
     transform-origin: bottom;
     height: 4px;
@@ -2156,19 +2187,121 @@
     filter: drop-shadow(0 10px 26px color-mix(in srgb, var(--delight) 18%, transparent));
   }
 
+  /* No border. A placeholder stands in for a line of text or a filled control,
+     and neither of those has an outline — a hairline around every bar turns a
+     paragraph into a stack of little boxes, and once the fill became visible the
+     border read as a light ring around a darker shape. Borders belong to the
+     containers a skeleton sits inside (the card, the table frame, the tab
+     strip), which are real chrome and stay put when data lands. */
   .lemma-skeleton {
     position: relative;
     overflow: hidden;
-    border: 1px solid color-mix(in srgb, var(--border-subtle) 64%, transparent);
+    /* Tinted off the ink, not off `--surface-2`. On a white card `--surface-2`
+       is a ~3% step and the old mix pushed it *further* toward transparent, so
+       placeholders were all but invisible on exactly the surfaces that use them
+       most. A skeleton nobody can see is the same as no skeleton. */
     background:
       linear-gradient(
         90deg,
-        color-mix(in srgb, var(--surface-2) 82%, transparent) 0%,
-        color-mix(in srgb, var(--surface-1) 96%, var(--brand-warm) 4%) 48%,
-        color-mix(in srgb, var(--surface-2) 82%, transparent) 100%
+        color-mix(in srgb, var(--text-primary) 9%, var(--surface-2)) 0%,
+        color-mix(in srgb, var(--text-primary) 4%, var(--surface-2)) 48%,
+        color-mix(in srgb, var(--text-primary) 9%, var(--surface-2)) 100%
       );
     background-size: 220% 100%;
     animation: lemma-skeleton-breathe 1800ms var(--ease-out) infinite;
+  }
+
+  /* ── ASYNC REGION — one box, three fills
+     The wrapper for <AsyncRegion />. It owns nothing visual of its own; the
+     settled layout still decides the box. What lives here is the transition
+     between fills, and the one affordance a refresh gets. */
+  .lemma-async-region {
+    min-width: 0;
+  }
+
+  /* The fade has to *restart* when the fill changes, and the element persists
+     across that change — so the state selectors carry three identical
+     keyframes under three names. Changing `animation-name` is what re-runs it;
+     a shared name would play once on mount and never again. */
+  .lemma-async-region[data-state="loading"] {
+    animation: lemma-async-enter-loading var(--dur-control) var(--ease-out) both;
+  }
+
+  .lemma-async-region[data-state="empty"] {
+    animation: lemma-async-enter-empty var(--dur-control) var(--ease-out) both;
+  }
+
+  .lemma-async-region[data-state="ready"] {
+    animation: lemma-async-enter-ready var(--dur-control) var(--ease-out) both;
+  }
+
+  /* A refetch over content we already have. It dims rather than disappearing:
+     stale rows you can still read beat a placeholder that says less. Available
+     outside <AsyncRegion /> too, for regions that own their own branch. */
+  [data-refreshing="true"] {
+    opacity: 0.62;
+    transition: opacity var(--dur-control) var(--ease-out);
+  }
+
+  /* Placeholders do not perform the arrival animation — otherwise you watch the
+     same reveal twice, once for the skeleton and once for the real card. */
+  [data-skeleton="true"],
+  .resource-index-grid > [data-skeleton="true"] {
+    animation: none;
+    pointer-events: none;
+  }
+
+  .resource-index-grid > .resource-index-card[data-skeleton="true"]:hover {
+    border-color: color-mix(in srgb, var(--border-subtle) 74%, transparent);
+    background: var(--surface-1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lemma-skeleton {
+      animation: none;
+      opacity: 0.86;
+    }
+
+    .lemma-async-region[data-state="loading"],
+    .lemma-async-region[data-state="empty"],
+    .lemma-async-region[data-state="ready"] {
+      animation: none;
+    }
+  }
+
+  /* ── LIVENESS, NOT LOADING
+     A status dot that says "this is running right now" is a different claim from
+     a placeholder that says "content is coming". They used to share
+     `animate-pulse`, which made the two indistinguishable in the markup and let
+     ad-hoc pulses spread into places that wanted a skeleton. Named, so the lint
+     rule can ban the raw utility and still leave liveness alone. */
+  .lemma-live-pulse {
+    animation: lemma-live-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  /* Rotation as an *affordance* — a refresh control turning while it refreshes.
+     Also not loading: there is content on screen the whole time. */
+  .lemma-spin {
+    animation: lemma-spin 1s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lemma-live-pulse,
+    .lemma-spin {
+      animation: none;
+    }
+  }
+
+  /* The thinking line holds its height from the moment a turn starts; only the
+     label fades in once the 350ms grace has passed. */
+  .lemma-assistant-thinking > * {
+    animation: lemma-async-enter-ready var(--dur-control) var(--ease-out) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lemma-assistant-thinking > * {
+      animation: none;
+    }
   }
 
   .lemma-mark,

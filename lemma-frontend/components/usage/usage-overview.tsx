@@ -1,11 +1,11 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { AlertCircle, BarChart3, Loader2, ReceiptText } from '@/components/ui/icons';
+import { AlertCircle, BarChart3, ReceiptText } from '@/components/ui/icons';
 
 import { Badge } from '@/components/ui/badge';
 import { ResourceMetric, ResourceMetricStrip } from '@/components/pod/resource-layout';
-import { InlineEmptyState } from '@/components/shared/empty-state';
+import { EmptyState } from '@/components/shared/empty-state';
 import {
     Select,
     SelectContent,
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/select';
 import { useRecentUsage, useUsageLimits, useUsageStats, useUsageSummary } from '@/lib/hooks/use-usage';
 import type { UsageLimits, UsageRecord, UsageStats, UsageSummary } from '@/lib/types';
+import { Skeleton } from '@/components/shared/loading';
 
 type UsageScope = 'organization' | 'pod';
 
@@ -71,8 +72,20 @@ export function UsageOverview({ organizationId, podId, scope }: UsageOverviewPro
             {error ? <UsageError error={error} /> : null}
 
             {isLoading ? (
-                <div className="surface-panel flex min-h-[18rem] items-center justify-center">
-                    <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(21rem,0.75fr)]">
+                    <div className="surface-panel min-h-[18rem] p-4">
+                        <Skeleton shape="block" className="h-4 w-32" />
+                        <Skeleton shape="block" className="mt-4 h-[13rem] w-full" />
+                    </div>
+                    <div className="surface-panel min-h-[18rem] p-4">
+                        <Skeleton shape="block" className="h-4 w-28" />
+                        <div className="mt-4 space-y-3">
+                            <Skeleton className="h-3 w-full" />
+                            <Skeleton className="h-3 w-4/5" />
+                            <Skeleton className="h-3 w-3/5" />
+                            <Skeleton className="h-3 w-2/3" />
+                        </div>
+                    </div>
                 </div>
             ) : (
                 <>
@@ -133,7 +146,7 @@ function UsageTrend({ stats }: { stats?: UsageStats }) {
             </div>
 
             {buckets.length === 0 ? (
-                <InlineEmptyState
+                <EmptyState variant="inline"
                     icon={<BarChart3 className="h-4 w-4" />}
                     title="No trend yet"
                     description="Usage will appear here after this scope has activity in the selected window."
@@ -215,7 +228,7 @@ function RecentUsageList({ records }: { records: UsageRecord[] }) {
             </div>
 
             {records.length === 0 ? (
-                <InlineEmptyState
+                <EmptyState variant="inline"
                     icon={<ReceiptText className="h-4 w-4" />}
                     title="No usage events yet"
                     description="Recent model and tool activity will appear here."

@@ -2,11 +2,11 @@
 
 import { use } from 'react';
 
-import { SectionPrimer } from '@/components/education/section-primer';
+import { ConceptHint } from '@/components/education/concept-hint';
 import { ConnectorsView } from '@/components/connectors/connectors-view';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
-import { StepLoader } from '@/components/brand/loader';
 import { usePod } from '@/lib/hooks/use-pods';
+import { StepLoader } from '@/components/brand/loader';
 
 export default function PodConnectorsPage({ params }: { params: Promise<{ id: string }> }) {
     const { id: podId } = use(params);
@@ -24,9 +24,8 @@ export default function PodConnectorsPage({ params }: { params: Promise<{ id: st
         <ResourceIndexShell>
             <ResourceHeader
                 title="Connectors"
-                meta={<span>{pod?.name || 'Pod'}</span>}
+                meta={<ConceptHint concept="connector" />}
             />
-            <SectionPrimer concept="connector" className="mb-4" />
             <ConnectorsView
                 embedded
                 showHeader={false}

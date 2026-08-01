@@ -3,32 +3,26 @@
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
-import { CheckCircle2, ExternalLink, Loader2, Plug, RefreshCw } from '@/components/ui/icons';
-import Image from 'next/image';
+import { Check, ExternalLink, RefreshCw } from '@/components/ui/icons';
 import type { Account, Connector } from '@/lib/types';
+import { ConnectorIcon } from './connector-icon';
 import {
     getAccountStatusMeta,
-    getAppLabel,
     getPrimaryCapability,
     usesDirectCredentials,
 } from './connector-utils';
+import { StepLoader } from '@/components/brand/loader';
 
-function ConnectorIcon({ icon, alt }: { icon?: string | null; alt: string }) {
-    if (icon) {
-        return (
-            <div className="relative h-10 w-10 shrink-0 rounded-lg bg-transparent p-1.5">
-                <Image src={icon} alt={alt} fill className="object-contain p-1" />
-            </div>
-        );
-    }
-    return (
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[color:color-mix(in_srgb,var(--surface-2)_46%,transparent)]">
-            <Plug className="h-5 w-5 text-[var(--text-tertiary)]" />
-        </div>
-    );
-}
-
-export function ConnectorCard({
+/**
+ * A catalog entry. Rows rather than cards: the catalog is something you scan for
+ * a name you already have in mind, and 79 equal-weight cards with a full-width
+ * button each reads as a table of records, not a set of apps.
+ *
+ * Connected state lives next to the name, which leaves the action zone holding
+ * exactly one control at a fixed width — that's what keeps the buttons on a
+ * common right edge across both columns.
+ */
+export function ConnectorRow({
     app,
     isConnected,
     isBusy,
@@ -45,64 +39,70 @@ export function ConnectorCard({
 }) {
     const capability = getPrimaryCapability(app);
     const connectsWithCredentials = usesDirectCredentials(capability);
+    const label = app.title || app.name || app.id;
 
     return (
-        <div className="resource-index-card group p-4">
-            <div className="mb-3 flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3">
-                    <ConnectorIcon icon={app.icon} alt={getAppLabel(app)} />
-                    <div>
-                        <p className="text-sm font-normal text-[var(--text-primary)]">{app.title || app.name}</p>
-                    </div>
+        <div className="group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-gentle hover:bg-[var(--surface-1)]">
+            <ConnectorIcon connectorId={app.id} icon={app.icon} label={label} size="sm" />
+
+            <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                    <p className="truncate text-sm text-[var(--text-primary)]">{label}</p>
+                    {isConnected ? (
+                        <Check
+                            aria-label="Connected"
+                            className="h-3.5 w-3.5 shrink-0 text-[var(--state-success)]"
+                        />
+                    ) : null}
                 </div>
-                {isConnected ? (
-                    <span className="inline-flex shrink-0 items-center gap-1.5 py-1 text-xs font-medium text-[var(--state-success)]">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Connected
-                    </span>
+                {app.description ? (
+                    <p className="truncate text-xs leading-5 text-[var(--text-tertiary)]">{app.description}</p>
                 ) : null}
             </div>
 
-            <p className="mb-4 min-h-[44px] line-clamp-2 text-sm leading-6 text-[var(--text-secondary)]">
-                {app.description || `Connect ${getAppLabel(app)} to your workflows.`}
-            </p>
-
-            <div className="flex items-center gap-2">
+            {hasAdvanced && !isConnected ? (
                 <Button
-                    className="flex-1 justify-center"
-                    variant={isConnected ? 'outline' : 'primary'}
+                    variant="quiet"
+                    size="sm"
+                    className="h-8 shrink-0 px-2 text-xs text-[var(--text-tertiary)] opacity-0 transition-gentle group-hover:opacity-100 group-focus-within:opacity-100"
+                    onClick={() => onAdvanced(app)}
+                    disabled={isBusy}
+                >
+                    Advanced
+                </Button>
+            ) : null}
+
+            <div className="flex w-[124px] shrink-0 justify-end">
+                <Button
+                    variant={isConnected ? 'quiet' : 'secondary'}
+                    size="sm"
+                    className="h-8"
                     onClick={() => onConnect(app)}
                     disabled={isBusy}
                 >
                     {isBusy ? (
                         <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Connecting...
+                            <StepLoader size="xs" className="mr-1.5" />
+                            Connecting
                         </>
                     ) : (
                         <>
-                            {isConnected ? 'Connect another' : 'Connect'}
-                            {connectsWithCredentials ? null : <ExternalLink className="ml-2 h-4 w-4" />}
+                            {isConnected ? 'Add another' : 'Connect'}
+                            {connectsWithCredentials ? null : <ExternalLink className="ml-1.5 h-3.5 w-3.5" />}
                         </>
                     )}
                 </Button>
-                {hasAdvanced && !isConnected ? (
-                    <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-9 px-2 text-xs text-[var(--text-tertiary)]"
-                        onClick={() => onAdvanced(app)}
-                        disabled={isBusy}
-                    >
-                        Advanced
-                    </Button>
-                ) : null}
             </div>
         </div>
     );
 }
 
-export function ConnectedAccountCard({
+/**
+ * A connected account. Same row rhythm as the catalog below it — six accounts
+ * are six one-line facts, and giving them full cards made the top of the page
+ * read at a completely different density from the rest.
+ */
+export function ConnectedAccountRow({
     account,
     isBusy,
     onReconnect,
@@ -115,53 +115,61 @@ export function ConnectedAccountCard({
 }) {
     const status = getAccountStatusMeta(account.status);
     const appName = account.connector?.title || account.connector?.name || 'Unknown app';
+    // Sitting under "Your accounts" already says connected — only the exceptions
+    // earn a status badge, so a healthy account reads as a name and nothing else.
+    const subtitle = account.display_name || account.email;
 
     return (
-        <div className="resource-index-card group p-4">
-            <div className="flex items-start justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-3">
-                    <ConnectorIcon icon={account.connector?.icon} alt={appName} />
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                            <p className="truncate text-sm font-normal text-[var(--text-primary)]">{appName}</p>
-                            {account.is_default ? (
-                                <span className="chip chip-sm chip-muted shrink-0">Default</span>
-                            ) : null}
-                        </div>
-                        <p className="truncate text-xs text-[var(--text-tertiary)]">{account.display_name || account.email || 'Connected'}</p>
-                    </div>
+        <div className="group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-gentle hover:bg-[var(--surface-1)]">
+            <ConnectorIcon
+                connectorId={account.connector_id}
+                icon={account.connector?.icon}
+                label={appName}
+                size="sm"
+            />
+
+            <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                    <p className="truncate text-sm text-[var(--text-primary)]">{appName}</p>
+                    {account.is_default ? (
+                        <span className="chip chip-sm chip-muted shrink-0">Default</span>
+                    ) : null}
                 </div>
-                <ResourceActionsMenu
-                    ariaLabel={`Open actions for ${appName}`}
-                    triggerClassName="h-8 w-8 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-                >
-                    <DestructiveResourceActionItem disabled={isBusy} onSelect={() => onDisconnect(account)}>
-                        Disconnect
-                    </DestructiveResourceActionItem>
-                </ResourceActionsMenu>
+                {subtitle ? (
+                    <p className="truncate text-xs leading-5 text-[var(--text-tertiary)]">{subtitle}</p>
+                ) : null}
             </div>
 
-            <div className="mt-3 flex items-center justify-between gap-2">
-                <Badge variant={status.variant} title={status.hint}>
-                    {status.label}
-                </Badge>
-                {status.needsAttention ? (
+            {status.needsAttention ? (
+                <>
+                    <Badge variant={status.variant} title={status.hint} className="shrink-0">
+                        {status.label}
+                    </Badge>
                     <Button
-                        variant="outline"
+                        variant="secondary"
                         size="sm"
-                        className="h-8"
+                        className="h-8 shrink-0"
                         onClick={() => onReconnect(account)}
                         disabled={isBusy}
                     >
                         {isBusy ? (
-                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                            <StepLoader size="xs" className="mr-1.5" />
                         ) : (
-                            <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
                         )}
                         Reconnect
                     </Button>
-                ) : null}
-            </div>
+                </>
+            ) : null}
+
+            <ResourceActionsMenu
+                ariaLabel={`Open actions for ${appName}`}
+                triggerClassName="h-8 w-8 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+            >
+                <DestructiveResourceActionItem disabled={isBusy} onSelect={() => onDisconnect(account)}>
+                    Disconnect
+                </DestructiveResourceActionItem>
+            </ResourceActionsMenu>
         </div>
     );
 }

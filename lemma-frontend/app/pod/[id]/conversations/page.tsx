@@ -43,7 +43,7 @@ export default function PodConversationsPage({
                         </h1>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
-                        <Button type="button" size="sm" className="gap-2" onClick={startNewConversation}>
+                        <Button variant="secondary" type="button" size="sm" className="gap-2" onClick={startNewConversation}>
                             <Plus className="h-4 w-4" />
                             New conversation
                         </Button>

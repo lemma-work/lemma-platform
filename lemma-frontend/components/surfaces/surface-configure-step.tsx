@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, Plus, Trash2 } from '@/components/ui/icons';
+import { Plus, Trash2 } from '@/components/ui/icons';
 
 import { SurfaceReachCard } from '@/components/surfaces/surface-reach-card';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import type { SurfacePlatformDefinition } from '@/lib/surfaces/registry';
 import type { AssistantSurface } from '@/lib/types';
+import { StepLoader } from '@/components/brand/loader';
 
 export const DEFAULT_AGENT_VALUE = '__pod_default_agent__';
 
@@ -139,7 +140,7 @@ export function SurfaceConfigureStep({
 
                     {isLoadingChannels ? (
                         <div className="flex items-center gap-2 text-xs text-[var(--text-tertiary)]">
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading channels…
+                            <StepLoader size="xs" /> Loading channels…
                         </div>
                     ) : availableChannels.length === 0 && draft.channels.length === 0 ? (
                         <p className="text-xs leading-5 text-[var(--text-tertiary)]">
@@ -172,7 +173,7 @@ export function SurfaceConfigureStep({
                             })}
                             <Button
                                 type="button"
-                                variant="outline"
+                                variant="secondary"
                                 size="sm"
                                 className="w-fit"
                                 disabled={remainingChannels.length === 0}
@@ -288,7 +289,7 @@ function ChannelRouteRow({
             </div>
             <Button
                 type="button"
-                variant="ghost"
+                variant="quiet"
                 size="icon"
                 onClick={onRemove}
                 aria-label="Remove channel route"

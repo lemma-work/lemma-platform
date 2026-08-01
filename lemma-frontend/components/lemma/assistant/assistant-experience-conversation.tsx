@@ -2,7 +2,7 @@
 
 import type { ReactNode, RefObject } from "react";
 import { cn } from "@/lib/utils";
-import { InlineLoader } from "@/components/brand/loader";
+import { TranscriptSkeleton } from "@/components/shared/loading";
 import { Button } from "@/components/ui/button";
 import { ArrowDown, RotateCcw } from "@/components/ui/icons";
 import {
@@ -123,9 +123,10 @@ export interface AssistantExperienceConversationProps {
   onScroll: () => void;
   contentWidthClassName?: string;
   activeConversationId: string | null;
-  resolvedFinalOutput: ReactNode;
   showEmptyState: boolean;
   emptyState: ReactNode;
+  /** Stretch the empty state over the whole viewport so it can dock to the composer. */
+  fillEmptyState?: boolean;
   isInitialMessageLoading: boolean;
   hasOlderMessages: boolean;
   isLoadingMessages: boolean;
@@ -154,9 +155,9 @@ export function AssistantExperienceConversation({
   onScroll,
   contentWidthClassName,
   activeConversationId,
-  resolvedFinalOutput,
   showEmptyState,
   emptyState,
+  fillEmptyState = false,
   isInitialMessageLoading,
   hasOlderMessages,
   isLoadingMessages,
@@ -178,26 +179,32 @@ export function AssistantExperienceConversation({
   onScrollToBottom,
   isConversationBusy,
 }: AssistantExperienceConversationProps) {
+  // With no messages there is nothing to scroll, so the viewport stops claiming
+  // the leftover height and shrinks to its content. The column above can then
+  // centre the empty state and the composer together as one group, instead of
+  // stranding the empty state at one end of a tall blank page.
+  const shrinkToContent = fillEmptyState && showEmptyState;
+
   return (
     <AssistantMessageViewport
       ref={messagesContainerRef}
       onScroll={onScroll}
+      className={cn(shrinkToContent && "max-h-full flex-none")}
       innerClassName={contentWidthClassName}
     >
-      <div className="flex w-full flex-col gap-5" aria-live="polite" aria-atomic="false">
-      {resolvedFinalOutput ? (
-        <div>
-          {resolvedFinalOutput}
-        </div>
-      ) : null}
-
+      <div
+        className="flex w-full flex-col gap-5"
+        aria-live="polite"
+        aria-atomic="false"
+      >
       {showEmptyState ? emptyState : null}
 
-      {isInitialMessageLoading ? (
-        <div className="flex items-center justify-center py-10">
-          <InlineLoader size="sm" label="Loading messages" className="animate-in fade-in duration-200" />
-        </div>
-      ) : null}
+      {/* Message-shaped, not a centred caption. A caption at `py-10` is a box of
+          a completely different height from the transcript that replaces it, and
+          in a bottom-anchored scroller that swap reads as the conversation
+          lurching into place. These turns are roughly the size of the real ones,
+          so the first message lands where the placeholder already was. */}
+      {isInitialMessageLoading ? <TranscriptSkeleton turns={2} /> : null}
 
       {((hasOlderMessages || isLoadingOlderMessages) && hasMessages) ? (
         <div className="flex items-center justify-center py-1">
@@ -212,12 +219,14 @@ export function AssistantExperienceConversation({
         </div>
       ) : null}
 
+      {/* No entrance animation on this container. It is keyed by conversation,
+          so `slide-in-from-bottom` played over the *entire history* every time
+          you switched conversations — months of messages sliding up together to
+          announce a load. Arrival motion belongs to a message as it appears, not
+          to the transcript as a whole. */}
       <div
         key={activeConversationId || "new-conversation"}
-        className={cn(
-          "flex w-full flex-col gap-5",
-          !isInitialMessageLoading && displayMessageRows.length > 0 && "animate-in fade-in slide-in-from-bottom-1 duration-200",
-        )}
+        className="flex w-full flex-col gap-5"
       >
       {displayMessageRows.map((row, index) => {
         if (completedRunTraceGroups.groupedIndexes.has(index)) {
@@ -267,7 +276,7 @@ export function AssistantExperienceConversation({
             {onRetryFailedMessage ? (
               <Button
                 type="button"
-                variant="outline"
+                variant="secondary"
                 size="sm"
                 onClick={onRetryFailedMessage}
                 className="h-8 shrink-0 gap-1.5 bg-transparent px-2.5"
@@ -283,7 +292,7 @@ export function AssistantExperienceConversation({
       {showScrollToBottom ? (
       <Button
         type="button"
-        variant="outline"
+        variant="secondary"
         size="icon"
         onClick={onScrollToBottom}
         className="sticky bottom-2 z-10 ml-auto size-8 shadow-md"

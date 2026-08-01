@@ -11,7 +11,6 @@ import {
     Download,
     Eye,
     File as FileIcon,
-    Loader2,
     Maximize2,
     Minimize2,
     Save,
@@ -38,7 +37,11 @@ import {
     renderDocxPreview,
     renderPdfPreview,
 } from '@/components/documents/preview-renderers';
+import { DocumentFrontmatter } from '@/components/documents/document-frontmatter';
+import { joinFrontmatter, splitFrontmatter } from '@/lib/files/frontmatter';
 import { MarkdownEditor } from './markdown-editor';
+import { DocumentBodySkeleton, DocumentSkeleton } from '@/components/documents/document-skeleton';
+import { StepLoader } from '@/components/brand/loader';
 
 interface DocumentViewerProps {
     podId: string;
@@ -348,6 +351,25 @@ export function DocumentViewer({
         || previewType === 'html'
         || previewType === 'code';
 
+    /**
+     * Frontmatter never reaches the markdown editor. A `---` fence renders as a
+     * rule and a setext heading, and the editor would then write that mangled
+     * shape back — quietly stripping the contract a SKILL.md depends on. The
+     * block is held aside here and re-attached to whatever the editor emits.
+     */
+    const markdownFrontmatter = useMemo(
+        () => (previewType === 'markdown' ? splitFrontmatter(docContent) : null),
+        [docContent, previewType]
+    );
+    const markdownBody = markdownFrontmatter ? markdownFrontmatter.body : docContent;
+    const markdownFrontmatterRaw = markdownFrontmatter?.raw ?? null;
+    const handleMarkdownBodyChange = useCallback(
+        (body: string) => {
+            setDocContent(joinFrontmatter(markdownFrontmatterRaw, body));
+        },
+        [markdownFrontmatterRaw]
+    );
+
     useEffect(() => {
         if (!doc) return;
 
@@ -604,7 +626,7 @@ export function DocumentViewer({
                 />
             ) : null}
             {canWriteDocument && hasUnsavedChanges && (
-                <Button
+                <Button variant="primary"
                     size="sm"
                     className="h-8 gap-1.5 px-3 text-xs font-medium"
                     onClick={() => void handleSave()}
@@ -617,7 +639,7 @@ export function DocumentViewer({
                 <TooltipTrigger asChild>
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         className="h-8 w-8 rounded"
                         onClick={() => void handleToggleFullscreen()}
@@ -633,7 +655,7 @@ export function DocumentViewer({
                 <TooltipTrigger asChild>
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         className="h-8 w-8 rounded"
                         onClick={() => void handleCopyContent()}
@@ -666,7 +688,7 @@ export function DocumentViewer({
                             <TooltipTrigger asChild>
                                 <Button
                                     type="button"
-                                    variant="ghost"
+                                    variant="quiet"
                                     size="icon"
                                     className="h-8 w-8 rounded"
                                     onClick={openShare}
@@ -685,7 +707,7 @@ export function DocumentViewer({
                 <Tooltip>
                     <TooltipTrigger asChild>
                         <Button
-                            variant="ghost"
+                            variant="quiet"
                             size="icon"
                             className="h-8 w-8 rounded"
                             onClick={() => setTextViewMode((current) => current === 'preview' ? 'source' : 'preview')}
@@ -700,7 +722,7 @@ export function DocumentViewer({
             <Tooltip>
                 <TooltipTrigger asChild>
                     <Button
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         className="h-8 w-8 rounded"
                         onClick={() => void handleDownload()}
@@ -716,14 +738,14 @@ export function DocumentViewer({
                 <Tooltip>
                     <TooltipTrigger asChild>
                         <Button
-                            variant="ghost"
+                            variant="quiet"
                             size="icon"
                             className="h-8 w-8 rounded text-[var(--state-error)] hover:text-[var(--state-error)]"
                             onClick={() => setShowDeleteDialog(true)}
                             disabled={!doc || isDeleting}
                             aria-label="Delete"
                         >
-                            {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                            {isDeleting ? <StepLoader size="sm" /> : <Trash2 className="h-4 w-4" />}
                         </Button>
                     </TooltipTrigger>
                     <TooltipContent>Delete</TooltipContent>
@@ -771,12 +793,11 @@ export function DocumentViewer({
         return () => topbar?.setTopbar({});
     }, [backLabel, doc, doc?.name, documentPath, headerActions, headerMode, topbar, topbarBackHref, topbarBackLabel]);
 
+    // Same shell the dynamic-import fallback drew a moment ago, and the same one
+    // the settled viewer draws next — so this is a continuation of one load, not
+    // a second screen replacing the first.
     if (isLoadingDoc) {
-        return (
-            <div className="h-full flex items-center justify-center">
-                <Loader2 className="h-8 w-8 animate-spin text-[var(--text-tertiary)]" />
-            </div>
-        );
+        return <DocumentSkeleton headerMode={headerMode} />;
     }
 
     if (!doc) {
@@ -801,7 +822,7 @@ export function DocumentViewer({
                 <div className="context-row flex-wrap items-center justify-between gap-2 px-3 py-2">
                 <div className="min-w-0 flex items-center gap-2">
                     {onClose ? (
-                        <Button variant="ghost" size="sm" className="h-8 gap-1.5" onClick={onClose}>
+                        <Button variant="quiet" size="sm" className="h-8 gap-1.5" onClick={onClose}>
                             <ArrowLeft className="h-3.5 w-3.5" />
                             {backLabel}
                         </Button>
@@ -826,11 +847,9 @@ export function DocumentViewer({
             ) : null}
 
             <div className="min-h-0 flex-1 overflow-auto p-3">
-                {isLoadingPreview && (
-                    <div className="flex h-full min-h-[220px] items-center justify-center">
-                        <Loader2 className="h-6 w-6 animate-spin text-[var(--text-tertiary)]" />
-                    </div>
-                )}
+                {/* By now the header is real and only the body is still coming,
+                    so the body keeps the exact fill it already had. */}
+                {isLoadingPreview && <DocumentBodySkeleton />}
 
                 {!isLoadingPreview && previewError && (
                     <div className="rounded-md border px-3 py-2 text-xs state-surface-error">
@@ -841,9 +860,15 @@ export function DocumentViewer({
                 {!isLoadingPreview && !previewError && (
                     previewType === 'markdown' ? (
                         <div className="mx-auto max-w-4xl px-2 py-5 sm:px-4">
-                            <MarkdownEditor
+                            <DocumentFrontmatter
                                 content={docContent}
-                                onChange={canWriteDocument ? setDocContent : () => undefined}
+                                path={documentPath}
+                                editable={canWriteDocument}
+                                onChange={setDocContent}
+                            />
+                            <MarkdownEditor
+                                content={markdownBody}
+                                onChange={canWriteDocument ? handleMarkdownBodyChange : () => undefined}
                                 editable={canWriteDocument}
                                 className="min-h-[70vh]"
                                 editorClassName="min-h-[70vh]"

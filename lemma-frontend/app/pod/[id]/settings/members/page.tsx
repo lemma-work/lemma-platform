@@ -2,7 +2,7 @@
 
 import { use, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { ArrowRight, CheckCircle2, Loader2, Mail, Plus, ShieldCheck, Users } from '@/components/ui/icons';
+import { ArrowRight, CheckCircle2, Mail, Plus, ShieldCheck, Users } from '@/components/ui/icons';
 import { formatDistanceToNow } from 'date-fns';
 import { toast } from 'sonner';
 
@@ -52,6 +52,8 @@ import { usePod } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
 import { OrganizationRole, PodRole } from '@/lib/types';
 import { buildPodInviteRedirectUri, getPodInviteRedirectOptions } from '@/lib/utils/invite-redirects';
+import { FieldRowsSkeleton } from '@/components/shared/loading';
+import { StepLoader } from '@/components/brand/loader';
 
 type AccessView = 'people' | 'invites' | 'requests' | 'roles' | 'available';
 
@@ -364,10 +366,8 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
 
     if (loadingMembers) {
         return (
-            <div className="context-shell flex min-h-full items-center justify-center bg-transparent">
-                <div className="surface-panel px-5 py-4">
-                    <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-                </div>
+            <div className="context-shell min-h-full bg-transparent">
+                <FieldRowsSkeleton rows={5} className="max-w-2xl" />
             </div>
         );
     }
@@ -379,7 +379,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
             action={canManageMembers ? (
                 <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
                     <DialogTrigger asChild>
-                        <Button className="gap-2">
+                        <Button variant="primary" className="gap-2">
                             <Plus className="h-4 w-4" />
                             Add person
                         </Button>
@@ -460,8 +460,8 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                         </p>
                                     </div>
                                     <DialogFooter className="pt-1">
-                                        <Button variant="ghost" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
-                                        <Button onClick={handleInviteByEmail} disabled={!inviteEmail.trim() || !pod?.organization_id || isInviting}>
+                                        <Button variant="quiet" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
+                                        <Button variant="primary" onClick={handleInviteByEmail} disabled={!inviteEmail.trim() || !pod?.organization_id || isInviting}>
                                             {isInviting ? 'Sending...' : 'Send invite'}
                                         </Button>
                                     </DialogFooter>
@@ -506,8 +506,8 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                     </Select>
                                 </div>
                                 <DialogFooter className="pt-1">
-                                    <Button variant="ghost" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
-                                    <Button onClick={handleAddMember} disabled={!selectedOrgMemberId || isAdding}>
+                                    <Button variant="quiet" onClick={() => setAddDialogOpen(false)}>Cancel</Button>
+                                    <Button variant="primary" onClick={handleAddMember} disabled={!selectedOrgMemberId || isAdding}>
                                         {isAdding ? 'Adding...' : 'Add member'}
                                     </Button>
                                 </DialogFooter>
@@ -531,12 +531,12 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 {activeView === 'people' ? (
                     members.length === 0 ? (
                         <EmptyState
-                            variant="panel"
+                            variant="region"
                             icon={<Users className="h-5 w-5" />}
                             title="No people yet"
                             description="Start with the people who need to operate this pod day to day, then widen access once the work settles."
                             action={canManageMembers ? (
-                                <Button size="sm" className="gap-2" onClick={() => setAddDialogOpen(true)}>
+                                <Button variant="secondary" size="sm" className="gap-2" onClick={() => setAddDialogOpen(true)}>
                                     <Plus className="h-4 w-4" />
                                     Add person
                                 </Button>
@@ -621,15 +621,15 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
 
                 {activeView === 'invites' ? (
                     loadingInvitations ? (
-                        <QuietEmptyState icon={<Loader2 className="h-4 w-4 animate-spin" />}>Loading invites...</QuietEmptyState>
+                        <QuietEmptyState icon={<StepLoader size="sm" />}>Loading invites...</QuietEmptyState>
                     ) : pendingPodInvitations.length === 0 ? (
                         <EmptyState
-                            variant="compact"
+                            variant="region"
                             icon={<Mail className="h-4 w-4" />}
                             title="No pending email invites"
                             description="Email invitations that grant pod access will appear here."
                             action={canInviteByEmail ? (
-                                <Button variant="outline" size="sm" className="gap-2" onClick={() => setAddDialogOpen(true)}>
+                                <Button variant="secondary" size="sm" className="gap-2" onClick={() => setAddDialogOpen(true)}>
                                     <Mail className="h-3.5 w-3.5" />
                                     Invite
                                 </Button>
@@ -671,12 +671,12 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 {activeView === 'requests' ? (
                     <>
                         <div className="mb-2 flex justify-end">
-                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => void refetchJoinRequests()}>
+                            <Button variant="quiet" size="sm" className="h-7 px-2 text-xs" onClick={() => void refetchJoinRequests()}>
                                 Refresh
                             </Button>
                         </div>
                         {loadingJoinRequests ? (
-                            <QuietEmptyState icon={<Loader2 className="h-4 w-4 animate-spin" />}>Loading requests...</QuietEmptyState>
+                            <QuietEmptyState icon={<StepLoader size="sm" />}>Loading requests...</QuietEmptyState>
                         ) : isJoinRequestsError ? (
                             <div className="state-surface-error rounded-lg px-3 py-3 text-sm text-[var(--text-secondary)]">
                                 {joinRequestsError instanceof Error
@@ -750,7 +750,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                                             </SelectContent>
                                                         </Select>
                                                     </div>
-                                                    <Button
+                                                    <Button variant="secondary"
                                                         size="sm"
                                                         onClick={() => handleApproveJoinRequest(request.id, requesterLabel)}
                                                         disabled={isApprovingThis}
@@ -778,7 +778,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                     </p>
                                 </div>
                                 {canManageRoles ? (
-                                    <Button size="sm" variant="outline" className="gap-2" onClick={() => setCreateRoleDialogOpen(true)}>
+                                    <Button size="sm" variant="secondary" className="gap-2" onClick={() => setCreateRoleDialogOpen(true)}>
                                         <Plus className="h-3.5 w-3.5" />
                                         New custom role
                                     </Button>
@@ -798,7 +798,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                     return (
                                         <Button
                                             key={role.name}
-                                            variant="ghost"
+                                            variant="quiet"
                                             onClick={() => setEditingRoleName(role.name)}
                                             className="lemma-index-row group flex h-auto w-full items-center justify-start gap-3 text-left"
                                             data-active={isActive}
@@ -839,7 +839,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                     </div>
                                     {canManageRoles ? (
                                         <Button
-                                            variant="outline"
+                                            variant="secondary"
                                             size="sm"
                                             disabled={isDeletingRole}
                                             onClick={() => deletePodRole(editingRole.name, {
@@ -864,7 +864,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                                     Choose what this role can do across the pod. Share specific resources from the resource itself.
                                                 </p>
                                             </div>
-                                            {isSavingRole ? <Loader2 className="h-4 w-4 animate-spin text-[var(--text-tertiary)]" /> : null}
+                                            {isSavingRole ? <StepLoader size="sm" className="text-[var(--text-tertiary)]" /> : null}
                                         </div>
 
                                         <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
@@ -958,8 +958,8 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                             </div>
                         </div>
                         <DialogFooter>
-                            <Button variant="ghost" onClick={() => setCreateRoleDialogOpen(false)}>Cancel</Button>
-                            <Button onClick={handleCreateRole} disabled={!canManageRoles || isCreatingRole || !newRoleName.trim()}>
+                            <Button variant="quiet" onClick={() => setCreateRoleDialogOpen(false)}>Cancel</Button>
+                            <Button variant="primary" onClick={handleCreateRole} disabled={!canManageRoles || isCreatingRole || !newRoleName.trim()}>
                                 {isCreatingRole ? 'Creating...' : 'Create role'}
                             </Button>
                         </DialogFooter>
@@ -980,7 +980,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                         </p>
                                         <p className="hidden truncate text-xs text-[var(--text-secondary)] md:block">{member.user?.email}</p>
                                     </div>
-                                    <Button variant="ghost" size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setAddDialogOpen(true)}>
+                                    <Button variant="quiet" size="sm" className="h-7 gap-1.5 px-2 text-xs" onClick={() => setAddDialogOpen(true)}>
                                         Add people
                                         <ArrowRight className="h-3.5 w-3.5" />
                                     </Button>

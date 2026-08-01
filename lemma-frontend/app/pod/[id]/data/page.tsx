@@ -4,17 +4,19 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Database, Loader2, Plus } from '@/components/ui/icons';
+import { Database, Plus } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { DatastoreTableView } from '@/components/data/datastore-table-view';
 import { DatastoreTableSkeleton } from '@/components/data/datastore-table-skeleton';
+import { DocumentSkeleton } from '@/components/documents/document-skeleton';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
+import { AsyncRegion, ListSkeleton } from '@/components/shared/loading';
 import {
     showResourceCreatedToast,
     showResourceErrorToast,
@@ -70,16 +72,16 @@ import { DataHubHeaderActions } from './_components/data-hub-header-actions';
 import { FolderUploadStatusBanner } from './_components/folder-upload-status-banner';
 import { FileSearchResults } from './_components/file-search-results';
 import { FileEntriesBrowser } from './_components/file-entries-browser';
-import { FolderTitleSelector, TableTitleSelector } from './_components/data-hub-title-selectors';
+import { FolderTitleSelector } from './_components/data-hub-title-selectors';
+import { TableTabStrip } from './_components/table-tab-strip';
 
 const DocumentViewer = dynamic(
     () => import('@/components/documents/document-viewer').then((module) => module.DocumentViewer),
     {
-        loading: () => (
-            <div className="flex min-h-0 flex-1 items-center justify-center">
-                <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-            </div>
-        ),
+        // The same skeleton the viewer itself shows while it fetches the file,
+        // so downloading the chunk and loading the record read as one wait
+        // instead of two differently-sized ones.
+        loading: () => <DocumentSkeleton />,
     }
 );
 const TableBuilder = dynamic(
@@ -1080,6 +1082,19 @@ export default function DataHubPage({
 
     const currentFolderLabel = folderTrail.length > 0 ? folderTrail[folderTrail.length - 1]?.name || 'Folder' : 'Home';
 
+    // Rendered as the table toolbar's `headerLeft`, not as a band of its own.
+    // Which table you are in and what you can do to it are one question, so they
+    // get one row — a separate strip above the toolbar made the page four
+    // stacked headers before any data showed up.
+    const tableStrip = (
+        <TableTabStrip
+            tables={tables}
+            activeTableName={activeTableName}
+            loadingTables={loadingTables}
+            onSelectTable={(tableName) => updateQuery({ tab: tableName, filter: null }, { history: 'push' })}
+        />
+    );
+
     return (
         <ResourceIndexShell
             mode={usesWorkbenchLayout ? 'workbench' : 'ledger'}
@@ -1097,15 +1112,6 @@ export default function DataHubPage({
                         onBreadcrumbClick={handleBreadcrumbClick}
                         onNewFolder={() => setShowNewFolderInput(true)}
                         onNewFile={() => setIsNewFileOpen(true)}
-                    />
-                ) : activeTableName ? (
-                    <TableTitleSelector
-                        loadingTables={loadingTables}
-                        activeTableName={activeTableName}
-                        tables={tables}
-                        canCreateTable={canCreateTable}
-                        onSelectTable={(tableName) => updateQuery({ tab: tableName, filter: null }, { history: 'push' })}
-                        onNewTable={() => updateQuery({ new: 'table' }, { history: 'push' })}
                     />
                 ) : 'Data'}
                 meta={<ConceptHint concept={showingFiles ? 'file' : 'table'} />}
@@ -1181,11 +1187,17 @@ export default function DataHubPage({
                                             }
                                         }}
                                     />
-                                    <Button size="sm" onClick={() => void handleCreateFolder()} disabled={isCreatingFolder}>
-                                        {isCreatingFolder ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Create'}
+                                    <Button
+                                        variant="primary"
+                                        size="sm"
+                                        onClick={() => void handleCreateFolder()}
+                                        loading={isCreatingFolder}
+                                        loadingLabel="Creating"
+                                    >
+                                        Create
                                     </Button>
                                     <Button
-                                        variant="ghost"
+                                        variant="quiet"
                                         size="sm"
                                         onClick={() => {
                                             setShowNewFolderInput(false);
@@ -1218,45 +1230,53 @@ export default function DataHubPage({
                                         onDownloadByPath={(filePath, fileName) => void handleDownloadByPath(filePath, fileName)}
                                     />
                                 ) : (
-                                    <>
-                                        {(loadingFiles || refreshingFiles) && (
-                                            <div className="flex h-full min-h-[200px] items-center justify-center py-12">
-                                                <Loader2 className="h-6 w-6 animate-spin text-[var(--text-tertiary)]" />
-                                            </div>
-                                        )}
-
-                                        {!loadingFiles && !refreshingFiles && filteredEntries.length === 0 && (
+                                    /* Three fills of the same pane. A refresh no
+                                       longer throws the listing away for a centred
+                                       spinner — opening a folder you have already
+                                       seen keeps its rows and dims them. */
+                                    <AsyncRegion
+                                        isLoading={loadingFiles}
+                                        isEmpty={filteredEntries.length === 0}
+                                        isRefreshing={refreshingFiles}
+                                        label="Loading files"
+                                        className="h-full"
+                                        skeleton={<ListSkeleton rows={7} className="px-1" />}
+                                        empty={(
                                             <EmptyState
-                                                variant="compact"
+                                                variant="region"
                                                 icon={<ProductIcon kind="files" size="sm" />}
                                                 title={searchQuery ? 'No files or folders match this search' : 'This folder is empty'}
                                                 description={searchQuery ? 'Try another search term.' : 'Upload files or create a folder when this pod needs source material.'}
                                             />
                                         )}
-
-                                        {!loadingFiles && !refreshingFiles && filteredEntries.length > 0 && (
-                                            <FileEntriesBrowser
-                                                filesView={filesView}
-                                                filteredEntries={filteredEntries}
-                                                imagePreviewUrls={imagePreviewUrls}
-                                                activeFileNamespace={activeFileNamespace}
-                                                canDeleteFiles={canDeleteFiles}
-                                                isDeletingFile={isDeletingFile}
-                                                onFolderOpen={handleFolderOpen}
-                                                onOpenFile={(entry) => void handleOpenFile(entry)}
-                                                onDownload={(entry) => void handleDownload(entry)}
-                                                onRequestDelete={setEntryPendingDelete}
-                                            />
-                                        )}
-                                    </>
+                                    >
+                                        <FileEntriesBrowser
+                                            filesView={filesView}
+                                            filteredEntries={filteredEntries}
+                                            imagePreviewUrls={imagePreviewUrls}
+                                            activeFileNamespace={activeFileNamespace}
+                                            canDeleteFiles={canDeleteFiles}
+                                            isDeletingFile={isDeletingFile}
+                                            onFolderOpen={handleFolderOpen}
+                                            onOpenFile={(entry) => void handleOpenFile(entry)}
+                                            onDownload={(entry) => void handleDownload(entry)}
+                                            onRequestDelete={setEntryPendingDelete}
+                                        />
+                                    </AsyncRegion>
                                 )}
                             </div>
                             </div>
                         </>
                     )
-                ) : loadingTables ? (
+                ) : loadingTables && !activeTableName ? (
+                    // Only while we do not yet know *which* table to open. Once we
+                    // do, `DatastoreTableView` mounts and renders this same
+                    // skeleton itself — rendering it here as well meant two
+                    // skeletons in a row, the second a fresh mount that restarted
+                    // the shimmer from zero for no change in state.
                     <DatastoreTableSkeleton />
                 ) : activeTableName ? (
+                    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                     <DatastoreTableView
                         key={`${activeTableName}:${routeTableFiltersKey}`}
                         podId={podId}
@@ -1268,22 +1288,22 @@ export default function DataHubPage({
                         canUpdateTable={canUpdateTable}
                         canDeleteTable={canDeleteTable}
                         initialFilters={routeTableFilters}
-                        headerLeft={({ totalRecords }) => (
-                            <div className="text-xs text-[var(--text-tertiary)]">
-                                {totalRecords} record{totalRecords === 1 ? '' : 's'}
-                            </div>
-                        )}
+                        // The record count lives in the footer, which already
+                        // prints the range. Printing it twice bought nothing and
+                        // cost the row that now holds the table switcher.
+                        headerLeft={tableStrip}
                     />
+                    </div>
                 ) : (
                     <EmptyState
-                        variant="panel"
+                        variant="region"
                         icon={<Database className="h-5 w-5" />}
                         title="No tables yet"
                         description={canCreateTable
                             ? "Create a table when this pod needs structured records."
                             : "No tables are available to you yet."}
                         action={canCreateTable ? (
-                            <Button
+                            <Button variant="primary"
                                 size="sm"
                                 className="gap-2"
                                 onClick={() => updateQuery({ new: 'table' }, { history: 'push' })}

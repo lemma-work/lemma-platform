@@ -41,7 +41,6 @@ import { Plus, Mail } from '@/components/ui/icons';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { StepLoader } from '@/components/brand/loader';
 import { PlainPageShell } from '@/components/dashboard/plain-page-shell';
 import { OrganizationSettingsNav } from '@/components/organizations/organization-settings-nav';
 import {
@@ -56,6 +55,7 @@ import { formatRoleLabel } from '@/lib/utils/role-labels';
 import { buildOrganizationInviteRedirectUri } from '@/lib/utils/invite-redirects';
 
 import { useParams } from 'next/navigation';
+import { StepLoader } from '@/components/brand/loader';
 
 export default function OrgMembersPage() {
     return (
@@ -179,7 +179,7 @@ function OrgAccessSettings({
                     disabled={!canManage}
                 />
                 {canManage ? (
-                    <Button
+                    <Button variant="primary"
                         onClick={handleSave}
                         disabled={!dirty || missingDomain}
                         loading={isPending}
@@ -225,7 +225,7 @@ function MembersList({ orgId, members, isLoading }: { orgId: string, members: Or
     if (members.length === 0) {
         return (
             <EmptyState
-                variant="compact"
+                variant="region"
                 title="No members yet"
                 description="Invite the people who should help own this organization."
                 className="surface-panel-muted py-8"
@@ -424,7 +424,7 @@ function InviteMemberDialog({ orgId }: { orgId: string }) {
     return (
         <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-                <Button size="sm" className="gap-2">
+                <Button variant="secondary" size="sm" className="gap-2">
                     <Plus className="h-4 w-4" />
                     Invite member
                 </Button>
@@ -467,8 +467,8 @@ function InviteMemberDialog({ orgId }: { orgId: string }) {
                         </p>
                     </div>
                     <DialogFooter>
-                        <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
-                        <Button type="submit" disabled={isPending}>
+                        <Button type="button" variant="quiet" onClick={() => setOpen(false)}>Cancel</Button>
+                        <Button variant="primary" type="submit" disabled={isPending}>
                             {isPending ? 'Sending...' : 'Send Invitation'}
                         </Button>
                     </DialogFooter>

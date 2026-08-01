@@ -1,6 +1,6 @@
 'use client';
 
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, keepPreviousData } from '@tanstack/react-query';
 import { ThemeProvider as NextThemesProvider } from 'next-themes';
 import { useState, type ReactNode } from 'react';
 import { usePathname } from 'next/navigation';
@@ -16,6 +16,20 @@ export function Providers({ children }: { children: ReactNode }) {
                     queries: {
                         staleTime: 60 * 1000, // 1 minute
                         refetchOnWindowFocus: false,
+                        /**
+                         * A changed key is a *different question about the same
+                         * screen* — switch table, open folder, pick a filter,
+                         * page forward. Without this the query drops to
+                         * `isLoading`, the screen unmounts what it was showing,
+                         * and a full skeleton flashes for content that is
+                         * usually 150ms away and laid out identically.
+                         *
+                         * Keeping the previous data means the region stays put
+                         * and dims (`isFetching` → `isRefreshing`) instead.
+                         * First loads are unaffected: there is nothing previous
+                         * to keep, so they still get the skeleton.
+                         */
+                        placeholderData: keepPreviousData,
                     },
                 },
             })

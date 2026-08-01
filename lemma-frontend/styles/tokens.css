@@ -213,6 +213,60 @@
   }
 }
 
+/* Owned outright rather than borrowed from Tailwind's `animate-pulse` /
+   `animate-spin`: those keyframes are theme values and are only emitted while
+   something still uses the utility, and the point of naming these is that
+   nothing does. */
+@keyframes lemma-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes lemma-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Async-region fills. Three names, one motion — see `.lemma-async-region`:
+   restarting the fade on a state change needs a different animation-name, and
+   the region element itself never unmounts. */
+@keyframes lemma-async-enter-loading {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lemma-async-enter-empty {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lemma-async-enter-ready {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 @keyframes lemma-skeleton-breathe {
   0% {
     background-position: 120% 0;

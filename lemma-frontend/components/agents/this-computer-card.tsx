@@ -175,7 +175,7 @@ export function ThisComputerCard({
                 {status.available && status.paired ? (
                     <Button
                         type="button"
-                        variant={status.running ? 'ghost' : 'default'}
+                        variant={status.running ? 'quiet' : 'primary'}
                         size="sm"
                         loading={busy === 'toggle'}
                         onClick={() =>
@@ -211,7 +211,7 @@ export function ThisComputerCard({
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="sm"
                         className="gap-1.5"
                         loading={busy === 'refresh'}
@@ -224,7 +224,7 @@ export function ThisComputerCard({
                     </Button>
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="sm"
                         className="gap-1.5"
                         onClick={() => void run('log', () => agentHostBridge.openLog())}
@@ -234,7 +234,7 @@ export function ThisComputerCard({
                     </Button>
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="sm"
                         onClick={() => setConfirmDisconnect(true)}
                         loading={busy === 'unpair'}

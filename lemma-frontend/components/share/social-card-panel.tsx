@@ -50,7 +50,7 @@ function ShareTargetRow({ subject }: { subject: ShareSubject }) {
                     return (
                         <Tooltip key={target.id}>
                             <TooltipTrigger asChild>
-                                <Button asChild variant="ghost" size="icon" className="h-7 w-7">
+                                <Button asChild variant="quiet" size="icon" className="h-7 w-7">
                                     <a
                                         href={target.href(subject)}
                                         target="_blank"

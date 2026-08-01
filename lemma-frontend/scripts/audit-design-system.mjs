@@ -990,6 +990,32 @@ const informationalChecks = [
     allowed: allowedScaleSource,
     allowedMatch: isIllustrationSelector,
   },
+  {
+    id: 'multiplePrimaryButtons',
+    // design.md §8: at most one primary action reachable per view. A file with
+    // several is usually several views (a wizard, a page plus its dialogs), so
+    // this reports rather than blocks — but it is where lost hierarchy shows up
+    // first, and a default of `primary` once made 108 of these by accident.
+    label: 'Files with more than one primary Button (design.md §8), review for same-view competition',
+    pattern: /<Button\b(?:[^>"']|"[^"]*"|'[^']*')*?variant=["']primary["'](?:[^>"']|"[^"]*"|'[^']*')*?>/g,
+    // Marketing pages are a different genre — a landing page is allowed to
+    // repeat its call to action.
+    allowed(path) {
+      return path.includes('/landing');
+    },
+    find(source) {
+      const tags = [...source.matchAll(/<Button\b((?:[^>"']|"[^"]*"|'[^']*')*?)>/g)].filter((match) =>
+        /variant=\{?["']primary["']/.test(match[1])
+      );
+      if (tags.length < 2) return [];
+      // The first is the view's legitimate primary; everything beyond it is
+      // what needs a second look.
+      return tags.slice(1).map((match) => ({
+        value: `<Button${match[1].replace(/\s+/g, ' ').trimEnd()}>`,
+        line: lineNumberAt(source, match.index ?? 0),
+      }));
+    },
+  },
 ];
 
 const protectedAssistantChecks = [...checks, ...advisoryChecks, ...informationalChecks];
@@ -1212,6 +1238,9 @@ function lineNumberAt(source, index) {
 }
 
 function findMatches(source, check, rel) {
+  // Some findings are about how many of a thing a file has, not about any one
+  // match in isolation — those supply `find` instead of relying on `pattern`.
+  if (check.find) return check.find(source, rel);
   const matches = [];
   for (const match of source.matchAll(check.pattern)) {
     const value = match[0];

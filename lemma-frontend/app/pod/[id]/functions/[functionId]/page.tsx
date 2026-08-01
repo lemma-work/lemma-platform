@@ -1,7 +1,7 @@
 'use client';
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, Save } from '@/components/ui/icons';
+import { Save } from '@/components/ui/icons';
 
 import { FunctionEditor } from '@/components/functions/function-editor';
 import { FunctionTestPanel } from '@/components/functions/function-test-panel';
@@ -12,12 +12,14 @@ import {
 } from '@/components/pod/resource-layout';
 import { ResourceArrivalNotice } from '@/components/shared/resource-feedback';
 import { type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
+import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { useFunction, useUpdateFunction } from '@/lib/hooks/use-functions';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { Function as FunctionType, UpdateFunctionData } from '@/lib/types';
 import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
+import { StepLoader } from '@/components/brand/loader';
 
 const SIDEBAR_WIDTH_CLASSES = [
     'w-[35%]', 'w-[36%]', 'w-[37%]', 'w-[38%]', 'w-[39%]', 'w-[40%]', 'w-[41%]', 'w-[42%]',
@@ -215,32 +217,32 @@ export default function FunctionDetailPage({
                 <div className="flex min-w-0 flex-1 flex-col">
                     <div className="sticky top-0 z-10 flex items-center justify-between bg-[color:color-mix(in_srgb,var(--surface-1)_88%,transparent)] px-4 py-2 shadow-[var(--shadow-xs)]">
                         <div className="flex items-center gap-2">
-                            <div className="h-5 w-5 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                            <div className="h-5 w-32 animate-pulse rounded bg-[var(--bg-subtle)]" />
+                            <Skeleton shape="block" className="h-5 w-5" />
+                            <Skeleton shape="block" className="h-5 w-32" />
                         </div>
                         <div className="flex gap-2">
-                            <div className="h-7 w-16 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                            <div className="h-7 w-8 animate-pulse rounded bg-[var(--bg-subtle)]" />
+                            <Skeleton shape="block" className="h-7 w-16" />
+                            <Skeleton shape="block" className="h-7 w-8" />
                         </div>
                     </div>
 
                     <div className="flex-1 space-y-8 p-12">
-                        <div className="h-16 w-16 animate-pulse rounded-xl bg-[var(--bg-subtle)]" />
-                        <div className="h-10 max-w-md animate-pulse rounded bg-[var(--bg-subtle)]" />
+                        <Skeleton shape="block" className="h-16 w-16 rounded-xl" />
+                        <Skeleton shape="block" className="h-10 max-w-md" />
                         <div className="space-y-4">
-                            <div className="h-8 w-full animate-pulse rounded bg-[var(--bg-subtle)]" />
-                            <div className="h-24 w-full animate-pulse rounded bg-[var(--bg-subtle)]" />
+                            <Skeleton shape="block" className="h-8 w-full" />
+                            <Skeleton shape="block" className="h-24 w-full" />
                         </div>
                     </div>
                 </div>
 
                 <div className="hidden w-[500px] border-l border-[color:color-mix(in_srgb,var(--border-subtle)_35%,transparent)] bg-[var(--surface-1)] lg:block">
                     <div className="p-4">
-                        <div className="h-8 w-32 animate-pulse rounded bg-[var(--bg-subtle)]" />
+                        <Skeleton shape="block" className="h-8 w-32" />
                     </div>
                     <div className="space-y-4 p-4">
-                        <div className="h-32 animate-pulse rounded bg-[var(--bg-subtle)]" />
-                        <div className="h-10 animate-pulse rounded bg-[var(--bg-subtle)]" />
+                        <Skeleton shape="block" className="h-32 w-full" />
+                        <Skeleton shape="block" className="h-10 w-full" />
                     </div>
                 </div>
             </div>
@@ -272,14 +274,14 @@ export default function FunctionDetailPage({
                 actions={(
                     <>
                         {canUpdateCurrentFunction && (hasUnsavedChanges || updateFunction.isPending) ? (
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 size="sm"
                                 onClick={() => void handleSave()}
                                 disabled={updateFunction.isPending || !hasUnsavedChanges}
                                 className="h-8 gap-1.5 px-3 text-xs font-medium"
                             >
-                                {updateFunction.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                                {updateFunction.isPending ? <StepLoader size="xs" /> : <Save className="h-3.5 w-3.5" />}
                                 {updateFunction.isPending ? 'Saving...' : 'Save changes'}
                             </Button>
                         ) : null}

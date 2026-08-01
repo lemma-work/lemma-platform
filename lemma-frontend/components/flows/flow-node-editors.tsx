@@ -463,7 +463,7 @@ export function StartDetailsPanel({
 
             <div className="flex items-center justify-between gap-3">
                 <span className="text-xs text-[var(--text-tertiary)]">{getStartSummary(draft)}</span>
-                <Button size="sm" onClick={() => void saveDraft()} disabled={isSaving || !isStartReady(draft)}>
+                <Button variant="primary" size="sm" onClick={() => void saveDraft()} disabled={isSaving || !isStartReady(draft)}>
                     {isSaving ? 'Saving...' : 'Save start'}
                 </Button>
             </div>
@@ -742,7 +742,7 @@ export function StepDetailsPanel({
                             <Button
                                 type="button"
                                 size="sm"
-                                variant="outline"
+                                variant="secondary"
                                 className="h-7 bg-[var(--card-bg)]"
                                 onClick={addInputKey}
                                 disabled={!newInputKey.trim() || inputMappingKeys.includes(newInputKey.trim())}
@@ -797,7 +797,7 @@ export function StepDetailsPanel({
                                                 {!requirement && (
                                                     <Button
                                                         type="button"
-                                                        variant="ghost"
+                                                        variant="quiet"
                                                         size="icon"
                                                         className="h-6 w-6 text-[var(--state-error)]"
                                                         onClick={() => removeInputKey(key)}
@@ -1036,7 +1036,7 @@ export function StepDetailsPanel({
                             <SectionTitle title="Branches" />
                             <Button
                                 type="button"
-                                variant="outline"
+                                variant="secondary"
                                 size="sm"
                                 className="h-7 bg-[var(--card-bg)]"
                                 onClick={() =>
@@ -1069,7 +1069,7 @@ export function StepDetailsPanel({
                                 <p>No branches yet. Add paths before relying on this decision.</p>
                                 <Button
                                     type="button"
-                                    variant="outline"
+                                    variant="secondary"
                                     size="sm"
                                     className="h-7 bg-[var(--card-bg)]"
                                     onClick={() =>
@@ -1187,7 +1187,7 @@ export function StepDetailsPanel({
                                             <span>{branch.steps.length} steps</span>
                                             <Button
                                                 type="button"
-                                                variant="outline"
+                                                variant="secondary"
                                                 size="sm"
                                                 className="h-7 bg-[var(--card-bg)]"
                                                 onClick={() =>
@@ -1209,7 +1209,7 @@ export function StepDetailsPanel({
                                         </div>
                                         <Button
                                             type="button"
-                                            variant="ghost"
+                                            variant="quiet"
                                             size="sm"
                                             className="h-7 text-[var(--state-error)]"
                                             onClick={() =>

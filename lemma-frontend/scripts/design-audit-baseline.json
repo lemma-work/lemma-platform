@@ -1,9 +1,9 @@
 {
   "informational": {
-    "rawButtonElements": 24,
+    "rawButtonElements": 29,
     "rawSwitchButtonElements": 0,
     "rawFieldElements": 2,
-    "inlineEditableFieldElements": 1,
+    "inlineEditableFieldElements": 3,
     "cardSkinOverrides": 0,
     "buttonSkinOverrides": 0,
     "badgePresentationOverrides": 3,
@@ -11,9 +11,10 @@
     "hoverOnlyDisplayReveal": 0,
     "fixedWidthsWiderThanPhones": 0,
     "pageBodyRepeatsResourceName": 0,
-    "rawFontSizeDeclaration": 0,
+    "rawFontSizeDeclaration": 1,
     "rawRadiusDeclaration": 0,
-    "rawSpacingDeclaration": 0
+    "rawSpacingDeclaration": 0,
+    "multiplePrimaryButtons": 20
   },
   "protectedAssistant": {
     "rawButtonElements": 1

@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, ChevronDown, Database, FolderPlus, Loader2, Plus } from '@/components/ui/icons';
+import { Check, ChevronDown, FolderPlus, Plus } from '@/components/ui/icons';
 
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ResourceTitleButton } from '@/components/pod/resource-layout';
@@ -79,70 +79,6 @@ export function FolderTitleSelector({
                         <DropdownMenuItem onClick={onNewFile}>
                             <Plus className="mr-2 h-3.5 w-3.5" />
                             New file
-                        </DropdownMenuItem>
-                    </>
-                ) : null}
-            </DropdownMenuContent>
-        </DropdownMenu>
-    );
-}
-
-export interface TableTitleSelectorProps {
-    loadingTables: boolean;
-    activeTableName: string | null;
-    tables: { name: string }[];
-    canCreateTable: boolean;
-    onSelectTable: (tableName: string) => void;
-    onNewTable: () => void;
-}
-
-export function TableTitleSelector({
-    loadingTables,
-    activeTableName,
-    tables,
-    canCreateTable,
-    onSelectTable,
-    onNewTable,
-}: TableTitleSelectorProps) {
-    return (
-        <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-                <ResourceTitleButton
-                    trailing={<ChevronDown className="h-4 w-4" />}
-                >
-                    {loadingTables ? 'Loading tables' : activeTableName ?? 'No tables yet'}
-                </ResourceTitleButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-72">
-                <DropdownMenuLabel>Tables</DropdownMenuLabel>
-                {loadingTables ? (
-                    <DropdownMenuItem disabled>
-                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                        Loading tables
-                    </DropdownMenuItem>
-                ) : tables.length > 0 ? (
-                    tables.map((item) => (
-                        <DropdownMenuItem
-                            key={item.name}
-                            onClick={() => onSelectTable(item.name)}
-                        >
-                            <Database className="mr-2 h-3.5 w-3.5" />
-                            <span className="truncate">{item.name}</span>
-                            {item.name === activeTableName ? <Check className="ml-auto h-3.5 w-3.5" /> : null}
-                        </DropdownMenuItem>
-                    ))
-                ) : (
-                    <DropdownMenuItem disabled>
-                        <Database className="mr-2 h-3.5 w-3.5" />
-                        No tables yet
-                    </DropdownMenuItem>
-                )}
-                {canCreateTable ? (
-                    <>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={onNewTable}>
-                            <Plus className="mr-2 h-3.5 w-3.5" />
-                            New table
                         </DropdownMenuItem>
                     </>
                 ) : null}

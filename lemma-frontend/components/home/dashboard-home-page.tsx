@@ -81,7 +81,7 @@ function PendingInvitationsHomePanel() {
                         </p>
                     </div>
                 </div>
-                <Button asChild className="shrink-0 gap-2">
+                <Button variant="secondary" asChild className="shrink-0 gap-2">
                     <Link href={`/invitations/${firstInvitation.id}/accept`}>
                         Review invite
                         <ArrowRight className="h-4 w-4" />
