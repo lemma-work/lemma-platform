@@ -298,6 +298,10 @@ async def test_reconcile_time_jobs_replaces_active_and_removes_stale(
         "load_active_time_schedules",
         AsyncMock(return_value=[cron, future, past]),
     )
+    deactivate = AsyncMock()
+    monkeypatch.setattr(
+        scheduler_service, "deactivate_unusable_time_schedules", deactivate
+    )
 
     await service.reconcile_time_schedule_jobs()
 
@@ -313,6 +317,7 @@ async def test_reconcile_time_jobs_replaces_active_and_removes_stale(
     )
     assert service.add_once_job.call_args.kwargs["user_id"] == future.user_id
     assert service.add_once_job.call_args.kwargs["schedule_id"] == future.id
+    assert deactivate.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -359,7 +364,7 @@ async def test_scheduler_does_not_resume_when_reconciliation_fails(monkeypatch) 
     emitter.stop.assert_awaited_once()
 
 
-def _reconciling_service(scheduler, monkeypatch, schedules):
+def _reconciling_service(scheduler, monkeypatch, schedules, *, deactivate=None):
     service = scheduler_service.SchedulerService.__new__(
         scheduler_service.SchedulerService
     )
@@ -368,6 +373,11 @@ def _reconciling_service(scheduler, monkeypatch, schedules):
         scheduler_service,
         "load_active_time_schedules",
         AsyncMock(return_value=schedules),
+    )
+    monkeypatch.setattr(
+        scheduler_service,
+        "deactivate_unusable_time_schedules",
+        deactivate or AsyncMock(),
     )
     return service
 
@@ -419,10 +429,9 @@ async def test_reconcile_deactivates_and_removes_too_frequent_legacy_job(
         )
     ]
     deactivate = AsyncMock()
-    monkeypatch.setattr(
-        scheduler_service, "deactivate_unusable_time_schedules", deactivate
+    service = _reconciling_service(
+        scheduler, monkeypatch, [legacy], deactivate=deactivate
     )
-    service = _reconciling_service(scheduler, monkeypatch, [legacy])
     service.add_cron_job = Mock()
     service.add_once_job = Mock()
 
