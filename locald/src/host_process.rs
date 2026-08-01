@@ -1281,21 +1281,38 @@ fn reclaim_verified_processes(
     )
 }
 
+/// How long `process_identity` waits for a freshly forked process to finish
+/// `exec` before giving up on naming its executable.
 #[cfg(unix)]
-pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
-    let pid = pid.to_string();
+const IDENTITY_SETTLE_ATTEMPTS: u32 = 20;
+#[cfg(unix)]
+const IDENTITY_SETTLE_INTERVAL: Duration = Duration::from_millis(25);
+
+/// One `ps` query. `Ok(None)` means the process exists but has not yet reported
+/// a usable executable name, so the caller should look again.
+#[cfg(unix)]
+fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
     let executable = Command::new("/bin/ps")
-        .args(["-p", &pid, "-o", "comm="])
+        .args(["-p", pid, "-o", "comm="])
         .output()?;
     let started = Command::new("/bin/ps")
-        .args(["-p", &pid, "-o", "lstart="])
+        .args(["-p", pid, "-o", "lstart="])
         .output()?;
     if !executable.status.success() || !started.status.success() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "process not found"));
     }
     let executable = String::from_utf8(executable.stdout)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let executable = Path::new(executable.trim())
+    let executable = executable.trim();
+    // `ps` brackets the name as `(sh)` while a process has forked but not yet
+    // finished `exec`, and while it is exiting. That placeholder is not a path,
+    // so canonicalizing it fails with ENOENT — which used to make a child that
+    // was merely still starting look unidentifiable, and cost it the ownership
+    // record it had just been spawned to receive.
+    if executable.starts_with('(') && executable.ends_with(')') {
+        return Ok(None);
+    }
+    let executable = Path::new(executable)
         .canonicalize()?
         .to_string_lossy()
         .into_owned();
@@ -1306,10 +1323,27 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
     if start_identity.is_empty() {
         return Err(io::Error::other("process start identity was empty"));
     }
-    Ok(ProcessIdentity {
+    Ok(Some(ProcessIdentity {
         executable,
         start_identity,
-    })
+    }))
+}
+
+#[cfg(unix)]
+pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
+    let pid = pid.to_string();
+    for attempt in 0..IDENTITY_SETTLE_ATTEMPTS {
+        if let Some(identity) = query_process_identity(&pid)? {
+            return Ok(identity);
+        }
+        if attempt + 1 < IDENTITY_SETTLE_ATTEMPTS {
+            thread::sleep(IDENTITY_SETTLE_INTERVAL);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "process never reported an executable path",
+    ))
 }
 
 #[cfg(unix)]
@@ -1913,8 +1947,25 @@ mod tests {
         let body = body.to_owned();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut request = [0_u8; 1024];
-            let _ = stream.read(&mut request);
+            // Consume the whole request head before answering. A single read can
+            // return before the client has finished writing, and a discarded read
+            // error hides that entirely. Responding and then dropping the socket
+            // while request bytes are still unread makes the kernel close with RST
+            // instead of FIN, so the client's in-flight write fails with EPIPE
+            // rather than reading the healthy response.
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(0) => break,
+                    Ok(_) => request.extend_from_slice(&byte),
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
             write!(
                 stream,
                 "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -1923,6 +1974,11 @@ mod tests {
             .unwrap();
             stream.flush().unwrap();
             stream.shutdown(std::net::Shutdown::Write).unwrap();
+            // Hold the socket open until the client has read the response and
+            // closed its end, so the drop below is a graceful FIN rather than an
+            // RST that could discard buffered response bytes mid-read.
+            let mut drained = Vec::new();
+            let _ = stream.read_to_end(&mut drained);
         });
         (
             HttpHealthSpec {
