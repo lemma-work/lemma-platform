@@ -1163,12 +1163,12 @@ def test_trigger_id_includes_provider():
 
 
 @pytest.mark.asyncio
-async def test_upsert_trigger_tags_provider():
+async def test_upsert_trigger_tags_kind():
     class _FakeTriggerRepo:
         def __init__(self):
             self.created = []
 
-        async def get_by_connector_provider_and_name(self, app, provider, name):
+        async def get_by_connector_kind_and_name(self, app, kind, name):
             return None
 
         async def create(self, entity):

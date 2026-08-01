@@ -96,6 +96,7 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     AuthMethod,
     AuthProvider,
+    provider_to_kind,
     ComposioProviderCapability,
     LemmaProviderCapability,
     OAuth2Defaults,
@@ -652,7 +653,8 @@ def _composio_provider_capability(
 
 
 def _operation_id(connector_id: str, provider: AuthProvider, operation_name: str) -> str:
-    return f"{connector_id}:{provider.value.lower()}:{operation_name}"
+    kind = provider_to_kind(provider).value
+    return f"{connector_id}:{kind}:{operation_name}"
 
 
 def _trigger_id(
@@ -871,9 +873,9 @@ async def _upsert_operation(
     operation_name = (
         _normalize_operation_name(public_name) if normalize_name else public_name.strip()
     )
-    existing = await operation_repository.get_by_connector_provider_and_name(
+    existing = await operation_repository.get_by_connector_kind_and_name(
         connector_id,
-        provider.value,
+        provider_to_kind(provider).value,
         operation_name,
     )
     entity = ConnectorOperationEntity(
@@ -901,9 +903,9 @@ async def _upsert_trigger(
     *,
     provider: AuthProvider,
 ) -> None:
-    existing = await trigger_repository.get_by_connector_provider_and_name(
+    existing = await trigger_repository.get_by_connector_kind_and_name(
         connector_id,
-        provider.value,
+        provider_to_kind(provider).value,
         trigger.slug,
     )
     entity = ConnectorTriggerEntity(
@@ -1102,9 +1104,9 @@ async def _sync_native_catalog(
             )
 
             existing_trigger = (
-                await trigger_repository.get_by_connector_provider_and_name(
+                await trigger_repository.get_by_connector_kind_and_name(
                     connector_id,
-                    AuthProvider.LEMMA.value,
+                    provider_to_kind(AuthProvider.LEMMA).value,
                     trigger_data["event_type"],
                 )
             )

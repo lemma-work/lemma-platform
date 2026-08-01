@@ -48,16 +48,16 @@ class ConnectorTriggerRepository(
         result = await self.session.execute(stmt)
         return [instance.to_entity() for instance in result.scalars().all()]
 
-    async def list_by_connector_provider(
+    async def list_by_connector_kind(
         self,
         connector_id: str,
-        provider: str,
+        kind: str,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorTriggerEntity]:
         stmt = select(ConnectorTrigger).where(
             ConnectorTrigger.connector_id == connector_id,
-            ConnectorTrigger.provider == provider,
+            ConnectorTrigger.kind == kind,
         )
         if search_query:
             stmt = stmt.where(ConnectorTrigger.description.ilike(f"%{search_query}%"))
@@ -67,16 +67,16 @@ class ConnectorTriggerRepository(
         result = await self.session.execute(stmt)
         return [instance.to_entity() for instance in result.scalars().all()]
 
-    async def get_by_connector_provider_and_name(
+    async def get_by_connector_kind_and_name(
         self,
         connector_id: str,
-        provider: str,
+        kind: str,
         trigger_name: str,
     ) -> Optional[ConnectorTriggerEntity]:
         normalized_name = trigger_name.strip().lower()
         stmt = select(ConnectorTrigger).where(
             ConnectorTrigger.connector_id == connector_id,
-            ConnectorTrigger.provider == provider,
+            ConnectorTrigger.kind == kind,
             or_(
                 func.lower(ConnectorTrigger.event_type) == normalized_name,
                 ConnectorTrigger.id == trigger_name,
@@ -130,7 +130,7 @@ class ConnectorTriggerRepository(
         return trigger.to_entity() if trigger else None
 
     async def get_by_app_name_and_event_type(
-        self, app_name: str, event_type: str, provider: Optional[str] = None
+        self, app_name: str, event_type: str, kind: Optional[str] = None
     ) -> List[ConnectorTriggerEntity]:
         normalized = app_name.lower()
         stmt = (
@@ -142,8 +142,8 @@ class ConnectorTriggerRepository(
                 | (func.lower(Connector.title) == normalized),
             )
         )
-        if provider is not None:
-            stmt = stmt.where(ConnectorTrigger.provider == provider)
+        if kind is not None:
+            stmt = stmt.where(ConnectorTrigger.kind == kind)
         result = await self.session.execute(stmt)
         triggers = result.scalars().all()
 

@@ -242,7 +242,7 @@ class ConnectorService:
         credentials: OAuthCredentials,
     ) -> dict | None:
         """Fetch the account holder's own profile via the catalog-curated
-        profile operation(s) for this connector+provider, so identity fields
+        profile operation(s) for this connector+kind, so identity fields
         (email, name, workspace, ...) are populated the same way for any app
         the catalog has a profile operation for, not just a hardcoded few."""
         if self.operation_gateway is None or self.operation_repository is None:
@@ -252,10 +252,11 @@ class ConnectorService:
             capability = connector.capability_for(provider)
         except ValueError:
             return None
+        kind = connector.default_kind_for_provider(provider).value
         for operation_name in capability.profile_operation_names or ():
             operation = (
-                await self.operation_repository.get_by_connector_provider_and_name(
-                    connector_id, provider, operation_name
+                await self.operation_repository.get_by_connector_kind_and_name(
+                    connector_id, kind, operation_name
                 )
             )
             if operation is None:

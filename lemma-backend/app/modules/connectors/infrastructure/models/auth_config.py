@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -13,14 +13,22 @@ from app.modules.connectors.domain.auth_config import (
     AuthConfigSource,
     AuthConfigStatus,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import ConnectorKind
 
 if TYPE_CHECKING:
     from app.modules.connectors.infrastructure.models.connector import Connector
 
 
 class AuthConfig(UUIDAuditBase):
-    """Organization-scoped selected provider config for a connector app."""
+    """One organization's install of a connector.
+
+    ``kind`` is the single runtime discriminator (it replaced ``provider``). An
+    org may hold many active installs of the same connector -- two Slack apps,
+    several MCP servers -- so there is deliberately no ``(organization_id,
+    connector_id)`` uniqueness. Installs are told apart by ``name``; exactly one
+    may be ``is_default``, which is what a caller addressing a bare
+    ``connector_id`` resolves to.
+    """
 
     __tablename__ = "auth_configs"
 
@@ -31,16 +39,19 @@ class AuthConfig(UUIDAuditBase):
         String(255), ForeignKey("connectors.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(Text, nullable=False)
-    provider: Mapped[str] = mapped_column(String(50), default=AuthProvider.LEMMA.value)
+    kind: Mapped[str] = mapped_column(
+        String(50), default=ConnectorKind.PACKAGE.value, nullable=False
+    )
     config_source: Mapped[str] = mapped_column(
         String(50), default=AuthConfigSource.SYSTEM_DEFAULT.value
     )
     status: Mapped[str] = mapped_column(
         String(50), default=AuthConfigStatus.ACTIVE.value
     )
-    provider_config: Mapped[dict | None] = mapped_column(
-        JSONB, default=None, nullable=True
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
     )
+    config: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", JSONB, default=None, nullable=True
     )
@@ -58,21 +69,29 @@ class AuthConfig(UUIDAuditBase):
 
     __table_args__ = (
         Index(
-            "ix_auth_configs_unique_active_org_app",
-            "organization_id",
-            "connector_id",
-            unique=True,
-            postgresql_where=(status == AuthConfigStatus.ACTIVE.value),
-        ),
-        Index(
             "ix_auth_configs_unique_active_org_name",
             "organization_id",
             "name",
             unique=True,
             postgresql_where=(status == AuthConfigStatus.ACTIVE.value),
         ),
+        # At most one default install per (org, connector). This replaces the
+        # old unique (organization_id, connector_id) index: many installs are
+        # now legal, but exactly one answers a bare connector_id lookup.
+        Index(
+            "uq_auth_configs_default_per_connector",
+            "organization_id",
+            "connector_id",
+            unique=True,
+            postgresql_where=(is_default & (status == AuthConfigStatus.ACTIVE.value)),
+        ),
         Index("ix_auth_configs_org_status", "organization_id", "status"),
-        Index("ix_auth_configs_app_provider_status", "connector_id", "provider", "status"),
+        Index(
+            "ix_auth_configs_org_connector_status",
+            "organization_id",
+            "connector_id",
+            "status",
+        ),
     )
 
     def to_entity(self) -> AuthConfigEntity:
@@ -81,10 +100,11 @@ class AuthConfig(UUIDAuditBase):
             organization_id=self.organization_id,
             connector_id=self.connector_id,
             name=self.name,
-            provider=self.provider,
+            kind=self.kind,
             config_source=self.config_source,
             status=self.status,
-            provider_config=self.provider_config,
+            is_default=self.is_default,
+            config=self.config,
             metadata=self.metadata_,
             created_by_user_id=self.created_by_user_id,
             updated_by_user_id=self.updated_by_user_id,

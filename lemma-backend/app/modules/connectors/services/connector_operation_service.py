@@ -13,7 +13,7 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
     OperationSummary,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import AuthProvider, kind_to_provider
 from app.modules.connectors.domain.errors import (
     AccountResolutionError,
     ConnectorNotFoundError,
@@ -78,15 +78,15 @@ class ConnectorOperationService:
         self,
         connector_id: str,
         *,
-        provider: str | None = None,
+        kind: str | None = None,
         search_query: str | None = None,
         limit: int | None = None,
     ) -> list[Any]:
         await self._get_connector(connector_id)
-        if provider:
-            operations = await self.operation_repository.list_by_connector_provider(
+        if kind:
+            operations = await self.operation_repository.list_by_connector_kind(
                 connector_id,
-                provider,
+                kind,
                 search_query=search_query,
                 limit=limit,
             )
@@ -112,12 +112,7 @@ class ConnectorOperationService:
             organization_id=organization_id,
             auth_config_name=auth_config_name,
         )
-        provider = (
-            auth_config.provider.value
-            if hasattr(auth_config.provider, "value")
-            else str(auth_config.provider)
-        )
-        return auth_config, auth_config.connector_id, provider
+        return auth_config, auth_config.connector_id, auth_config.kind.value
 
     def _normalize_operation_lookup_name(self, operation_name: str) -> str:
         return operation_name.strip().lower()
@@ -319,7 +314,7 @@ class ConnectorOperationService:
         query: str | None = None,
         limit: int | None = None,
     ) -> OperationDiscoverResponse:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -328,7 +323,7 @@ class ConnectorOperationService:
             connector_id,
             query=query,
             limit=limit,
-            provider=provider,
+            kind=kind,
         )
 
     async def discover_operations(
@@ -336,14 +331,14 @@ class ConnectorOperationService:
         connector_id: str,
         query: str | None = None,
         limit: int | None = None,
-        provider: str | None = None,
+        kind: str | None = None,
     ) -> OperationDiscoverResponse:
         total_operations = len(
-            await self._list_operation_entities(connector_id, provider=provider)
+            await self._list_operation_entities(connector_id, kind=kind)
         )
         selected_operations = await self._list_operation_entities(
             connector_id,
-            provider=provider,
+            kind=kind,
             search_query=query,
             limit=limit,
         )
@@ -364,14 +359,14 @@ class ConnectorOperationService:
         self,
         connector_id: str,
         operation_name: str,
-        provider: str | None = None,
+        kind: str | None = None,
     ) -> OperationDetail:
         await self._get_connector(connector_id)
-        if provider:
+        if kind:
             operation = (
-                await self.operation_repository.get_by_connector_provider_and_name(
+                await self.operation_repository.get_by_connector_kind_and_name(
                     connector_id,
-                    provider,
+                    kind,
                     operation_name,
                 )
             )
@@ -392,7 +387,7 @@ class ConnectorOperationService:
         auth_config_name: str,
         operation_name: str,
     ) -> OperationDetail:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -400,18 +395,18 @@ class ConnectorOperationService:
         return await self.get_operation_details(
             connector_id,
             operation_name,
-            provider=provider,
+            kind=kind,
         )
 
     async def get_operation_details_batch(
         self,
         connector_id: str,
         operation_names: list[str] | None = None,
-        provider: str | None = None,
+        kind: str | None = None,
     ) -> OperationDetailsBatchResponse:
         operations = await self._list_operation_entities(
             connector_id,
-            provider=provider,
+            kind=kind,
         )
         operations_by_name = {
             self._normalize_operation_lookup_name(operation.name): operation
@@ -453,7 +448,7 @@ class ConnectorOperationService:
         auth_config_name: str,
         operation_names: list[str] | None = None,
     ) -> OperationDetailsBatchResponse:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -461,7 +456,7 @@ class ConnectorOperationService:
         return await self.get_operation_details_batch(
             connector_id,
             operation_names=operation_names,
-            provider=provider,
+            kind=kind,
         )
 
     # -- Resolve / execute split ------------------------------------------------
@@ -485,7 +480,7 @@ class ConnectorOperationService:
         api_url: str | None = None,
         account_id: UUID | None = None,
     ) -> ResolvedConnectorExecution:
-        auth_config, connector_id, _provider = await self._resolve_auth_config_context(
+        auth_config, connector_id, _kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -516,7 +511,7 @@ class ConnectorOperationService:
         auth_config_id: UUID | None = None,
     ) -> ResolvedConnectorExecution:
         await self._get_connector(connector_id)
-        provider: str | None = None
+        kind: str | None = None
         if auth_config_id is not None:
             if self.connector_service is None:
                 raise ConnectorNotFoundError(connector_id)
@@ -525,11 +520,7 @@ class ConnectorOperationService:
             )
             if auth_config is None:
                 raise ConnectorNotFoundError(str(auth_config_id))
-            provider = (
-                auth_config.provider.value
-                if hasattr(auth_config.provider, "value")
-                else str(auth_config.provider)
-            )
+            kind = auth_config.kind.value
             account = await self.account_resolution_service.resolve_account_for_auth_config(
                 user_id=user_id,
                 connector_id=connector_id,
@@ -549,16 +540,12 @@ class ConnectorOperationService:
                     account.auth_config_id
                 )
                 if auth_config is not None:
-                    provider = (
-                        auth_config.provider.value
-                        if hasattr(auth_config.provider, "value")
-                        else str(auth_config.provider)
-                    )
+                    kind = auth_config.kind.value
 
-        if provider:
-            operation = await self.operation_repository.get_by_connector_provider_and_name(
+        if kind:
+            operation = await self.operation_repository.get_by_connector_kind_and_name(
                 connector_id,
-                provider,
+                kind,
                 operation_name,
             )
         else:
@@ -576,11 +563,13 @@ class ConnectorOperationService:
         return ResolvedConnectorExecution(
             connector_id=connector_id,
             operation_execution_name=operation.execution_name,
-            # Resolve the provider to a concrete value (the gateway already maps
-            # None -> LEMMA for routing). This guarantees the execute phase passes
-            # a non-None provider, so the gateway skips its connector-validation
-            # read and the external call holds NO DB connection.
-            provider=provider or AuthProvider.LEMMA.value,
+            # The gateway still routes on the legacy provider vocabulary, so map
+            # the install's kind back onto it. Always concrete, never None: that
+            # is what lets the gateway skip its connector-validation read so the
+            # external call holds NO DB connection.
+            provider=(
+                kind_to_provider(kind).value if kind else AuthProvider.LEMMA.value
+            ),
             third_party_credentials=third_party_credentials,
             payload=payload or {},
             auth_token=auth_token,

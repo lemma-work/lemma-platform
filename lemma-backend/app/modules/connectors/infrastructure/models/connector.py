@@ -17,9 +17,10 @@ class Connector(StringAuditBase):
     icon: Mapped[str | None] = mapped_column(
         String(500), default=None, nullable=True
     )  # File path
-    provider_capabilities: Mapped[list[dict]] = mapped_column(
-        JSONB, default=list, nullable=False
-    )
+    # The ways this connector can be installed (one KindSpec per element). An
+    # install picks exactly one; several entries is normal -- gmail, slack, jira
+    # and google_drive all ship as both a vendored package and a Composio toolkit.
+    kinds: Mapped[list[dict]] = mapped_column(JSONB, default=list, nullable=False)
     agent_instruction: Mapped[str | None] = mapped_column(
         Text, default=None, nullable=True
     )

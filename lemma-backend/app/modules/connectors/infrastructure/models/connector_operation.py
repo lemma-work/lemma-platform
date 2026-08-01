@@ -16,7 +16,15 @@ if TYPE_CHECKING:
 
 
 class ConnectorOperation(StringAuditBase):
-    """Stored catalog entry for connector operations."""
+    """Global catalog operation, seeded from the release by the import script.
+
+    This table holds *only* connector-wide operations -- Composio toolkit tools,
+    vendored package operations, and specs bundled at import time. Operations
+    discovered per install (MCP tools, OpenAPI-URL endpoints) live in
+    ``auth_config_operations`` instead, so a catalog query can never return one
+    tenant's data to another. That separation is structural, not a predicate
+    somebody has to remember to write.
+    """
 
     __tablename__ = "connector_operations"
 
@@ -25,7 +33,7 @@ class ConnectorOperation(StringAuditBase):
         ForeignKey("connectors.id", ondelete="CASCADE"),
         nullable=False,
     )
-    provider: Mapped[str] = mapped_column(String(50), default="LEMMA", nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), default="package", nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     provider_operation_name: Mapped[str | None] = mapped_column(
         String(255), nullable=True
@@ -43,21 +51,24 @@ class ConnectorOperation(StringAuditBase):
         default=None,
         nullable=True,
     )
+    # Polymorphic execution descriptor consumed by the kind's executor. NULL for
+    # `package`, whose operations are described by the vendored client itself.
+    execution: Mapped[dict | None] = mapped_column(JSONB, default=None, nullable=True)
 
     connector: Mapped["Connector"] = relationship("Connector")
 
     __table_args__ = (
         Index(
-            "ix_connector_operations_app_provider_name",
+            "uq_connector_operations_name",
             "connector_id",
-            "provider",
+            "kind",
             "name",
             unique=True,
         ),
         Index(
-            "ix_connector_operations_app_provider_operation",
+            "ix_connector_operations_app_kind_operation",
             "connector_id",
-            "provider",
+            "kind",
             "provider_operation_name",
         ),
     )

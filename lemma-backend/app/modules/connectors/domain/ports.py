@@ -99,16 +99,16 @@ class ConnectorTriggerRepositoryPort(Protocol):
         cursor: Optional[str] = None,
     ) -> Tuple[Sequence[ConnectorTriggerEntity], Optional[str]]: ...
 
-    async def list_by_connector_provider(
+    async def list_by_connector_kind(
         self,
         connector_id: str,
-        provider: str,
+        kind: str,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorTriggerEntity]: ...
 
-    async def get_by_connector_provider_and_name(
-        self, connector_id: str, provider: str, trigger_name: str
+    async def get_by_connector_kind_and_name(
+        self, connector_id: str, kind: str, trigger_name: str
     ) -> Optional[ConnectorTriggerEntity]: ...
 
 
@@ -128,10 +128,10 @@ class ConnectorOperationRepositoryPort(Protocol):
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorOperationEntity]: ...
 
-    async def list_by_connector_provider(
+    async def list_by_connector_kind(
         self,
         connector_id: str,
-        provider: str,
+        kind: str,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorOperationEntity]: ...
@@ -140,8 +140,8 @@ class ConnectorOperationRepositoryPort(Protocol):
         self, connector_id: str, operation_name: str
     ) -> Optional[ConnectorOperationEntity]: ...
 
-    async def get_by_connector_provider_and_name(
-        self, connector_id: str, provider: str, operation_name: str
+    async def get_by_connector_kind_and_name(
+        self, connector_id: str, kind: str, operation_name: str
     ) -> Optional[ConnectorOperationEntity]: ...
 
     async def has_operations(self, connector_id: str) -> bool: ...

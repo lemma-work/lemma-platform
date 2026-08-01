@@ -1,8 +1,26 @@
+"""Connector catalog entity and the per-kind capability specs.
+
+A connector is a catalog entry (``gmail``, ``slack``, ``sql``). *How* an
+organization talks to it is the **kind**: ``composio`` (Composio brokers auth and
+execution), ``package`` (a vendored ``lemma-connectors`` client), ``http`` (an
+OpenAPI descriptor executed directly), ``sql``, or ``mcp``.
+
+Kind is the single runtime discriminator. It is stored on the *auth config*, not
+here, because one catalog entry can legitimately be installed either way --
+``gmail``, ``google_drive``, ``slack`` and ``jira`` all ship as both a vendored
+package and a Composio toolkit. The connector row only advertises which kinds it
+supports; an install pins exactly one.
+
+``AuthProvider`` survives as a deprecated compatibility shim for callers outside
+this module (agent surfaces, schedule composition, pod bundles) and is removed
+once they migrate.
+"""
+
 import datetime
 import enum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 
 class AuthScheme(str, enum.Enum):
@@ -11,9 +29,66 @@ class AuthScheme(str, enum.Enum):
     NOAUTH = "NOAUTH"
 
 
+class ConnectorKind(str, enum.Enum):
+    """How an install authenticates, discovers and executes operations."""
+
+    COMPOSIO = "composio"
+    HTTP = "http"
+    SQL = "sql"
+    MCP = "mcp"
+    PACKAGE = "package"
+
+
+class DiscoveryMode(str, enum.Enum):
+    """Where an install's operation set comes from.
+
+    ``NONE`` means the catalog holds every operation (Composio toolkits, vendored
+    packages, connectors with a spec bundled at import time such as GitHub).
+    ``MCP``/``OPENAPI`` mean the operations are discovered per install and stored
+    against the auth config.
+    """
+
+    NONE = "none"
+    MCP = "mcp"
+    OPENAPI = "openapi"
+
+
 class AuthProvider(str, enum.Enum):
+    """Deprecated. Use :class:`ConnectorKind`.
+
+    Retained so callers outside this module keep working for one release. Read
+    paths map through :func:`kind_to_provider`; ``LEMMA`` means "any non-Composio
+    kind" and therefore cannot round-trip back to a single kind on its own.
+    """
+
     LEMMA = "LEMMA"
     COMPOSIO = "COMPOSIO"
+
+
+def kind_to_provider(kind: "ConnectorKind | str") -> AuthProvider:
+    """Map a kind onto the legacy provider vocabulary."""
+    value = kind.value if isinstance(kind, ConnectorKind) else str(kind)
+    return (
+        AuthProvider.COMPOSIO
+        if value == ConnectorKind.COMPOSIO.value
+        else AuthProvider.LEMMA
+    )
+
+
+def provider_to_kind(provider: "AuthProvider | str") -> ConnectorKind:
+    """Best-effort inverse of :func:`kind_to_provider`.
+
+    ``LEMMA`` is ambiguous -- it covers package/http/sql/mcp -- so it resolves to
+    ``PACKAGE``, which is what every pre-existing native install actually was.
+    Callers that know the real kind must pass it explicitly rather than rely on
+    this.
+    """
+    value = provider.value if isinstance(provider, AuthProvider) else str(provider)
+    return (
+        ConnectorKind.COMPOSIO
+        if value == AuthProvider.COMPOSIO.value
+        else ConnectorKind.PACKAGE
+    )
 
 
 class OAuth2Defaults(BaseModel):
@@ -52,41 +127,83 @@ class SystemOAuthCredentialRef(BaseModel):
         )
 
 
-class LemmaProviderCapability(BaseModel):
-    provider: Literal[AuthProvider.LEMMA] = AuthProvider.LEMMA
+class KindSpecBase(BaseModel):
+    """Catalog metadata for one way of installing a connector.
+
+    Never instantiated directly -- each concrete subclass narrows ``kind`` to a
+    ``Literal`` so the union discriminates on it.
+    """
+
+    kind: ConnectorKind
     auth_scheme: AuthScheme = AuthScheme.OAUTH2
     oauth2_defaults: OAuth2Defaults | None = None
-    auth_config_schema: dict[str, Any] | None = None
-    credential_schema: dict[str, Any] | None = None
     system_oauth: SystemOAuthCredentialRef | None = None
     supports_org_custom_oauth: bool = False
+    # Runtime-enriched from the environment; never meaningful as persisted.
     system_default_available: bool = False
-    package_name: str | None = None
-    # Catalog-curated operation names (tried in order) that fetch the
-    # connected account's own profile (email/name/workspace), so display_name
-    # resolution doesn't depend on the OAuth response alone.
+    # JSON Schema for the install's own config (``auth_configs.config``).
+    # Validated on every create/update -- unlike the legacy path, which skipped
+    # validation entirely for non-OAuth2 native connectors.
+    install_schema: dict[str, Any] | None = Field(
+        default=None, validation_alias="auth_config_schema"
+    )
+    # JSON Schema for a connected account's credentials.
+    credential_schema: dict[str, Any] | None = None
+    discovery: DiscoveryMode = DiscoveryMode.NONE
+    # Catalog-curated operation names (tried in order) that fetch the connected
+    # account's own profile, so display_name resolution doesn't depend on the
+    # OAuth response alone.
     profile_operation_names: list[str] | None = None
 
+    model_config = ConfigDict(populate_by_name=True)
 
-class ComposioProviderCapability(BaseModel):
-    provider: Literal[AuthProvider.COMPOSIO] = AuthProvider.COMPOSIO
+    @property
+    def auth_config_schema(self) -> dict[str, Any] | None:
+        """Deprecated alias for :attr:`install_schema`."""
+        return self.install_schema
+
+    @property
+    def provider(self) -> AuthProvider:
+        """Deprecated. The legacy provider this kind maps onto."""
+        return kind_to_provider(self.kind)
+
+
+class PackageKindSpec(KindSpecBase):
+    kind: Literal[ConnectorKind.PACKAGE] = ConnectorKind.PACKAGE
+    package_name: str | None = None
+
+
+class ComposioKindSpec(KindSpecBase):
+    kind: Literal[ConnectorKind.COMPOSIO] = ConnectorKind.COMPOSIO
     auth_scheme: AuthScheme = AuthScheme.OAUTH2
     toolkit_slug: str
-    auth_config_schema: dict[str, Any] | None = None
     system_default_available: bool = True
     supports_org_custom_auth_config: bool = False
-    profile_operation_names: list[str] | None = None
 
 
-ProviderCapability = Annotated[
-    LemmaProviderCapability | ComposioProviderCapability,
-    Field(discriminator="provider"),
+class HttpKindSpec(KindSpecBase):
+    kind: Literal[ConnectorKind.HTTP] = ConnectorKind.HTTP
+
+
+class SqlKindSpec(KindSpecBase):
+    kind: Literal[ConnectorKind.SQL] = ConnectorKind.SQL
+    auth_scheme: AuthScheme = AuthScheme.API_KEY
+
+
+class McpKindSpec(KindSpecBase):
+    kind: Literal[ConnectorKind.MCP] = ConnectorKind.MCP
+    auth_scheme: AuthScheme = AuthScheme.API_KEY
+
+
+KindSpec = Annotated[
+    PackageKindSpec | ComposioKindSpec | HttpKindSpec | SqlKindSpec | McpKindSpec,
+    Field(discriminator="kind"),
 ]
-ProviderCapabilityAdapter = TypeAdapter(ProviderCapability)
+KindSpecAdapter: TypeAdapter[Any] = TypeAdapter(KindSpec)
 
 
 class ConnectorEntity(BaseModel):
-    """Global app catalog entry plus typed provider capability metadata."""
+    """Global app catalog entry plus the kinds it can be installed as."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -95,7 +212,13 @@ class ConnectorEntity(BaseModel):
     description: str | None = Field(None, description="Description of the connector")
     icon: str | None = Field(None, description="Icon URL or path")
     agent_instruction: str | None = Field(None, description="Instruction for AI agent")
-    provider_capabilities: list[ProviderCapability] = Field(default_factory=list)
+    kinds: list[KindSpec] = Field(
+        default_factory=list, description="Ways this connector can be installed"
+    )
+    # Transitional runtime-only fields. The auth providers still read the
+    # effective OAuth config off a model_copy'd entity rather than being handed
+    # an install; they move to ResolvedInstall when the kind plugins take over
+    # authentication, and these go with them. Never persisted.
     oauth2_config: OAuth2Config | None = Field(
         None,
         description="Runtime-only effective OAuth2 config; never persisted on connectors.",
@@ -112,15 +235,74 @@ class ConnectorEntity(BaseModel):
     created_at: datetime.datetime | None = Field(None, description="Created at")
     updated_at: datetime.datetime | None = Field(None, description="Updated at")
 
-    def capability_for(self, provider: AuthProvider | str) -> ProviderCapability:
-        provider_value = provider.value if hasattr(provider, "value") else str(provider)
-        for capability in self.provider_capabilities:
-            if capability.provider.value == provider_value:
-                return capability
-        raise ValueError(f"Connector '{self.id}' does not support provider '{provider_value}'")
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_capabilities(cls, data: Any) -> Any:
+        """Accept ``provider_capabilities=`` from callers not yet migrated.
+
+        The capability classes are already aliases of the kind specs, so the
+        values need no translation -- only the field name moved. A legacy dict
+        carrying ``provider`` but no ``kind`` is mapped the same way an install
+        is: ``COMPOSIO`` to the composio spec, anything else to ``package``.
+        """
+        if not isinstance(data, dict):
+            return data
+        legacy = data.get("provider_capabilities")
+        if data.get("kinds") is not None or legacy is None:
+            return data
+        kinds: list[Any] = []
+        for capability in legacy:
+            if isinstance(capability, dict) and "kind" not in capability:
+                capability = {
+                    **capability,
+                    "kind": provider_to_kind(capability.get("provider", "LEMMA")),
+                }
+            kinds.append(capability)
+        return {**data, "kinds": kinds}
+
+    def spec_for(self, kind: ConnectorKind | str) -> KindSpec:
+        """Return the spec for ``kind``, or raise ``ValueError``."""
+        wanted = kind.value if isinstance(kind, ConnectorKind) else str(kind)
+        for spec in self.kinds:
+            if spec.kind.value == wanted:
+                return spec
+        raise ValueError(f"Connector '{self.id}' cannot be installed as '{wanted}'")
+
+    def supported_kinds(self) -> list[ConnectorKind]:
+        return [spec.kind for spec in self.kinds]
+
+    def default_kind_for_provider(self, provider: AuthProvider | str) -> ConnectorKind:
+        """Resolve the legacy provider vocabulary against this connector's kinds.
+
+        ``COMPOSIO`` maps to the composio spec; ``LEMMA`` means "whichever
+        non-composio kind this connector actually ships", which is unambiguous
+        because a connector never advertises two native kinds.
+        """
+        value = provider.value if isinstance(provider, AuthProvider) else str(provider)
+        if value == AuthProvider.COMPOSIO.value:
+            return ConnectorKind.COMPOSIO
+        for spec in self.kinds:
+            if spec.kind is not ConnectorKind.COMPOSIO:
+                return spec.kind
+        raise ValueError(f"Connector '{self.id}' has no native kind")
+
+    # --- deprecated provider-shaped accessors ------------------------------
+
+    @property
+    def provider_capabilities(self) -> list[KindSpec]:
+        """Deprecated alias for :attr:`kinds`."""
+        return self.kinds
+
+    def capability_for(self, provider: AuthProvider | str) -> KindSpec:
+        """Deprecated. Use :meth:`spec_for` with a concrete kind."""
+        return self.spec_for(self.default_kind_for_provider(provider))
 
 
-# Internal naming aliases for code paths that still describe the auth scheme/executor
-# vocabulary while persisting only provider capabilities on connectors.
+# Internal naming aliases retained for call sites that still speak the older
+# auth-scheme / provider vocabulary.
 AuthMethod = AuthScheme
 OperationExecutor = AuthProvider
+ProviderCapability = KindSpec
+ProviderCapabilityAdapter = KindSpecAdapter
+LemmaProviderCapability = PackageKindSpec
+ComposioProviderCapability = ComposioKindSpec
