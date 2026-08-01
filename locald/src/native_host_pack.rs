@@ -182,6 +182,15 @@ fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
 }
 
 fn source_bindings(root: &Path) -> io::Result<Bindings> {
+    source_bindings_with(root, &resolve_on_path("uv")?, &resolve_on_path("node")?)
+}
+
+/// The layout half of source mode, with the toolchain already located.
+///
+/// Split out so what a checkout *is* can be described without a machine that
+/// has `uv` and `node` installed — a CI runner has neither, and a test about
+/// where secrets live should not need them.
+fn source_bindings_with(root: &Path, uv: &Path, node: &Path) -> io::Result<Bindings> {
     let backend_dir = required_dir(root, "the backend project", "lemma-backend")?;
     let frontend_dir = required_dir(root, "the frontend project", "lemma-frontend")?;
     // The backend depends on AgentBox, so its interpreter can run AgentBox's
@@ -197,14 +206,14 @@ fn source_bindings(root: &Path) -> io::Result<Bindings> {
         // to stage before local mode runs the code being edited. Resolved to
         // absolute paths so locald can identify the processes it spawns.
         python: vec![
-            path_text(&resolve_on_path("uv")?)?,
+            path_text(uv)?,
             "run".to_owned(),
             "--project".to_owned(),
             path_text(&backend_dir)?,
             "python".to_owned(),
         ],
         frontend_command: vec![
-            path_text(&resolve_on_path("node")?)?,
+            path_text(node)?,
             path_text(&launcher)?,
             "--dev".to_owned(),
             path_text(&frontend_dir)?,
@@ -1082,7 +1091,14 @@ mod tests {
         )
         .unwrap();
 
-        let source = source_bindings(root.path()).unwrap();
+        // Named rather than resolved: a CI runner has neither tool installed,
+        // and where secrets live does not depend on them.
+        let source = source_bindings_with(
+            root.path(),
+            Path::new("/usr/bin/uv"),
+            Path::new("/usr/bin/node"),
+        )
+        .unwrap();
         assert_eq!(source.secret_key_provider, "static");
 
         let pack = tempfile::tempdir().unwrap();
