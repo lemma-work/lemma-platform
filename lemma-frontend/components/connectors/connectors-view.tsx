@@ -12,13 +12,15 @@ import {
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { Input } from '@/components/ui/input';
-import { CheckCircle2, Loader2, Plug, Search } from '@/components/ui/icons';
+import { Plug, Search } from '@/components/ui/icons';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import type { Account, Connector } from '@/lib/types';
 import { useOrganization } from '@/components/dashboard/org-context';
+import { ResourceCardGridSkeleton } from '@/components/shared/loading';
 import { ConnectorGrid } from './connector-grid';
-import { ConnectedAccountCard } from './connector-card';
+import { ConnectorMosaic } from './connector-mosaic';
+import { ConnectedAccountRow } from './connector-card';
 import { ConnectAccountDialog, type CredentialTarget } from './connect-account-dialog';
 import { AdvancedConfigDialog, type AdvancedEnablePayload } from './advanced-config';
 import {
@@ -325,7 +327,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
     if (!effectiveOrganizationId) {
         return (
             <EmptyState
-                variant="panel"
+                variant="region"
                 icon={<Plug className="h-5 w-5" />}
                 title="Select an organization"
                 description="Connectors are enabled and connected inside an organization."
@@ -335,8 +337,8 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
     if (isLoadingAccounts || isLoadingApps || isLoadingAuthConfigs) {
         return (
-            <div className={embedded ? 'flex min-h-[30vh] items-center justify-center bg-transparent' : 'context-shell flex min-h-full items-center justify-center bg-transparent pb-8'}>
-                <Loader2 className="h-8 w-8 animate-spin text-[var(--text-tertiary)]" />
+            <div className={embedded ? 'min-h-[30vh] bg-transparent' : 'context-shell min-h-full bg-transparent pb-8'}>
+                <ResourceCardGridSkeleton count={6} />
             </div>
         );
     }
@@ -358,38 +360,35 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         </div>
     );
 
-    return (
-        <div className={embedded ? 'min-h-full bg-transparent' : 'context-shell min-h-full bg-transparent pb-8'}>
+    // Band first, controls under it — the logos are the masthead, so the copy and
+    // the search sit on the panel's own footer rather than fighting it for space.
+    // The `<h1>` only prints on the standalone route; embedded, the pod shell
+    // already names the section and repeating it read as a settings screen.
+    const masthead = (
+        <>
             {showHeader ? (
-                <>
-                    <div className="context-header">
-                        <div>
-                            <p className="section-label">Connectors</p>
-                            <h1 className="font-display text-4xl font-normal text-[var(--text-primary)]">Connectors</h1>
-                            <p className="mt-2 max-w-2xl text-sm text-[var(--text-secondary)]">
-                                Connect the apps you use, and they’re available to you across every pod in {effectiveOrganizationName || 'this organization'}.
-                            </p>
-                        </div>
-                        {searchField}
-                    </div>
-                    <p className="context-inline-note">
-                        Click Connect and we’ll set up the recommended integration automatically. Use Advanced only to pick a
-                        different provider or your own credentials.
-                    </p>
-                </>
-            ) : (
-                <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <p className="max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
-                        Connect the apps you use, and they’re available to you across every pod in {effectiveOrganizationName || 'this organization'}.
+                <h1 className="mb-4 font-display text-4xl font-normal text-[var(--text-primary)]">Connectors</h1>
+            ) : null}
+            <div className="connector-masthead relative mb-6 overflow-hidden">
+                <ConnectorMosaic connectors={connectors || []} />
+                <div className="flex flex-col gap-3 px-4 pb-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-[var(--text-secondary)]">
+                        Connect the apps you use, and they’re available across every pod in{' '}
+                        {effectiveOrganizationName || 'this organization'}.
                     </p>
                     {searchField}
                 </div>
-            )}
+            </div>
+        </>
+    );
+
+    return (
+        <div className={embedded ? 'min-h-full bg-transparent' : 'context-shell min-h-full bg-transparent pb-8'}>
+            {masthead}
 
             {accounts && accounts.length > 0 && (
                 <section className="context-section">
                     <div className="mb-3 flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4 text-[var(--state-success)]" />
                         <h2 className="text-base font-normal text-[var(--text-primary)]">Your accounts</h2>
                         <span className="text-xs text-[var(--text-tertiary)]">{accounts.length}</span>
                         {attentionCount > 0 ? (
@@ -398,9 +397,9 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                             </span>
                         ) : null}
                     </div>
-                    <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="grid grid-cols-1 gap-x-4 lg:grid-cols-2">
                         {accounts.map((account) => (
-                            <ConnectedAccountCard
+                            <ConnectedAccountRow
                                 key={account.id}
                                 account={account}
                                 isBusy={
@@ -423,9 +422,8 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             )}
 
             <section>
-                <div className="mb-3 flex items-center gap-2">
-                    <Plug className="h-4 w-4 text-[var(--text-tertiary)]" />
-                    <h2 className="text-base font-normal text-[var(--text-primary)]">All connectors</h2>
+                <div className="mb-4 flex items-center gap-2">
+                    <h2 className="text-base font-normal text-[var(--text-primary)]">Browse apps</h2>
                     <span className="text-xs text-[var(--text-tertiary)]">{filteredApps.length}</span>
                 </div>
                 <ConnectorGrid
