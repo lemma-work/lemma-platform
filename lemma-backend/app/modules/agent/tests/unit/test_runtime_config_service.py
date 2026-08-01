@@ -1722,3 +1722,76 @@ async def test_a_config_edit_still_needs_the_computer_awake():
             user_id=user_id,
             config_selections={"approval": "always"},
         )
+
+async def test_one_unreadable_row_does_not_blank_the_whole_listing():
+    """Drives the real repository, not a stand-in.
+
+    The protocol allowlist in `get_visible` already excludes retired daemon
+    profiles, so a row that reaches validation has a protocol this build knows
+    and a body it could not parse - a partial write, a hand-edited row, or a
+    field a later release tightened. Mapping them in a comprehension took out
+    the Models page for the whole organization on one bad row.
+    """
+    from app.modules.agent.infrastructure.repositories import (
+        AgentRuntimeProfileRepository,
+    )
+
+    organization_id = uuid4()
+
+    class _Row:
+        """Enough of AgentRuntimeProfileModel for _to_entity to run."""
+
+        def __init__(self, *, identifier, entity):
+            self.id = identifier
+            self.credentials = None
+            self._entity = entity
+
+        def to_entity(self):
+            return self._entity
+
+    readable = _provider_profile(organization_id=organization_id, name="Working")
+
+    class _Broken:
+        id = "broken"
+
+        def to_entity(self):
+            # A row whose stored shape no longer satisfies the domain model.
+            return AgentRuntimeProfile.model_construct(
+                id="broken",
+                organization_id=organization_id,
+                scope=RuntimeProfileScope.ORGANIZATION,
+                kind=RuntimeProfileKind.MODEL_PROVIDER,
+                protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+                name="Broken",
+                default_model_name=None,  # MODEL_PROVIDER requires one
+                model_catalog=[],
+                config={},
+                status=RuntimeProfileStatus.ACTIVE,
+                metadata={},
+            )
+
+        credentials = None
+
+    rows = [_Row(identifier=readable.id, entity=readable), _Broken()]
+
+    class _Result:
+        def scalars(self):
+            return iter(rows)
+
+    class _Session:
+        async def execute(self, _stmt):
+            return _Result()
+
+    class _Encryption:
+        def decrypt_json(self, _value):
+            return None
+
+    repository = AgentRuntimeProfileRepository.__new__(AgentRuntimeProfileRepository)
+    repository.session = _Session()
+    repository.encryption = _Encryption()
+
+    listed = await repository.get_visible(
+        organization_id=organization_id, user_id=uuid4()
+    )
+
+    assert [profile.id for profile in listed] == [readable.id]

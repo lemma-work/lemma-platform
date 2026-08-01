@@ -403,36 +403,64 @@ async def poll_agent_host_commands(
     channel_service = await get_channel_service()
     async with channel_service.subscribe([host_poke_channel(host_id)]) as pokes:
         poke = aiter(pokes)
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return AgentHostPollResponse(
-                    protocol_version=negotiated_protocol,
-                    host_status=host_status,
-                    commands=[],
+        # The wait for a poke is a task that outlives one loop iteration, and is
+        # deliberately never cancelled mid-flight. `asyncio.wait_for` cancels the
+        # inner awaitable on timeout, and cancelling `anext()` closes the async
+        # generator - so the *second* idle round would raise StopAsyncIteration
+        # out of the handler and 500 the poll. Every host went OFFLINE five
+        # seconds after connecting because of it.
+        waiting: asyncio.Task[str | bytes] | None = None
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return AgentHostPollResponse(
+                        protocol_version=negotiated_protocol,
+                        host_status=host_status,
+                        commands=[],
+                    )
+                if waiting is None:
+                    waiting = asyncio.ensure_future(anext(poke))
+                done, _ = await asyncio.wait(
+                    {waiting}, timeout=min(_IDLE_REPOLL_SECONDS, remaining)
                 )
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(
-                    anext(poke), timeout=min(_IDLE_REPOLL_SECONDS, remaining)
-                )
-            if loop.time() >= deadline:
-                continue
-            async with _uow_factory() as uow:
-                commands = await AgentHostDispatchRepository(uow).poll_commands(
-                    host_id=host_id,
-                    limit=_MAX_COMMANDS_PER_POLL,
-                    acknowledged_command_ids=[],
-                    checkpoints=[],
-                    rejections=[],
-                    available_run_slots=request.capacity.available_runs,
-                )
-                await uow.commit()
-            if commands:
-                return AgentHostPollResponse(
-                    protocol_version=negotiated_protocol,
-                    host_status=host_status,
-                    commands=commands,
-                )
+                if done:
+                    # Consume the result so an exception is not swallowed, then
+                    # re-arm on the next round. A closed subscription ends the
+                    # idle wait: the host re-polls and subscribes afresh.
+                    finished, waiting = waiting, None
+                    try:
+                        finished.result()
+                    except StopAsyncIteration:
+                        return AgentHostPollResponse(
+                            protocol_version=negotiated_protocol,
+                            host_status=host_status,
+                            commands=[],
+                        )
+                if loop.time() >= deadline:
+                    continue
+                async with _uow_factory() as uow:
+                    commands = await AgentHostDispatchRepository(uow).poll_commands(
+                        host_id=host_id,
+                        limit=_MAX_COMMANDS_PER_POLL,
+                        acknowledged_command_ids=[],
+                        checkpoints=[],
+                        rejections=[],
+                        available_run_slots=request.capacity.available_runs,
+                    )
+                    await uow.commit()
+                if commands:
+                    return AgentHostPollResponse(
+                        protocol_version=negotiated_protocol,
+                        host_status=host_status,
+                        commands=commands,
+                    )
+        finally:
+            # The response is on its way out; nothing will read the poke now.
+            if waiting is not None:
+                waiting.cancel()
+                with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
+                    await waiting
 
 
 @router.post(

@@ -6,11 +6,13 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import func, literal, literal_column, select, update
 from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.orm import selectinload
 
 from app.core.authorization.context import Context, ResourceType, ResourceVisibility
+from app.core.log.log import get_logger
 from app.core.authorization.delegation import DEFAULT_POD_AGENT_ID
 from app.core.authorization.grants import (
     delete_grantee_grants,
@@ -77,6 +79,8 @@ from app.modules.connectors.contracts import SecretEncryptionPort
 
 _ACTIVE_AGENT_RUN_STATUS_VALUES = _run_status_values_for_db(ACTIVE_AGENT_RUN_STATUSES)
 _DEFAULT_POD_AGENT_ID_SQL = literal_column(f"'{DEFAULT_POD_AGENT_ID}'::uuid")
+
+logger = get_logger(__name__)
 
 # Rows written for the retired local daemon still carry its per-tool protocols
 # (CODEX_APP_SERVER, CLAUDE_CODE, …). They can never execute again, and
@@ -282,7 +286,24 @@ class AgentRuntimeProfileRepository:
             AgentRuntimeProfileModel.name.asc(),
         )
         result = await self.session.execute(stmt)
-        return [self._to_entity(instance) for instance in result.scalars()]
+        # One unmappable row must not blank the workspace's entire model list.
+        # The protocol filter above already excludes retired daemon profiles, so
+        # anything reaching here has a protocol this build knows and a body it
+        # could not validate - a partial write, a hand-edited row, or a field
+        # this build tightened. Skipping it costs that one profile; raising
+        # costs every profile the organization has, and the Models page with it.
+        profiles: list[AgentRuntimeProfile] = []
+        for instance in result.scalars():
+            try:
+                profiles.append(self._to_entity(instance))
+            except ValidationError as error:
+                logger.warning(
+                    "agent.runtime_profile.unreadable.skipped",
+                    profile_id=str(instance.id),
+                    organization_id=str(organization_id),
+                    error=str(error),
+                )
+        return profiles
 
     async def get_visible_by_id(
         self,

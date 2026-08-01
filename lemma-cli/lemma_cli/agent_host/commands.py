@@ -56,15 +56,21 @@ def _binary() -> str:
     if packaged.is_file():
         return str(packaged)
 
-    managed = managed_binary_path()
-    if managed.is_file():
-        return str(managed)
-
+    # A source checkout wins over a previously downloaded release. Running from
+    # the repository means this checkout is the thing under test, and the
+    # managed copy is whatever release happened to be installed once - so with
+    # the old order `make agent-host` built one binary, paired with a different
+    # and older one, then served with the fresh one. A packaged CLI has no
+    # `agent-host/target` beside it, so it still falls through to the download.
     repository = Path(__file__).resolve().parents[3]
     for profile in ("release", "debug"):
         development = repository / "agent-host" / "target" / profile / packaged_name
         if development.is_file():
             return str(development)
+
+    managed = managed_binary_path()
+    if managed.is_file():
+        return str(managed)
 
     typer.echo(
         "Agent Host is not installed; installing the version matched to this CLI...",

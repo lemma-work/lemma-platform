@@ -68,10 +68,47 @@ fn home_directory() -> anyhow::Result<PathBuf> {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HostConfig {
     pub installation_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "targets_skipping_unreadable")]
     pub targets: Vec<TargetConfig>,
     #[serde(default = "default_max_runs")]
     pub max_runs: u16,
+}
+
+/// Drop targets this build cannot read, rather than failing the whole config.
+///
+/// A target written by an older Agent Host can lack a field this one requires -
+/// pairing moved from a keypair to `host_secret`, so every pre-upgrade entry is
+/// unreadable. Failing the load made *every* command exit with a serde error
+/// pointing at a line number, including the `connect` you would run to recover:
+/// the only way out was to hand-edit the file. A target we cannot read is a
+/// target we cannot use, so skipping it loses nothing and leaves the host able
+/// to pair again.
+fn targets_skipping_unreadable<'de, D>(deserializer: D) -> Result<Vec<TargetConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|value| {
+            let name = value
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("<unnamed>")
+                .to_owned();
+            match serde_json::from_value::<TargetConfig>(value) {
+                Ok(target) => Some(target),
+                Err(error) => {
+                    tracing::warn!(
+                        target_name = %name,
+                        %error,
+                        "ignoring a paired workspace this version cannot read; pair it again"
+                    );
+                    None
+                }
+            }
+        })
+        .collect())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -187,5 +224,66 @@ mod tests {
             }],
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn a_target_from_before_host_secrets_is_skipped_not_fatal() {
+        // Exactly the shape written by the keypair-era host. Failing the whole
+        // load on it bricked every command, `connect` included, so the only
+        // recovery was hand-editing the file.
+        let legacy = serde_json::json!({
+            "installation_id": "installation",
+            "max_runs": 2,
+            "targets": [
+                {
+                    "target_id": Uuid::new_v4(),
+                    "name": "paired before the upgrade",
+                    "base_url": "http://localhost:8710/",
+                    "host_id": Uuid::new_v4(),
+                    "user_id": Uuid::new_v4(),
+                    "organization_id": null,
+                    "public_key_fingerprint": "0d009517e46ab181",
+                    "enabled": true,
+                    "allow_insecure_http": true,
+                    "draining": false,
+                    "refresh_generation": 0
+                }
+            ]
+        });
+
+        let config: HostConfig = serde_json::from_value(legacy).unwrap();
+
+        assert!(config.targets.is_empty());
+        assert_eq!(config.installation_id, "installation");
+        assert_eq!(config.max_runs, 2);
+    }
+
+    #[test]
+    fn a_readable_target_survives_beside_an_unreadable_one() {
+        let good = Uuid::new_v4();
+        let mixed = serde_json::json!({
+            "installation_id": "installation",
+            "targets": [
+                { "name": "unreadable", "target_id": Uuid::new_v4() },
+                {
+                    "target_id": good,
+                    "name": "current",
+                    "base_url": "https://api.lemma.work/",
+                    "host_id": Uuid::new_v4(),
+                    "user_id": Uuid::new_v4(),
+                    "organization_id": null,
+                    "host_secret": "secret",
+                    "enabled": true,
+                    "allow_insecure_http": false,
+                    "draining": false,
+                    "refresh_generation": 0
+                }
+            ]
+        });
+
+        let config: HostConfig = serde_json::from_value(mixed).unwrap();
+
+        assert_eq!(config.targets.len(), 1);
+        assert_eq!(config.targets[0].target_id, good);
     }
 }
