@@ -57,6 +57,13 @@ struct Bindings {
     /// Argv prefix that runs the backend's Python.
     python: Vec<String>,
     backend_dir: PathBuf,
+    /// Where AgentBox's own Alembic history is rooted, and what its config is
+    /// called there. A pack flattens both projects into `backend/` and renames
+    /// the config to `agentbox-alembic.ini`; a checkout keeps AgentBox in its
+    /// own directory under its own `alembic.ini`, whose `script_location` is
+    /// relative to that directory.
+    agentbox_dir: PathBuf,
+    agentbox_config: &'static str,
     frontend_command: Vec<String>,
     frontend_dir: PathBuf,
     /// Assets that are baked into a pack but live in sibling projects in a
@@ -156,6 +163,8 @@ fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
         browser_sdk: backend_dir.join("assets/browser-sdk/lemma-client.js"),
         browser_ui: backend_dir.join("assets/browser-sdk/lemma-ui.js"),
         skills: backend_dir.join("assets/lemma-skills"),
+        agentbox_dir: backend_dir.clone(),
+        agentbox_config: "agentbox-alembic.ini",
         backend_dir,
         frontend_dir: root.join("frontend"),
         node_env: "production",
@@ -165,6 +174,9 @@ fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
 fn source_bindings(root: &Path) -> io::Result<Bindings> {
     let backend_dir = required_dir(root, "the backend project", "lemma-backend")?;
     let frontend_dir = required_dir(root, "the frontend project", "lemma-frontend")?;
+    // The backend depends on AgentBox, so its interpreter can run AgentBox's
+    // migrations; only the working directory and config name differ.
+    let agentbox_dir = required_dir(root, "the AgentBox project", "agentbox")?;
     let launcher = required_file(
         root,
         "frontend launcher",
@@ -172,16 +184,17 @@ fn source_bindings(root: &Path) -> io::Result<Bindings> {
     )?;
     Ok(Bindings {
         // `uv` and `node` come from PATH, which is the point: there is nothing
-        // to stage before local mode runs the code being edited.
+        // to stage before local mode runs the code being edited. Resolved to
+        // absolute paths so locald can identify the processes it spawns.
         python: vec![
-            "uv".to_owned(),
+            path_text(&resolve_on_path("uv")?)?,
             "run".to_owned(),
             "--project".to_owned(),
             path_text(&backend_dir)?,
             "python".to_owned(),
         ],
         frontend_command: vec![
-            "node".to_owned(),
+            path_text(&resolve_on_path("node")?)?,
             path_text(&launcher)?,
             "--dev".to_owned(),
             path_text(&frontend_dir)?,
@@ -189,6 +202,8 @@ fn source_bindings(root: &Path) -> io::Result<Bindings> {
         browser_sdk: root.join("lemma-typescript/public/lemma-client.js"),
         browser_ui: root.join("lemma-typescript/public/lemma-ui.js"),
         skills: root.join("lemma-skills"),
+        agentbox_dir,
+        agentbox_config: "alembic.ini",
         backend_dir,
         frontend_dir,
         node_env: "development",
@@ -543,8 +558,8 @@ fn build(
             },
             {
                 "id": "agentbox-migrations",
-                "command": argv(&bindings.python, &["-m", "alembic", "-c", "agentbox-alembic.ini", "upgrade", "head"]),
-                "cwd": path_text(&backend_dir)?,
+                "command": argv(&bindings.python, &["-m", "alembic", "-c", bindings.agentbox_config, "upgrade", "head"]),
+                "cwd": path_text(&bindings.agentbox_dir)?,
                 "env": backend_env,
                 "timeout_seconds": 300,
                 "max_attempts": 5,
@@ -592,6 +607,26 @@ fn argv(prefix: &[String], rest: &[&str]) -> Vec<String> {
     let mut command = prefix.to_vec();
     command.extend(rest.iter().map(|value| (*value).to_owned()));
     command
+}
+
+/// Resolve a PATH tool to an absolute path, the way a pack's own binaries are.
+///
+/// Not cosmetic. `record_child` identifies a spawned process with
+/// `ps -o comm=`, which reports exactly the argv[0] it was launched with, and
+/// then canonicalizes it. Spawned as bare `uv`, that is the string "uv" and the
+/// canonicalize fails with ENOENT — so locald tears the process back down with
+/// "could not record ownership of backend" and local mode never starts.
+fn resolve_on_path(tool: &str) -> io::Result<PathBuf> {
+    let path = std::env::var_os("PATH").ok_or_else(|| invalid("PATH is not set"))?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(tool))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            invalid(format!(
+                "source mode needs {tool} on PATH; it runs the checkout directly"
+            ))
+        })?
+        .canonicalize()
 }
 
 fn required_dir(root: &Path, label: &str, relative: &str) -> io::Result<PathBuf> {
