@@ -952,8 +952,12 @@ async def configure_workspace_api_url(
 
 
 @pytest_asyncio.fixture(scope="function")
-async def scheduler_api_server(e2e_settings) -> AsyncGenerator[str, None]:
+async def scheduler_api_server(
+    e2e_settings,
+    db_manager,
+) -> AsyncGenerator[str, None]:
     """Run a real scheduler API server for workflow/schedule e2e tests."""
+    _ = db_manager
 
     from app.scheduler import app as scheduler_app
 

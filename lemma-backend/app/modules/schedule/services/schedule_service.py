@@ -15,6 +15,7 @@ from app.modules.schedule.domain.errors import (
     ScheduleValidationError,
 )
 from app.modules.schedule.domain.interfaces import (
+    DatastoreSchedulePolicy,
     ExternalScheduleWriter,
     ScheduleRepository,
     SchedulerService,
@@ -22,20 +23,25 @@ from app.modules.schedule.domain.interfaces import (
     ScheduleTargetResolver,
 )
 from app.modules.schedule.domain.schedule import (
+    DatastoreScheduleConfig,
     ScheduleCreateEntity,
     ScheduleEntity,
     ScheduleType,
     ScheduleUpdateEntity,
     normalize_datastore_schedule_config,
 )
-from app.modules.schedule.domain.events.schedule import ScheduleFired
-from app.modules.schedule.repositories.schedule_run_repository import (
-    ScheduleRunRepository,
-)
 from app.modules.schedule.repositories.schedule_repository import (
     ScheduleRepository as ScheduleRepositoryImpl,
 )
 from app.modules.schedule.scheduler.api_client import SchedulerAPIClient
+from app.modules.schedule.services.time_schedule_policy import (
+    validate_time_schedule_config,
+)
+from app.modules.schedule.services.schedule_run_service import ScheduleRunService
+from app.modules.schedule.services.schedule_update_policy import (
+    is_explicit_reactivation,
+    validate_schedule_update_policies,
+)
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -51,6 +57,7 @@ class ScheduleService:
         scheduler_service: Optional[SchedulerService] = None,
         external_schedule_writer: Optional[ExternalScheduleWriter] = None,
         target_resolver: ScheduleTargetResolver | None = None,
+        datastore_policy: DatastoreSchedulePolicy | None = None,
         authorization_service: object | None = None,
     ):
         self.uow = uow
@@ -66,7 +73,18 @@ class ScheduleService:
             external_schedule_writer = ExternalScheduleWriterAdapter(uow=uow)
         self.external_schedule_writer = external_schedule_writer
         self.authorization_service = authorization_service
-        self.run_repository = ScheduleRunRepository(uow)
+        if datastore_policy is None:
+            from app.composition.schedule_datastore_policy import (
+                SqlAlchemyDatastoreSchedulePolicy,
+            )
+
+            datastore_policy = SqlAlchemyDatastoreSchedulePolicy(uow)
+        self.datastore_policy = datastore_policy
+        self.run_service = ScheduleRunService(
+            uow=uow,
+            schedule_repository=self.schedule_repository,
+            datastore_policy=datastore_policy,
+        )
         if target_resolver is None:
             from app.composition.schedule_targets import (
                 SqlAlchemyScheduleTargetResolver,
@@ -83,13 +101,9 @@ class ScheduleService:
         ctx: Context,
         limit: int,
     ):
-        schedule = await self.get_schedule(schedule_id, ctx=ctx)
-        if schedule is None or schedule.pod_id != pod_id:
-            return None
-        await ctx.require(
-            Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id)
+        return await self.run_service.list_schedule_runs(
+            pod_id=pod_id, schedule_id=schedule_id, ctx=ctx, limit=limit
         )
-        return await self.run_repository.list_for_schedule(schedule_id, limit=limit)
 
     async def retry_schedule_run(
         self,
@@ -99,35 +113,9 @@ class ScheduleService:
         run_id: UUID,
         ctx: Context,
     ):
-        schedule = await self.get_schedule(schedule_id, ctx=ctx)
-        if schedule is None or schedule.pod_id != pod_id:
-            return None
-        await ctx.require(
-            Permissions.SCHEDULE_UPDATE, ResourceRef.schedule(pod_id, schedule_id)
+        return await self.run_service.retry_schedule_run(
+            pod_id=pod_id, schedule_id=schedule_id, run_id=run_id, ctx=ctx
         )
-        schedule_run = await self.run_repository.reset_for_retry(
-            schedule_id=schedule_id, run_id=run_id
-        )
-        if schedule_run is None:
-            return None
-        self.uow.collect_events(
-            [
-                ScheduleFired(
-                    schedule_id=schedule.id,
-                    user_id=schedule.user_id,
-                    schedule_type=schedule.schedule_type,
-                    pod_id=schedule.pod_id,
-                    account_id=schedule.account_id,
-                    payload=schedule_run.payload,
-                    metadata=schedule_run.metadata,
-                    llm_output=schedule_run.llm_output,
-                    scheduled_at=schedule_run.source_occurred_at,
-                    source_event_id=schedule_run.source_event_id,
-                    causation_id=schedule_run.id,
-                )
-            ]
-        )
-        return schedule_run
 
     async def create_schedule(
         self,
@@ -150,6 +138,9 @@ class ScheduleService:
         await self._validate_name_available(schedule_create)
         await self._validate_target(schedule_create)
         await self._require_target_execute(schedule_create, ctx=ctx)
+        await self._require_datastore_table_update(schedule_create, ctx=ctx)
+        if schedule_create.schedule_type == ScheduleType.TIME:
+            validate_time_schedule_config(schedule_create.config)
         schedule = ScheduleEntity(**schedule_create.model_dump())
         created = await self.schedule_repository.create(schedule)
 
@@ -172,9 +163,9 @@ class ScheduleService:
                         created = updated
             except Exception as exc:
                 logger.debug(
-                    'schedule.schedule_service.create_external_schedule_s.propagated',
-                exc_info=True,
-            )
+                    "schedule.schedule_service.create_external_schedule_s.propagated",
+                    exc_info=True,
+                )
                 await self.schedule_repository.delete(created.id)
                 raise ScheduleValidationError(
                     f"Failed to create external schedule: {exc}"
@@ -324,13 +315,14 @@ class ScheduleService:
     ) -> str:
         """Resolve the visibility a new schedule is stored with.
 
-        An explicit visibility is always honored. Otherwise schedules are
-        PERSONAL — private to their creator — unless they target a GLOBAL
-        workflow, which is a pod-wide singleton whose schedule is a pod-level
-        trigger and therefore stays POD-visible to the whole pod.
+        An explicit visibility is always honored. DATASTORE schedules and
+        GLOBAL-workflow schedules default to POD; other schedules default to
+        PERSONAL.
         """
         if schedule_create.visibility is not None:
             return self._normalize_schedule_visibility(schedule_create.visibility)
+        if schedule_create.schedule_type == ScheduleType.DATASTORE:
+            return ResourceVisibility.POD.value
         if await self._targets_global_workflow(schedule_create):
             return ResourceVisibility.POD.value
         return ResourceVisibility.PERSONAL.value
@@ -449,6 +441,12 @@ class ScheduleService:
             return None
 
         update_data = await self._resolve_update_target(existing, schedule_update)
+        await validate_schedule_update_policies(
+            existing,
+            update_data,
+            ctx=ctx,
+            require_datastore_update=self._require_datastore_table_update,
+        )
         if "name" in update_data and update_data["name"]:
             await self._validate_name_available(
                 existing.model_copy(update={"name": update_data["name"]}),
@@ -482,7 +480,7 @@ class ScheduleService:
                     )
         updated = await self.schedule_repository.update(schedule_id, **update_data)
 
-        if updated and update_data.get("is_active") is True:
+        if is_explicit_reactivation(existing, updated, update_data):
             # Reactivating a schedule clears its circuit-breaker failure streak so
             # a re-enabled schedule starts fresh instead of tripping again on the
             # next failure.
@@ -518,7 +516,7 @@ class ScheduleService:
                 raise
             except Exception as exc:
                 logger.debug(
-                    'schedule.schedule_service.delete_external_schedule_s.propagated',
+                    "schedule.schedule_service.delete_external_schedule_s.propagated",
                     schedule_id=schedule_id,
                     exc_info=True,
                 )
@@ -648,3 +646,26 @@ class ScheduleService:
                     pod_id=schedule.pod_id,
                 ),
             )
+
+    async def _require_datastore_table_update(
+        self,
+        schedule: ScheduleCreateEntity | ScheduleEntity,
+        ctx: Context | None,
+    ) -> None:
+        if schedule.schedule_type != ScheduleType.DATASTORE:
+            return
+        if schedule.pod_id is None or ctx is None:
+            raise RuntimeError(
+                "Context and pod_id are required for DATASTORE schedule authorization"
+            )
+        try:
+            config = DatastoreScheduleConfig(**schedule.config)
+        except ValueError as exc:
+            raise ScheduleValidationError(
+                "DATASTORE schedules must declare an explicit table_name."
+            ) from exc
+        await self.datastore_policy.require_table_update(
+            pod_id=schedule.pod_id,
+            table_name=config.table_name,
+            ctx=ctx,
+        )

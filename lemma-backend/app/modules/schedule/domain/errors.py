@@ -30,9 +30,28 @@ class ScheduleSourceEventIdRequiredError(ScheduleValidationError):
         self.code = "SCHEDULE_SOURCE_EVENT_ID_REQUIRED"
 
 
+class ScheduleTooFrequentError(ScheduleValidationError):
+    def __init__(self, minimum_interval_minutes: int):
+        unit = "minute" if minimum_interval_minutes == 1 else "minutes"
+        super().__init__(
+            "Time schedules cannot run more frequently than every "
+            f"{minimum_interval_minutes} {unit}."
+        )
+        self.code = "SCHEDULE_TOO_FREQUENT"
+
+
 class ScheduleNotFoundError(ScheduleDomainError):
     def __init__(self, message: str = "Schedule not found"):
         super().__init__(message=message, code="SCHEDULE_NOT_FOUND", status_code=404)
+
+
+class ScheduleRunNotRetryableError(ScheduleDomainError):
+    def __init__(self):
+        super().__init__(
+            message="Schedule run is not failed, dead-lettered, or does not exist",
+            code="SCHEDULE_RUN_NOT_RETRYABLE",
+            status_code=409,
+        )
 
 
 class ScheduleAccessDeniedError(ScheduleDomainError):

@@ -7,6 +7,7 @@ from app.modules.schedule.domain.schedule import (
     ScheduleCreateEntity,
     ScheduleEntity,
     ScheduleType,
+    ScheduleUpdateEntity,
 )
 from app.modules.schedule.api.schemas.schedule_schemas import CreateScheduleRequest
 from app.modules.schedule.domain.errors import (
@@ -15,6 +16,45 @@ from app.modules.schedule.domain.errors import (
 )
 from app.modules.schedule.domain.interfaces import ScheduleTarget
 from app.modules.schedule.services.schedule_service import ScheduleService
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("was_active, should_reset", [(False, True), (True, False)])
+async def test_only_explicit_reactivation_resets_failure_streak(
+    was_active,
+    should_reset,
+):
+    schedule_repo = AsyncMock()
+    service = ScheduleService(
+        uow=AsyncMock(),
+        schedule_repository=schedule_repo,
+        scheduler_service=AsyncMock(),
+        external_schedule_writer=AsyncMock(),
+    )
+    schedule = ScheduleEntity(
+        id=uuid4(),
+        user_id=uuid4(),
+        schedule_type=ScheduleType.DATASTORE,
+        config={"table_name": "records", "operations": ["INSERT"]},
+        is_active=was_active,
+        consecutive_failures=3,
+    )
+    schedule_repo.get.return_value = schedule
+    schedule_repo.update.return_value = schedule.model_copy(update={"is_active": True})
+    service._resolve_update_target = AsyncMock(  # type: ignore[method-assign]
+        return_value={"is_active": True}
+    )
+    service._require_datastore_table_update = AsyncMock()  # type: ignore[method-assign]
+
+    await service.update_schedule(
+        schedule.id,
+        ScheduleUpdateEntity(is_active=True),
+    )
+
+    if should_reset:
+        schedule_repo.reset_consecutive_failures.assert_awaited_once_with(schedule.id)
+    else:
+        schedule_repo.reset_consecutive_failures.assert_not_awaited()
 
 
 @pytest.mark.asyncio

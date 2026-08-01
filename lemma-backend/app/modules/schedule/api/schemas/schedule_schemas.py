@@ -62,17 +62,13 @@ class CreateScheduleRequest(BaseModel):
         if bool(self.agent_name) == bool(self.workflow_name):
             raise ValueError("Exactly one of agent_name or workflow_name is required")
         if self.connector_trigger_id and self.schedule_type != ScheduleType.WEBHOOK:
-            raise ValueError(
-                "connector_trigger_id is only valid for WEBHOOK schedules"
-            )
+            raise ValueError("connector_trigger_id is only valid for WEBHOOK schedules")
         if (
             self.agent_name
             and self.schedule_type == ScheduleType.WEBHOOK
             and not self.connector_trigger_id
         ):
-            raise ValueError(
-                "Agent webhook schedules require connector_trigger_id"
-            )
+            raise ValueError("Agent webhook schedules require connector_trigger_id")
         if self.workflow_name and self.connector_trigger_id:
             raise ValueError(
                 "connector_trigger_id is only valid for agent webhook schedules; "
@@ -154,11 +150,14 @@ class ScheduleListResponse(BaseModel):
 class ScheduleRunResponse(BaseModel):
     id: UUID
     schedule_id: UUID
+    user_id: UUID | None
     source_event_id: str
     status: ScheduleRunStatus
     attempts: int
     target_kind: str
-    target_run_id: str | None = None
+    target_run_id: str | None
+    redrive_of_run_id: UUID | None = None
+    redriven_by_user_id: UUID | None = None
     payload: dict
     metadata: dict
     llm_output: dict

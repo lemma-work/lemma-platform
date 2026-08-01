@@ -440,7 +440,7 @@ def test_composio_webhook_signature_verification():
     if not secret:
         pytest.skip("Webhook verification requires COMPOSIO_WEBHOOK_SECRET.")
 
-    from app.modules.schedule.infrastructure.adapters.composio_webhook_verifier import (
+    from app.composition.schedule_connectors import (
         ComposioWebhookVerifier,
     )
 

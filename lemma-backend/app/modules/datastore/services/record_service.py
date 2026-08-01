@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from app.core.authorization.context import Context
-from app.core.domain.message_bus import MessageBus
-from app.core.infrastructure.events.message_bus import get_message_bus
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
     DatastoreRecordNotFoundError,
@@ -34,14 +32,11 @@ class RecordService:
     def __init__(
         self,
         record_repository: DatastoreRecordRepositoryPort,
-        message_bus: MessageBus | None = None,
+        event_dispatcher: Callable[[], Awaitable[int]] | None = None,
         authorization_service: object | None = None,
         user_repository: UserReader | None = None,
-        transactional_events: bool = False,
-        event_dispatcher: Callable[[], Awaitable[int]] | None = None,
     ):
         self.record_repository = record_repository
-        self.message_bus = message_bus or get_message_bus()
         self.authorization_service = authorization_service
         self.authz = (
             DatastoreAuthorization(authorization_service)
@@ -49,12 +44,7 @@ class RecordService:
             else None
         )
         self.user_repository = user_repository
-        self.transactional_events = transactional_events
-        self.events = RecordEventCoordinator(
-            self.message_bus,
-            transactional=transactional_events,
-            dispatcher=event_dispatcher,
-        )
+        self.events = RecordEventCoordinator(dispatcher=event_dispatcher)
 
     async def _require_datastore_read(
         self,
@@ -191,7 +181,7 @@ class RecordService:
             )
 
         await self._validate_user_reference_columns(ctx, sanitized_data)
-        if self.transactional_events and ctx.events_enabled:
+        if ctx.events_enabled:
             event_factory = partial(
                 self.events.required_for_record,
                 ctx=ctx,
@@ -199,25 +189,16 @@ class RecordService:
                 payload=sanitized_data,
                 user_id=user_id,
             )
-            record = await self.record_repository.create_record(
-                ctx,
-                sanitized_data,
-                user_id,
-                event_factory=event_factory,
-            )
-            await self.events.dispatch()
         else:
-            record = await self.record_repository.create_record(
-                ctx, sanitized_data, user_id
-            )
-            await self.events.emit_compat(
-                ctx,
-                str(record.id),
-                DatastoreRecordOperation.INSERT,
-                sanitized_data,
-                user_id,
-                owner_user_id=record.user_id,
-            )
+            event_factory = None
+        record = await self.record_repository.create_record(
+            ctx,
+            sanitized_data,
+            user_id,
+            event_factory=event_factory,
+        )
+        if event_factory is not None:
+            await self.events.dispatch()
         return record
 
     async def get_record(
@@ -355,7 +336,7 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
-        if self.transactional_events and ctx.events_enabled:
+        if ctx.events_enabled:
             event_factory = partial(
                 self.events.required_for_record,
                 ctx=ctx,
@@ -363,31 +344,18 @@ class RecordService:
                 payload=sanitized_data,
                 user_id=user_id,
             )
-            record = await self.record_repository.update_record(
-                ctx,
-                record_id,
-                sanitized_data,
-                user_id,
-                enforce_user_scope=enforce_user_scope,
-                event_factory=event_factory,
-            )
-            await self.events.dispatch()
         else:
-            record = await self.record_repository.update_record(
-                ctx,
-                record_id,
-                sanitized_data,
-                user_id,
-                enforce_user_scope=enforce_user_scope,
-            )
-            await self.events.emit_compat(
-                ctx,
-                str(record.id),
-                DatastoreRecordOperation.UPDATE,
-                sanitized_data,
-                user_id,
-                owner_user_id=record.user_id,
-            )
+            event_factory = None
+        record = await self.record_repository.update_record(
+            ctx,
+            record_id,
+            sanitized_data,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=event_factory,
+        )
+        if event_factory is not None:
+            await self.events.dispatch()
         return record
 
     async def delete_record(
@@ -404,28 +372,26 @@ class RecordService:
             ctx=ctx,
             admin_mode=admin_mode,
         )
-        event = self.events.build(
-            ctx, str(record_id), DatastoreRecordOperation.DELETE, {}, user_id
+        event_factory = None
+        if ctx.events_enabled:
+            event_factory = partial(
+                self.events.required_for_record,
+                ctx=ctx,
+                operation=DatastoreRecordOperation.DELETE,
+                payload={},
+                user_id=user_id,
+            )
+
+        await self.record_repository.delete_record(
+            ctx,
+            record_id,
+            user_id,
+            enforce_user_scope=enforce_user_scope,
+            event_factory=event_factory,
         )
-        if self.transactional_events and event is not None:
-            deleted = await self.record_repository.delete_record(
-                ctx,
-                record_id,
-                user_id,
-                enforce_user_scope=enforce_user_scope,
-                event=event,
-            )
+        if event_factory is not None:
             await self.events.dispatch()
-        else:
-            deleted = await self.record_repository.delete_record(
-                ctx,
-                record_id,
-                user_id,
-                enforce_user_scope=enforce_user_scope,
-            )
-            if deleted and event is not None:
-                await self.events.publish(event)
-        return deleted
+        return True
 
     async def bulk_create_records(
         self,
@@ -475,13 +441,14 @@ class RecordService:
             if upsert
             else self.record_repository.bulk_create_records
         )
-        event_args = {"events": events} if self.transactional_events else {}
-        written = await write_records(ctx, sanitized_records, user_id, **event_args)
+        written = await write_records(
+            ctx,
+            sanitized_records,
+            user_id,
+            events=events,
+        )
 
-        if not self.transactional_events:
-            for event in events:
-                await self.events.publish(event)
-        elif events:
+        if events:
             await self.events.dispatch()
 
         return written

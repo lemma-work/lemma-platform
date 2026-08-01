@@ -1,6 +1,6 @@
 [package]
 name = "lemma-agent-host"
-version = "0.1.0"
+version = "0.7.0"
 description = "Durable local bridge between Lemma and ACP-compatible coding agents"
 edition = "2024"
 rust-version = "1.88"

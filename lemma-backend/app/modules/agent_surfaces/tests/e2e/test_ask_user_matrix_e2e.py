@@ -63,7 +63,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_text,
 )
 from app.modules.connectors.domain.connector import AuthProvider
-from app.modules.schedule.infrastructure.schedule_managers.manager_factory import (
+from app.composition.schedule_connectors import (
     ManagersFactory,
 )
 

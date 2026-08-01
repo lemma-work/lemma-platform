@@ -11320,6 +11320,30 @@
             "title": "Payload",
             "type": "object"
           },
+          "redrive_of_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redrive Of Run Id"
+          },
+          "redriven_by_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redriven By User Id"
+          },
           "schedule_id": {
             "format": "uuid",
             "title": "Schedule Id",
@@ -11375,15 +11399,29 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           }
         },
         "required": [
           "id",
           "schedule_id",
+          "user_id",
           "source_event_id",
           "status",
           "attempts",
           "target_kind",
+          "target_run_id",
           "payload",
           "metadata",
           "llm_output",
@@ -11398,6 +11436,9 @@
           "RECEIVED",
           "PROCESSING",
           "DISPATCHED",
+          "COMPLETED",
+          "TARGET_FAILED",
+          "CANCELLED",
           "FILTERED",
           "FAILED",
           "DEAD_LETTERED"
@@ -16331,7 +16372,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.1"
+    "version": "0.7.0"
   },
   "openapi": "3.1.0",
   "paths": {
