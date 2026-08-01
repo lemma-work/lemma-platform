@@ -94,6 +94,19 @@ if [[ -f "${dev_locald_root}/control.token" ]]; then
   fi
 fi
 
+# A locald that was killed never got to run its own `stop()`, so the VM helper
+# it was supervising is reparented to init and keeps holding the runtime
+# directory and its vsock. The next run then starts a second VM against the same
+# disk, and the survivor wins: "Lemma's private runtime exited (signal: 9)".
+#
+# The helper takes its runtime path in argv, so unlike locald it can be matched
+# without risking the real install's VM.
+if pgrep -f "lemma-vz .*${dev_locald_root}" >/dev/null 2>&1; then
+  echo "Retiring an orphaned dev VM helper." >&2
+  pkill -f "lemma-vz .*${dev_locald_root}" >/dev/null 2>&1 || true
+  sleep 1
+fi
+
 declare -a source_env=()
 if (( source_mode )); then
   # The VM guest artifacts are the one thing a checkout cannot build on demand,
