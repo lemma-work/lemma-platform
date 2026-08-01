@@ -273,6 +273,26 @@ export function runtimeAvailabilityLabel(profile: AgentRuntimeProfileResponse): 
     }
 }
 
+/**
+ * Whether this profile's model and config selections can be changed right now.
+ *
+ * Mirrors the backend rule rather than guessing at it: `update_agent_host_profile`
+ * contacts the paired computer only for an edit that touches `default_model_name`
+ * or `config_selections`, because those are validated against what the harness
+ * advertises at that moment. A rename never leaves the database and works while
+ * the machine is asleep.
+ *
+ * Deliberately false only on a *positive* signal. The backend leaves
+ * `availability_status` null at the two call sites built without a host
+ * repository, and treating "unknown" as offline would disable a control the user
+ * can in fact save.
+ */
+export function canConfigureHarnessProfile(profile: {
+    availability_status?: string | null;
+}): boolean {
+    return profile.availability_status == null || profile.availability_status === 'READY';
+}
+
 // A profile the workspace has retired. It keeps working for history and can be
 // restored, but it is out of the catalog and cannot be picked for new runs.
 export function isArchivedProfile(profile: { status?: string | null }): boolean {
