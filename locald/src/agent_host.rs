@@ -452,7 +452,12 @@ fn is_loopback_http(url: &str) -> bool {
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => host,
         _ => authority,
     };
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]")
+    // `.localhost` is reserved to loopback by RFC 6761, and Lemma Desktop serves
+    // its own workspace and API on `app.lemma.localhost`. Matching only the
+    // three literal spellings meant this flag was never passed for a desktop
+    // install's own URL, so the host refused to pair with the very workspace
+    // that asked it to.
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]") || host.ends_with(".localhost")
 }
 
 /// Strip anything from a subprocess message that we passed in as a secret.
@@ -777,9 +782,19 @@ mod tests {
         assert!(is_loopback_http("http://127.0.0.1:8710/api"));
         assert!(is_loopback_http("http://[::1]:8710"));
         assert!(is_loopback_http("http://localhost"));
+        // The hostname Lemma Desktop serves its own workspace and API on.
+        // Refusing this is refusing a desktop install the right to pair with
+        // itself, which is exactly what it did.
+        assert!(is_loopback_http("http://app.lemma.localhost:52502"));
+        assert!(is_loopback_http(
+            "http://apps.lemma.localhost:52502/internal"
+        ));
         // A LAN or public address over plain HTTP stays refused.
         assert!(!is_loopback_http("http://192.168.1.10:8710"));
         assert!(!is_loopback_http("http://localhost.evil.example:8710"));
+        // ".localhost" must be the suffix, not a substring someone else owns.
+        assert!(!is_loopback_http("http://localhost.attacker.example:8710"));
+        assert!(!is_loopback_http("http://notlocalhost:8710"));
         assert!(!is_loopback_http("https://api.lemma.work"));
     }
 
