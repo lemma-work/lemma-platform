@@ -231,6 +231,16 @@ class Settings(BaseSettings):
             "how hard one process can hammer upstreams."
         ),
     )
+    connector_allow_private_network_targets: bool = Field(
+        default=False,
+        description=(
+            "Permit connector installs to target loopback, private and "
+            "link-local addresses. Off by default: in a multi-tenant deployment "
+            "this is what stops an org admin pointing a connector at the cloud "
+            "metadata service or walking internal services. Self-hosted "
+            "deployments running connectors against their own network turn it on."
+        ),
+    )
     outbound_http_max_keepalive: int = Field(
         default=20,
         description=(

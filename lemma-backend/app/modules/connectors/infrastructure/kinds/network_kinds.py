@@ -10,9 +10,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from app.core.net.url_guard import UnsafeUrlError, assert_safe_host, assert_safe_url
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import ConnectorKind, KindSpec
+from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.kinds import (
     DiscoveredOperation,
     ExecutionRequest,
@@ -36,11 +38,26 @@ class _NeverRefreshes:
 
 
 class _TenantConfiguredInstaller:
-    """Validates config, then vets every tenant-supplied network target."""
+    """Validates config, then vets every tenant-supplied network target.
 
-    def __init__(self, *, url_fields: tuple[str, ...] = (), host_fields: tuple[str, ...] = ()):
+    The vetting is the point. These three kinds are the only ones where the
+    *tenant* chooses the address we connect to, so without it an org admin can
+    aim an install at the cloud metadata service or at internal services on the
+    cluster network and read the response back.
+    """
+
+    def __init__(
+        self,
+        *,
+        url_fields: tuple[str, ...] = (),
+        host_field: str | None = None,
+        port_field: str = "port",
+        default_port: int = 5432,
+    ):
         self._url_fields = url_fields
-        self._host_fields = host_fields
+        self._host_field = host_field
+        self._port_field = port_field
+        self._default_port = default_port
 
     async def validate_install(
         self,
@@ -50,9 +67,20 @@ class _TenantConfiguredInstaller:
         config_source: AuthConfigSource,
     ) -> dict[str, Any]:
         validated = validate_install_config(spec, config)
-        # Target vetting (rejecting loopback, link-local and private ranges so an
-        # install cannot be pointed at the cluster's own metadata service) lands
-        # with the URL guard; the fields it must cover are declared here.
+        try:
+            for field in self._url_fields:
+                value = validated.get(field)
+                if value:
+                    await assert_safe_url(str(value))
+            if self._host_field:
+                host = validated.get(self._host_field)
+                if host:
+                    port = validated.get(self._port_field) or self._default_port
+                    await assert_safe_host(str(host), int(port))
+        except UnsafeUrlError as exc:
+            raise ConnectorValidationError(
+                str(exc), details={"reason": exc.reason}
+            ) from exc
         return validated
 
 
@@ -160,7 +188,7 @@ def http_installer() -> _TenantConfiguredInstaller:
 
 
 def sql_installer() -> _TenantConfiguredInstaller:
-    return _TenantConfiguredInstaller(host_fields=("host",))
+    return _TenantConfiguredInstaller(host_field="host")
 
 
 def mcp_installer() -> _TenantConfiguredInstaller:

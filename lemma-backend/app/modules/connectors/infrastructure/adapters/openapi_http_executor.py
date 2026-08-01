@@ -154,6 +154,18 @@ def _raw_body(body: Any) -> dict[str, Any]:
     return {"json": body}
 
 
+async def _assert_safe_base_url(base_url: str) -> None:
+    from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
+
+    try:
+        await assert_safe_url(base_url)
+    except UnsafeUrlError as exc:
+        raise OpenApiHttpExecutionError(
+            f"Refusing to call an unsafe target: {exc}",
+            details={"reason": exc.reason},
+        ) from exc
+
+
 def _summarize_error_body(content: bytes | None, *, limit: int = 600) -> str:
     if not content:
         return ""
@@ -194,6 +206,11 @@ class OpenApiHttpExecutor:
         connection_config = connection_config or {}
         mode = (execution or {}).get("mode", "openapi")
         base_url = self._resolve_base_url(execution, third_party_credentials, connection_config)
+        # Re-checked at execution, not just at install. The base URL can come
+        # from the *account* (Jira's per-tenant cloud URL), which never passed
+        # through install validation, and DNS for an install-time-valid host can
+        # have changed since. This narrows the rebind window to one request.
+        await _assert_safe_base_url(base_url)
         auth_headers, auth_query = self._resolve_auth(third_party_credentials)
         default_headers = self._default_headers(execution, connection_config)
 

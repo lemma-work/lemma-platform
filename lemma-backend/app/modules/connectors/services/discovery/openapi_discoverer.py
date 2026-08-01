@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Awaitable, Callable
 
-import httpx
 
+from app.core.net.url_guard import fetch_guarded
+from app.modules.connectors.config import connector_settings
 from app.modules.connectors.infrastructure.openapi import build_operation_descriptors
 from app.modules.connectors.services.discovery.base import DiscoveredOperation
 
@@ -15,10 +17,26 @@ _FETCH_TIMEOUT_SECONDS = 20.0
 
 
 async def _default_fetch_spec(url: str, headers: dict[str, str] | None) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=_FETCH_TIMEOUT_SECONDS, follow_redirects=True) as client:
-        response = await client.get(url, headers=headers or {})
-        response.raise_for_status()
-        return response.json()
+    """Fetch a tenant-supplied spec URL, guarded and capped.
+
+    The URL comes from the install, so every hop is re-validated (a public URL
+    that redirects to ``10.0.0.5`` is the obvious way around an install-time
+    check) and the body is cut off at the configured ceiling rather than being
+    buffered in full.
+    """
+    from app.core.net.http_client import get_shared_http_client
+
+    raw = await fetch_guarded(
+        get_shared_http_client(),
+        url,
+        max_bytes=connector_settings.connector_spec_max_bytes,
+        timeout=_FETCH_TIMEOUT_SECONDS,
+        headers=headers or {},
+    )
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f"OpenAPI spec at '{url}' is not valid JSON.") from exc
 
 
 def _spec_default_server(spec: dict[str, Any]) -> str | None:
