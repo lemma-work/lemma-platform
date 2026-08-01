@@ -253,19 +253,23 @@ conversation. The agent will never see it here, so there is no point waiting —
 tool informs and asks, it does not block. Structured collect-an-answer-back-into-this-run
 is not built yet; that is `Ask`, and it does not exist.
 
-**Telling your own run's owner.** Normally refused — if they are reading this
-conversation, just reply. But a run nobody is watching (a schedule, a workflow step)
-has no "just reply": its final answer lands somewhere no one opens. There, messaging
-the run's owner is allowed and the notification links back to **this** run, so opening
-it shows the work that produced it. This is how "tell me when X happens" works.
+**Telling your own run's owner.** Refused when *they started this conversation* —
+your reply already reaches them. Allowed when they did not: a schedule or workflow
+step has no reply destination, its answer lands in a conversation nobody opened. There
+the notification links back to **this** run, so opening it shows the work that produced
+it. This is how "tell me when X happens" works.
+
+The test is who *started* the conversation, not who is looking at it — Lemma does not
+track the latter. So a long task you kicked off in the app and walked away from will
+not ping you; it answers in the thread and waits for you to come back.
 
 Rules the tool enforces, so the agent does not have to:
 
 - The recipient must be a member of the pod (fails closed if membership cannot be checked).
 - An ambiguous name is an error, never a best guess — messaging the wrong colleague is
   not a mistake the agent can see or undo.
-- Reaching someone reading this conversation is refused, with the schedule/workflow
-  exception above.
+- Reaching the person who started this conversation is refused, with the
+  schedule/workflow exception above.
 
 **Gating.** `MESSAGING` in the agent's `toolsets`, and on a chat surface the surface's
 `config.send_policy.audience` must be `POD_MEMBERS`. Default is `NOBODY`.

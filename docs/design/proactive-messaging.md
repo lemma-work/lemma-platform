@@ -96,7 +96,25 @@ The 30-minute window is deliberately much tighter than the surface's 24h DM rese
 
 **The one case that keeps its own conversation:** a run telling *its own owner* something. Reaching the person a run belongs to is normally the wrong tool — just reply — but a schedule- or workflow-born run has nobody reading its conversation, so "reply" is advice with no destination. There, `message_person` is allowed and the notification is pointed back at **the run's own conversation**, so opening the inbox entry shows the work that produced it rather than a bare line of text.
 
-Getting this wrong is what made the headline use case fail in the first draft: the self-message guard fired on exactly the case the feature exists for, and told a scheduled agent to reply to a conversation nobody would ever open. The signal that separates them is `conversation.origin_type` — `SCHEDULE_RUN`/`WORKFLOW_RUN` means unwatched, `None` means somebody is reading.
+Getting this wrong is what made the headline use case fail in the first draft: the self-message guard fired on exactly the case the feature exists for, and told a scheduled agent to reply to a conversation nobody would ever open.
+
+### "Is anyone reading this?" is not a question Lemma can answer
+
+The separating signal is `conversation.origin_type` — `SCHEDULE_RUN`/`WORKFLOW_RUN` versus `None`. That is **provenance**: who *started* the conversation. It is being used as a proxy for **attention**: who is *looking at* it. They are not the same question, and it is worth being explicit that the second one has no answer here.
+
+Three candidate signals, and what each actually knows:
+
+| Signal | Answers | State |
+| --- | --- | --- |
+| `conversation.origin_type` | did a person start this | exists — what the guard uses |
+| Realtime channel subscribers | is a client attached to a live run stream *right now* | derivable (`PUBSUB NUMSUB`), per-process bookkeeping today, nothing calls it |
+| Read state | have they seen it | does not exist — no `last_read_at` on conversations |
+
+Even the second one only reports attachment during a run stream, and only for this instant; someone can close the tab immediately after. The question that actually matters — *will they notice this* — is about the future and is unknowable.
+
+**The accepted consequence:** a task a person started in the app and then walked away from gets the refusal. The agent answers in the thread and the person hears nothing until they come back. That is a real gap in a feature built to close exactly this kind of gap, and it is a deliberate choice rather than an oversight — the alternative (always notify) trades a missed message for a redundant badge, and reasonable people can disagree about which is worse.
+
+If it turns out to bite, the fix is not a better attention detector. It is to stop gating on attention: always notify the run's owner, always point the notification at the run's own conversation, and let a redundant badge be the cost. Subscriber counts stay available for *suppressing* that badge as an optimisation — never as the gate on whether someone gets told.
 
 Persisting happens **before** sending. If the platform call fails the person still has the message in Lemma; the reverse order would put a message on their phone that the agent has no memory of.
 

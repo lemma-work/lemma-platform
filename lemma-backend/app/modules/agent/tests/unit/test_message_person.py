@@ -126,11 +126,12 @@ class TestReachingYourOwnRunOwner:
         assert result.success
 
     @pytest.mark.asyncio
-    async def test_but_an_interactive_conversation_is_told_to_just_reply(self):
+    async def test_but_a_person_started_conversation_is_told_to_just_reply(self):
+        """The signal is provenance, not attention — see the note on the guard."""
         captured: dict = {}
         result = await _call("dj@acme.com", origin=None, captured=captured)
         assert not result.success
-        assert "reply to them here" in result.error
+        assert "answer here instead" in result.error
         assert captured == {}, "nothing should have been sent"
 
 

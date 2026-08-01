@@ -129,10 +129,11 @@ async def message_person(
     reply starts a conversation of THEIR own, under THEIR permissions — you will
     not see it in this conversation, so do not wait on it here.
 
-    Do NOT use this to reach someone who is reading this conversation — reply to
-    them normally instead. The exception is a run nobody is watching (a schedule,
-    or a workflow step): there is no "normally" there, so telling the run's owner
-    what happened is exactly what this is for, and it links back to this run.
+    Do NOT use this to reach the person who started this conversation — your
+    normal reply already goes to them. The exception is a run they did not start
+    (a schedule, or a workflow step): that reply reaches nobody, so telling the
+    run's owner what happened is exactly what this is for, and it links back to
+    this run.
     """
     from app.modules.agent_surfaces.domain.entities import NotificationOrigin
     from app.modules.agent_surfaces.services.surface_display_delivery import (
@@ -151,10 +152,18 @@ async def message_person(
     if recipient_id is None:
         return MessagePersonResponse(success=False, error=error)
 
-    # Reaching the person the run belongs to is normally the wrong tool — just
-    # reply. But a schedule- or workflow-born run has nobody reading its
-    # conversation, so "reply to them directly" is advice with no destination.
-    # That run telling its owner something is the whole point of notifications.
+    # Reaching the person the run belongs to is normally the wrong tool — the
+    # reply is already going to them. But a schedule- or workflow-born run has no
+    # reply destination at all: its answer lands in a conversation that was never
+    # opened by anyone. That run telling its owner something is the whole point.
+    #
+    # The signal is provenance, not attention: origin_type says who *started* the
+    # conversation, not who is looking at it. Nothing in the system knows the
+    # latter — there is no read state on conversations, and the realtime channel
+    # only reports a client attached to a live run stream. So a person-started
+    # task the user walked away from is refused here and they hear nothing until
+    # they come back. Accepted tradeoff, documented in
+    # docs/design/proactive-messaging.md.
     conversation_id = getattr(deps, "conversation_id", None)
     notify_conversation_id: UUID | None = None
     if recipient_id == getattr(deps, "user_id", None):
@@ -163,8 +172,9 @@ async def message_person(
             return MessagePersonResponse(
                 success=False,
                 error=(
-                    "That is the person you are already working for, and they are "
-                    "reading this conversation — reply to them here instead."
+                    "That is the person this run belongs to, and they opened this "
+                    "conversation themselves — your reply already reaches them, so "
+                    "answer here instead of notifying them."
                 ),
             )
         # Hand the run's own conversation to notify so the inbox entry opens the
