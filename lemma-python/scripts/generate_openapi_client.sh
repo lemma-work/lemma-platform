@@ -83,17 +83,12 @@ fi
 normalize_json_file "$SPEC_TMP"
 # Strip server-internal surface the public SDK/CLI never calls: billing,
 # the job scheduler, and inbound webhook receivers. Excluded operations are
-# dropped and their now-unreferenced component schemas are pruned.
+# dropped and their now-unreferenced component schemas are pruned. The list
+# itself lives in prepare_client_openapi.py so this script, the TypeScript one
+# and dump_openapi_spec.py cannot prune differently.
 "$PYTHON_BIN" "$REPO_ROOT/scripts/prepare_client_openapi.py" \
   "$SPEC_TMP" \
-  "$CLIENT_SPEC_TMP" \
-  --exclude-tag billing-subscriptions \
-  --exclude-tag billing-webhooks \
-  --exclude-tag scheduler \
-  --exclude-tag webhooks \
-  --exclude-prefix /billing \
-  --exclude-prefix /scheduler \
-  --exclude-prefix /webhooks
+  "$CLIENT_SPEC_TMP"
 normalize_json_file "$CLIENT_SPEC_TMP"
 
 cd "$SDK_DIR"

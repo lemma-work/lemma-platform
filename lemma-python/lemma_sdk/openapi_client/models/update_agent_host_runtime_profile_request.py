@@ -8,57 +8,58 @@ from typing import (
     TypeVar,
     cast,
 )
-from uuid import UUID
 
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-from ..models.runtime_profile_scope import RuntimeProfileScope
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.create_agent_host_runtime_profile_request_config_selections import (
-        CreateAgentHostRuntimeProfileRequestConfigSelections,
+    from ..models.update_agent_host_runtime_profile_request_config_selections_type_0 import (
+        UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0,
     )
 
 
-T = TypeVar("T", bound="CreateAgentHostRuntimeProfileRequest")
+T = TypeVar("T", bound="UpdateAgentHostRuntimeProfileRequest")
 
 
 @_attrs_define
-class CreateAgentHostRuntimeProfileRequest:
+class UpdateAgentHostRuntimeProfileRequest:
     """
     Attributes:
-        harness_id (UUID):
-        name (str):
-        config_selections (CreateAgentHostRuntimeProfileRequestConfigSelections | Unset):
+        config_selections (None | Unset | UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0):
         default_model_name (None | str | Unset):
         description (None | str | Unset):
         host_wait_timeout_seconds (int | None | Unset):
-        scope (RuntimeProfileScope | Unset):
+        name (None | str | Unset):
         source (Literal['AGENT_HOST'] | Unset):  Default: 'AGENT_HOST'.
     """
 
-    harness_id: UUID
-    name: str
-    config_selections: CreateAgentHostRuntimeProfileRequestConfigSelections | Unset = (
-        UNSET
-    )
+    config_selections: (
+        None | Unset | UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0
+    ) = UNSET
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
     host_wait_timeout_seconds: int | None | Unset = UNSET
-    scope: RuntimeProfileScope | Unset = UNSET
+    name: None | str | Unset = UNSET
     source: Literal["AGENT_HOST"] | Unset = "AGENT_HOST"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        harness_id = str(self.harness_id)
+        from ..models.update_agent_host_runtime_profile_request_config_selections_type_0 import (
+            UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0,
+        )
 
-        name = self.name
-
-        config_selections: dict[str, Any] | Unset = UNSET
-        if not isinstance(self.config_selections, Unset):
+        config_selections: dict[str, Any] | None | Unset
+        if isinstance(self.config_selections, Unset):
+            config_selections = UNSET
+        elif isinstance(
+            self.config_selections,
+            UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0,
+        ):
             config_selections = self.config_selections.to_dict()
+        else:
+            config_selections = self.config_selections
 
         default_model_name: None | str | Unset
         if isinstance(self.default_model_name, Unset):
@@ -78,20 +79,17 @@ class CreateAgentHostRuntimeProfileRequest:
         else:
             host_wait_timeout_seconds = self.host_wait_timeout_seconds
 
-        scope: str | Unset = UNSET
-        if not isinstance(self.scope, Unset):
-            scope = self.scope.value
+        name: None | str | Unset
+        if isinstance(self.name, Unset):
+            name = UNSET
+        else:
+            name = self.name
 
         source = self.source
 
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
-        field_dict.update(
-            {
-                "harness_id": harness_id,
-                "name": name,
-            }
-        )
+        field_dict.update({})
         if config_selections is not UNSET:
             field_dict["config_selections"] = config_selections
         if default_model_name is not UNSET:
@@ -100,8 +98,8 @@ class CreateAgentHostRuntimeProfileRequest:
             field_dict["description"] = description
         if host_wait_timeout_seconds is not UNSET:
             field_dict["host_wait_timeout_seconds"] = host_wait_timeout_seconds
-        if scope is not UNSET:
-            field_dict["scope"] = scope
+        if name is not UNSET:
+            field_dict["name"] = name
         if source is not UNSET:
             field_dict["source"] = source
 
@@ -109,25 +107,39 @@ class CreateAgentHostRuntimeProfileRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.create_agent_host_runtime_profile_request_config_selections import (
-            CreateAgentHostRuntimeProfileRequestConfigSelections,
+        from ..models.update_agent_host_runtime_profile_request_config_selections_type_0 import (
+            UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0,
         )
 
         d = dict(src_dict)
-        harness_id = UUID(d.pop("harness_id"))
 
-        name = d.pop("name")
-
-        _config_selections = d.pop("config_selections", UNSET)
-        config_selections: CreateAgentHostRuntimeProfileRequestConfigSelections | Unset
-        if isinstance(_config_selections, Unset):
-            config_selections = UNSET
-        else:
-            config_selections = (
-                CreateAgentHostRuntimeProfileRequestConfigSelections.from_dict(
-                    _config_selections
+        def _parse_config_selections(
+            data: object,
+        ) -> None | Unset | UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                config_selections_type_0 = (
+                    UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0.from_dict(
+                        data
+                    )
                 )
+
+                return config_selections_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(
+                None
+                | Unset
+                | UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0,
+                data,
             )
+
+        config_selections = _parse_config_selections(d.pop("config_selections", UNSET))
 
         def _parse_default_model_name(data: object) -> None | str | Unset:
             if data is None:
@@ -160,30 +172,30 @@ class CreateAgentHostRuntimeProfileRequest:
             d.pop("host_wait_timeout_seconds", UNSET)
         )
 
-        _scope = d.pop("scope", UNSET)
-        scope: RuntimeProfileScope | Unset
-        if isinstance(_scope, Unset):
-            scope = UNSET
-        else:
-            scope = RuntimeProfileScope(_scope)
+        def _parse_name(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        name = _parse_name(d.pop("name", UNSET))
 
         source = cast(Literal["AGENT_HOST"] | Unset, d.pop("source", UNSET))
         if source != "AGENT_HOST" and not isinstance(source, Unset):
             raise ValueError(f"source must match const 'AGENT_HOST', got '{source}'")
 
-        create_agent_host_runtime_profile_request = cls(
-            harness_id=harness_id,
-            name=name,
+        update_agent_host_runtime_profile_request = cls(
             config_selections=config_selections,
             default_model_name=default_model_name,
             description=description,
             host_wait_timeout_seconds=host_wait_timeout_seconds,
-            scope=scope,
+            name=name,
             source=source,
         )
 
-        create_agent_host_runtime_profile_request.additional_properties = d
-        return create_agent_host_runtime_profile_request
+        update_agent_host_runtime_profile_request.additional_properties = d
+        return update_agent_host_runtime_profile_request
 
     @property
     def additional_keys(self) -> list[str]:

@@ -219,6 +219,13 @@ jobs:
         run: make typecheck-critical
       - name: Architecture, complexity, and broad-catch ratchet
         run: make architecture
+      # The codegen-drift gate only proves the SDKs match the committed spec.
+      # Nothing proved the committed spec matches the routes this app defines,
+      # so a new endpoint could ship with both SDKs silently lacking it. This
+      # compares the two, and belongs here rather than in codegen-drift because
+      # it needs the backend's dependencies to import the app.
+      - name: OpenAPI spec matches the routes the app defines
+        run: uv run python scripts/dump_openapi_spec.py --check
 
   backend-migration:
     name: lemma-backend migration upgrade/downgrade

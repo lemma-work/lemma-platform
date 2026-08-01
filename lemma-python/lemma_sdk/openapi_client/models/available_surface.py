@@ -12,6 +12,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.surface_connect_descriptor import SurfaceConnectDescriptor
+    from ..models.surface_system_claim import SurfaceSystemClaim
 
 
 T = TypeVar("T", bound="AvailableSurface")
@@ -34,6 +35,8 @@ class AvailableSurface:
             connector_available (bool | Unset):  Default: True.
             description (None | str | Unset):
             icon (None | str | Unset):
+            managed_setup_available (bool | Unset):  Default: False.
+            system_claim (None | SurfaceSystemClaim | Unset):
             title (None | str | Unset):
     """
 
@@ -45,11 +48,14 @@ class AvailableSurface:
     connector_available: bool | Unset = True
     description: None | str | Unset = UNSET
     icon: None | str | Unset = UNSET
+    managed_setup_available: bool | Unset = False
+    system_claim: None | SurfaceSystemClaim | Unset = UNSET
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.surface_connect_descriptor import SurfaceConnectDescriptor
+        from ..models.surface_system_claim import SurfaceSystemClaim
 
         connector_id = self.connector_id
 
@@ -84,6 +90,16 @@ class AvailableSurface:
         else:
             icon = self.icon
 
+        managed_setup_available = self.managed_setup_available
+
+        system_claim: dict[str, Any] | None | Unset
+        if isinstance(self.system_claim, Unset):
+            system_claim = UNSET
+        elif isinstance(self.system_claim, SurfaceSystemClaim):
+            system_claim = self.system_claim.to_dict()
+        else:
+            system_claim = self.system_claim
+
         title: None | str | Unset
         if isinstance(self.title, Unset):
             title = UNSET
@@ -108,6 +124,10 @@ class AvailableSurface:
             field_dict["description"] = description
         if icon is not UNSET:
             field_dict["icon"] = icon
+        if managed_setup_available is not UNSET:
+            field_dict["managed_setup_available"] = managed_setup_available
+        if system_claim is not UNSET:
+            field_dict["system_claim"] = system_claim
         if title is not UNSET:
             field_dict["title"] = title
 
@@ -116,6 +136,7 @@ class AvailableSurface:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.surface_connect_descriptor import SurfaceConnectDescriptor
+        from ..models.surface_system_claim import SurfaceSystemClaim
 
         d = dict(src_dict)
         connector_id = d.pop("connector_id")
@@ -170,6 +191,25 @@ class AvailableSurface:
 
         icon = _parse_icon(d.pop("icon", UNSET))
 
+        managed_setup_available = d.pop("managed_setup_available", UNSET)
+
+        def _parse_system_claim(data: object) -> None | SurfaceSystemClaim | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                system_claim_type_0 = SurfaceSystemClaim.from_dict(data)
+
+                return system_claim_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(None | SurfaceSystemClaim | Unset, data)
+
+        system_claim = _parse_system_claim(d.pop("system_claim", UNSET))
+
         def _parse_title(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -188,6 +228,8 @@ class AvailableSurface:
             connector_available=connector_available,
             description=description,
             icon=icon,
+            managed_setup_available=managed_setup_available,
+            system_claim=system_claim,
             title=title,
         )
 

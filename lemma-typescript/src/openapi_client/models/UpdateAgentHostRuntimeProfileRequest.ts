@@ -2,14 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { RuntimeProfileScope } from './RuntimeProfileScope.js';
-export type CreateAgentHostRuntimeProfileRequest = {
-    config_selections?: Record<string, any>;
+export type UpdateAgentHostRuntimeProfileRequest = {
+    config_selections?: (Record<string, any> | null);
     default_model_name?: (string | null);
     description?: (string | null);
-    harness_id: string;
     host_wait_timeout_seconds?: (number | null);
-    name: string;
-    scope?: RuntimeProfileScope;
+    name?: (string | null);
     source?: string;
 };

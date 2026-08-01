@@ -408,6 +408,14 @@ def validate_agent_host_selections(
             raise ValueError(
                 f"Invalid value for Agent Host configuration selection: {key}"
             )
+        if not allowed_values and _is_disallowed_policy_selection(option, value):
+            # An option that advertises no values accepts anything here, but the
+            # Agent Host still refuses these for a permission-bearing setting
+            # (is_disallowed_policy_value in acp.rs). Without this the profile
+            # saves cleanly and every run fails at session setup instead.
+            raise ValueError(
+                f"That value is not allowed for Agent Host configuration: {key}"
+            )
         normalized[normalized_key] = value
     return normalized
 
@@ -434,6 +442,32 @@ def validate_agent_host_model(
     if not has_model_option or normalized not in model_options:
         raise ValueError("default_model_name is not offered by this harness")
     return normalized
+
+
+# Mirrors the Agent Host's own policy filter (agent-host/src/acp.rs:569-600):
+# an option whose id or category mentions one of these governs what the coding
+# agent is allowed to do without asking.
+_POLICY_OPTION_MARKERS = ("mode", "permission", "approval", "sandbox")
+_DISALLOWED_POLICY_VALUES = frozenset(
+    {
+        "bypasspermissions",
+        "agentfullaccess",
+        "fullaccess",
+        "acceptedits",
+        "yolo",
+        "auto",
+    }
+)
+
+
+def _is_disallowed_policy_selection(option: dict[str, object], value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    identity = f"{option.get('id') or ''} {option.get('category') or ''}".lower()
+    if not any(marker in identity for marker in _POLICY_OPTION_MARKERS):
+        return False
+    normalized = "".join(ch for ch in value if ch.isalnum()).lower()
+    return normalized in _DISALLOWED_POLICY_VALUES
 
 
 def _agent_host_option_values(raw_options: object) -> list[object]:

@@ -32,6 +32,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCatalogEntry,
     RuntimeProfileKind,
     RuntimeProfileProtocol,
+    RuntimeProfileAvailability,
     RuntimeProfileScope,
     RuntimeProfileStatus,
     reveal_credentials,
@@ -216,6 +217,41 @@ class AgentRuntimeProfileService:
                 )
             )
         return profiles
+
+    async def list_profiles_with_availability(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        include_disabled: bool = False,
+    ) -> list[tuple[AgentRuntimeProfile, RuntimeProfileAvailability | None]]:
+        """Every visible profile, paired with whether it can take work now.
+
+        Availability is derived per read, never stored: the same harness profile
+        is READY or OFFLINE depending only on whether someone's laptop is awake.
+        Two batched queries rather than one per profile.
+        """
+        profiles = await self.list_profiles(
+            organization_id=organization_id,
+            user_id=user_id,
+            include_disabled=include_disabled,
+        )
+        harness_ids = {
+            profile.harness_id for profile in profiles if profile.harness_id is not None
+        }
+        if self.host_repository is None or not harness_ids:
+            # Two other call sites build this service without a host repository.
+            # They never render availability, so degrade rather than fail.
+            return [(profile, None) for profile in profiles]
+
+        harnesses = await self.host_repository.get_harnesses(harness_ids)
+        hosts = await self.host_repository.get_many(
+            {harness.host_id for harness in harnesses.values()}
+        )
+        return [
+            (profile, _profile_availability(profile, harnesses, hosts))
+            for profile in profiles
+        ]
 
     async def create_agent_host_profile(
         self,
@@ -711,6 +747,36 @@ def _agent_host_model_catalog(
                 )
             )
     return entries
+
+
+def _profile_availability(
+    profile: AgentRuntimeProfile,
+    harnesses: dict[UUID, object],
+    hosts: dict[UUID, object],
+) -> RuntimeProfileAvailability | None:
+    """Why a harness-backed profile can or cannot take work.
+
+    ``None`` for a model provider: it is reachable whenever its endpoint is, and
+    Lemma has nothing local to report about it.
+    """
+    if profile.harness_id is None:
+        return None
+    harness = harnesses.get(profile.harness_id)
+    if harness is None:
+        return RuntimeProfileAvailability.NOT_INSTALLED
+    host = hosts.get(getattr(harness, "host_id", None))
+    if host is None or getattr(host, "revoked_at", None) is not None:
+        return RuntimeProfileAvailability.UNAVAILABLE
+    if (
+        effective_agent_host_status(
+            getattr(host, "status", None), getattr(host, "last_seen_at", None)
+        )
+        is not AgentHostStatus.ONLINE
+    ):
+        return RuntimeProfileAvailability.OFFLINE
+    if getattr(harness, "health", None) != AgentHostHarnessHealth.READY.value:
+        return RuntimeProfileAvailability.UNAVAILABLE
+    return RuntimeProfileAvailability.READY
 
 
 def _normalize_profile_name(name: str) -> str:

@@ -7,31 +7,22 @@ import httpx
 
 from ... import errors
 from ...client import AuthenticatedClient, Client
-from ...models.agent_runtime_profile_list_response import (
-    AgentRuntimeProfileListResponse,
-)
+from ...models.agent_runtime_profile_response import AgentRuntimeProfileResponse
 from ...models.error_response import ErrorResponse
-from ...types import UNSET, Response, Unset
+from ...types import Response
 
 
 def _get_kwargs(
     org_id: UUID,
-    *,
-    include_disabled: bool | Unset = False,
+    profile_id: str,
 ) -> dict[str, Any]:
 
-    params: dict[str, Any] = {}
-
-    params["include_disabled"] = include_disabled
-
-    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
-
     _kwargs: dict[str, Any] = {
-        "method": "get",
-        "url": "/organizations/{org_id}/agent-runtime/profiles".format(
+        "method": "post",
+        "url": "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore".format(
             org_id=quote(str(org_id), safe=""),
+            profile_id=quote(str(profile_id), safe=""),
         ),
-        "params": params,
     }
 
     return _kwargs
@@ -39,9 +30,9 @@ def _get_kwargs(
 
 def _parse_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> AgentRuntimeProfileListResponse | ErrorResponse | None:
+) -> AgentRuntimeProfileResponse | ErrorResponse | None:
     if response.status_code == 200:
-        response_200 = AgentRuntimeProfileListResponse.from_dict(response.json())
+        response_200 = AgentRuntimeProfileResponse.from_dict(response.json())
 
         return response_200
 
@@ -58,7 +49,7 @@ def _parse_response(
 
 def _build_response(
     *, client: AuthenticatedClient | Client, response: httpx.Response
-) -> Response[AgentRuntimeProfileListResponse | ErrorResponse]:
+) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -69,27 +60,27 @@ def _build_response(
 
 def sync_detailed(
     org_id: UUID,
+    profile_id: str,
     *,
     client: AuthenticatedClient | Client,
-    include_disabled: bool | Unset = False,
-) -> Response[AgentRuntimeProfileListResponse | ErrorResponse]:
-    """List Available Agent Runtime Profiles
+) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
+    """Restore Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        include_disabled (bool | Unset):  Default: False.
+        profile_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[AgentRuntimeProfileListResponse | ErrorResponse]
+        Response[AgentRuntimeProfileResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
         org_id=org_id,
-        include_disabled=include_disabled,
+        profile_id=profile_id,
     )
 
     response = client.get_httpx_client().request(
@@ -101,54 +92,54 @@ def sync_detailed(
 
 def sync(
     org_id: UUID,
+    profile_id: str,
     *,
     client: AuthenticatedClient | Client,
-    include_disabled: bool | Unset = False,
-) -> AgentRuntimeProfileListResponse | ErrorResponse | None:
-    """List Available Agent Runtime Profiles
+) -> AgentRuntimeProfileResponse | ErrorResponse | None:
+    """Restore Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        include_disabled (bool | Unset):  Default: False.
+        profile_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        AgentRuntimeProfileListResponse | ErrorResponse
+        AgentRuntimeProfileResponse | ErrorResponse
     """
 
     return sync_detailed(
         org_id=org_id,
+        profile_id=profile_id,
         client=client,
-        include_disabled=include_disabled,
     ).parsed
 
 
 async def asyncio_detailed(
     org_id: UUID,
+    profile_id: str,
     *,
     client: AuthenticatedClient | Client,
-    include_disabled: bool | Unset = False,
-) -> Response[AgentRuntimeProfileListResponse | ErrorResponse]:
-    """List Available Agent Runtime Profiles
+) -> Response[AgentRuntimeProfileResponse | ErrorResponse]:
+    """Restore Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        include_disabled (bool | Unset):  Default: False.
+        profile_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[AgentRuntimeProfileListResponse | ErrorResponse]
+        Response[AgentRuntimeProfileResponse | ErrorResponse]
     """
 
     kwargs = _get_kwargs(
         org_id=org_id,
-        include_disabled=include_disabled,
+        profile_id=profile_id,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -158,28 +149,28 @@ async def asyncio_detailed(
 
 async def asyncio(
     org_id: UUID,
+    profile_id: str,
     *,
     client: AuthenticatedClient | Client,
-    include_disabled: bool | Unset = False,
-) -> AgentRuntimeProfileListResponse | ErrorResponse | None:
-    """List Available Agent Runtime Profiles
+) -> AgentRuntimeProfileResponse | ErrorResponse | None:
+    """Restore Agent Runtime Profile
 
     Args:
         org_id (UUID):
-        include_disabled (bool | Unset):  Default: False.
+        profile_id (str):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        AgentRuntimeProfileListResponse | ErrorResponse
+        AgentRuntimeProfileResponse | ErrorResponse
     """
 
     return (
         await asyncio_detailed(
             org_id=org_id,
+            profile_id=profile_id,
             client=client,
-            include_disabled=include_disabled,
         )
     ).parsed
