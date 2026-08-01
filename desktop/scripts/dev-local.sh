@@ -64,18 +64,30 @@ dev_locald_root="${dev_support_root}/locald"
 #
 # Ask it to leave, then make sure it did.
 if [[ -f "${dev_locald_root}/control.token" ]]; then
+  # Ask the daemon who it is before asking it to leave. locald takes its root
+  # from the environment, not from argv, so a pattern match on the path finds
+  # nothing and would silently spare the very process we need gone -- while
+  # `pkill lemma-locald` would take out the real install's daemon too. Its own
+  # hello carries the pid, which is exactly the one to insist on.
+  stale_pid="$(
+    env LEMMA_LOCALD_ROOT="${dev_locald_root}" "${locald_bin}" \
+      send '{"cmd":"status","id":"dev-identify"}' 2>/dev/null |
+      sed -n 's/.*"event":"hello".*"pid":\([0-9]*\).*/\1/p' | head -1
+  )"
   env LEMMA_LOCALD_ROOT="${dev_locald_root}" \
     "${locald_bin}" send '{"cmd":"shutdown-daemon","id":"dev-refresh"}' \
     >/dev/null 2>&1 || true
-fi
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  pgrep -f "lemma-locald.*${dev_locald_root}" >/dev/null 2>&1 || break
-  sleep 0.5
-done
-if pgrep -f "lemma-locald.*${dev_locald_root}" >/dev/null 2>&1; then
-  echo "Previous dev locald ignored shutdown; stopping it." >&2
-  pkill -f "lemma-locald.*${dev_locald_root}" >/dev/null 2>&1 || true
-  sleep 1
+  if [[ -n "${stale_pid}" ]]; then
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "${stale_pid}" 2>/dev/null || break
+      sleep 0.5
+    done
+    if kill -0 "${stale_pid}" 2>/dev/null; then
+      echo "Previous dev locald (pid ${stale_pid}) ignored shutdown; stopping it." >&2
+      kill -9 "${stale_pid}" 2>/dev/null || true
+      sleep 1
+    fi
+  fi
 fi
 
 declare -a source_env=()
