@@ -14,7 +14,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init dev dev-public agent-host verify-agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
         _ensure-native-connectors \
         test-dev-workflow \
@@ -538,6 +538,22 @@ stop-agent-host:
 		systemctl --user stop lemma-agent-host >/dev/null 2>&1 || true; \
 	fi
 	@pkill -f 'lemma-agent-host serve' >/dev/null 2>&1 || true
+
+# The one command that answers "does ACP chat over Agent Host actually work?"
+#
+# Pairs a real Agent Host against a control plane over `app.lemma.localhost` -
+# the hostname Desktop uses - then drives Codex, Claude Code and OpenCode over
+# real ACP and asserts each streams a real answer back through the host
+# protocol, keeps one provider session across two turns, and survives a session
+# the provider has forgotten.
+#
+# Spends real provider quota and needs those agents authenticated locally, which
+# is why it is opt-in and excluded from CI.
+verify-agent-host:
+	@command -v cargo >/dev/null 2>&1 || 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
+	@echo "→ Verifying ACP chat over Agent Host (real agents, real quota)…"
+	@cd $(AGENT_HOST_DIR) && 		LEMMA_REAL_AGENT_HOST_DATA_DIR="$${LEMMA_REAL_AGENT_HOST_DATA_DIR:-$$HOME/Library/Application Support/Lemma/agent-host}" 		cargo test --locked --test real_harness_e2e -- --ignored --nocapture --test-threads=1
+	@echo "  ✓ ACP chat over Agent Host verified"
 
 agent-host:
 	@command -v cargo >/dev/null 2>&1 || \

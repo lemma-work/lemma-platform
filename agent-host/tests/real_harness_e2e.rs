@@ -795,8 +795,13 @@ async fn run_through_paired_agent_host(source_paths: &HostPaths, agent: &str) {
     #[cfg(unix)]
     std::os::unix::fs::symlink(&source_paths.adapters, &paths.adapters).unwrap();
     let installation_id = Uuid::new_v4().to_string();
+    // Paired the way Desktop pairs: over `app.lemma.localhost`, the hostname the
+    // app serves its own workspace and API on, rather than the raw loopback IP.
+    // Using `127.0.0.1` here is what let this test pass while "Connect this
+    // computer" was impossible in the product — that hostname was refused as a
+    // non-loopback plain-HTTP target by both locald and the host.
     let target = TargetClient::pair(
-        url::Url::parse(&format!("http://{address}/")).unwrap(),
+        url::Url::parse(&format!("http://app.lemma.localhost:{}/", address.port())).unwrap(),
         "real-control-e2e-pairing-code",
         "Real control E2E",
         &installation_id,
