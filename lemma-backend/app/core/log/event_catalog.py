@@ -132,6 +132,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent_surfaces.ingress_service.surface_channel_route_agent_s.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
     'agent_surfaces.ingress_service.surface_egress_skipped_invalid_last.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
     'agent_surfaces.ingress_service.surface_egress_skipped_missing_last.diagnostic': EventSpec('debug', frozenset({'conversation_id'})),
+    'agent.messaging.conversation_origin_failed': EventSpec('debug', frozenset()),
     'agent.messaging.message_person_failed': EventSpec('debug', frozenset()),
     'agent_surfaces.ingress_service.reach_record_failed.diagnostic': EventSpec('debug', frozenset({'surface_id'})),
     'agent_surfaces.ingress_service.send_refused_no_membership_port.diagnostic': EventSpec('debug', frozenset({'surface_id'})),

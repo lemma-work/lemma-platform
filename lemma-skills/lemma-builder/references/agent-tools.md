@@ -14,9 +14,18 @@ Two toolsets gate them (grant them in the agent's `toolsets`, see `agents.md`):
 | `SPEECH` | `say`, `listen` |
 | `MESSAGING` | `message_person` |
 
-Note the split: `USER_INTERACTION` and `SPEECH` reach **the person the agent is already
-working for**. `MESSAGING` reaches **somebody else**, which is a different act with
-different consequences — see *Reaching another person* below.
+Note the split, which is about **which conversation the tool acts on**, not about who
+is on the other end:
+
+| | Acts on | Run can pause on it | Answer comes back to |
+| --- | --- | --- | --- |
+| `USER_INTERACTION`, `SPEECH` | **this** conversation — same thread, same context, same user | yes (`ask_user`, `request_approval`) | this run |
+| `MESSAGING` | **its own** conversation, with its own context and its own user | no | nowhere yet — see below |
+
+That is why `message_person` is not "`ask_user` for other people". `ask_user` suspends
+this run and resumes it with the answer. `message_person` starts a separate
+conversation and returns immediately; the recipient's reply lives in *their* thread
+under *their* permissions, and this run never sees it.
 
 Every tool returns at least `{ success, message?, error? }` (errors are non-fatal — a
 failed tool returns `success:false` with `error`, it does not crash the run); the
@@ -42,7 +51,7 @@ delivers it per surface.
 | `display_resource` (TABLE/AGENT/…) | inline resource view | delivered as a link/summary | link/summary | not delivered |
 | `say` | audio player | **native voice note** (MP3) | **native voice note** (OGG voice bubble) | not delivered |
 | `request_approval` | approval card | approval card | approval card | (asks in prose) |
-| `message_person` | *(reaches the recipient, not this conversation)* — lands in their Lemma inbox, plus whichever chat platform they last used | | | |
+| `message_person` | *(does not act on this conversation at all — opens the recipient's own)* — lands in their Lemma inbox, plus whichever chat platform they last used | | | |
 
 Ground truth: `agent_surfaces/platforms/platform_capabilities.py` (per-platform
 capabilities) and `agent/tools/user_interaction/pydantic_adapter.py`
@@ -207,11 +216,11 @@ descriptions, so any agent with the toolset gets them.)
 
 ---
 
-## Reaching another person (`message_person`)
+## Starting a conversation (`message_person`)
 
-Every other tool on this page talks to the person the agent is already working for.
-This one talks to **somebody else** — a colleague who did not start the conversation
-and is not watching it.
+Every other tool on this page acts **inside the conversation the agent is already in**.
+This one starts a **new one**: its own thread, its own context, owned by whoever
+receives it. That is the difference that matters — not who is on the other end.
 
 ```jsonc
 { "person": "priya@acme.com",          // email (exact) or name (must match exactly one member)
@@ -234,17 +243,29 @@ both the agent *and* the human whose authority the run carries ("Ops Assistant,
 working for Deepak"). They do not see the agent's conversation, its task, or its
 reasoning. Write a message that stands on its own.
 
-**Their reply is not yours.** It opens a conversation **they** own, running under
-**their** permissions. The agent will never see it in the calling conversation, so
-there is no point waiting on it — this tool informs and asks, it does not block.
-Structured collect-an-answer-back-into-this-run is not built yet.
+**Which conversation it lands in.** Never this one. It continues the recipient's live
+thread if they have one going (last touched within 30 minutes, same agent), and
+otherwise opens a fresh conversation owned by them — seeded with the message itself, so
+the thread reads as a conversation rather than an alert.
+
+**Their reply is not yours.** It runs under **their** permissions in **their**
+conversation. The agent will never see it here, so there is no point waiting — this
+tool informs and asks, it does not block. Structured collect-an-answer-back-into-this-run
+is not built yet; that is `Ask`, and it does not exist.
+
+**Telling your own run's owner.** Normally refused — if they are reading this
+conversation, just reply. But a run nobody is watching (a schedule, a workflow step)
+has no "just reply": its final answer lands somewhere no one opens. There, messaging
+the run's owner is allowed and the notification links back to **this** run, so opening
+it shows the work that produced it. This is how "tell me when X happens" works.
 
 Rules the tool enforces, so the agent does not have to:
 
 - The recipient must be a member of the pod (fails closed if membership cannot be checked).
 - An ambiguous name is an error, never a best guess — messaging the wrong colleague is
   not a mistake the agent can see or undo.
-- Messaging the person it is already working for is refused; reply to them normally.
+- Reaching someone reading this conversation is refused, with the schedule/workflow
+  exception above.
 
 **Gating.** `MESSAGING` in the agent's `toolsets`, and on a chat surface the surface's
 `config.send_policy.audience` must be `POD_MEMBERS`. Default is `NOBODY`.

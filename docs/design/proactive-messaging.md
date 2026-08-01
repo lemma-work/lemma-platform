@@ -78,12 +78,25 @@ notify(pod, recipient, body, origin) →
 
 ### The conversation strategy
 
+The axis that matters is **which conversation a tool acts on**, and it is easy to mistake for *who is on the other end*.
+
+| | Acts on | Can the run pause on it | Where the answer goes |
+| --- | --- | --- | --- |
+| `ask_user`, `request_approval`, `display_resource`, `say` | **this** conversation | yes (the pausing ones) | back into this run |
+| `notify` / `message_person` / `NOTIFY` | **its own** conversation, with its own context and its own user | no | the recipient's thread — not here |
+
+So `message_person` is not "`ask_user` for other people". `ask_user` suspends the run and resumes it with the answer. `notify` starts a separate conversation and returns immediately. Closing that gap is what `Ask` would be, and it is not built.
+
 A message you cannot reply to is an alert, not a conversation. So every notification lands in a conversation the recipient owns, with the outbound text persisted in it.
 
 - **A live thread is continued** — last touched within 30 minutes.
 - **Anything colder opens a new conversation**, seeded with its origin, and the person's thread is repointed at it with a compare-and-set so a concurrent inbound cannot split one thread across two conversations.
 
 The 30-minute window is deliberately much tighter than the surface's 24h DM reset. That setting exists to stop threads living forever, not to decide whether a new subject belongs in an old one — a digest arriving the morning after yesterday's support chat is a new subject, and appending it reads as a non-sequitur.
+
+**The one case that keeps its own conversation:** a run telling *its own owner* something. Reaching the person a run belongs to is normally the wrong tool — just reply — but a schedule- or workflow-born run has nobody reading its conversation, so "reply" is advice with no destination. There, `message_person` is allowed and the notification is pointed back at **the run's own conversation**, so opening the inbox entry shows the work that produced it rather than a bare line of text.
+
+Getting this wrong is what made the headline use case fail in the first draft: the self-message guard fired on exactly the case the feature exists for, and told a scheduled agent to reply to a conversation nobody would ever open. The signal that separates them is `conversation.origin_type` — `SCHEDULE_RUN`/`WORKFLOW_RUN` means unwatched, `None` means somebody is reading.
 
 Persisting happens **before** sending. If the platform call fails the person still has the message in Lemma; the reverse order would put a message on their phone that the agent has no memory of.
 
@@ -133,7 +146,7 @@ Folding all three into one entity is the right shape, and it carries a genuine h
 
 ## Open questions
 
-1. **Should a scheduled run notify by default?** Today it does not — a run must explicitly call `message_person` or use a `NOTIFY` node. That keeps a five-minute cron from turning the badge permanently red, at the cost of leaving a silent scheduled run as invisible as it was before. The alternative is notifying on failure only, which is probably the real answer.
+1. **Should a scheduled run notify by default?** Today it does not — a run must explicitly call `message_person` or use a `NOTIFY` node. That keeps a five-minute cron from turning the badge permanently red, at the cost of leaving a silent scheduled run as invisible as it was before. The alternative is notifying on failure only, which is probably the real answer. (`schedules.consecutive_failures` already exists; nothing reads it for this.)
 2. **Does `notify` need a digest mode?** First-success-wins solves cross-channel spam; it does nothing about ten notifications from one workflow in one minute.
 3. **Is `Notification` a `ResourceType`?** It is user-scoped, so probably not — but `Ask` almost certainly is, since it is assignable and permission-checked.
 

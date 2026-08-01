@@ -25,6 +25,30 @@ from app.modules.agent.tools.messaging.models import (
 logger = get_logger(__name__)
 
 
+async def _conversation_origin(conversation_id: UUID | None) -> str | None:
+    """What started this conversation, or None if a person did.
+
+    ``SCHEDULE_RUN`` / ``WORKFLOW_RUN`` mean nobody is sitting in front of it —
+    the run's final answer lands somewhere no one opens. That is exactly when an
+    agent needs to be able to tell its owner something.
+    """
+    if conversation_id is None:
+        return None
+    from app.core.infrastructure.db.session import async_session_maker
+    from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
+    from app.modules.agent.infrastructure.repositories import ConversationRepository
+
+    try:
+        async with create_uow_from_session_maker(async_session_maker) as uow:
+            conversation = await ConversationRepository(uow).get_conversation(
+                conversation_id
+            )
+        return getattr(conversation, "origin_type", None) if conversation else None
+    except Exception:
+        logger.debug("agent.messaging.conversation_origin_failed", exc_info=True)
+        return None
+
+
 async def _pod_members(pod_id: UUID) -> list:
     from app.core.infrastructure.db.session import async_session_maker
     from app.core.infrastructure.db.uow_factory import create_uow_from_session_maker
@@ -105,8 +129,10 @@ async def message_person(
     reply starts a conversation of THEIR own, under THEIR permissions — you will
     not see it in this conversation, so do not wait on it here.
 
-    Do NOT use this to reach the person you are already talking to; reply to
-    them normally instead.
+    Do NOT use this to reach someone who is reading this conversation — reply to
+    them normally instead. The exception is a run nobody is watching (a schedule,
+    or a workflow step): there is no "normally" there, so telling the run's owner
+    what happened is exactly what this is for, and it links back to this run.
     """
     from app.modules.agent_surfaces.domain.entities import NotificationOrigin
     from app.modules.agent_surfaces.services.surface_display_delivery import (
@@ -125,14 +151,25 @@ async def message_person(
     if recipient_id is None:
         return MessagePersonResponse(success=False, error=error)
 
+    # Reaching the person the run belongs to is normally the wrong tool — just
+    # reply. But a schedule- or workflow-born run has nobody reading its
+    # conversation, so "reply to them directly" is advice with no destination.
+    # That run telling its owner something is the whole point of notifications.
+    conversation_id = getattr(deps, "conversation_id", None)
+    notify_conversation_id: UUID | None = None
     if recipient_id == getattr(deps, "user_id", None):
-        return MessagePersonResponse(
-            success=False,
-            error=(
-                "That is the person you are already working for — reply to them "
-                "directly instead of messaging them."
-            ),
-        )
+        origin = await _conversation_origin(conversation_id)
+        if origin is None:
+            return MessagePersonResponse(
+                success=False,
+                error=(
+                    "That is the person you are already working for, and they are "
+                    "reading this conversation — reply to them here instead."
+                ),
+            )
+        # Hand the run's own conversation to notify so the inbox entry opens the
+        # work that produced it, rather than a bare message with no trail.
+        notify_conversation_id = conversation_id
 
     agent_label = getattr(deps, "agent_display_name", None) or getattr(
         deps, "agent_name", None
@@ -146,6 +183,7 @@ async def message_person(
             agent_name=getattr(deps, "agent_name", None),
             origin_type=NotificationOrigin.AGENT_RUN,
             origin_id=getattr(deps, "agent_run_id", None),
+            conversation_id=notify_conversation_id,
             attribution=_attribution(
                 members, getattr(deps, "user_id", None), agent_label or "An agent"
             ),

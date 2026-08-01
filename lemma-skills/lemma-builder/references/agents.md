@@ -90,7 +90,7 @@ Grant only the toolsets the job needs:
 | `USER_INTERACTION` | ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
 | `SUBAGENTS` | async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
-| `MESSAGING` | reach a **different** pod member unprompted (`message_person`) — see `agent-tools.md`. Grant deliberately: this is the one toolset that puts the agent's words in front of somebody who did not ask for them |
+| `MESSAGING` | start a **new** conversation with a pod member (`message_person`) — its own thread, its own context, not this one. Includes telling the owner of a schedule/workflow run what happened. See `agent-tools.md`; grant deliberately, since it can put the agent's words in front of somebody who did not ask for them |
 
 For pod files and data, prefer `POD` (typed, grant-checked table/record/file tools).
 `WORKSPACE_CLI` is the escape hatch when the agent needs a real shell. There is no
