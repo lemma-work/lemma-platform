@@ -1366,22 +1366,11 @@ impl AcpCallbacks for JournalCallbacks {
             self.lease_epoch,
             provider_session_id,
         )?;
-        // Lemma stores this against the conversation and hands it back as the
-        // next turn's `resume_session_id`. Reported here rather than with the
-        // terminal checkpoint so a run that fails, is cancelled, or has its
-        // machine sleep partway still leaves the conversation resumable.
-        let mut detail = JsonMap::new();
-        detail.insert(
-            "provider_session_id".to_owned(),
-            Value::String(provider_session_id.to_owned()),
-        );
-        self.journal.checkpoint(
-            self.target_id,
-            self.run_id,
-            self.lease_epoch,
-            RunState::Dispatching,
-            &detail,
-        )?;
+        // `mark_dispatch_intent` just made the session id durable, and
+        // `pending_control` puts it on every checkpoint this run reports. Waking
+        // the poll here gets it upstream on the first one rather than a whole
+        // long poll later, so Lemma has the conversation's session before the
+        // user's next message arrives.
         self.events_ready.notify_one();
         Ok(())
     }

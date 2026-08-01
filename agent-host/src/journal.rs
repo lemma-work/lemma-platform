@@ -827,7 +827,8 @@ impl Journal {
         // even though the Agent Host remains connected and healthy.
         let mut checkpoint_statement = connection.prepare(
             r#"
-            SELECT runs.run_id, runs.lease_epoch, runs.state, runs.checkpoint_detail
+            SELECT runs.run_id, runs.lease_epoch, runs.state, runs.checkpoint_detail,
+                   runs.provider_session_id
               FROM runs
              WHERE runs.target_id=?1
                AND (
@@ -861,23 +862,40 @@ impl Journal {
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         let checkpoints = encoded
             .into_iter()
-            .map(|(run_id, lease_epoch, state, detail)| {
-                Ok(RunCheckpoint {
-                    run_id: Uuid::parse_str(&run_id).map_err(|_| {
-                        JournalError::InvalidEnum(format!("invalid run UUID {run_id}"))
-                    })?,
-                    lease_epoch: u32::try_from(lease_epoch).map_err(|_| {
-                        JournalError::InvalidEnum(format!("invalid lease epoch {lease_epoch}"))
-                    })?,
-                    state: enum_parse(&state)?,
-                    detail: serde_json::from_str(&detail)?,
-                })
-            })
+            .map(
+                |(run_id, lease_epoch, state, detail, provider_session_id)| {
+                    let mut detail: JsonMap = serde_json::from_str(&detail)?;
+                    // Carried on every checkpoint, not just the one written when the
+                    // session opened. A run holds a single pending-checkpoint slot,
+                    // so the `Running` state that follows the first streamed token
+                    // overwrites the detail of the checkpoint before it - and the
+                    // first token lands milliseconds after the prompt, well inside
+                    // one poll. Lemma needs this id to keep the conversation on one
+                    // provider session, and reads it idempotently.
+                    if let Some(session_id) = provider_session_id {
+                        detail.insert(
+                            "provider_session_id".to_owned(),
+                            serde_json::Value::String(session_id),
+                        );
+                    }
+                    Ok(RunCheckpoint {
+                        run_id: Uuid::parse_str(&run_id).map_err(|_| {
+                            JournalError::InvalidEnum(format!("invalid run UUID {run_id}"))
+                        })?,
+                        lease_epoch: u32::try_from(lease_epoch).map_err(|_| {
+                            JournalError::InvalidEnum(format!("invalid lease epoch {lease_epoch}"))
+                        })?,
+                        state: enum_parse(&state)?,
+                        detail,
+                    })
+                },
+            )
             .collect::<Result<Vec<_>, JournalError>>()?;
         let mut rejection_statement = connection.prepare(
             "SELECT rejection_json FROM command_rejections WHERE target_id=?1 ORDER BY created_at LIMIT 256",
@@ -1474,6 +1492,51 @@ mod tests {
             journal.pending_control(target).unwrap(),
             (vec![], vec![], vec![])
         );
+    }
+
+    #[test]
+    fn the_provider_session_rides_every_checkpoint_not_just_the_one_that_opened_it() {
+        // A run has one pending-checkpoint slot, so the RUNNING that follows the
+        // first streamed token overwrites the detail written a moment earlier -
+        // and the first token lands well inside a single poll. Putting the id on
+        // the checkpoint that happened to be current lost it every time.
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+        journal
+            .mark_dispatch_intent(target, spec.agent_run_id, 1, "rollout-42")
+            .unwrap();
+        journal
+            .checkpoint(
+                target,
+                spec.agent_run_id,
+                1,
+                RunState::Running,
+                &JsonMap::new(),
+            )
+            .unwrap();
+
+        let (_, checkpoints, _) = journal.pending_control(target).unwrap();
+        assert_eq!(checkpoints.len(), 1);
+        assert_eq!(checkpoints[0].state, RunState::Running);
+        assert_eq!(
+            checkpoints[0].detail.get("provider_session_id"),
+            Some(&serde_json::Value::String("rollout-42".to_owned())),
+            "the RUNNING checkpoint dropped the session the conversation needs"
+        );
+    }
+
+    #[test]
+    fn a_run_that_never_opened_a_session_reports_no_session_id() {
+        let (_directory, journal, target, command, spec) = fixture();
+        journal
+            .accept_start(target, &command, &spec, "codex", "1.0")
+            .unwrap();
+
+        let (_, checkpoints, _) = journal.pending_control(target).unwrap();
+        assert_eq!(checkpoints.len(), 1);
+        assert!(!checkpoints[0].detail.contains_key("provider_session_id"));
     }
 
     #[test]
