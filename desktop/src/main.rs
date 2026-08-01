@@ -2910,7 +2910,14 @@ fn navigation_disposition(
 ) -> NavigationDisposition {
     if is_desktop_browser_auth_url(url) {
         NavigationDisposition::OpenExternal
-    } else if url.scheme() == "tauri" {
+    } else if trusted_native_asset_url(url) {
+        // Our own bundled pages, whichever origin this build serves them from.
+        // Testing `scheme() == "tauri"` alone was right for a packaged app and
+        // silently wrong for a dev one: `cargo tauri dev` serves those same
+        // files over loopback http, and the local-mode branch below denies
+        // every local http destination that is not the workspace. So the
+        // splash was refused before it could paint, and the window stayed white
+        // until the workspace URL replaced it a minute later.
         NavigationDisposition::Allow
     } else if !matches!(url.scheme(), "http" | "https") {
         NavigationDisposition::Deny
@@ -4073,6 +4080,40 @@ mod tests {
         } else {
             assert_eq!(splash.scheme(), "tauri");
         }
+    }
+
+    #[test]
+    fn the_splash_survives_the_navigation_gate_in_local_mode() {
+        // Local mode denies local http destinations that are not the workspace,
+        // which is what kept a dev build's splash off the screen: it is served
+        // over loopback http, so it looked exactly like the thing that rule
+        // exists to block.
+        let splash = tauri::Url::parse(&native_asset_url("index.html")).unwrap();
+        assert_eq!(
+            navigation_disposition(
+                &splash,
+                "local",
+                "http://app.lemma.localhost:52501",
+                "http://app.lemma.localhost:52502",
+            ),
+            NavigationDisposition::Allow,
+            "the splash must be allowed to load: {splash}"
+        );
+    }
+
+    #[test]
+    fn local_mode_still_denies_a_local_destination_that_is_not_ours() {
+        // The allowance above must not become a hole: an arbitrary loopback
+        // port is still refused in local mode.
+        assert_eq!(
+            navigation_disposition(
+                &tauri::Url::parse("http://127.0.0.1:9999/").unwrap(),
+                "local",
+                "http://app.lemma.localhost:52501",
+                "http://app.lemma.localhost:52502",
+            ),
+            NavigationDisposition::Deny
+        );
     }
 
     #[test]
