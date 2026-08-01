@@ -129,12 +129,32 @@ async def list_schedule_runs(
         ctx=ctx,
         limit=max(1, min(limit, 1000)),
     )
-    if runs is None:
-        raise HTTPException(status_code=404, detail="Schedule not found")
     return ScheduleRunListResponse(
         items=[ScheduleRunResponse.model_validate(item) for item in runs],
         limit=max(1, min(limit, 1000)),
     )
+
+
+@router.post(
+    "/{schedule_id}/runs/{run_id}/retry",
+    response_model=ScheduleRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="schedule.run.retry",
+)
+async def retry_schedule_run(
+    pod_id: UUID,
+    schedule_id: UUID,
+    run_id: UUID,
+    service: ScheduleServiceDep,
+    ctx: PodContextDep,
+) -> ScheduleRunResponse:
+    schedule_run = await service.retry_schedule_run(
+        pod_id=pod_id,
+        schedule_id=schedule_id,
+        run_id=run_id,
+        ctx=ctx,
+    )
+    return ScheduleRunResponse.model_validate(schedule_run)
 
 
 @router.get(
@@ -154,7 +174,9 @@ async def get_schedule(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found"
         )
-    await ctx.require(Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id))
+    await ctx.require(
+        Permissions.SCHEDULE_READ, ResourceRef.schedule(pod_id, schedule_id)
+    )
 
     return await _schedule_detail_response(schedule)
 
@@ -177,7 +199,9 @@ async def update_schedule(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found"
         )
-    await ctx.require(Permissions.SCHEDULE_UPDATE, ResourceRef.schedule(pod_id, schedule_id))
+    await ctx.require(
+        Permissions.SCHEDULE_UPDATE, ResourceRef.schedule(pod_id, schedule_id)
+    )
 
     schedule_update = ScheduleUpdateEntity(
         config=request.config,
@@ -190,8 +214,12 @@ async def update_schedule(
         visibility=request.visibility,
     )
 
-    updated_schedule = await service.update_schedule(schedule_id, schedule_update, ctx=ctx)
-    updated_schedule = await service.get_schedule(schedule_id, ctx=ctx) or updated_schedule
+    updated_schedule = await service.update_schedule(
+        schedule_id, schedule_update, ctx=ctx
+    )
+    updated_schedule = (
+        await service.get_schedule(schedule_id, ctx=ctx) or updated_schedule
+    )
     return await _schedule_detail_response(updated_schedule)
 
 
@@ -212,7 +240,9 @@ async def delete_schedule(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found"
         )
-    await ctx.require(Permissions.SCHEDULE_DELETE, ResourceRef.schedule(pod_id, schedule_id))
+    await ctx.require(
+        Permissions.SCHEDULE_DELETE, ResourceRef.schedule(pod_id, schedule_id)
+    )
 
     await service.delete_schedule(schedule_id)
     return None

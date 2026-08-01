@@ -407,12 +407,12 @@ class ScheduleRepository(ScheduleRepositoryInterface):
                 config = entity.datastore_config
             except ValueError:
                 logger.debug(
-                    'schedule.schedule_repository.datastore_schedule_s_has_invalid.diagnostic'
+                    "schedule.schedule_repository.datastore_schedule_s_has_invalid.diagnostic"
                 )
                 continue
             if config is None or not config.operations:
                 logger.debug(
-                    'schedule.schedule_repository.datastore_schedule_s_declares_no.diagnostic'
+                    "schedule.schedule_repository.datastore_schedule_s_declares_no.diagnostic"
                 )
                 continue
             if operation_value in config.operations:
@@ -459,4 +459,11 @@ class ScheduleRepository(ScheduleRepositoryInterface):
             update(Schedule)
             .where(Schedule.id == schedule_id)
             .values(consecutive_failures=0)
+        )
+
+    async def set_consecutive_failures(self, schedule_id: UUID, count: int) -> None:
+        await self.session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id)
+            .values(consecutive_failures=count)
         )

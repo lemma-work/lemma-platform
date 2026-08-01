@@ -270,7 +270,7 @@ async def on_schedule_fired(
     )
 
 
-@streaq_task(name="check_and_start_flows_for_schedule")
+@streaq_task(name="check_and_start_flows_for_schedule", max_tries=10)
 async def check_and_start_flows_for_schedule(
     schedule_id: str,
     user_id: str | None,
@@ -297,4 +297,20 @@ async def check_and_start_flows_for_schedule(
                 if source_occurred_at
                 else None
             ),
+        )
+
+
+@streaq_cron("*/5 * * * *", name="recover_schedule_runs")
+async def recover_schedule_runs() -> None:
+    from app.composition.schedule_run_recovery import ScheduleRunRecoveryService
+
+    worker_ctx: AppWorkerContext = streaq_worker.context
+    async with worker_ctx.uow() as uow:
+        result = await ScheduleRunRecoveryService(uow).recover()
+    if result.redelivered or result.reconciled or result.dead_lettered:
+        logger.warning(
+            "schedule.runs.recovered",
+            redelivered=result.redelivered,
+            reconciled=result.reconciled,
+            dead_lettered=result.dead_lettered,
         )

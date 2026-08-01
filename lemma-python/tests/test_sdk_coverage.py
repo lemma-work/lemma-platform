@@ -114,13 +114,13 @@ def test_facade_imports_resolve():
     from lemma_sdk import resources  # noqa: F401
 
 
-def test_schedule_run_contract_has_no_new_fire_aliases() -> None:
+def test_schedule_run_contract_includes_retry_without_fire_aliases() -> None:
     spec = json.loads(SPEC_PATH.read_text(encoding="utf-8"))
     paths = set(spec["paths"])
     schemas = spec["components"]["schemas"]
 
     assert "/pods/{pod_id}/schedules/{schedule_id}/runs" in paths
-    assert "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry" not in paths
+    assert "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry" in paths
     assert not any("/fires" in path for path in paths)
     assert "ScheduleRunResponse" in schemas
     assert "ScheduleRunListResponse" in schemas
@@ -137,6 +137,9 @@ def test_schedule_run_contract_has_no_new_fire_aliases() -> None:
     ]
     assert {"user_id", "target_run_id"} <= set(
         schemas["ScheduleRunResponse"]["required"]
+    )
+    assert {"redrive_of_run_id", "redriven_by_user_id"} <= set(
+        schemas["ScheduleRunResponse"]["properties"]
     )
     assert "ScheduleFireStatus" in schemas
     assert "ScheduleFireResponse" not in schemas

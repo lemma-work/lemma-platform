@@ -161,6 +161,13 @@ def main() -> int:
                     now() - interval '1 minute', now() - interval '1 minute'
                 ),
                 (
+                    '00000000-0000-0000-0000-000000000050',
+                    'legacy-terminal-failure', 'TARGET_FAILED', 1, 'WORKFLOW',
+                    NULL, '{}', '{}', '{}', now() - interval '30 seconds',
+                    '00000000-0000-0000-0000-000000000076',
+                    now() - interval '30 seconds', now() - interval '30 seconds'
+                ),
+                (
                     '00000000-0000-0000-0000-000000000050', 'retryable-failure',
                     'FAILED', 2, 'WORKFLOW', NULL, '{}', '{}', '{}', now(),
                     '00000000-0000-0000-0000-000000000075', now(), now()
@@ -197,10 +204,10 @@ def main() -> int:
             WHERE id = '00000000-0000-0000-0000-000000000050'
             """
         )
-        assert cursor.fetchone() == (2,)
+        assert cursor.fetchone() == (3,)
         cursor.execute(
             """
-            SELECT source_event_id, status, user_id::text,
+            SELECT source_event_id, status, target_outcome, user_id::text,
                    target_run_id IS NOT NULL
             FROM schedule_runs
             WHERE schedule_id = '00000000-0000-0000-0000-000000000050'
@@ -210,6 +217,7 @@ def main() -> int:
         assert cursor.fetchall() == [
             (
                 "completed-workflow",
+                "DISPATCHED",
                 "COMPLETED",
                 "00000000-0000-0000-0000-000000000010",
                 True,
@@ -217,48 +225,74 @@ def main() -> int:
             (
                 "dead-letter",
                 "DEAD_LETTERED",
+                None,
                 "00000000-0000-0000-0000-000000000010",
-                True,
+                False,
             ),
             (
                 "failed-agent",
+                "DISPATCHED",
                 "TARGET_FAILED",
                 "00000000-0000-0000-0000-000000000010",
                 True,
             ),
             (
                 "failed-workflow",
+                "DISPATCHED",
                 "TARGET_FAILED",
                 "00000000-0000-0000-0000-000000000010",
                 True,
             ),
             (
+                "legacy-terminal-failure",
+                "TARGET_FAILED",
+                None,
+                "00000000-0000-0000-0000-000000000010",
+                False,
+            ),
+            (
                 "retryable-failure",
                 "FAILED",
+                None,
                 "00000000-0000-0000-0000-000000000010",
-                True,
+                False,
             ),
         ]
         cursor.execute(
             """
-            SELECT origin_type, origin_id
+            SELECT origin_type, origin_id::text
             FROM agent_conversations
             WHERE id = '00000000-0000-0000-0000-000000000063'
             """
         )
-        assert cursor.fetchone() == (None, None)
+        assert cursor.fetchone() == (
+            "SCHEDULE_RUN",
+            "00000000-0000-0000-0000-000000000073",
+        )
         cursor.execute(
             """
             SELECT
                 to_regclass('uq_schedule_runs_target') IS NOT NULL,
-                to_regclass('ix_schedule_runs_retryable_recovery') IS NULL,
+                to_regclass('ix_schedule_runs_retryable_recovery') IS NOT NULL,
                 is_nullable
             FROM information_schema.columns
             WHERE table_name = 'schedule_runs'
               AND column_name = 'target_run_id'
             """
         )
-        assert cursor.fetchone() == (True, True, "NO")
+        assert cursor.fetchone() == (True, True, "YES")
+        cursor.execute(
+            """
+            SELECT is_active, last_fire_status, last_error
+            FROM schedules
+            WHERE id = '00000000-0000-0000-0000-000000000050'
+            """
+        )
+        assert cursor.fetchone() == (
+            False,
+            "ERROR",
+            "DATASTORE schedules must declare an explicit table_name.",
+        )
         cursor.execute(
             """
             SELECT column_name

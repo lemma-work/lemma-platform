@@ -19,6 +19,7 @@ from app.modules.schedule.scheduler.api.schemas import (
 from app.core.config import reveal_secret
 from app.core.log.log import get_logger
 from app.modules.schedule.config import schedule_settings
+from app.modules.schedule.domain.errors import ScheduleDomainError
 
 logger = get_logger(__name__)
 
@@ -90,13 +91,18 @@ async def schedule_cron_job(
             schedule_id=data.schedule_id,
             next_run_time=next_run_time,
         )
+    except ScheduleDomainError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid cron expression: {e}",
         )
     except Exception:
-        logger.debug('schedule.scheduler_controller.cron_job.propagated', exc_info=True)
+        logger.debug("schedule.scheduler_controller.cron_job.propagated", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule cron job",
@@ -124,6 +130,7 @@ async def schedule_once_job(
             run_date=data.run_date,
             payload=data.payload,
             replace_existing=data.replace_existing,
+            logical_schedule=data.logical_schedule,
         )
 
         # Use schedule_id as job_id
@@ -139,7 +146,9 @@ async def schedule_once_job(
             next_run_time=next_run_time,
         )
     except Exception:
-        logger.debug('schedule.scheduler_controller.one_time_job.propagated', exc_info=True)
+        logger.debug(
+            "schedule.scheduler_controller.one_time_job.propagated", exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule one-time job",

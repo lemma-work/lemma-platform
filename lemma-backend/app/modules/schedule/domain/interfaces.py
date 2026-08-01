@@ -28,6 +28,16 @@ class ScheduleTargetResolver(Protocol):
     ) -> ScheduleTarget | None: ...
 
 
+class DatastoreSchedulePolicy(Protocol):
+    async def require_table_update(
+        self, *, pod_id: UUID, table_name: str, ctx: Context
+    ) -> None: ...
+
+    async def can_view_all_runs(
+        self, *, pod_id: UUID, table_name: str, ctx: Context
+    ) -> bool: ...
+
+
 class ScheduleEventFilter(Protocol):
     """Evaluate an optional schedule filter without exposing model infrastructure."""
 

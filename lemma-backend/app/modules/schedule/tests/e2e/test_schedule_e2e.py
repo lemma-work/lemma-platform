@@ -16,7 +16,8 @@ from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
     ConnectorTrigger,
 )
-from app.modules.schedule.domain.schedule import ScheduleType
+from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
+from app.modules.schedule.infrastructure.models.run import ScheduleRun
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.test_support.e2e_authz import (
     add_pod_member,
@@ -153,9 +154,7 @@ async def _seed_connector_trigger(
             Connector(
                 id=connector_id,
                 title=connector_id.replace("_", " ").title(),
-                provider_capabilities=[
-                    {"provider": "LEMMA", "auth_scheme": "OAUTH2"}
-                ],
+                provider_capabilities=[{"provider": "LEMMA", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )
@@ -199,9 +198,7 @@ async def _workflow_runs(
     return response.json()["items"]
 
 
-async def _workflow_run(
-    client: AsyncClient, pod_id: str, run_id: str
-) -> dict:
+async def _workflow_run(client: AsyncClient, pod_id: str, run_id: str) -> dict:
     response = await client.get(f"/pods/{pod_id}/workflow-runs/{run_id}")
     assert response.status_code == 200, response.text
     return response.json()
@@ -287,17 +284,13 @@ async def _wait_for_schedule_runs(
 ) -> list[dict]:
     deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
     while asyncio.get_running_loop().time() < deadline:
-        response = await client.get(
-            f"/pods/{pod_id}/schedules/{schedule_id}/runs"
-        )
+        response = await client.get(f"/pods/{pod_id}/schedules/{schedule_id}/runs")
         assert response.status_code == 200, response.text
         items = response.json()["items"]
         if len(items) == count and all(item["status"] == status for item in items):
             return items
         await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
-    pytest.fail(
-        f"Timed out waiting for {count} schedule runs with status {status}"
-    )
+    pytest.fail(f"Timed out waiting for {count} schedule runs with status {status}")
 
 
 async def _wait_for_schedule_run_status_counts(
@@ -309,9 +302,7 @@ async def _wait_for_schedule_run_status_counts(
     deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
     expected_total = sum(expected.values())
     while asyncio.get_running_loop().time() < deadline:
-        response = await client.get(
-            f"/pods/{pod_id}/schedules/{schedule_id}/runs"
-        )
+        response = await client.get(f"/pods/{pod_id}/schedules/{schedule_id}/runs")
         assert response.status_code == 200, response.text
         items = response.json()["items"]
         actual = {
@@ -462,7 +453,7 @@ async def test_schedule_list_and_get_honor_visibility_and_resource_grants(
     assert editor_list.status_code == 200, editor_list.text
     assert {item["id"] for item in editor_list.json()["items"]} == {
         owner_schedule["id"],
-        editor_schedule["id"]
+        editor_schedule["id"],
     }
     editor_items = {item["id"]: item for item in editor_list.json()["items"]}
     assert set(editor_items[owner_schedule["id"]]["allowed_actions"]) == {
@@ -525,9 +516,7 @@ async def test_schedule_list_and_get_honor_visibility_and_resource_grants(
         f"/pods/{pod_id}/schedules",
         headers=pod_user_headers,
     )
-    assert pod_user_list_after_grant.status_code == 200, (
-        pod_user_list_after_grant.text
-    )
+    assert pod_user_list_after_grant.status_code == 200, pod_user_list_after_grant.text
     assert {item["id"] for item in pod_user_list_after_grant.json()["items"]} == {
         owner_schedule["id"],
         restricted_schedule["id"],
@@ -579,13 +568,9 @@ async def test_pod_users_create_and_manage_their_own_personal_schedules(
         )
         return user, auth_headers(user)
 
-    pod_user, pod_user_headers = await _add_member(
-        "schedule-pod-user", role="POD_USER"
-    )
+    pod_user, pod_user_headers = await _add_member("schedule-pod-user", role="POD_USER")
     # A second pod user, to prove personal schedules stay private to their owner.
-    peer_user, peer_headers = await _add_member(
-        "schedule-peer-user", role="POD_USER"
-    )
+    peer_user, peer_headers = await _add_member("schedule-peer-user", role="POD_USER")
     # A pod viewer lacks schedule.create entirely.
     viewer, viewer_headers = await _add_member("schedule-viewer", role="POD_VIEWER")
 
@@ -906,9 +891,7 @@ async def test_wait_until_resumes_from_a_timer_persisted_without_an_owner(
     # job row deserializes to: schedule_id and payload, no user_id.
     scheduler = get_scheduler_service()
     scheduler.scheduler.add_job(
-        func=(
-            "app.modules.schedule.scheduler.scheduler_service:execute_scheduled_job"
-        ),
+        func=("app.modules.schedule.scheduler.scheduler_service:execute_scheduled_job"),
         trigger=DateTrigger(
             run_date=datetime.now(timezone.utc) + timedelta(seconds=1),
             timezone=utc,
@@ -1020,7 +1003,10 @@ async def test_webhook_workflow_schedule_contract_derives_start_config(
             "type": "object",
             "properties": {"labelIds": {"type": "string"}},
         },
-        payload_schema={"type": "object", "properties": {"subject": {"type": "string"}}},
+        payload_schema={
+            "type": "object",
+            "properties": {"subject": {"type": "string"}},
+        },
     )
     workflow = await _create_workflow(
         authenticated_client,
@@ -1194,6 +1180,7 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
     authenticated_client: AsyncClient,
     async_client: AsyncClient,
     fixed_test_org,
+    db_manager,
     worker,
 ):
     _ = worker
@@ -1253,6 +1240,54 @@ async def test_rls_datastore_schedule_run_and_workflow_belong_to_row_owner(
     assert len(run_items) == 1
     assert run_items[0]["user_id"] == row_owner["id"]
     assert run_items[0]["target_run_id"] == workflow_run["id"]
+
+    owner_runs = await async_client.get(
+        f"/pods/{pod_id}/schedules/{schedule['id']}/runs",
+        headers=auth_headers(row_owner),
+    )
+    assert owner_runs.status_code == 200, owner_runs.text
+    assert [item["user_id"] for item in owner_runs.json()["items"]] == [row_owner["id"]]
+
+    peer = await signup_user(async_client, "schedule-run-history-peer")
+    peer_org_member = await invite_org_member(
+        authenticated_client,
+        async_client,
+        org_id=fixed_test_org["id"],
+        user=peer,
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=peer_org_member["id"],
+        role="POD_EDITOR",
+        roles=["POD_EDITOR"],
+    )
+    peer_runs = await async_client.get(
+        f"/pods/{pod_id}/schedules/{schedule['id']}/runs",
+        headers=auth_headers(peer),
+    )
+    assert peer_runs.status_code == 200, peer_runs.text
+    assert peer_runs.json()["items"] == []
+
+    source_run_id = UUID(run_items[0]["id"])
+    async with db_manager.session_factory() as session, session.begin():
+        source_run = await session.get(ScheduleRun, source_run_id)
+        assert source_run is not None
+        source_run.target_outcome = ScheduleRunStatus.TARGET_FAILED.value
+        source_run.completed_at = datetime.now(timezone.utc)
+
+    retry_path = (
+        f"/pods/{pod_id}/schedules/{schedule['id']}/runs/{source_run_id}/retry"
+    )
+    hidden_retry = await async_client.post(
+        retry_path,
+        headers=auth_headers(peer),
+    )
+    assert hidden_retry.status_code == 409, hidden_retry.text
+    assert hidden_retry.json()["code"] == "SCHEDULE_RUN_NOT_RETRYABLE"
+
+    admin_retry = await authenticated_client.post(retry_path)
+    assert admin_retry.status_code == 202, admin_retry.text
 
 
 @pytest.mark.asyncio
@@ -1359,9 +1394,7 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         assert len(matching_events) == 1
         assert matching_events[0].payload["user_id"] == schedule["user_id"]
 
-    email_deadline = (
-        asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
-    )
+    email_deadline = asyncio.get_running_loop().time() + SCHEDULE_E2E_TIMEOUT_SECONDS
     matching_emails: list[dict] = []
     while asyncio.get_running_loop().time() < email_deadline:
         matching_emails = []
@@ -1378,9 +1411,7 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
         await asyncio.sleep(SCHEDULE_E2E_POLL_SECONDS)
     assert len(matching_emails) == 1
 
-    workflow_runs = await _workflow_runs(
-        authenticated_client, pod_id, workflow["name"]
-    )
+    workflow_runs = await _workflow_runs(authenticated_client, pod_id, workflow["name"])
     assert len(workflow_runs) == 5
     assert {run["status"] for run in workflow_runs} == {"FAILED"}
     assert {run["user_id"] for run in workflow_runs} == {row_owner["id"]}
@@ -1403,7 +1434,9 @@ async def test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedu
     )
     assert schedule_runs.status_code == 200, schedule_runs.text
     assert len(schedule_runs.json()["items"]) == 5
-    assert len(await _workflow_runs(authenticated_client, pod_id, workflow["name"])) == 5
+    assert (
+        len(await _workflow_runs(authenticated_client, pod_id, workflow["name"])) == 5
+    )
 
 
 @pytest.mark.asyncio
@@ -1637,6 +1670,69 @@ async def test_schedule_name_is_pod_scoped_unique_and_filterable(
 
 
 @pytest.mark.asyncio
+async def test_time_schedule_frequency_policy_covers_create_update_and_reactivation(
+    authenticated_client: AsyncClient,
+    fixed_test_org,
+    db_manager,
+):
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    agent = await _create_agent(authenticated_client, pod_id)
+
+    rejected = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.TIME.value,
+        agent_name=agent["name"],
+        config={"cron": "*/5 * * * *"},
+        expected_status=422,
+    )
+    assert rejected["code"] == "SCHEDULE_TOO_FREQUENT"
+    assert rejected["message"] == (
+        "Time schedules cannot run more frequently than every 15 minutes."
+    )
+
+    schedule = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.TIME.value,
+        agent_name=agent["name"],
+        config={"cron": "*/15 * * * *"},
+    )
+    rejected_update = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}",
+        json={"config": {"cron": "* * * * *"}},
+    )
+    assert rejected_update.status_code == 422, rejected_update.text
+    assert rejected_update.json()["code"] == "SCHEDULE_TOO_FREQUENT"
+
+    async with db_manager.session_factory() as session, session.begin():
+        persisted = await session.get(Schedule, UUID(schedule["id"]))
+        assert persisted is not None
+        persisted.config = {"cron": "*/5 * * * *"}
+        persisted.is_active = False
+
+    rejected_reactivation = await authenticated_client.patch(
+        f"/pods/{pod_id}/schedules/{schedule['id']}",
+        json={"is_active": True},
+    )
+    assert rejected_reactivation.status_code == 422, rejected_reactivation.text
+    assert rejected_reactivation.json()["code"] == "SCHEDULE_TOO_FREQUENT"
+
+    one_time = await _create_schedule(
+        authenticated_client,
+        pod_id,
+        schedule_type=ScheduleType.TIME.value,
+        agent_name=agent["name"],
+        config={
+            "scheduled_at": (
+                datetime.now(timezone.utc) + timedelta(minutes=2)
+            ).isoformat()
+        },
+    )
+    assert one_time["is_active"] is True
+
+
+@pytest.mark.asyncio
 async def test_datastore_schedule_fires_and_records_telemetry(
     authenticated_client: AsyncClient,
     fixed_test_org,
@@ -1678,7 +1774,9 @@ async def test_datastore_schedule_fires_and_records_telemetry(
     assert run["start_type"] == "DATASTORE_EVENT"
 
     # Fire telemetry is recorded for debuggability.
-    detail = await authenticated_client.get(f"/pods/{pod_id}/schedules/{schedule['id']}")
+    detail = await authenticated_client.get(
+        f"/pods/{pod_id}/schedules/{schedule['id']}"
+    )
     assert detail.status_code == 200, detail.text
     body = detail.json()
     assert body["last_fire_status"] == "TRIGGERED"
@@ -1710,6 +1808,76 @@ async def test_datastore_schedule_requires_explicit_operations(
         expected_status=422,
     )
     assert "declare operations explicitly" in str(response)
+
+
+@pytest.mark.asyncio
+async def test_datastore_schedule_requires_table_editor_and_defaults_to_pod(
+    authenticated_client: AsyncClient,
+    async_client: AsyncClient,
+    fixed_test_org,
+):
+    pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    await _create_datastore_table(authenticated_client, pod_id)
+    workflow = await _create_workflow(
+        authenticated_client,
+        pod_id,
+        start={
+            "type": "DATASTORE_EVENT",
+            "config": {"table_name": "schedule_records", "operations": ["INSERT"]},
+        },
+        name_prefix="table-editor-schedule-workflow",
+    )
+
+    async def add_member(slug: str, role: str) -> dict[str, str]:
+        user = await signup_user(async_client, slug)
+        organization_member = await invite_org_member(
+            authenticated_client,
+            async_client,
+            org_id=fixed_test_org["id"],
+            user=user,
+        )
+        await add_pod_member(
+            authenticated_client,
+            pod_id=pod_id,
+            organization_member_id=organization_member["id"],
+            role=role,
+            roles=[role],
+        )
+        return auth_headers(user)
+
+    pod_user_headers = await add_member("datastore-schedule-user", "POD_USER")
+    editor_headers = await add_member("datastore-schedule-editor", "POD_EDITOR")
+    config = {"table_name": "schedule_records", "operations": ["INSERT"]}
+
+    await _create_schedule(
+        async_client,
+        pod_id,
+        schedule_type=ScheduleType.DATASTORE.value,
+        workflow_name=workflow["name"],
+        config=config,
+        headers=pod_user_headers,
+        expected_status=403,
+    )
+    schedule = await _create_schedule(
+        async_client,
+        pod_id,
+        schedule_type=ScheduleType.DATASTORE.value,
+        workflow_name=workflow["name"],
+        config=config,
+        headers=editor_headers,
+    )
+    assert schedule["visibility"] == "POD"
+
+    missing_table = await _create_schedule(
+        async_client,
+        pod_id,
+        schedule_type=ScheduleType.DATASTORE.value,
+        workflow_name=workflow["name"],
+        config={"operations": ["INSERT"]},
+        headers=editor_headers,
+        expected_status=422,
+    )
+    assert "table_name" in str(missing_table)
 
 
 @pytest.mark.asyncio
@@ -1783,7 +1951,7 @@ async def test_matcher_skips_invalid_or_empty_operations(
     await db_session.execute(
         sa_text(
             "UPDATE schedules SET config = "
-            "'{\"table_name\": \"corrupt_records\", \"operations\": [\"create\"]}' "
+            '\'{"table_name": "corrupt_records", "operations": ["create"]}\' '
             "WHERE id = :id"
         ),
         {"id": schedule["id"]},
@@ -1797,7 +1965,7 @@ async def test_matcher_skips_invalid_or_empty_operations(
     # A no-operations row also matches nothing.
     await db_session.execute(
         sa_text(
-            "UPDATE schedules SET config = '{\"table_name\": \"corrupt_records\"}' "
+            'UPDATE schedules SET config = \'{"table_name": "corrupt_records"}\' '
             "WHERE id = :id"
         ),
         {"id": schedule["id"]},

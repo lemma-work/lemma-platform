@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.authorization.context import Context, ResourceRef, ResourceType
@@ -19,7 +19,11 @@ from app.composition.workflow_schedule_runtime import (
     ScheduleRunOutcomeService,
     ScheduleRunRepository,
 )
-from app.modules.schedule.contracts import ScheduleFireStatus, ScheduleRunStatus
+from app.modules.schedule.contracts import (
+    ScheduleFireStatus,
+    ScheduleRunStatus,
+    ScheduleType,
+)
 
 logger = get_logger(__name__)
 
@@ -29,6 +33,44 @@ def _schedule_pod_id(schedule) -> UUID:
     if pod_id is None:
         raise ValueError("Target schedule has no pod_id")
     return pod_id
+
+
+def _schedule_run_user_id(schedule, user_id: UUID | str | None) -> UUID:
+    if user_id is not None:
+        return UUID(str(user_id))
+    if schedule.schedule_type == ScheduleType.DATASTORE:
+        raise ValueError(f"Datastore schedule {schedule.id} fired without a row owner")
+    return schedule.user_id
+
+
+def _schedule_run_identity(schedule_run) -> tuple[UUID, str]:
+    if schedule_run.user_id is None or schedule_run.target_run_id is None:
+        raise RuntimeError(f"Schedule run {schedule_run.id} has no execution identity")
+    return schedule_run.user_id, schedule_run.target_run_id
+
+
+def _accept_inactive_one_time_fire(
+    schedule, *, schedule_event_id: str, source_occurred_at: datetime | None
+) -> bool:
+    if schedule.schedule_type != ScheduleType.TIME or source_occurred_at is None:
+        return False
+    scheduled_at = schedule.config.get("scheduled_at")
+    if not scheduled_at or schedule.config.get("cron"):
+        return False
+    try:
+        configured = datetime.fromisoformat(str(scheduled_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if configured.tzinfo is None:
+        configured = configured.replace(tzinfo=timezone.utc)
+    else:
+        configured = configured.astimezone(timezone.utc)
+    if source_occurred_at.tzinfo is None:
+        occurred_at = source_occurred_at.replace(tzinfo=timezone.utc)
+    else:
+        occurred_at = source_occurred_at.astimezone(timezone.utc)
+    expected_event_id = f"cron:{schedule.id}:{occurred_at.isoformat()}"
+    return configured == occurred_at and schedule_event_id == expected_event_id
 
 
 class ScheduleStartService:
@@ -76,15 +118,13 @@ class ScheduleStartService:
                 schedule_id=schedule_id,
             )
             return
-        if not schedule.is_active:
+        if not schedule.is_active and not _accept_inactive_one_time_fire(
+            schedule,
+            schedule_event_id=schedule_event_id,
+            source_occurred_at=source_occurred_at,
+        ):
             return
-        if user_id is None:
-            # A schedule run is owned; there is nothing authoritative to fall
-            # back to here, so refuse rather than invent an owner.
-            raise ValueError(
-                f"Schedule {schedule_id} fired without an owner; refusing to run it"
-            )
-        run_user_id = UUID(str(user_id))
+        run_user_id = _schedule_run_user_id(schedule, user_id)
 
         run_repo = ScheduleRunRepository(self._uow)
         schedule_run = await run_repo.claim(
@@ -99,11 +139,12 @@ class ScheduleStartService:
         )
         if schedule_run is None:
             return
+        execution_user_id, target_run_id = _schedule_run_identity(schedule_run)
         if schedule_run.status == ScheduleRunStatus.DEAD_LETTERED:
             await self._record_fire(
                 schedule_repo,
                 schedule,
-                run_id=schedule_run.target_run_id,
+                run_id=target_run_id,
                 status=ScheduleFireStatus.ERROR,
                 error="Target dispatch exhausted automatic retries",
                 dispatch_dead_lettered=True,
@@ -121,10 +162,10 @@ class ScheduleStartService:
             try:
                 run_id = await self._start_workflow_for_schedule(
                     schedule=schedule,
-                    user_id=schedule_run.user_id,
+                    user_id=execution_user_id,
                     trigger=trigger,
                     schedule_event_id=schedule_event_id,
-                    target_run_id=schedule_run.target_run_id,
+                    target_run_id=target_run_id,
                 )
                 await run_repo.mark_dispatched(schedule_run.id)
                 await self._record_fire(
@@ -137,7 +178,7 @@ class ScheduleStartService:
                 await self._record_fire(
                     schedule_repo,
                     schedule,
-                    run_id=schedule_run.target_run_id,
+                    run_id=target_run_id,
                     status=ScheduleFireStatus.ERROR,
                     error=f"{type(exc).__name__}: target dispatch failed",
                     dispatch_dead_lettered=(
@@ -151,7 +192,7 @@ class ScheduleStartService:
             try:
                 pod_id = _schedule_pod_id(schedule)
                 ctx = await self._build_user_context(
-                    user_id=schedule_run.user_id,
+                    user_id=execution_user_id,
                     pod_id=pod_id,
                 )
                 await ctx.require(
@@ -168,8 +209,8 @@ class ScheduleStartService:
                         agent_id=schedule.agent_id,
                         input_data=trigger.to_context_value(),
                         pod_id=pod_id,
-                        user_id=schedule_run.user_id,
-                        conversation_id=UUID(schedule_run.target_run_id),
+                        user_id=execution_user_id,
+                        conversation_id=UUID(target_run_id),
                         source="SCHEDULE",
                     )
                 finally:
@@ -183,7 +224,7 @@ class ScheduleStartService:
             except Exception as exc:
                 run_status = await run_repo.mark_failed(schedule_run.id, exc)
                 logger.debug(
-                    'workflow.schedule_start_service.start_agent_schedule.propagated',
+                    "workflow.schedule_start_service.start_agent_schedule.propagated",
                     agent_id=str(schedule.agent_id),
                     schedule_id=schedule_id,
                     exc_info=True,
@@ -191,7 +232,7 @@ class ScheduleStartService:
                 await self._record_fire(
                     schedule_repo,
                     schedule,
-                    run_id=schedule_run.target_run_id,
+                    run_id=target_run_id,
                     status=ScheduleFireStatus.ERROR,
                     error=f"{type(exc).__name__}: target dispatch failed",
                     dispatch_dead_lettered=(
@@ -331,7 +372,7 @@ class ScheduleStartService:
             error=error,
         )
         if dispatch_dead_lettered:
-            await ScheduleRunOutcomeService(
-                self._uow
-            ).record_dispatch_dead_letter(schedule)
+            await ScheduleRunOutcomeService(self._uow).record_dispatch_dead_letter(
+                schedule
+            )
         await self._uow.commit()

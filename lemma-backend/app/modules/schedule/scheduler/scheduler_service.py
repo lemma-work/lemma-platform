@@ -12,25 +12,34 @@ from uuid import UUID
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.events import EVENT_JOB_ERROR
 from pytz import utc
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.engine import make_url
 
 from app.core.config import settings
 from app.core.infrastructure.db.session import async_session_maker
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
-from app.modules.schedule.domain.schedule import ScheduleType
+from app.modules.schedule.domain.errors import ScheduleDomainError
+from app.modules.schedule.domain.events.schedule import ScheduleDeactivated
+from app.modules.schedule.domain.schedule import ScheduleFireStatus, ScheduleType
 from app.modules.schedule.infrastructure.models.schedule import Schedule
 from app.modules.schedule.scheduler.events import get_event_emitter
 from app.modules.schedule.scheduler.executor import (
     ScheduledTimeAsyncIOExecutor,
     current_scheduled_run_time,
 )
+from app.modules.schedule.services.time_schedule_policy import (
+    validate_cron_expression,
+    validate_time_schedule_config,
+)
 
 logger = get_logger(__name__)
+
+_TIME_CRON_JOB_KIND = "TIME_SCHEDULE_CRON"
+_TIME_ONCE_JOB_KIND = "TIME_SCHEDULE_ONCE"
 
 
 def build_sync_jobstore_url(database_url: str) -> str:
@@ -81,10 +90,57 @@ async def load_active_time_schedules() -> list[TimeScheduleJob]:
         ]
 
 
+async def deactivate_unusable_time_schedules(
+    failures: list[tuple[TimeScheduleJob, str, str]],
+) -> None:
+    if not failures:
+        return
+    async with async_session_maker() as session:
+        uow = SqlAlchemyUnitOfWork(session)
+        for schedule, reason, message in failures:
+            changed = await session.scalar(
+                update(Schedule)
+                .where(Schedule.id == schedule.id, Schedule.is_active.is_(True))
+                .values(
+                    is_active=False,
+                    last_fire_status=ScheduleFireStatus.ERROR.value,
+                    last_error=message[:2000],
+                )
+                .returning(Schedule.id)
+            )
+            if changed is not None:
+                uow.collect_events(
+                    [
+                        ScheduleDeactivated(
+                            schedule_id=schedule.id,
+                            user_id=schedule.user_id,
+                            schedule_type=ScheduleType.TIME,
+                            consecutive_failures=0,
+                            reason=reason,
+                        )
+                    ]
+                )
+        await uow.commit()
+
+
+async def mark_one_time_schedule_emitted(schedule_id: UUID) -> None:
+    async with async_session_maker() as session, session.begin():
+        await session.execute(
+            update(Schedule)
+            .where(Schedule.id == schedule_id, Schedule.is_active.is_(True))
+            .values(
+                is_active=False,
+                last_fire_status=ScheduleFireStatus.TRIGGERED.value,
+                last_error=None,
+            )
+        )
+
+
 async def execute_scheduled_job(
     schedule_id: str,
     user_id: str | None = None,
     payload: dict | None = None,
+    _lemma_job_kind: str | None = None,
 ):
     """Static function to execute scheduled jobs.
 
@@ -114,6 +170,8 @@ async def execute_scheduled_job(
         payload=payload or {},
         scheduled_at=current_scheduled_run_time(),
     )
+    if _lemma_job_kind == _TIME_ONCE_JOB_KIND:
+        await mark_one_time_schedule_emitted(schedule_uuid)
 
 
 class SchedulerService:
@@ -198,12 +256,23 @@ class SchedulerService:
         schedules = await load_active_time_schedules()
 
         now = datetime.now(timezone.utc)
-        desired: list[
-            tuple[TimeScheduleJob, dict, datetime | None, str | None]
-        ] = []
+        desired: list[tuple[TimeScheduleJob, dict, datetime | None, str | None]] = []
+        failures: list[tuple[TimeScheduleJob, str, str]] = []
         for schedule in schedules:
-            resolved = self._resolve_time_trigger(schedule, now=now)
-            if resolved is None:
+            try:
+                resolved = self._resolve_time_trigger(schedule, now=now)
+            except ScheduleDomainError as exc:
+                reason = (
+                    "SCHEDULE_ONE_TIME_MISSED"
+                    if exc.message == "scheduled_at must be in the future."
+                    else exc.code
+                )
+                failures.append((schedule, reason, exc.message))
+                logger.warning(
+                    "schedule.reconcile.unusable_row",
+                    schedule_id=str(schedule.id),
+                    reason=reason,
+                )
                 continue
             payload, run_date, cron = resolved
             desired.append((schedule, payload, run_date, cron))
@@ -222,6 +291,7 @@ class SchedulerService:
                         user_id=schedule.user_id,
                         run_date=run_date,
                         payload=payload,
+                        logical_schedule=True,
                     )
                 else:
                     assert cron is not None
@@ -231,18 +301,26 @@ class SchedulerService:
                         cron_expression=cron,
                         payload=payload,
                     )
-            except (ValueError, TypeError):
+            except (ScheduleDomainError, ValueError, TypeError) as exc:
+                reason = getattr(exc, "code", "SCHEDULE_REJECTED")
+                message = getattr(exc, "message", str(exc))
+                failures.append((schedule, str(reason), str(message)))
                 logger.warning(
                     "schedule.reconcile.unusable_row",
                     schedule_id=str(schedule.id),
-                    reason="rejected_trigger",
+                    reason=str(reason),
                 )
                 continue
             scheduled_ids.add(str(schedule.id))
 
+        await deactivate_unusable_time_schedules(failures)
+
         for job in self.scheduler.get_jobs():
             payload = dict((job.kwargs or {}).get("payload") or {})
-            if payload.get("schedule_id") == job.id and job.id not in scheduled_ids:
+            job_kind = (job.kwargs or {}).get("_lemma_job_kind")
+            is_logical = job_kind in {_TIME_CRON_JOB_KIND, _TIME_ONCE_JOB_KIND}
+            is_legacy_logical = payload.get("schedule_id") == job.id
+            if (is_logical or is_legacy_logical) and job.id not in scheduled_ids:
                 self.scheduler.remove_job(job.id)
 
     def _resolve_time_trigger(
@@ -250,45 +328,18 @@ class SchedulerService:
         schedule: TimeScheduleJob,
         *,
         now: datetime,
-    ) -> tuple[dict, datetime | None, str | None] | None:
-        """Return the desired job for one row, or None to drop it.
-
-        None means "no job should exist for this schedule": the row is past due,
-        has no usable trigger, or stores a run date this process cannot parse.
-        """
+    ) -> tuple[dict, datetime | None, str | None]:
+        """Return the validated desired job for one authoritative row."""
         config = dict(schedule.config or {})
         payload = dict(config.get("payload") or {})
-        payload.setdefault("schedule_id", str(schedule.id))
         scheduled_at = config.get("scheduled_at")
         cron = config.get("cron")
-
+        parsed = validate_time_schedule_config(config, now=now)
         if scheduled_at:
-            try:
-                run_date = datetime.fromisoformat(str(scheduled_at))
-            except ValueError:
-                logger.warning(
-                    "schedule.reconcile.unusable_row",
-                    schedule_id=str(schedule.id),
-                    reason="unparsable_scheduled_at",
-                )
-                return None
-            if run_date.tzinfo is None:
-                run_date = run_date.replace(tzinfo=timezone.utc)
-            else:
-                run_date = run_date.astimezone(timezone.utc)
-            if run_date <= now:
-                return None
-            return payload, run_date, None
-
-        if cron:
-            return payload, None, str(cron)
-
-        logger.warning(
-            "schedule.reconcile.unusable_row",
-            schedule_id=str(schedule.id),
-            reason="no_trigger",
-        )
-        return None
+            assert isinstance(parsed, datetime)
+            return payload, parsed, None
+        assert cron is not None
+        return payload, None, str(cron)
 
     async def shutdown(self, wait: bool = True):
         """Shutdown the scheduler and event emitter."""
@@ -305,7 +356,7 @@ class SchedulerService:
     def add_cron_job(
         self,
         schedule_id: UUID,
-        user_id: UUID,
+        user_id: UUID | None,
         cron_expression: str,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
@@ -318,21 +369,7 @@ class SchedulerService:
             payload: Optional payload to include in the event
             replace_existing: Replace if job exists
         """
-        # Parse cron expression
-        parts = cron_expression.split()
-        if len(parts) != 5:
-            raise ValueError(f"Invalid cron expression: {cron_expression}")
-
-        minute, hour, day, month, day_of_week = parts
-
-        apscheduler_trigger = CronTrigger(
-            minute=minute,
-            hour=hour,
-            day=day,
-            month=month,
-            day_of_week=day_of_week,
-            timezone=utc,
-        )
+        apscheduler_trigger = validate_cron_expression(cron_expression)
 
         # Use schedule_id as job_id
         job_id = str(schedule_id)
@@ -344,8 +381,9 @@ class SchedulerService:
             id=job_id,
             kwargs={
                 "schedule_id": job_id,
-                "user_id": str(user_id),
+                "user_id": str(user_id) if user_id else None,
                 "payload": payload,
+                "_lemma_job_kind": _TIME_CRON_JOB_KIND,
             },
             replace_existing=replace_existing,
         )
@@ -359,10 +397,11 @@ class SchedulerService:
     def add_once_job(
         self,
         schedule_id: UUID,
-        user_id: UUID,
+        user_id: UUID | None,
         run_date: datetime,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
+        logical_schedule: bool = False,
     ) -> None:
         """Add a one-time scheduled job.
 
@@ -390,8 +429,9 @@ class SchedulerService:
             id=job_id,
             kwargs={
                 "schedule_id": job_id,
-                "user_id": str(user_id),
+                "user_id": str(user_id) if user_id else None,
                 "payload": payload,
+                "_lemma_job_kind": (_TIME_ONCE_JOB_KIND if logical_schedule else None),
             },
             replace_existing=replace_existing,
         )
@@ -411,7 +451,7 @@ class SchedulerService:
             )
         except Exception:
             logger.debug(
-                'schedule.scheduler_service.remove_job.diagnostic', job_id=job_id
+                "schedule.scheduler_service.remove_job.diagnostic", job_id=job_id
             )
 
     def pause_job(self, job_id: str) -> None:
@@ -423,7 +463,7 @@ class SchedulerService:
             )
         except Exception:
             logger.debug(
-                'schedule.scheduler_service.pause_job.diagnostic', job_id=job_id
+                "schedule.scheduler_service.pause_job.diagnostic", job_id=job_id
             )
 
     def resume_job(self, job_id: str) -> None:
@@ -435,7 +475,7 @@ class SchedulerService:
             )
         except Exception:
             logger.debug(
-                'schedule.scheduler_service.resume_job.diagnostic', job_id=job_id
+                "schedule.scheduler_service.resume_job.diagnostic", job_id=job_id
             )
 
     def get_job(self, job_id: str):

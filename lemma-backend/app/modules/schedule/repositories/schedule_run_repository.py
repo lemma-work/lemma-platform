@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid7
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
@@ -53,9 +53,7 @@ class ScheduleRunRepository:
                 source_occurred_at=source_occurred_at,
                 started_at=now,
             )
-            .on_conflict_do_nothing(
-                constraint="uq_schedule_run_source_event"
-            )
+            .on_conflict_do_nothing(constraint="uq_schedule_run_source_event")
             .returning(ScheduleRun.id)
         )
         if created_id is not None:
@@ -72,6 +70,13 @@ class ScheduleRunRepository:
             .with_for_update()
         )
         if model is None:
+            return None
+        if model.user_id is None:
+            model.user_id = user_id
+        if model.target_run_id is None:
+            model.target_run_id = str(uuid7())
+        await self.session.flush()
+        if model.target_outcome is not None:
             return None
         if model.status in {
             ScheduleRunStatus.DISPATCHED.value,
@@ -111,24 +116,22 @@ class ScheduleRunRepository:
         must not drag it back. Callers get no result because there is nothing
         to decide — the ledger row is the authority either way.
         """
-        await self.session.execute(
-            update(ScheduleRun)
-            .where(
-                ScheduleRun.id == run_id,
-                ScheduleRun.status == ScheduleRunStatus.PROCESSING.value,
-            )
-            .values(
-                status=ScheduleRunStatus.DISPATCHED.value,
-                error_type=None,
-                error_code=None,
-                completed_at=None,
-            )
-        )
+        model = await self.session.get(ScheduleRun, run_id, with_for_update=True)
+        if model is None or model.status != ScheduleRunStatus.PROCESSING.value:
+            return
+        model.status = ScheduleRunStatus.DISPATCHED.value
+        if model.target_outcome is None:
+            model.error_type = None
+            model.error_code = None
+            model.completed_at = None
+        await self.session.flush()
 
     async def mark_failed(self, run_id: UUID, exc: Exception) -> ScheduleRunStatus:
         model = await self.session.get(ScheduleRun, run_id, with_for_update=True)
         if model is None:
             raise LookupError(f"Schedule run {run_id} no longer exists")
+        if model.target_outcome is not None:
+            return ScheduleRunStatus(model.target_outcome)
         if model.status in {
             ScheduleRunStatus.COMPLETED.value,
             ScheduleRunStatus.TARGET_FAILED.value,
@@ -137,9 +140,7 @@ class ScheduleRunRepository:
         }:
             return ScheduleRunStatus(model.status)
         if model.status != ScheduleRunStatus.PROCESSING.value:
-            raise RuntimeError(
-                f"Cannot fail schedule run {run_id} from {model.status}"
-            )
+            raise RuntimeError(f"Cannot fail schedule run {run_id} from {model.status}")
         status = (
             ScheduleRunStatus.DEAD_LETTERED
             if model.attempts >= self.MAX_ATTEMPTS
@@ -177,26 +178,121 @@ class ScheduleRunRepository:
             )
             .with_for_update()
         )
-        if model is None or model.status not in {
+        if model is None or model.target_outcome is not None:
+            return None
+
+        if model.status in {
+            ScheduleRunStatus.COMPLETED.value,
+            ScheduleRunStatus.TARGET_FAILED.value,
+            ScheduleRunStatus.CANCELLED.value,
+        }:
+            model.target_outcome = model.status
+            await self.session.flush()
+            return model.to_entity()
+        if model.status not in {
             ScheduleRunStatus.PROCESSING.value,
             ScheduleRunStatus.DISPATCHED.value,
         }:
             return None
 
-        model.status = status.value
+        model.target_outcome = status.value
         model.error_type = error_type
         model.error_code = None
         model.completed_at = completed_at or datetime.now(timezone.utc)
         await self.session.flush()
         return model.to_entity()
 
+    async def consecutive_terminal_failures(self, schedule_id: UUID) -> int:
+        rows = (
+            await self.session.execute(
+                select(ScheduleRun.status, ScheduleRun.target_outcome)
+                .where(
+                    ScheduleRun.schedule_id == schedule_id,
+                    ScheduleRun.completed_at.is_not(None),
+                )
+                .order_by(ScheduleRun.completed_at.desc(), ScheduleRun.id.desc())
+            )
+        ).all()
+        failures = 0
+        for dispatch_status, target_outcome in rows:
+            effective_status = target_outcome or dispatch_status
+            if effective_status in {
+                ScheduleRunStatus.COMPLETED.value,
+                ScheduleRunStatus.CANCELLED.value,
+            }:
+                break
+            if effective_status in {
+                ScheduleRunStatus.TARGET_FAILED.value,
+                ScheduleRunStatus.DEAD_LETTERED.value,
+            }:
+                failures += 1
+        return failures
+
+    async def create_redrive(
+        self,
+        *,
+        schedule_id: UUID,
+        run_id: UUID,
+        redriven_by_user_id: UUID,
+        fallback_user_id: UUID,
+        required_user_id: UUID | None = None,
+    ) -> tuple[ScheduleRunEntity, bool] | None:
+        source_query = select(ScheduleRun).where(
+            ScheduleRun.id == run_id,
+            ScheduleRun.schedule_id == schedule_id,
+        )
+        if required_user_id is not None:
+            source_query = source_query.where(ScheduleRun.user_id == required_user_id)
+        source = await self.session.scalar(source_query.with_for_update())
+        if source is None:
+            return None
+
+        existing = await self.session.scalar(
+            select(ScheduleRun).where(ScheduleRun.redrive_of_run_id == source.id)
+        )
+        if existing is not None:
+            return existing.to_entity(), False
+
+        effective_status = source.target_outcome or source.status
+        if effective_status not in {
+            ScheduleRunStatus.FAILED.value,
+            ScheduleRunStatus.DEAD_LETTERED.value,
+            ScheduleRunStatus.TARGET_FAILED.value,
+        }:
+            return None
+
+        redrive = ScheduleRun(
+            schedule_id=schedule_id,
+            user_id=source.user_id or fallback_user_id,
+            source_event_id=f"redrive:{source.id}",
+            status=ScheduleRunStatus.RECEIVED.value,
+            attempts=0,
+            target_kind=source.target_kind,
+            target_run_id=str(uuid7()),
+            payload=source.payload or {},
+            fire_metadata=source.fire_metadata or {},
+            llm_output=source.llm_output or {},
+            source_occurred_at=source.source_occurred_at,
+            redrive_of_run_id=source.id,
+            redriven_by_user_id=redriven_by_user_id,
+        )
+        self.session.add(redrive)
+        await self.session.flush()
+        return redrive.to_entity(), True
+
     async def list_for_schedule(
-        self, schedule_id: UUID, *, limit: int = 100
+        self,
+        schedule_id: UUID,
+        *,
+        limit: int = 100,
+        user_id: UUID | None = None,
     ) -> list[ScheduleRunEntity]:
+        stmt = select(ScheduleRun).where(ScheduleRun.schedule_id == schedule_id)
+        if user_id is not None:
+            stmt = stmt.where(ScheduleRun.user_id == user_id)
         rows = await self.session.scalars(
-            select(ScheduleRun)
-            .where(ScheduleRun.schedule_id == schedule_id)
-            .order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc())
-            .limit(limit)
+            stmt.order_by(ScheduleRun.created_at.desc(), ScheduleRun.id.desc()).limit(
+                limit
+            )
         )
         return [row.to_entity() for row in rows.all()]

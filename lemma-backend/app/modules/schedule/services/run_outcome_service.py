@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.schedule.config import schedule_settings
@@ -56,10 +57,7 @@ class ScheduleRunOutcomeService:
                 f"Schedule {schedule_run.schedule_id} disappeared during outcome update"
             )
 
-        await self._apply_breaker(
-            schedule,
-            failed=status == ScheduleRunStatus.TARGET_FAILED,
-        )
+        await self._apply_breaker(schedule)
         return True
 
     async def record_dispatch_dead_letter(self, schedule: ScheduleEntity) -> None:
@@ -67,7 +65,15 @@ class ScheduleRunOutcomeService:
         locked = await self.schedule_repository.get_for_update(schedule.id)
         if locked is None:
             raise LookupError(f"Schedule {schedule.id} disappeared during dispatch")
-        await self._apply_breaker(locked, failed=True)
+        await self._apply_breaker(locked)
+
+    async def recompute_breaker(self, schedule_id: UUID) -> None:
+        schedule = await self.schedule_repository.get_for_update(schedule_id)
+        if schedule is None:
+            raise LookupError(
+                f"Schedule {schedule_id} disappeared during reconciliation"
+            )
+        await self._apply_breaker(schedule)
 
     async def reconcile_tripped_schedules(self) -> int:
         """Deactivate backfilled schedules already beyond the configured threshold."""
@@ -85,8 +91,6 @@ class ScheduleRunOutcomeService:
     async def _apply_breaker(
         self,
         schedule: ScheduleEntity,
-        *,
-        failed: bool,
     ) -> None:
         """Advance the breaker for the *schedule*, whoever owned the run.
 
@@ -99,13 +103,8 @@ class ScheduleRunOutcomeService:
         reactivate. See
         ``test_five_row_owner_workflow_failures_deactivate_schedule_owner_schedule``.
         """
-        if not failed:
-            await self.schedule_repository.reset_consecutive_failures(schedule.id)
-            return
-
-        count = await self.schedule_repository.increment_consecutive_failures(
-            schedule.id
-        )
+        count = await self.run_repository.consecutive_terminal_failures(schedule.id)
+        await self.schedule_repository.set_consecutive_failures(schedule.id, count)
         threshold = schedule_settings.schedule_max_consecutive_failures
         if threshold <= 0 or count < threshold:
             return

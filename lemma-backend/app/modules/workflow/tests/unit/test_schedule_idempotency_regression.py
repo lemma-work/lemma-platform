@@ -6,13 +6,14 @@ single-owner target dispatch.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
 
-from app.modules.schedule.domain.schedule import ScheduleRunStatus
+from app.modules.schedule.domain.schedule import ScheduleRunStatus, ScheduleType
 from app.modules.workflow.domain.events import WorkflowRunTerminalEvent
 from app.modules.workflow.domain.run import WorkflowRunEntity
 from app.modules.workflow.execution.engine import WorkflowEngine
@@ -167,6 +168,44 @@ async def test_duplicate_agent_schedule_fire_is_skipped(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_emitted_one_time_fire_runs_after_schedule_is_marked_inactive(
+    monkeypatch,
+):
+    engine = _engine_with_mocks()
+    scheduled_at = datetime(2026, 7, 10, tzinfo=timezone.utc)
+    schedule = SimpleNamespace(
+        id=uuid4(),
+        pod_id=uuid4(),
+        user_id=uuid4(),
+        workflow_id=uuid4(),
+        agent_id=None,
+        is_active=False,
+        schedule_type=ScheduleType.TIME,
+        config={"scheduled_at": scheduled_at.isoformat()},
+    )
+    schedule_repo = Mock(get=AsyncMock(return_value=schedule))
+    run_repo = Mock(claim=AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRepository",
+        lambda uow: schedule_repo,
+    )
+    monkeypatch.setattr(
+        "app.modules.workflow.services.schedule_start_service.ScheduleRunRepository",
+        lambda uow: run_repo,
+    )
+
+    await ScheduleStartService(engine).handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=schedule.user_id,
+        payload={},
+        schedule_event_id=f"cron:{schedule.id}:{scheduled_at.isoformat()}",
+        source_occurred_at=scheduled_at,
+    )
+
+    run_repo.claim.assert_awaited_once()
+
+
+@pytest.mark.anyio
 async def test_workflow_timer_requires_exact_wait_ref() -> None:
     service = ScheduleStartService(_engine_with_mocks())
 
@@ -255,7 +294,10 @@ async def test_agent_schedule_run_and_conversation_use_event_user(monkeypatch):
     )
 
     assert run_repo.claim.await_args.kwargs["user_id"] == row_owner_id
-    assert engine.agent_adapter.run_agent_by_id.await_args.kwargs["user_id"] == row_owner_id
+    assert (
+        engine.agent_adapter.run_agent_by_id.await_args.kwargs["user_id"]
+        == row_owner_id
+    )
     assert (
         engine.agent_adapter.run_agent_by_id.await_args.kwargs["conversation_id"]
         == target_run_id
@@ -313,10 +355,9 @@ async def test_workflow_schedule_run_uses_event_user(monkeypatch):
         service._start_workflow_for_schedule.await_args.kwargs["user_id"]
         == row_owner_id
     )
-    assert (
-        service._start_workflow_for_schedule.await_args.kwargs["target_run_id"]
-        == str(target_run_id)
-    )
+    assert service._start_workflow_for_schedule.await_args.kwargs[
+        "target_run_id"
+    ] == str(target_run_id)
 
 
 @pytest.mark.anyio
@@ -408,8 +449,9 @@ async def test_workflow_timer_without_owner_adopts_the_run_owner() -> None:
 
 
 @pytest.mark.anyio
-async def test_schedule_fire_without_owner_is_refused(monkeypatch) -> None:
-    """A schedule run is owned; there is nothing authoritative to fall back to."""
+async def test_legacy_time_schedule_fire_resolves_owner_from_schedule(
+    monkeypatch,
+) -> None:
     engine = _engine_with_mocks()
     schedule = SimpleNamespace(
         id=uuid4(),
@@ -422,24 +464,36 @@ async def test_schedule_fire_without_owner_is_refused(monkeypatch) -> None:
     )
     import app.modules.workflow.services.schedule_start_service as svc_mod
 
-    monkeypatch.setattr(
-        svc_mod,
-        "ScheduleRepository",
-        lambda uow: Mock(get=AsyncMock(return_value=schedule)),
+    schedule_repo = Mock(
+        get=AsyncMock(return_value=schedule),
+        record_fire=AsyncMock(),
     )
-    run_repo = Mock(claim=AsyncMock())
+    monkeypatch.setattr(svc_mod, "ScheduleRepository", lambda uow: schedule_repo)
+    schedule_run = SimpleNamespace(
+        id=uuid4(),
+        user_id=schedule.user_id,
+        target_run_id=str(uuid4()),
+        status=ScheduleRunStatus.PROCESSING,
+    )
+    run_repo = Mock(
+        claim=AsyncMock(return_value=schedule_run),
+        mark_dispatched=AsyncMock(),
+    )
     monkeypatch.setattr(svc_mod, "ScheduleRunRepository", lambda uow: run_repo)
     service = ScheduleStartService(engine)
+    service._start_workflow_for_schedule = AsyncMock(
+        return_value=schedule_run.target_run_id
+    )
 
-    with pytest.raises(ValueError, match="fired without an owner"):
-        await service.handle_schedule_fired(
-            schedule_id=str(schedule.id),
-            user_id=None,
-            payload={},
-            schedule_event_id="evt-no-owner",
-        )
+    await service.handle_schedule_fired(
+        schedule_id=str(schedule.id),
+        user_id=None,
+        payload={},
+        schedule_event_id="evt-no-owner",
+    )
 
-    run_repo.claim.assert_not_awaited()
+    assert run_repo.claim.await_args.kwargs["user_id"] == schedule.user_id
+    run_repo.mark_dispatched.assert_awaited_once_with(schedule_run.id)
 
 
 @pytest.mark.anyio

@@ -5,15 +5,17 @@ from uuid import UUID
 from ..openapi_client.api.schedules import (
     schedule_create,
     schedule_delete,
-    schedule_run_list,
     schedule_get,
     schedule_list,
+    schedule_run_list,
+    schedule_run_retry,
     schedule_update,
 )
 from ..openapi_client.models.create_schedule_request import CreateScheduleRequest
 from ..openapi_client.models.schedule_detail_response import ScheduleDetailResponse
 from ..openapi_client.models.schedule_list_response import ScheduleListResponse
 from ..openapi_client.models.schedule_run_list_response import ScheduleRunListResponse
+from ..openapi_client.models.schedule_run_response import ScheduleRunResponse
 from ..openapi_client.models.schedule_type import ScheduleType
 from ..openapi_client.models.update_schedule_request import UpdateScheduleRequest
 from ..openapi_client.types import UNSET
@@ -77,4 +79,12 @@ class PodSchedules(BoundResource):
             self._pod_uuid(),
             self._schedule_id(schedule_id),
             limit=limit,
+        )
+
+    def retry_run(self, schedule_id: str, run_id: str) -> ScheduleRunResponse:
+        return self._call(
+            schedule_run_retry,
+            self._pod_uuid(),
+            self._schedule_id(schedule_id),
+            as_uuid(run_id),
         )

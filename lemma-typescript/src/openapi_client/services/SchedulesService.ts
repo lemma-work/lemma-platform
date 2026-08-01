@@ -6,6 +6,7 @@ import type { CreateScheduleRequest } from '../models/CreateScheduleRequest.js';
 import type { ScheduleDetailResponse } from '../models/ScheduleDetailResponse.js';
 import type { ScheduleListResponse } from '../models/ScheduleListResponse.js';
 import type { ScheduleRunListResponse } from '../models/ScheduleRunListResponse.js';
+import type { ScheduleRunResponse } from '../models/ScheduleRunResponse.js';
 import type { ScheduleType } from '../models/ScheduleType.js';
 import type { UpdateScheduleRequest } from '../models/UpdateScheduleRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -179,6 +180,32 @@ export class SchedulesService {
             },
             query: {
                 'limit': limit,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Retry Schedule Run
+     * @param podId
+     * @param scheduleId
+     * @param runId
+     * @returns ScheduleRunResponse Successful Response
+     * @throws ApiError
+     */
+    public static scheduleRunRetry(
+        podId: string,
+        scheduleId: string,
+        runId: string,
+    ): CancelablePromise<ScheduleRunResponse> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry',
+            path: {
+                'pod_id': podId,
+                'schedule_id': scheduleId,
+                'run_id': runId,
             },
             errors: {
                 422: `Validation Error`,

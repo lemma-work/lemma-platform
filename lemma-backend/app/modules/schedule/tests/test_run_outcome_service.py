@@ -18,11 +18,15 @@ from app.modules.schedule.services.run_outcome_service import (
 def _service() -> tuple[ScheduleRunOutcomeService, Mock]:
     uow = Mock(session=Mock(), collect_events=Mock())
     service = ScheduleRunOutcomeService(uow)
-    service.run_repository = Mock(transition_target_outcome=AsyncMock())
+    service.run_repository = Mock(
+        transition_target_outcome=AsyncMock(),
+        consecutive_terminal_failures=AsyncMock(),
+    )
     service.schedule_repository = Mock(
         get_for_update=AsyncMock(),
         increment_consecutive_failures=AsyncMock(),
         reset_consecutive_failures=AsyncMock(),
+        set_consecutive_failures=AsyncMock(),
         deactivate_if_active=AsyncMock(return_value=False),
         lock_breaker_candidates=AsyncMock(return_value=[]),
     )
@@ -54,7 +58,7 @@ async def test_fifth_target_failure_deactivates_and_notifies_schedule_owner(
         schedule_id=schedule.id
     )
     service.schedule_repository.get_for_update.return_value = schedule
-    service.schedule_repository.increment_consecutive_failures.return_value = 5
+    service.run_repository.consecutive_terminal_failures.return_value = 5
     service.schedule_repository.deactivate_if_active.return_value = True
 
     changed = await service.record_target_outcome(
@@ -66,8 +70,11 @@ async def test_fifth_target_failure_deactivates_and_notifies_schedule_owner(
     )
 
     assert changed is True
-    service.schedule_repository.increment_consecutive_failures.assert_awaited_once_with(
+    service.run_repository.consecutive_terminal_failures.assert_awaited_once_with(
         schedule.id
+    )
+    service.schedule_repository.set_consecutive_failures.assert_awaited_once_with(
+        schedule.id, 5
     )
     staged = uow.collect_events.call_args.args[0]
     assert len(staged) == 1
@@ -105,6 +112,7 @@ async def test_success_and_cancellation_reset_the_failure_streak(status):
         schedule_id=schedule.id
     )
     service.schedule_repository.get_for_update.return_value = schedule
+    service.run_repository.consecutive_terminal_failures.return_value = 0
 
     changed = await service.record_target_outcome(
         target_kind="WORKFLOW",
@@ -114,10 +122,9 @@ async def test_success_and_cancellation_reset_the_failure_streak(status):
     )
 
     assert changed is True
-    service.schedule_repository.reset_consecutive_failures.assert_awaited_once_with(
-        schedule.id
+    service.schedule_repository.set_consecutive_failures.assert_awaited_once_with(
+        schedule.id, 0
     )
-    service.schedule_repository.increment_consecutive_failures.assert_not_awaited()
     uow.collect_events.assert_not_called()
 
 
@@ -126,12 +133,15 @@ async def test_dispatch_dead_letter_counts_without_target_outcome():
     service, _ = _service()
     schedule = _schedule()
     service.schedule_repository.get_for_update.return_value = schedule
-    service.schedule_repository.increment_consecutive_failures.return_value = 2
+    service.run_repository.consecutive_terminal_failures.return_value = 2
 
     await service.record_dispatch_dead_letter(schedule)
 
-    service.schedule_repository.increment_consecutive_failures.assert_awaited_once_with(
+    service.run_repository.consecutive_terminal_failures.assert_awaited_once_with(
         schedule.id
+    )
+    service.schedule_repository.set_consecutive_failures.assert_awaited_once_with(
+        schedule.id, 2
     )
     service.run_repository.transition_target_outcome.assert_not_awaited()
 

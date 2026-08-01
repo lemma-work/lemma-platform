@@ -23,6 +23,9 @@ from app.core.request_context import correlation_headers
 from app.modules.schedule.domain.interfaces import SchedulerService
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 from app.modules.schedule.config import schedule_settings
+from app.modules.schedule.services.time_schedule_policy import (
+    validate_time_schedule_config,
+)
 
 logger = get_logger(__name__)
 
@@ -49,11 +52,11 @@ class SchedulerAPIClient(SchedulerService):
         if schedule.schedule_type == ScheduleType.TIME:
             config = schedule.time_config
             if not config:
-                logger.debug('schedule.api_client.missing_time_config.diagnostic')
-                return
+                raise ValueError("TIME schedule config is required")
+
+            validate_time_schedule_config(schedule.config)
 
             payload = dict(schedule.config.get("payload") or {})
-            payload.setdefault("schedule_id", str(schedule.id))
 
             if config.scheduled_at:
                 await self.schedule_once_job(
@@ -62,6 +65,7 @@ class SchedulerAPIClient(SchedulerService):
                     run_date=datetime.fromisoformat(config.scheduled_at),
                     payload=payload,
                     replace_existing=True,
+                    logical_schedule=True,
                 )
             elif config.cron:
                 await self.schedule_cron_job(
@@ -72,12 +76,10 @@ class SchedulerAPIClient(SchedulerService):
                     replace_existing=True,
                 )
             else:
-                logger.debug(
-                    'schedule.api_client.check_no_cron_or_scheduled.diagnostic'
-                )
+                raise ValueError("TIME schedule config has no trigger")
         else:
             logger.debug(
-                'schedule.api_client.unsupported_schedule_type_scheduling.diagnostic',
+                "schedule.api_client.unsupported_schedule_type_scheduling.diagnostic",
                 schedule_type=schedule.schedule_type,
             )
 
@@ -91,7 +93,7 @@ class SchedulerAPIClient(SchedulerService):
         except ClientResponseError as e:
             if e.status == 404:
                 logger.debug(
-                    'schedule.api_client.job_schedule_not_found_delete.diagnostic',
+                    "schedule.api_client.job_schedule_not_found_delete.diagnostic",
                     schedule_id=schedule_id,
                 )
             else:
@@ -127,7 +129,7 @@ class SchedulerAPIClient(SchedulerService):
         """Cleanup on deletion - warn if session wasn't properly closed."""
         if self._session is not None and not self._session.closed:
             logger.debug(
-                'schedule.api_client.schedulerapiclient_session_was_not_properly.diagnostic'
+                "schedule.api_client.schedulerapiclient_session_was_not_properly.diagnostic"
             )
 
     async def _request(
@@ -198,16 +200,22 @@ class SchedulerAPIClient(SchedulerService):
 
                 return await response.json()
         except ClientResponseError as e:
-            logger.debug('schedule.api_client.scheduler_api.propagated', status=e.status, exc_info=True)
+            logger.debug(
+                "schedule.api_client.scheduler_api.propagated",
+                status=e.status,
+                exc_info=True,
+            )
             raise
         except ClientError:
-            logger.debug('schedule.api_client.scheduler_api_request.propagated', exc_info=True)
+            logger.debug(
+                "schedule.api_client.scheduler_api_request.propagated", exc_info=True
+            )
             raise
 
     async def schedule_cron_job(
         self,
         schedule_id: UUID,
-        user_id: UUID,
+        user_id: UUID | None,
         cron_expression: str,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
@@ -223,6 +231,7 @@ class SchedulerAPIClient(SchedulerService):
         Returns:
             JobResponse with job details
         """
+        validate_time_schedule_config({"cron": cron_expression})
         request = ScheduleCronJobRequest(
             schedule_id=schedule_id,
             user_id=user_id,
@@ -242,10 +251,11 @@ class SchedulerAPIClient(SchedulerService):
     async def schedule_once_job(
         self,
         schedule_id: UUID,
-        user_id: UUID,
+        user_id: UUID | None,
         run_date: datetime,
         payload: Optional[dict] = None,
         replace_existing: bool = True,
+        logical_schedule: bool = False,
     ) -> JobResponse:
         """Schedule a one-time job.
 
@@ -264,6 +274,7 @@ class SchedulerAPIClient(SchedulerService):
             run_date=run_date,
             payload=payload,
             replace_existing=replace_existing,
+            logical_schedule=logical_schedule,
         )
 
         data = await self._request(

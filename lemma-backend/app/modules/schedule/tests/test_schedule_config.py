@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.modules.schedule.config import ScheduleSettings
 
 
@@ -5,6 +8,7 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
     assert set(ScheduleSettings.model_fields) == {
         "scheduler_api_url",
         "schedule_max_consecutive_failures",
+        "schedule_minimum_interval_minutes",
         "scheduler_internal_token",
     }
     assert (
@@ -14,6 +18,9 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
     assert (
         ScheduleSettings.model_fields["schedule_max_consecutive_failures"].default == 5
     )
+    assert (
+        ScheduleSettings.model_fields["schedule_minimum_interval_minutes"].default == 15
+    )
     assert ScheduleSettings.model_fields["scheduler_internal_token"].default is None
 
     monkeypatch.setenv("SCHEDULER_API_URL", "http://scheduler:8001")
@@ -22,3 +29,9 @@ def test_schedule_settings_own_scheduler_policy(monkeypatch):
     assert configured.scheduler_api_url == "http://scheduler:8001"
     assert configured.scheduler_internal_token is not None
     assert configured.scheduler_internal_token.get_secret_value() == "canary"
+
+
+def test_schedule_minimum_interval_must_be_positive(monkeypatch):
+    monkeypatch.setenv("SCHEDULE_MINIMUM_INTERVAL_MINUTES", "0")
+    with pytest.raises(ValidationError):
+        ScheduleSettings()

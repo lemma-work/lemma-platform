@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid7
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, text
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,8 +32,8 @@ class ScheduleRun(UUIDAuditBase):
     schedule_id: Mapped[UUID] = mapped_column(
         ForeignKey("schedules.id", ondelete="CASCADE"), nullable=False
     )
-    user_id: Mapped[UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     source_event_id: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(
@@ -33,17 +41,30 @@ class ScheduleRun(UUIDAuditBase):
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     target_kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    target_run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_run_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target_outcome: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    redrive_of_run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("schedule_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    redriven_by_user_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    fire_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    fire_metadata: Mapped[dict] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
     llm_output: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     error_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_occurred_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -60,6 +81,13 @@ class ScheduleRun(UUIDAuditBase):
             "target_kind",
             "target_run_id",
             unique=True,
+            postgresql_where=text("target_run_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_schedule_runs_redrive",
+            "redrive_of_run_id",
+            unique=True,
+            postgresql_where=text("redrive_of_run_id IS NOT NULL"),
         ),
     )
 
@@ -71,10 +99,12 @@ class ScheduleRun(UUIDAuditBase):
             schedule_id=self.schedule_id,
             user_id=self.user_id,
             source_event_id=self.source_event_id,
-            status=ScheduleRunStatus(self.status),
+            status=ScheduleRunStatus(self.target_outcome or self.status),
             attempts=self.attempts,
             target_kind=self.target_kind,
             target_run_id=self.target_run_id,
+            redrive_of_run_id=self.redrive_of_run_id,
+            redriven_by_user_id=self.redriven_by_user_id,
             payload=self.payload or {},
             metadata=self.fire_metadata or {},
             llm_output=self.llm_output or {},

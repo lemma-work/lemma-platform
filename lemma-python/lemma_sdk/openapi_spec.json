@@ -11320,6 +11320,30 @@
             "title": "Payload",
             "type": "object"
           },
+          "redrive_of_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redrive Of Run Id"
+          },
+          "redriven_by_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redriven By User Id"
+          },
           "schedule_id": {
             "format": "uuid",
             "title": "Schedule Id",
@@ -11361,8 +11385,15 @@
             "type": "string"
           },
           "target_run_id": {
-            "title": "Target Run Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Run Id"
           },
           "updated_at": {
             "format": "date-time",
@@ -11370,9 +11401,16 @@
             "type": "string"
           },
           "user_id": {
-            "format": "uuid",
-            "title": "User Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
           }
         },
         "required": [
@@ -16334,7 +16372,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.2"
+    "version": "0.7.3"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -27855,6 +27893,79 @@
           "resource": "schedule.run",
           "result": "collection",
           "verb": "list"
+        }
+      }
+    },
+    "/pods/{pod_id}/schedules/{schedule_id}/runs/{run_id}/retry": {
+      "post": {
+        "operationId": "schedule.run.retry",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Schedule Run",
+        "tags": [
+          "Schedules"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "schedule.run"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "schedule.run",
+          "result": "entity",
+          "verb": "retry"
         }
       }
     },

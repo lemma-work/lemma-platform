@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.modules.schedule.domain.events.schedule import ScheduleFired
+from app.modules.schedule.domain.errors import ScheduleTooFrequentError
 from app.modules.schedule.domain.schedule import ScheduleType
 from app.modules.schedule.handlers.schedule_consumer import handle_llm_filter_task
 from app.modules.schedule.infrastructure.adapters.schedule_event_publisher import (
@@ -148,16 +149,49 @@ async def test_scheduler_job_uses_uuid_and_empty_payload(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_logical_one_time_job_is_marked_inactive_only_after_emit(
+    monkeypatch,
+) -> None:
+    order: list[str] = []
+    emitter = SimpleNamespace(
+        emit_scheduled_job_event=AsyncMock(side_effect=lambda **_: order.append("emit"))
+    )
+    mark_emitted = AsyncMock(side_effect=lambda _: order.append("deactivate"))
+    monkeypatch.setattr(scheduler_service, "get_event_emitter", lambda: emitter)
+    monkeypatch.setattr(
+        scheduler_service, "mark_one_time_schedule_emitted", mark_emitted
+    )
+    monkeypatch.setattr(
+        scheduler_service,
+        "current_scheduled_run_time",
+        lambda: datetime(2026, 7, 10, tzinfo=timezone.utc),
+    )
+    schedule_id = uuid4()
+
+    await scheduler_service.execute_scheduled_job(
+        str(schedule_id),
+        str(uuid4()),
+        _lemma_job_kind="TIME_SCHEDULE_ONCE",
+    )
+
+    assert order == ["emit", "deactivate"]
+    mark_emitted.assert_awaited_once_with(schedule_id)
+
+
+@pytest.mark.asyncio
 async def test_normal_time_schedule_passes_owner_to_scheduler() -> None:
     schedule = SimpleNamespace(
         id=uuid4(),
         user_id=uuid4(),
         schedule_type=ScheduleType.TIME,
         time_config=SimpleNamespace(
-            cron="*/10 * * * *",
+            cron="*/15 * * * *",
             scheduled_at=None,
         ),
-        config={"payload": {"kind": "normal"}},
+        config={
+            "cron": "*/15 * * * *",
+            "payload": {"kind": "normal", "schedule_id": "customer-value"},
+        },
     )
     client = SchedulerAPIClient("http://scheduler.test")
     client.schedule_cron_job = AsyncMock()
@@ -167,10 +201,25 @@ async def test_normal_time_schedule_passes_owner_to_scheduler() -> None:
     client.schedule_cron_job.assert_awaited_once_with(
         schedule_id=schedule.id,
         user_id=schedule.user_id,
-        cron_expression="*/10 * * * *",
-        payload={"kind": "normal", "schedule_id": str(schedule.id)},
+        cron_expression="*/15 * * * *",
+        payload={"kind": "normal", "schedule_id": "customer-value"},
         replace_existing=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_client_rejects_too_frequent_cron_before_request() -> None:
+    client = SchedulerAPIClient("http://scheduler.test")
+    client._request = AsyncMock()
+
+    with pytest.raises(ScheduleTooFrequentError):
+        await client.schedule_cron_job(
+            schedule_id=uuid4(),
+            user_id=uuid4(),
+            cron_expression="*/5 * * * *",
+        )
+
+    client._request.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -203,11 +252,13 @@ async def test_workflow_timer_passes_owner_and_exact_wait_ref() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reconcile_time_jobs_replaces_active_and_removes_stale(monkeypatch) -> None:
+async def test_reconcile_time_jobs_replaces_active_and_removes_stale(
+    monkeypatch,
+) -> None:
     cron = SimpleNamespace(
         id=uuid4(),
         user_id=uuid4(),
-        config={"cron": "*/5 * * * *", "payload": {"kind": "cron"}},
+        config={"cron": "*/15 * * * *", "payload": {"kind": "cron"}},
     )
     future = SimpleNamespace(
         id=uuid4(),
@@ -257,8 +308,8 @@ async def test_reconcile_time_jobs_replaces_active_and_removes_stale(monkeypatch
     service.add_cron_job.assert_called_once_with(
         schedule_id=cron.id,
         user_id=cron.user_id,
-        cron_expression="*/5 * * * *",
-        payload={"kind": "cron", "schedule_id": str(cron.id)},
+        cron_expression="*/15 * * * *",
+        payload={"kind": "cron"},
     )
     assert service.add_once_job.call_args.kwargs["user_id"] == future.user_id
     assert service.add_once_job.call_args.kwargs["schedule_id"] == future.id
@@ -328,7 +379,7 @@ async def test_reconcile_skips_a_row_with_no_trigger_and_still_schedules_the_res
     """One unusable row must not stop the whole fleet from being reconciled."""
     broken = SimpleNamespace(id=uuid4(), user_id=uuid4(), config={"payload": {}})
     healthy = SimpleNamespace(
-        id=uuid4(), user_id=uuid4(), config={"cron": "*/5 * * * *"}
+        id=uuid4(), user_id=uuid4(), config={"cron": "*/15 * * * *"}
     )
     scheduler = Mock()
     scheduler.get_jobs.return_value = [
@@ -346,11 +397,47 @@ async def test_reconcile_skips_a_row_with_no_trigger_and_still_schedules_the_res
     service.add_cron_job.assert_called_once_with(
         schedule_id=healthy.id,
         user_id=healthy.user_id,
-        cron_expression="*/5 * * * *",
-        payload={"schedule_id": str(healthy.id)},
+        cron_expression="*/15 * * * *",
+        payload={},
     )
     # The unusable row's stale job is dropped rather than left firing.
     scheduler.remove_job.assert_called_once_with(str(broken.id))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_deactivates_and_removes_too_frequent_legacy_job(
+    monkeypatch,
+) -> None:
+    legacy = SimpleNamespace(
+        id=uuid4(), user_id=uuid4(), config={"cron": "*/5 * * * *"}
+    )
+    scheduler = Mock()
+    scheduler.get_jobs.return_value = [
+        SimpleNamespace(
+            id=str(legacy.id),
+            kwargs={"_lemma_job_kind": "TIME_SCHEDULE_CRON", "payload": {}},
+        )
+    ]
+    deactivate = AsyncMock()
+    monkeypatch.setattr(
+        scheduler_service, "deactivate_unusable_time_schedules", deactivate
+    )
+    service = _reconciling_service(scheduler, monkeypatch, [legacy])
+    service.add_cron_job = Mock()
+    service.add_once_job = Mock()
+
+    await service.reconcile_time_schedule_jobs()
+
+    service.add_cron_job.assert_not_called()
+    scheduler.remove_job.assert_called_once_with(str(legacy.id))
+    failures = deactivate.await_args.args[0]
+    assert failures == [
+        (
+            legacy,
+            "SCHEDULE_TOO_FREQUENT",
+            "Time schedules cannot run more frequently than every 15 minutes.",
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -361,7 +448,7 @@ async def test_reconcile_skips_a_row_whose_run_date_cannot_be_parsed(
         id=uuid4(), user_id=uuid4(), config={"scheduled_at": "not-a-timestamp"}
     )
     healthy = SimpleNamespace(
-        id=uuid4(), user_id=uuid4(), config={"cron": "*/5 * * * *"}
+        id=uuid4(), user_id=uuid4(), config={"cron": "*/15 * * * *"}
     )
     scheduler = Mock()
     scheduler.get_jobs.return_value = []
@@ -379,12 +466,12 @@ async def test_reconcile_skips_a_row_whose_run_date_cannot_be_parsed(
 async def test_reconcile_drops_a_row_whose_trigger_apscheduler_rejects(
     monkeypatch,
 ) -> None:
-    """A malformed cron is rejected at add time, not at config-shape time."""
+    """A malformed cron is rejected before it reaches APScheduler."""
     bad_cron = SimpleNamespace(
         id=uuid4(), user_id=uuid4(), config={"cron": "not a cron"}
     )
     healthy = SimpleNamespace(
-        id=uuid4(), user_id=uuid4(), config={"cron": "*/5 * * * *"}
+        id=uuid4(), user_id=uuid4(), config={"cron": "*/15 * * * *"}
     )
     scheduler = Mock()
     scheduler.get_jobs.return_value = [
@@ -393,6 +480,7 @@ async def test_reconcile_drops_a_row_whose_trigger_apscheduler_rejects(
             kwargs={"payload": {"schedule_id": str(bad_cron.id)}},
         )
     ]
+
     def add_cron_job(**kwargs):
         if kwargs["schedule_id"] == bad_cron.id:
             raise ValueError("Invalid cron expression: not a cron")
@@ -405,7 +493,7 @@ async def test_reconcile_drops_a_row_whose_trigger_apscheduler_rejects(
 
     assert {
         call_.kwargs["schedule_id"] for call_ in service.add_cron_job.call_args_list
-    } == {bad_cron.id, healthy.id}
+    } == {healthy.id}
     # Rejected trigger is treated like no trigger at all: its job goes away.
     scheduler.remove_job.assert_called_once_with(str(bad_cron.id))
 
