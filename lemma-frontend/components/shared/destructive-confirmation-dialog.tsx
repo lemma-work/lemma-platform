@@ -114,7 +114,7 @@ export function DestructiveConfirmationDialog({
                 ) : null}
 
                 <DialogFooter>
-                    <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isPending}>
+                    <Button variant="quiet" onClick={() => onOpenChange(false)} disabled={isPending}>
                         Cancel
                     </Button>
                     <Button

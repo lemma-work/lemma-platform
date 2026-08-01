@@ -110,7 +110,7 @@ async def untitled_function(ctx: FunctionContext, data: FunctionInput) -> Functi
                     { label: 'Status', value: (localData.name || '').trim() ? 'Ready to create' : 'Draft', tone: (localData.name || '').trim() ? 'ready' : 'muted' },
                                     ]} />}
                 actions={(
-                    <Button
+                    <Button variant="primary"
                         onClick={handleCreate}
                         disabled={createFunction.isPending}
                         size="sm"

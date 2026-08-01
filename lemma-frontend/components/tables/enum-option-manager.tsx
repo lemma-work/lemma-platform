@@ -66,7 +66,7 @@ export function EnumOptionManager({ options, onChange }: EnumOptionManagerProps)
                     }}
                     placeholder="Add option..."
                 />
-                <Button
+                <Button variant="primary"
                     type="button"
                     onClick={addOption}
                     disabled={!newOption.trim() || options.includes(newOption.trim())}

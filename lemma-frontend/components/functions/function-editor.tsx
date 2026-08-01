@@ -252,7 +252,7 @@ export function FunctionEditor({
                         <WiringRow
                             label="Can use"
                             action={(
-                                <Button type="button" variant="outline" size="sm" onClick={() => setIsAccessOpen(true)}>
+                                <Button type="button" variant="secondary" size="sm" onClick={() => setIsAccessOpen(true)}>
                                     Manage
                                 </Button>
                             )}
@@ -265,7 +265,7 @@ export function FunctionEditor({
                         <WiringRow
                             label="Takes"
                             action={(
-                                <Button type="button" variant="outline" size="sm" onClick={() => setIsContractOpen(true)}>
+                                <Button type="button" variant="secondary" size="sm" onClick={() => setIsContractOpen(true)}>
                                     Edit
                                 </Button>
                             )}

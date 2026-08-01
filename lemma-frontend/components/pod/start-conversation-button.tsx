@@ -23,7 +23,7 @@ export function StartConversationButton({
     /** A named agent, or null/undefined for the pod default assistant. */
     agentName?: string | null;
     label?: string;
-    variant?: 'primary' | 'secondary' | 'outline' | 'ghost';
+    variant?: 'primary' | 'secondary' | 'quiet';
     size?: 'sm' | 'default' | 'lg';
     className?: string;
 }) {

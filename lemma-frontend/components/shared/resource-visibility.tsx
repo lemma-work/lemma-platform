@@ -581,7 +581,7 @@ export function ResourceShareButton({
     const triggerNode = trigger?.({ openShare: () => handleOpenChange(true), disabled }) ?? (
         <Button
             type="button"
-            variant="outline"
+            variant="secondary"
             size="sm"
             className={cn('gap-1.5', buttonClassName)}
             onClick={() => handleOpenChange(true)}
@@ -767,7 +767,7 @@ export function ResourceShareButton({
                                                 </Select>
                                                 <Button
                                                     type="button"
-                                                    variant="ghost"
+                                                    variant="quiet"
                                                     size="icon"
                                                     className="h-8 w-8 shrink-0"
                                                     onClick={() => handleRemoveDraftGrant(grant)}
@@ -804,7 +804,7 @@ export function ResourceShareButton({
                         <Button type="button" variant="secondary" size="sm" onClick={() => setOpen(false)}>
                             Cancel
                         </Button>
-                        <Button
+                        <Button variant="primary"
                             type="button"
                             size="sm"
                             onClick={handleDone}

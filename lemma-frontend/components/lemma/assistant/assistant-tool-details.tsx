@@ -225,7 +225,7 @@ export function ToolDetailsPanel({
 	        {canOpenDisplayResource ? (
 	            <Button
 	              type="button"
-	              variant="outline"
+	              variant="secondary"
 	              size="sm"
 	              onClick={() => onNavigateResource?.("display_resource", displayResource.toolCallId, {
 	                request: displayResource.request,

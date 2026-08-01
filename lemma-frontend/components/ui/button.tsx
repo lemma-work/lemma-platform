@@ -1,8 +1,8 @@
 import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
-import { StepLoader } from "@/components/brand/loader";
 import { cn } from "@/lib/utils";
+import { StepLoader } from "@/components/brand/loader";
 
 /**
  * Buttons are surfaces you press, so they are lit like surfaces: a hairline that
@@ -14,23 +14,36 @@ import { cn } from "@/lib/utils";
 const RAISED_SOLID = "shadow-[var(--shadow-raised-solid)] active:translate-y-px active:shadow-[var(--shadow-pressed-solid)]";
 const RAISED_QUIET = "shadow-[var(--shadow-raised-quiet)] active:translate-y-px active:shadow-[var(--shadow-pressed-quiet)]";
 
+/**
+ * Variants name a ROLE, not an appearance.
+ *
+ * Naming them after how they look (outline, ghost) made every call site a fresh
+ * aesthetic judgement, which is why `outline` and `secondary` drifted into being
+ * the same button under two names. Pick by what the action IS:
+ *
+ *   primary     the one action this view exists for — at most one per view
+ *   secondary   a real alternative to the primary action
+ *   quiet       utilities, row actions, dismissals — present but not competing
+ *   destructive removes or revokes something
+ *   link        an action that belongs inside a sentence
+ *
+ * `secondary` is the default on purpose: nothing should read as the primary
+ * call to action without someone having said so.
+ */
 const buttonVariants = cva(
     "tap-target inline-flex select-none items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-sm font-medium tracking-normal transition-gentle focus-ring disabled:pointer-events-none disabled:opacity-50 disabled:shadow-none",
     {
         variants: {
             variant: {
-                default:
-                    `border border-[color:color-mix(in_srgb,var(--button-primary-bg)_84%,black)] bg-[var(--button-primary-bg)] text-[var(--button-primary-fg)] hover:bg-[var(--button-primary-bg-hover)] ${RAISED_SOLID}`,
                 primary:
                     `border border-[color:color-mix(in_srgb,var(--button-primary-bg)_84%,black)] bg-[var(--button-primary-bg)] text-[var(--button-primary-fg)] hover:bg-[var(--button-primary-bg-hover)] ${RAISED_SOLID}`,
                 secondary:
                     `border border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] text-[var(--button-secondary-fg)] hover:border-[color:var(--border-strong)] hover:bg-[var(--button-secondary-bg-hover)] ${RAISED_QUIET}`,
-                ghost:
-                    "bg-transparent text-[var(--text-tertiary)] hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)] active:bg-[var(--surface-3)]",
-                outline:
-                    `border border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] text-[var(--text-primary)] hover:border-[color:var(--border-strong)] hover:bg-[var(--button-secondary-bg-hover)] ${RAISED_QUIET}`,
-                accent:
-                    `border border-[color:var(--button-accent-border)] bg-[var(--button-accent-bg)] text-[var(--button-accent-fg)] hover:border-[color:var(--delight)] hover:text-[var(--delight)] ${RAISED_QUIET}`,
+                // Uses var(--text-secondary), not var(--text-tertiary): tertiary on
+                // canvas is ~2.6:1, which reads as disabled and fails the 3:1 floor
+                // for controls.
+                quiet:
+                    "bg-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)] active:bg-[var(--surface-3)]",
                 destructive:
                     `border border-[color:var(--button-destructive-border)] bg-[var(--state-error)] text-[var(--text-on-brand)] hover:brightness-95 ${RAISED_SOLID}`,
                 link:
@@ -46,7 +59,7 @@ const buttonVariants = cva(
             },
         },
         defaultVariants: {
-            variant: "primary",
+            variant: "secondary",
             size: "md",
         },
     }

@@ -51,7 +51,7 @@ export function TriggersRow({
             <WiringRow
                 label="Runs when"
                 action={canCreate ? (
-                    <Button type="button" variant="outline" size="sm" onClick={() => setEditing('new')}>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setEditing('new')}>
                         <Plus className="h-3.5 w-3.5" />
                         Add trigger
                     </Button>

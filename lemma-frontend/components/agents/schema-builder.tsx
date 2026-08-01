@@ -272,7 +272,7 @@ export function SchemaBuilder({ value, onChange, readOnly, variant = 'basic', on
             {!readOnly && (
                 <Button
                     onClick={addField}
-                    variant="ghost"
+                    variant="quiet"
                     size="sm"
                     className="surface-panel-dashed h-11 w-full text-sm font-medium text-[var(--text-secondary)] transition-gentle hover:scale-[1.002] hover:bg-[color:color-mix(in_srgb,var(--surface-2)_42%,transparent)] hover:text-[var(--text-primary)]"
                 >
@@ -333,7 +333,7 @@ function SchemaFieldRow({
                 </Select>
 
                 <Button
-                    variant="ghost"
+                    variant="quiet"
                     size="sm"
                     className={cn(
                         'h-9 rounded-full px-3 text-xs font-medium transition-gentle hover:scale-[1.02]',
@@ -348,7 +348,7 @@ function SchemaFieldRow({
                 </Button>
 
                 <Button
-                    variant="ghost"
+                    variant="quiet"
                     size="icon"
                     className="hover-state-error h-8 w-8 rounded-full text-[var(--text-tertiary)] opacity-0 transition-gentle group-hover:opacity-100 focus-visible:opacity-100"
                     onClick={onRemove}

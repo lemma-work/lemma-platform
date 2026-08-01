@@ -227,7 +227,7 @@ export const AssistantConversationList = forwardRef<HTMLElement, AssistantConver
           {onNewConversation ? (
             <Button
               type="button"
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={onNewConversation}
               className="h-8 px-3 text-sm"

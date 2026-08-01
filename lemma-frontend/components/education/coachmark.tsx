@@ -162,12 +162,12 @@ export function TourLayer({ tour }: TourLayerProps) {
                         ))}
                     </div>
                     <div className="flex items-center gap-2">
-                        <Button size="xs" variant="ghost" onClick={finish}>
+                        <Button size="xs" variant="quiet" onClick={finish}>
                             Skip tour
                         </Button>
                         <Button
                             size="xs"
-                            variant="accent"
+                            variant="secondary"
                             onClick={() => (isLast ? finish() : setStepIndex((index) => index + 1))}
                         >
                             {isLast ? 'Done' : 'Next'}

@@ -46,7 +46,7 @@ export default function RecipeDetailPage({ params }: { params: Promise<{ id: str
                         backLabel="Starters"
                     />
                     <div className="surface-panel p-6">
-                        <Button asChild variant="outline">
+                        <Button asChild variant="secondary">
                             <Link href={`/pod/${podId}/recipes`}>
                                 <ArrowLeft className="mr-2 h-4 w-4" />
                                 Back to starters
@@ -126,7 +126,7 @@ function RecipeDetail({ podId, recipe }: { podId: string; recipe: Recipe }) {
 
                         <div className="flex shrink-0 flex-col gap-3">
                             <StarterPreview recipe={recipe} compact />
-                            <Button onClick={() => launchRecipe(recipe)} disabled={!canBuild} size="lg">
+                            <Button variant="primary" onClick={() => launchRecipe(recipe)} disabled={!canBuild} size="lg">
                                 {isPrompt ? <Sparkles className="mr-2 h-4 w-4" /> : <PlayCircle className="mr-2 h-4 w-4" />}
                                 Add to {podName}
                             </Button>

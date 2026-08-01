@@ -60,7 +60,7 @@ export function ShareLanding({ destination, name, article, detail, cardPath }: S
                 </div>
 
                 <div className="mt-6 flex flex-col items-center gap-3">
-                    <Button asChild size="lg" className="gap-2">
+                    <Button variant="primary" asChild size="lg" className="gap-2">
                         <Link href={destination} prefetch={false}>
                             {isAuthenticated ? 'Open it' : 'Sign in to open'}
                             <ArrowRight className="h-4 w-4" />

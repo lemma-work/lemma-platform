@@ -156,7 +156,7 @@ function ConnectChip({
             <TooltipTrigger asChild>
                 <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     size="icon"
                     onClick={onOpen}
                     className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-dashed border-[var(--border-subtle)] opacity-50 transition-opacity hover:opacity-100"
