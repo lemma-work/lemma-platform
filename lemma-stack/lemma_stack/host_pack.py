@@ -65,6 +65,14 @@ class _Bindings:
     browser_sdk: Path
     browser_ui: Path
     skills: Path
+    # Where the backend keeps the key that encrypts stored secrets.
+    #
+    # A packaged install holds real provider credentials and belongs in the OS
+    # keychain. A checkout cannot use it: the backend is a ``uv run`` child of
+    # locald with no GUI session, so macOS answers with a "keychain cannot be
+    # found" dialog and the run stalls before anything works. Source mode uses
+    # an in-config key, which is throwaway anyway.
+    secret_key_provider: str
 
 
 def _packaged_bindings(root: Path) -> _Bindings:
@@ -107,6 +115,7 @@ def _packaged_bindings(root: Path) -> _Bindings:
         skills=backend_dir / "assets/lemma-skills",
         agentbox_dir=backend_dir,
         agentbox_config="agentbox-alembic.ini",
+        secret_key_provider="keychain",
     )
 
 
@@ -138,6 +147,7 @@ def _source_bindings(root: Path) -> _Bindings:
         # migrations; only the working directory and config name differ.
         agentbox_dir=_required_dir(root, "the AgentBox project", "agentbox"),
         agentbox_config="alembic.ini",
+        secret_key_provider="static",
     )
 
 
@@ -190,6 +200,7 @@ def build_manifest(
         backend_env["BROWSER_UI_PATH"] = str(browser_ui)
     if skills.is_dir():
         backend_env["LEMMA_SKILLS_ROOT"] = str(skills)
+    backend_env["SECRET_KEY_PROVIDER"] = bindings.secret_key_provider
 
     managed_runtime = None
     if selected_provider == "lemma_local":

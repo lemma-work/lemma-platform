@@ -73,6 +73,15 @@ struct Bindings {
     skills: PathBuf,
     /// `next dev` must not be told it is a production build.
     node_env: &'static str,
+    /// Where the backend keeps the key that encrypts stored secrets.
+    ///
+    /// A packaged install holds real provider credentials and belongs in the
+    /// OS keychain. A checkout cannot use it: the backend is a `uv run` child
+    /// of locald with no GUI session, so macOS answers with a "keychain cannot
+    /// be found" dialog and the run stalls before anything works. Source mode
+    /// uses an in-config key derived from this installation's own secret, which
+    /// is throwaway anyway — the whole dev root is under /tmp.
+    secret_key_provider: &'static str,
 }
 
 /// A checkout to run instead of a released pack, and the release whose pinned
@@ -168,6 +177,7 @@ fn packaged_bindings(root: &Path) -> io::Result<Bindings> {
         backend_dir,
         frontend_dir: root.join("frontend"),
         node_env: "production",
+        secret_key_provider: "keychain",
     })
 }
 
@@ -207,6 +217,7 @@ fn source_bindings(root: &Path) -> io::Result<Bindings> {
         backend_dir,
         frontend_dir,
         node_env: "development",
+        secret_key_provider: "static",
     })
 }
 
@@ -318,6 +329,19 @@ fn build(
     }
 
     let secrets = load_or_create_host_secrets(&paths.root.join("host.secrets.json"))?;
+    // Derived from this installation's own secret rather than stored separately,
+    // the same way the runtime credential key below is: stable across restarts
+    // so encrypted rows stay readable, distinct from every other key by its
+    // domain string, and gone when the data directory is. SHA-256 into url-safe
+    // base64 is exactly a Fernet key. Only source mode uses it; see
+    // `Bindings::secret_key_provider`.
+    let secret_encryption_key = URL_SAFE.encode(Sha256::digest(
+        [
+            secrets.agentbox_api_key.as_bytes(),
+            b"lemma-secret-encryption-v1",
+        ]
+        .concat(),
+    ));
     let runtime_key = URL_SAFE.encode(Sha256::digest(
         [
             secrets.agentbox_api_key.as_bytes(),
@@ -351,7 +375,10 @@ fn build(
         // Desktop stores backend encryption material in the signed-in user's
         // OS vault. Never fall back to the deterministic local-development key
         // for a packaged installation.
-        ("SECRET_KEY_PROVIDER", "keychain".to_owned()),
+        (
+            "SECRET_KEY_PROVIDER",
+            bindings.secret_key_provider.to_owned(),
+        ),
         (
             "DATABASE_URL",
             format!(
@@ -486,6 +513,9 @@ fn build(
         ("ENABLE_TELEGRAM_POLLING_MODE", "true".to_owned()),
         ("ENABLE_SLACK_SOCKET_MODE", "true".to_owned()),
     ]);
+    if bindings.secret_key_provider == "static" {
+        backend_env.insert("SECRET_ENCRYPTION_KEY", secret_encryption_key);
+    }
     let browser_sdk = &bindings.browser_sdk;
     let browser_ui = &bindings.browser_ui;
     let skills = &bindings.skills;
@@ -915,6 +945,11 @@ mod tests {
             manifest["services"][0]["env"]["SECRET_KEY_PROVIDER"],
             "keychain"
         );
+        // A packaged install must never carry the key in its own config; the
+        // keychain is the point.
+        assert!(manifest["services"][0]["env"]
+            .get("SECRET_ENCRYPTION_KEY")
+            .is_none());
         assert!(paths.root.join("state/cache/tldextract").is_dir());
         assert!(paths.root.join("state/cache/fastembed").is_dir());
         assert_eq!(
@@ -1028,5 +1063,36 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("Redis image must be pinned"));
+    }
+
+    #[test]
+    fn a_checkout_never_reaches_for_the_keychain() {
+        // The source-mode backend is a `uv run` child of locald with no GUI
+        // session. Asking macOS for the login keychain there does not fail
+        // quietly — it puts up "a keychain cannot be found to store
+        // secret-encryption-keyset" and the whole run stalls behind a dialog.
+        let root = tempfile::tempdir().unwrap();
+        for directory in ["lemma-backend", "lemma-frontend", "agentbox"] {
+            fs::create_dir_all(root.path().join(directory)).unwrap();
+        }
+        fs::create_dir_all(root.path().join("desktop/runtime")).unwrap();
+        fs::write(
+            root.path().join("desktop/runtime/frontend-launcher.mjs"),
+            "",
+        )
+        .unwrap();
+
+        let source = source_bindings(root.path()).unwrap();
+        assert_eq!(source.secret_key_provider, "static");
+
+        let pack = tempfile::tempdir().unwrap();
+        // A packaged install holds real provider credentials and must keep them
+        // in the OS keychain, so the two must not converge.
+        assert_ne!(
+            source.secret_key_provider,
+            packaged_bindings(pack.path())
+                .map(|bindings| bindings.secret_key_provider)
+                .unwrap_or("keychain")
+        );
     }
 }
