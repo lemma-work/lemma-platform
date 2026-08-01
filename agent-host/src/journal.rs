@@ -14,6 +14,51 @@ use crate::protocol::{
 
 const SCHEMA_VERSION: i64 = 1;
 
+/// The columns `initialize` creates, checked against what is on disk.
+///
+/// Deliberately not a version counter. `event_outbox` lost a NOT NULL
+/// `event_id` column without anyone bumping one, so the number said "same"
+/// while the shape had changed — and because every table is
+/// `CREATE TABLE IF NOT EXISTS`, the old shape survived and failed every insert.
+/// Comparing the real columns needs no one to remember anything.
+const EXPECTED_COLUMNS: &[(&str, &[&str])] = &[
+    (
+        "targets",
+        &[
+            "target_id",
+            "connection_state",
+            "last_error",
+            "last_connected_at",
+            "updated_at",
+        ],
+    ),
+    (
+        "command_receipts",
+        &[
+            "target_id",
+            "command_id",
+            "kind",
+            "payload_digest",
+            "state",
+            "ack_pending",
+            "received_at",
+            "updated_at",
+        ],
+    ),
+    (
+        "event_outbox",
+        &[
+            "target_id",
+            "run_id",
+            "lease_epoch",
+            "sequence",
+            "event_json",
+            "acknowledged_at",
+            "created_at",
+        ],
+    ),
+];
+
 type PendingControl = (Vec<Uuid>, Vec<RunCheckpoint>, Vec<CommandRejection>);
 
 /// Local dispatch-progress bookkeeping for a journaled run.
@@ -101,6 +146,12 @@ pub enum JournalError {
     AckMismatch,
 }
 
+fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, JournalError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 impl Journal {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, JournalError> {
         let path = path.as_ref().to_path_buf();
@@ -109,8 +160,49 @@ impl Journal {
                 .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         }
         let journal = Self { path };
+        journal.discard_if_incompatible()?;
         journal.initialize()?;
         Ok(journal)
+    }
+
+    /// Rebuild the journal when the file on disk has a different shape.
+    ///
+    /// `initialize` is all `CREATE TABLE IF NOT EXISTS`, so an older table
+    /// survives untouched. That is not theoretical: `event_outbox` once had a
+    /// NOT NULL `event_id` column, and a host carrying it failed *every* event
+    /// insert with a constraint error — accepting runs, renewing their leases,
+    /// and delivering nothing, so conversations hung on "thinking" forever with
+    /// no failure anyone could see.
+    ///
+    /// This is a local outbox for crash recovery, not a source of truth: the
+    /// server holds the run leases and re-drives what it needs. Losing
+    /// undelivered events is strictly better than never delivering again.
+    fn discard_if_incompatible(&self) -> Result<(), JournalError> {
+        if !self.path.exists() {
+            return Ok(());
+        }
+        let mismatch = {
+            let connection = self.connection()?;
+            EXPECTED_COLUMNS.iter().find_map(|(table, expected)| {
+                let found = table_columns(&connection, table).ok()?;
+                // An absent table is fine: initialize creates it.
+                (!found.is_empty() && found != *expected).then_some((*table, found))
+            })
+        };
+        let Some((table, found)) = mismatch else {
+            return Ok(());
+        };
+        tracing::warn!(
+            %table,
+            found = ?found,
+            "rebuilding the Agent Host journal: it was written with a different schema"
+        );
+        for suffix in ["", "-wal", "-shm"] {
+            let mut companion = self.path.clone().into_os_string();
+            companion.push(suffix);
+            let _ = std::fs::remove_file(std::path::PathBuf::from(companion));
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -1006,6 +1098,69 @@ mod tests {
 
     use super::*;
     use crate::protocol::CommandKind;
+
+    #[test]
+    fn a_journal_from_an_older_build_is_rebuilt_rather_than_left_broken() {
+        // The exact shape that shipped: event_outbox carrying a NOT NULL
+        // event_id this build never writes, under the *same* schema version —
+        // which is why a version counter could not catch it. Left in place,
+        // every append fails a constraint and the host delivers nothing while
+        // looking perfectly healthy.
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("journal.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    r#"
+                    CREATE TABLE event_outbox (
+                        target_id TEXT NOT NULL,
+                        run_id TEXT NOT NULL,
+                        lease_epoch INTEGER NOT NULL,
+                        sequence INTEGER NOT NULL,
+                        event_id TEXT NOT NULL,
+                        event_json TEXT NOT NULL,
+                        acknowledged_at TEXT,
+                        created_at TEXT NOT NULL,
+                        PRIMARY KEY (target_id, run_id, lease_epoch, sequence)
+                    );
+                    PRAGMA user_version = 1;
+                    "#,
+                )
+                .unwrap();
+        }
+
+        let journal = Journal::open(&path).unwrap();
+
+        let connection = Connection::open(&path).unwrap();
+        let columns: Vec<String> = connection
+            .prepare("PRAGMA table_info(event_outbox)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(
+            !columns.iter().any(|column| column == "event_id"),
+            "the stale column survived: {columns:?}"
+        );
+        drop(journal);
+    }
+
+    #[test]
+    fn a_journal_at_the_current_version_is_left_alone() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("journal.sqlite3");
+        let target = Uuid::new_v4();
+        Journal::open(&path)
+            .unwrap()
+            .register_target(target)
+            .unwrap();
+
+        // Reopening must not throw the registered target away.
+        let reopened = Journal::open(&path).unwrap();
+        reopened.register_target(target).unwrap();
+    }
 
     fn fixture() -> (TempDir, Journal, Uuid, Command, RunSpec) {
         let directory = TempDir::new().unwrap();
