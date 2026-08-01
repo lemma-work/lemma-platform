@@ -69,10 +69,14 @@ if [[ -f "${dev_locald_root}/control.token" ]]; then
   # nothing and would silently spare the very process we need gone -- while
   # `pkill lemma-locald` would take out the real install's daemon too. Its own
   # hello carries the pid, which is exactly the one to insist on.
+  # `|| true` is load-bearing under `set -e`: a control token left behind by a
+  # daemon that is already gone makes `send` exit non-zero, and a failing
+  # command substitution in an assignment takes the whole script with it. That
+  # is not a failure — there is simply nothing to retire.
   stale_pid="$(
     env LEMMA_LOCALD_ROOT="${dev_locald_root}" "${locald_bin}" \
       send '{"cmd":"status","id":"dev-identify"}' 2>/dev/null |
-      sed -n 's/.*"event":"hello".*"pid":\([0-9]*\).*/\1/p' | head -1
+      sed -n 's/.*"event":"hello".*"pid":\([0-9]*\).*/\1/p' | head -1 || true
   )"
   env LEMMA_LOCALD_ROOT="${dev_locald_root}" \
     "${locald_bin}" send '{"cmd":"shutdown-daemon","id":"dev-refresh"}' \
