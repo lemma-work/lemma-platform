@@ -71,6 +71,29 @@ class ConnectorSettings(BaseSettings):
             "server-side revocation."
         ),
     )
+    connector_composio_managed_files_enabled: bool = Field(
+        default=False,
+        description=(
+            "Let the Composio SDK handle files itself. Off, because the flag "
+            "governs both directions and its download half writes the payload "
+            "to this container's local disk and returns a path the caller "
+            "cannot open. Kept as a switch so a deployment can fall back if a "
+            "tool's upload shape turns out not to be covered."
+        ),
+    )
+    connector_inline_result_max_bytes: int = Field(
+        default=1024 * 1024,
+        description=(
+            "Largest binary result returned inline as base64. Anything bigger "
+            "is streamed to the pod datastore and returned as a reference, so a "
+            "large download never has to be held in memory (twice, once base64 "
+            "encoded) or serialized into a JSON response."
+        ),
+    )
+    connector_response_max_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        description="Hard ceiling on a binary result; larger is refused, not buffered.",
+    )
     connector_sql_engine_cache_size: int = Field(
         default=32,
         description=(

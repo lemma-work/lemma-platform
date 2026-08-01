@@ -39,15 +39,18 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         from composio import Composio
 
         os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
-        # Enable Composio's automatic file handling so tool args that accept a
-        # file (e.g. Gmail/Outlook `attachment`) can be passed a public/signed
-        # URL and the SDK uploads + attaches it. Required for outbound email
-        # attachments; harmless for tools without file params. We only ever pass
-        # signed URLs (never local paths), so the sensitive-local-path upload
-        # surface this flag guards is not exercised.
+        # The flag governs BOTH directions, and the download half is unusable
+        # here: the SDK writes the payload to this container's local disk and
+        # substitutes the local path into the response, so the caller receives a
+        # path it cannot open for a file that accumulates on the box forever.
+        # We keep the upload half by passing signed URLs ourselves and own the
+        # download half by streaming Composio's {name, mimetype, s3url} envelope
+        # to the pod datastore.
         return Composio(
             api_key=connector_settings.composio_api_key,
-            dangerously_allow_auto_upload_download_files=True,
+            dangerously_allow_auto_upload_download_files=(
+                connector_settings.connector_composio_managed_files_enabled
+            ),
         )
 
     async def list_operations(self, connector_id: str) -> list[str]:

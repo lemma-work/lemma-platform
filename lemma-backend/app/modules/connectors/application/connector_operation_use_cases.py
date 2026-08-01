@@ -37,9 +37,14 @@ class ConnectorOperationUseCases:
         self,
         uow_factory: UnitOfWorkFactory,
         service_builder: Callable[[Any], ConnectorOperationService],
+        pod_file_gateway_factory: Callable[[Any], Any] | None = None,
     ):
         self._uow_factory = uow_factory
         self._build = service_builder
+        # Supplied at composition, because reaching the pod datastore is where
+        # the connectors and datastore modules meet. None means "no pod context",
+        # and file results simply come back inline.
+        self._pod_file_gateway_factory = pod_file_gateway_factory or (lambda _uow: None)
 
     async def execute_operation_for_auth_config(
         self,
@@ -82,7 +87,7 @@ class ConnectorOperationUseCases:
         # error-mapping logic.
         try:
             async with uow_scope(self._uow_factory) as uow:
-                return await self._build(uow).execute_resolved(resolved)
+                response = await self._build(uow).execute_resolved(resolved)
         except (
             OperationExecutionUnauthorizedError,
             OperationExecutionAccessDeniedError,
@@ -93,6 +98,55 @@ class ConnectorOperationUseCases:
             # re-raise the original error unchanged.
             await self._flag_account_reauth_required(resolved)
             raise
+
+        # Phase 3: if the result carries a file, decide what the caller actually
+        # receives -- inline bytes for something small, a pod-datastore reference
+        # for something large. Its own short scope, after the external call.
+        return await self._capture_binary_output(
+            response,
+            payload=payload,
+            user_id=user_id,
+            request=request,
+            connector_id=resolved.connector_id,
+        )
+
+    async def _capture_binary_output(
+        self,
+        response: OperationExecutionResponse,
+        *,
+        payload: dict[str, Any],
+        user_id: UUID,
+        request: Request,
+        connector_id: str,
+    ) -> OperationExecutionResponse:
+        """Return a usable file, whatever shape the provider wrapped it in.
+
+        Detection is by shape anywhere in the result rather than one envelope at
+        the top level, which is why a Composio download -- nested under ``data``
+        in Composio's own envelope -- now resolves at all. Persisting is decided
+        by size; ``output_path`` only chooses the destination.
+        """
+        from app.modules.connectors.services.files.capture import find_binary
+        from app.modules.connectors.services.files.capture_writer import (
+            BinaryResultWriter,
+        )
+
+        result = getattr(response, "result", None)
+        if find_binary(result) is None:
+            return response
+
+        async with current_context_scope(
+            self._uow_factory, request=request, user_id=user_id
+        ) as scope:
+            gateway = self._pod_file_gateway_factory(scope.uow)
+            captured = await BinaryResultWriter(gateway).capture(
+                result,
+                connector_id=connector_id,
+                pod_id=getattr(scope.ctx, "pod_id", None),
+                ctx=scope.ctx,
+                output_path=(payload or {}).get("output_path"),
+            )
+        return OperationExecutionResponse(result=captured)
 
     async def _flag_account_reauth_required(
         self, resolved: ResolvedConnectorExecution

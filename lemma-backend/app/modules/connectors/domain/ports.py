@@ -112,6 +112,29 @@ class ConnectorTriggerRepositoryPort(Protocol):
     ) -> Optional[ConnectorTriggerEntity]: ...
 
 
+class PodFileGatewayPort(Protocol):
+    """Reads and writes pod datastore files on behalf of connector operations.
+
+    Kept as a port so the connectors module never imports datastore internals;
+    the adapter is wired at composition.
+    """
+
+    async def read_bytes(
+        self, *, pod_id: UUID, path: str, ctx: Any
+    ) -> Tuple[bytes, Optional[str], Optional[str]]: ...
+
+    async def write_bytes(
+        self,
+        *,
+        pod_id: UUID,
+        directory: str,
+        name: str,
+        content: bytes,
+        media_type: Optional[str],
+        ctx: Any,
+    ) -> dict: ...
+
+
 class ConnectorOperationRepositoryPort(Protocol):
     async def create(
         self, entity: ConnectorOperationEntity

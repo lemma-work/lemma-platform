@@ -169,7 +169,16 @@ def build_connector_operation_use_cases(
     # Factory mode: the use-case opens its own short UoWs per phase (via
     # build_connector_operation_service as the per-phase builder) so no pooled
     # connection is held across the external operation call.
-    return ConnectorOperationUseCases(uow_factory, build_connector_operation_service)
+    def _pod_file_gateway(uow):
+        # Imported here rather than at module scope: connectors must not depend
+        # on datastore, and this factory is composition wiring, not module code.
+        from app.composition.connector_pod_files import DatastorePodFileGateway
+
+        return DatastorePodFileGateway(uow)
+
+    return ConnectorOperationUseCases(
+        uow_factory, build_connector_operation_service, _pod_file_gateway
+    )
 
 
 def get_connector_operation_use_cases(
