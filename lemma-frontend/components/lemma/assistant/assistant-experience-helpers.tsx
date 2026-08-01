@@ -15,9 +15,16 @@ import {
   normalizeAssistantMarkdown,
 } from "lemma-sdk";
 import { cn } from "@/lib/utils";
+import {
+  fencedCodeFromPreNode,
+  isJsonFenceLanguage,
+  parseAssistantJson,
+  splitAssistantMessageSegments,
+} from "@/lib/assistant/json-blocks";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CheckCircle2, XCircle } from "@/components/ui/icons";
+import { AssistantJsonBlock } from "./assistant-json-block";
 import { humanizeKey } from "./assistant-format";
 import { suggestionIconForTitle } from "./assistant-parts";
 import type {
@@ -199,9 +206,19 @@ export function markdownComponentsForMessage(isUserMessage: boolean): Components
     code: ({ className, ...props }) => (
       <code className={cn("rounded px-1 py-0.5 font-mono text-sm", codeClassName, className)} {...stripMarkdownNode(props)} />
     ),
-    pre: ({ className, ...props }) => (
-      <pre className={cn("my-3 overflow-x-auto rounded-md border p-3 text-xs first:mt-0 last:mb-0", borderClassName, codeClassName, className)} {...stripMarkdownNode(props)} />
-    ),
+    // Fenced blocks tagged json — and untagged fences that turn out to be JSON —
+    // get the dedicated block. The raw source only survives on the hast node, so
+    // the detection happens here rather than in the `code` renderer.
+    pre: ({ className, node, ...props }) => {
+      const fenced = fencedCodeFromPreNode(node);
+      const json = fenced && (fenced.language === null || isJsonFenceLanguage(fenced.language))
+        ? parseAssistantJson(fenced.text)
+        : null;
+      if (json) return <AssistantJsonBlock json={json} isUserMessage={isUserMessage} />;
+      return (
+        <pre className={cn("my-3 overflow-x-auto rounded-md border p-3 text-xs first:mt-0 last:mb-0", borderClassName, codeClassName, className)} {...props} />
+      );
+    },
     table: ({ className, ...props }) => (
       <div className="my-3 w-full overflow-x-auto first:mt-0 last:mb-0">
         <table className={cn("w-full min-w-max border-collapse text-sm", className)} {...stripMarkdownNode(props)} />
@@ -250,16 +267,27 @@ export function defaultMessageContent({ message }: AssistantMessageRenderArgs): 
   }
 
   const isUserMessage = message.role === "user";
+  const markdownComponents = markdownComponentsForMessage(isUserMessage);
+  // Bare JSON is lifted out first: markdown would otherwise reflow a raw payload
+  // into unreadable prose, and normalizing it as markdown would rewrite its punctuation.
+  const segments = splitAssistantMessageSegments(displayContent);
 
   return (
     <div className={cn("min-w-0 overflow-hidden break-words text-sm font-normal leading-6 tracking-normal text-[var(--text-primary)]", isUserMessage ? "max-w-prose" : "max-w-full")}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        skipHtml
-        components={markdownComponentsForMessage(isUserMessage)}
-      >
-        {normalizeAssistantMarkdown(displayContent)}
-      </ReactMarkdown>
+      {segments.map((segment, index) => (
+        segment.kind === "json" ? (
+          <AssistantJsonBlock key={`json-${index}`} json={segment.json} isUserMessage={isUserMessage} />
+        ) : (
+          <ReactMarkdown
+            key={`markdown-${index}`}
+            remarkPlugins={[remarkGfm]}
+            skipHtml
+            components={markdownComponents}
+          >
+            {normalizeAssistantMarkdown(segment.text)}
+          </ReactMarkdown>
+        )
+      ))}
     </div>
   );
 }
@@ -357,7 +385,7 @@ export function defaultPendingFile({ file, remove, status = "queued", error }: A
       title={error || file.name}
     >
       {isUploading ? (
-        <span className="size-2.5 animate-spin rounded-full border border-[var(--text-tertiary)] border-t-transparent" aria-hidden="true" />
+        <span className="size-2.5 lemma-spin rounded-full border border-[var(--text-tertiary)] border-t-transparent" aria-hidden="true" />
       ) : isUploaded ? (
         <CheckCircle2 className="size-3 text-[var(--state-success)]" aria-hidden="true" />
       ) : isFailed ? (
@@ -367,7 +395,7 @@ export function defaultPendingFile({ file, remove, status = "queued", error }: A
       {!isUploading ? (
         <Button
           type="button"
-          variant="ghost"
+          variant="quiet"
           size="icon"
           onClick={remove}
           className="inline-flex size-4 items-center justify-center rounded-sm text-[var(--text-secondary)] hover:bg-[color:color-mix(in_srgb,var(--surface-2)_80%,transparent)] hover:text-[var(--text-primary)]"

@@ -86,11 +86,6 @@ export interface AssistantPendingFileRenderArgs {
   error?: string;
 }
 
-export interface AssistantFinalOutputRenderArgs {
-  output: Record<string, unknown>;
-  schema?: unknown;
-}
-
 export interface EmptyStateSuggestion {
   text: string;
   icon?: ReactNode;
@@ -117,6 +112,13 @@ export interface AssistantExperienceCustomizationProps {
   placeholder?: string;
   emptyState?: ReactNode;
   emptyStateSuggestions?: EmptyStateSuggestion[];
+  /**
+   * Let the empty state fill the message viewport instead of sitting at the top
+   * of it. A conversation with no messages has nothing to scroll, so a
+   * top-aligned empty state leaves a void between what you read and the
+   * composer you type into.
+   */
+  emptyStateFillsViewport?: boolean;
   resourceMentions?: AssistantResourceMention[];
   draft?: string;
   onDraftChange?: (value: string) => void;
@@ -125,8 +127,4 @@ export interface AssistantExperienceCustomizationProps {
   renderMessageContent?: (args: AssistantMessageRenderArgs) => ReactNode;
   renderToolInvocation?: (args: AssistantToolRenderArgs) => ReactNode;
   renderPendingFile?: (args: AssistantPendingFileRenderArgs) => ReactNode;
-  finalOutput?: Record<string, unknown> | null;
-  outputSchema?: unknown;
-  showFinalOutput?: boolean;
-  renderFinalOutput?: (args: AssistantFinalOutputRenderArgs) => ReactNode;
 }
