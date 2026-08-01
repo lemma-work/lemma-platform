@@ -56,12 +56,26 @@ locald_bin="${repo_root}/desktop/binaries/lemma-locald-${host_triple}"
 vz_bin="${repo_root}/desktop/binaries/lemma-vz-${host_triple}"
 dev_locald_root="${dev_support_root}/locald"
 
-# A desktop daemon is deliberately durable. Retire the prior isolated dev
-# daemon so every run exercises the freshly compiled locald sidecar.
+# A desktop daemon is deliberately durable, which in development means a locald
+# from an earlier run happily outlives `dev-local.sh` and keeps supervising with
+# whatever code it was built from. That is not a theoretical problem: a daemon
+# an hour older than the fix under test kept reproducing the bug it fixed, and
+# the evidence pointed everywhere except at the stale process.
+#
+# Ask it to leave, then make sure it did.
 if [[ -f "${dev_locald_root}/control.token" ]]; then
   env LEMMA_LOCALD_ROOT="${dev_locald_root}" \
     "${locald_bin}" send '{"cmd":"shutdown-daemon","id":"dev-refresh"}' \
     >/dev/null 2>&1 || true
+fi
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pgrep -f "lemma-locald.*${dev_locald_root}" >/dev/null 2>&1 || break
+  sleep 0.5
+done
+if pgrep -f "lemma-locald.*${dev_locald_root}" >/dev/null 2>&1; then
+  echo "Previous dev locald ignored shutdown; stopping it." >&2
+  pkill -f "lemma-locald.*${dev_locald_root}" >/dev/null 2>&1 || true
+  sleep 1
 fi
 
 declare -a source_env=()
