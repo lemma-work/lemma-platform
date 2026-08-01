@@ -12,8 +12,10 @@ import type {
 } from 'lemma-sdk';
 
 import {
+    HARNESS_DEFAULT_VALUE,
     formatAgentRuntime,
     harnessConfigControls,
+    harnessProfileChanges,
     hydrateRuntimeModel,
     isArchivedProfile,
     pairingCommands,
@@ -338,5 +340,67 @@ describe('harnessConfigControls', () => {
         expect(harnessConfigControls(undefined)).toEqual([]);
         expect(harnessConfigControls(null)).toEqual([]);
         expect(harnessConfigControls([])).toEqual([]);
+    });
+});
+
+describe('harnessProfileChanges', () => {
+    const stored = {
+        name: 'Codex',
+        description: 'Repo work',
+        defaultModel: 'gpt-5.1',
+        selections: { permission_mode: 'plan' },
+    };
+
+    it('sends nothing when nothing moved', () => {
+        expect(harnessProfileChanges(stored, { ...stored })).toEqual({});
+    });
+
+    it('keeps a rename off the harness path', () => {
+        // The backend contacts the paired computer only when an edit touches
+        // default_model_name or config_selections. Including them here would
+        // make renaming a coding agent fail whenever that laptop is asleep.
+        const changes = harnessProfileChanges(stored, { ...stored, name: 'Codex (main)' });
+
+        expect(changes).toEqual({ name: 'Codex (main)' });
+        expect(changes).not.toHaveProperty('default_model_name');
+        expect(changes).not.toHaveProperty('config_selections');
+    });
+
+    it('clears a description the user emptied, rather than omitting it', () => {
+        expect(harnessProfileChanges(stored, { ...stored, description: '   ' }))
+            .toEqual({ description: null });
+    });
+
+    it('maps the sentinel back to null when unpinning the model', () => {
+        expect(
+            harnessProfileChanges(stored, { ...stored, defaultModel: HARNESS_DEFAULT_VALUE }),
+        ).toEqual({ default_model_name: null });
+    });
+
+    it('ignores a selection left on the sentinel', () => {
+        // Rendering a control defaults it to "use this computer's setting",
+        // which is the absence of a selection - not a change to send.
+        expect(
+            harnessProfileChanges(stored, {
+                ...stored,
+                selections: { permission_mode: 'plan', reasoning: HARNESS_DEFAULT_VALUE },
+            }),
+        ).toEqual({});
+    });
+
+    it('sends the whole selection map when one entry changes', () => {
+        // Selections replace wholesale server-side, so a partial map would drop
+        // the others.
+        expect(
+            harnessProfileChanges(stored, {
+                ...stored,
+                selections: { permission_mode: 'default', reasoning: 'high' },
+            }),
+        ).toEqual({ config_selections: { permission_mode: 'default', reasoning: 'high' } });
+    });
+
+    it('notices a selection that was removed', () => {
+        expect(harnessProfileChanges(stored, { ...stored, selections: {} }))
+            .toEqual({ config_selections: {} });
     });
 });

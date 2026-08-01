@@ -28,12 +28,14 @@ import {
     useUpdateAgentRuntime,
     type AgentHostHarness,
 } from '@/lib/hooks/use-agent-runtime';
-import { agentHostHarnessModelCount, harnessConfigControls } from './agent-runtime-helpers';
+import {
+    HARNESS_DEFAULT_VALUE,
+    agentHostHarnessModelCount,
+    harnessConfigControls,
+    harnessProfileChanges,
+    liveConfigSelections,
+} from './agent-runtime-helpers';
 import { DialogField } from './provider-profile-dialog';
-
-// Radix Select refuses value="", so "let the agent decide" needs a real token.
-// The composer solves the same problem with POD_DEFAULT_AGENT_VALUE.
-const HARNESS_DEFAULT_VALUE = '__harness_default__';
 
 export type HarnessDialogTarget =
     | { mode: 'create'; harness: AgentHostHarness }
@@ -139,10 +141,6 @@ export function HarnessProfileDialog({
     const save = async () => {
         const trimmedName = name.trim();
         if (!trimmedName) return toast.error('Name this agent');
-        const defaultModelName = defaultModel === HARNESS_DEFAULT_VALUE ? null : defaultModel;
-        const configSelections = Object.fromEntries(
-            Object.entries(selections).filter(([, value]) => value && value !== HARNESS_DEFAULT_VALUE),
-        );
 
         try {
             if (target?.mode === 'create') {
@@ -154,22 +152,26 @@ export function HarnessProfileDialog({
                         harness_id: target.harness.id,
                         description: description.trim() || null,
                         scope,
-                        default_model_name: defaultModelName,
-                        config_selections: configSelections,
+                        default_model_name:
+                            defaultModel === HARNESS_DEFAULT_VALUE ? null : defaultModel,
+                        config_selections: liveConfigSelections(selections),
                     },
                 });
                 toast.success(`${trimmedName} is now pickable in chats`);
             } else if (profile) {
+                // Only what changed. The backend reaches out to the paired
+                // computer solely for an edit that touches the model or the
+                // config selections, so sending them unconditionally would make
+                // a rename fail whenever that machine is asleep.
+                const changes = harnessProfileChanges(freshDraft(target), draft);
+                if (Object.keys(changes).length === 0) {
+                    onClose();
+                    return;
+                }
                 await updateRuntime.mutateAsync({
                     organizationId,
                     profileId: profile.id,
-                    request: {
-                        source: 'AGENT_HOST',
-                        name: trimmedName,
-                        description: description.trim() || null,
-                        default_model_name: defaultModelName,
-                        config_selections: configSelections,
-                    },
+                    request: { source: 'AGENT_HOST', ...changes },
                 });
                 toast.success(`${trimmedName} updated`);
             }

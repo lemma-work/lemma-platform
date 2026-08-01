@@ -370,6 +370,72 @@ export function harnessConfigControls(
     return controls;
 }
 
+// Radix Select refuses value="", so "let the agent decide" needs a real token.
+// The composer solves the same problem with POD_DEFAULT_AGENT_VALUE.
+export const HARNESS_DEFAULT_VALUE = '__harness_default__';
+
+export type HarnessProfileFields = {
+    name: string;
+    description: string;
+    /** A model name, or HARNESS_DEFAULT_VALUE for "let the agent choose". */
+    defaultModel: string;
+    selections: Record<string, string>;
+};
+
+/**
+ * The PATCH body for a harness profile: only what the user actually changed.
+ *
+ * This is not just tidiness. The backend contacts the paired computer *only*
+ * when an edit touches `default_model_name` or `config_selections`, precisely so
+ * that a rename works while that machine is asleep
+ * (`touches_configuration` in runtime_profile_editor.py). Sending those fields
+ * unconditionally would require the machine to be online and READY to rename a
+ * coding agent, and fail with "not available" when it is not.
+ */
+export function harnessProfileChanges(
+    original: HarnessProfileFields,
+    next: HarnessProfileFields,
+): Record<string, unknown> {
+    const changes: Record<string, unknown> = {};
+
+    const name = next.name.trim();
+    if (name !== original.name.trim()) changes.name = name;
+
+    const description = next.description.trim();
+    if (description !== original.description.trim()) {
+        changes.description = description || null;
+    }
+
+    if (next.defaultModel !== original.defaultModel) {
+        changes.default_model_name =
+            next.defaultModel === HARNESS_DEFAULT_VALUE ? null : next.defaultModel;
+    }
+
+    const nextSelections = liveConfigSelections(next.selections);
+    if (!sameSelections(nextSelections, liveConfigSelections(original.selections))) {
+        changes.config_selections = nextSelections;
+    }
+
+    return changes;
+}
+
+/** Drop the "use this computer's setting" sentinel and any empty choice. */
+export function liveConfigSelections(
+    selections: Record<string, string>,
+): Record<string, string> {
+    return Object.fromEntries(
+        Object.entries(selections).filter(
+            ([, value]) => value && value !== HARNESS_DEFAULT_VALUE,
+        ),
+    );
+}
+
+function sameSelections(a: Record<string, string>, b: Record<string, string>): boolean {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((key) => a[key] === b[key]);
+}
+
 // Flatten the runtime-profile catalog into the flat, plain-language model list
 // the ModelPicker consumes. Every pickable model across every saved profile
 // (Lemma built-in, BYO providers, coding agents) becomes one row, tagged with

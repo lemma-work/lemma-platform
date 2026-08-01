@@ -1663,3 +1663,62 @@ async def test_availability_degrades_where_the_service_has_no_host_repository():
     # A harness profile: it would report READY/OFFLINE if a host repository
     # were wired, so None here is the degrade path, not the provider path.
     assert profile.harness_id is not None
+
+
+async def test_a_rename_works_while_the_paired_computer_is_asleep():
+    """The reason update_agent_host_profile gates on `touches_configuration`.
+
+    A laptop is offline most of the day. Renaming the coding agent it hosts, or
+    fixing its description, must not depend on that machine being awake — which
+    is also why the edit dialog sends only the fields the user actually changed.
+    """
+    organization_id = uuid4()
+    user_id = uuid4()
+    service, _repo, host_repository, _harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=user_id, config_options=[]
+    )
+    host = next(iter(host_repository.hosts.values()))
+    host.status = "OFFLINE"
+    host.last_seen_at = None
+
+    renamed = await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        name="Codex (main)",
+        description="Repo work",
+    )
+
+    assert renamed.name == "Codex (main)"
+    assert renamed.description == "Repo work"
+    # Untouched, because nothing re-validated against the sleeping harness.
+    assert renamed.config.harness_snapshot_revision == "rev-1"
+
+
+async def test_a_config_edit_still_needs_the_computer_awake():
+    """The other half of the same rule: a selection has to be validated against
+    the live harness, so it cannot be saved blind."""
+    organization_id = uuid4()
+    user_id = uuid4()
+    options = [
+        {
+            "id": "approval",
+            "category": "approval",
+            "name": "Approval",
+            "options": [{"value": "always"}, {"value": "never"}],
+        }
+    ]
+    service, _repo, host_repository, _harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=user_id, config_options=options
+    )
+    host = next(iter(host_repository.hosts.values()))
+    host.status = "OFFLINE"
+    host.last_seen_at = None
+
+    with pytest.raises(ValueError):
+        await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+            profile_id=profile.id,
+            organization_id=organization_id,
+            user_id=user_id,
+            config_selections={"approval": "always"},
+        )
