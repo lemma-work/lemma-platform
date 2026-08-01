@@ -60,7 +60,10 @@ def _redact_credential_config(value: dict | None) -> dict | None:
 
 def _response_from_entity(entity) -> AuthConfigResponseSchema:
     data = entity.model_dump(mode="json")
-    data["credential_config"] = _redact_credential_config(data.pop("provider_config", None))
+    # `provider` is a computed view on `kind`, so it is absent from model_dump.
+    data["kind"] = entity.kind.value
+    data["provider"] = entity.provider.value
+    data["credential_config"] = _redact_credential_config(data.pop("config", None))
     return AuthConfigResponseSchema.model_validate(data)
 
 

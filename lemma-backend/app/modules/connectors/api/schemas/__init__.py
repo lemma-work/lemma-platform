@@ -7,7 +7,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, ConfigDict
 
-from app.modules.connectors.domain.connector import AuthProvider, AuthScheme
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    AuthScheme,
+    ConnectorKind,
+)
 from app.modules.connectors.api.schemas.connector_operation_schemas import OperationSummary
 
 
@@ -174,10 +178,14 @@ class AuthConfigResponseSchema(BaseSchema):
     id: UUID
     organization_id: UUID
     connector_id: str
+    kind: str
+    # Deprecated: the legacy provider view of `kind`. Still emitted so existing
+    # clients keep working for one release.
     provider: str
     config_source: str
     status: str
     name: str
+    is_default: bool = False
     credential_config: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
     created_at: datetime.datetime
@@ -196,6 +204,8 @@ class AppTriggerResponseSchema(BaseSchema):
 
     id: str  # String ID (slug)
     connector_id: Optional[str]
+    kind: ConnectorKind
+    # Deprecated: the legacy provider view of `kind`, kept for one release.
     provider: AuthProvider
     # name: str # Name is likely id or part of it
     description: Optional[str]
@@ -215,6 +225,8 @@ class AppTriggerSummaryResponseSchema(BaseSchema):
 
     id: str
     connector_id: Optional[str]
+    kind: ConnectorKind
+    # Deprecated: the legacy provider view of `kind`, kept for one release.
     provider: AuthProvider
     description: Optional[str]
     created_at: datetime.datetime

@@ -22,6 +22,7 @@ from app.modules.connectors.domain.connector import (
     AuthMethod,
     AuthProvider,
     ComposioProviderCapability,
+    ConnectorKind,
     LemmaProviderCapability,
 )
 from app.modules.connectors.domain.auth_config import AuthConfigSource
@@ -59,15 +60,15 @@ class FakeProviderOperationError(Exception):
         self.details = details
 
 
-def _provider_capability(provider: str, auth_method: str) -> dict:
-    if provider == AuthProvider.COMPOSIO.value:
+def _provider_capability(kind: str, auth_method: str) -> dict:
+    if kind == ConnectorKind.COMPOSIO.value:
         return ComposioProviderCapability(
-            provider=AuthProvider.COMPOSIO,
+            kind="composio",
             auth_scheme=AuthMethod(auth_method),
             toolkit_slug="googlecalendar",
         ).model_dump(mode="json")
     return LemmaProviderCapability(
-        provider=AuthProvider.LEMMA,
+        kind="package",
         auth_scheme=AuthMethod(auth_method),
     ).model_dump(mode="json")
 
@@ -77,14 +78,14 @@ def _connector(
     app_id: str,
     title: str,
     description: str,
-    provider: str,
+    kind: str,
     auth_method: str,
 ) -> Connector:
     return Connector(
         id=app_id,
         title=title,
         description=description,
-        provider_capabilities=[_provider_capability(provider, auth_method)],
+        kinds=[_provider_capability(kind, auth_method)],
         is_active=True,
     )
 
@@ -94,12 +95,12 @@ async def _seed_auth_config(
     *,
     app_id: str,
     organization_id: str,
-    provider: str = AuthProvider.LEMMA.value,
+    kind: str = ConnectorKind.PACKAGE.value,
 ) -> AuthConfig:
     auth_config = AuthConfig(
         organization_id=organization_id,
         connector_id=app_id,
-        provider=provider,
+        kind=kind,
         config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
         name=f"{app_id}-{uuid4().hex[:8]}",
     )
@@ -254,7 +255,7 @@ async def test_connector_operations_use_connected_user_account(
             app_id=app_id,
             title="Test Operation App",
             description="Test App for Operations",
-            provider=AuthProvider.LEMMA.value,
+            kind="package",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -263,7 +264,7 @@ async def test_connector_operations_use_connected_user_account(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        provider=AuthProvider.LEMMA.value,
+        kind="package",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -376,7 +377,7 @@ async def test_connector_operation_discovery_uses_name_and_description_only(
             app_id=app_id,
             title="Test Search App",
             description="App for operation discovery search",
-            provider=AuthProvider.LEMMA.value,
+            kind="package",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -385,7 +386,7 @@ async def test_connector_operation_discovery_uses_name_and_description_only(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        provider=AuthProvider.LEMMA.value,
+        kind="package",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -459,7 +460,7 @@ async def test_connector_operation_lookup_is_case_insensitive(
             app_id=app_id,
             title="Case Search App",
             description="App for operation lookup casing",
-            provider=AuthProvider.COMPOSIO.value,
+            kind="composio",
             auth_method=AuthMethod.OAUTH2.value,
         )
         db_session.add(app)
@@ -468,7 +469,7 @@ async def test_connector_operation_lookup_is_case_insensitive(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        provider=AuthProvider.COMPOSIO.value,
+        kind="composio",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -482,7 +483,7 @@ async def test_connector_operation_lookup_is_case_insensitive(
         ConnectorOperation(
             id=f"{app_id}:EXCEL_CREATE_WORKBOOK",
             connector_id=app_id,
-            provider=AuthProvider.COMPOSIO.value,
+            kind="composio",
             name="EXCEL_CREATE_WORKBOOK",
             provider_operation_name="EXCEL_CREATE_WORKBOOK",
             display_name="Create Workbook",
@@ -527,7 +528,7 @@ async def test_connector_operation_requires_connected_user_account(
             app_id=app_id,
             title="Missing Account App",
             description="App without connected account",
-            provider=AuthProvider.LEMMA.value,
+            kind="package",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -536,7 +537,7 @@ async def test_connector_operation_requires_connected_user_account(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        provider=AuthProvider.LEMMA.value,
+        kind="package",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -591,7 +592,7 @@ async def test_connector_operation_returns_upstream_execution_error_details(
             app_id=app_id,
             title="Test Operation App",
             description="Test App for upstream execution errors",
-            provider=AuthProvider.LEMMA.value,
+            kind="package",
             auth_method=AuthMethod.API_KEY.value,
         )
         db_session.add(app)
@@ -600,7 +601,7 @@ async def test_connector_operation_returns_upstream_execution_error_details(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        provider=AuthProvider.LEMMA.value,
+        kind="package",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -686,7 +687,7 @@ async def test_google_calendar_operation_uses_composio_account(
             app_id=app_id,
             title="Google Calendar",
             description="Google Calendar connector",
-            provider=AuthProvider.COMPOSIO.value,
+            kind="composio",
             auth_method=AuthMethod.OAUTH2.value,
         )
         db_session.add(app)
@@ -695,7 +696,7 @@ async def test_google_calendar_operation_uses_composio_account(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        provider=AuthProvider.COMPOSIO.value,
+        kind="composio",
     )
     operations_url = (
         f"/organizations/{fixed_test_org['id']}/connectors/"
@@ -706,7 +707,7 @@ async def test_google_calendar_operation_uses_composio_account(
         ConnectorOperation(
             id=f"{app_id}:list_events",
             connector_id=app_id,
-            provider=AuthProvider.COMPOSIO.value,
+            kind="composio",
             name="list_events",
             provider_operation_name="list_events",
             display_name="List Events",

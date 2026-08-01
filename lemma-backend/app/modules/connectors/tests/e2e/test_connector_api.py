@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_operation import (
@@ -21,7 +21,7 @@ async def test_connector(db_session: AsyncSession):
         id="google_calendar",
         title="Google Calendar",
         description="Calendar connector",
-        provider_capabilities=[{"provider": "LEMMA", "auth_scheme": "OAUTH2"}],
+        kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
         is_active=True,
     )
     db_session.add(app)
@@ -43,12 +43,12 @@ async def test_connector(db_session: AsyncSession):
 
 
 async def _seed_trigger_auth_config(
-    db_session: AsyncSession, *, app_id: str, organization_id, provider: str
+    db_session: AsyncSession, *, app_id: str, organization_id, kind: str
 ) -> AuthConfig:
     auth_config = AuthConfig(
         organization_id=organization_id,
         connector_id=app_id,
-        provider=provider,
+        kind=kind,
         config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
         name=f"{app_id}-{uuid4().hex[:8]}",
     )
@@ -96,30 +96,30 @@ async def test_get_connector_not_found_returns_domain_payload(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "provider,expected_config_field",
+    "kind,expected_config_field",
     [
-        (AuthProvider.COMPOSIO.value, "composio_field"),
-        (AuthProvider.LEMMA.value, "lemma_field"),
+        (ConnectorKind.COMPOSIO.value, "composio_field"),
+        (ConnectorKind.PACKAGE.value, "lemma_field"),
     ],
 )
-async def test_triggers_filtered_by_auth_config_provider(
+async def test_triggers_filtered_by_auth_config_kind(
     authenticated_client: AsyncClient,
     fixed_test_org,
     db_session: AsyncSession,
-    provider: str,
+    kind: str,
     expected_config_field: str,
 ):
-    """A COMPOSIO auth config returns only COMPOSIO triggers, LEMMA only LEMMA."""
-    app_id = f"trigger-filter-{provider.lower()}"
+    """An install sees only the triggers its own kind emits."""
+    app_id = f"trigger-filter-{kind}"
     db_session.add(
         Connector(
             id=app_id,
             title="Trigger Filter App",
             description="App carrying both LEMMA and COMPOSIO triggers",
-            provider_capabilities=[
-                {"provider": "LEMMA", "auth_scheme": "OAUTH2"},
+            kinds=[
+                {"kind": "package", "auth_scheme": "OAUTH2"},
                 {
-                    "provider": "COMPOSIO",
+                    "kind": "composio",
                     "auth_scheme": "OAUTH2",
                     "toolkit_slug": "filter",
                 },
@@ -132,7 +132,7 @@ async def test_triggers_filtered_by_auth_config_provider(
             ConnectorTrigger(
                 id=f"{app_id}:lemma:new_message",
                 connector_id=app_id,
-                provider=AuthProvider.LEMMA.value,
+                kind="package",
                 event_type="new_message",
                 description="LEMMA new message",
                 config_schema={
@@ -144,7 +144,7 @@ async def test_triggers_filtered_by_auth_config_provider(
             ConnectorTrigger(
                 id=f"{app_id}:composio:new_message",
                 connector_id=app_id,
-                provider=AuthProvider.COMPOSIO.value,
+                kind="composio",
                 event_type="new_message",
                 description="COMPOSIO new message",
                 config_schema={
@@ -159,7 +159,7 @@ async def test_triggers_filtered_by_auth_config_provider(
         db_session,
         app_id=app_id,
         organization_id=fixed_test_org["id"],
-        provider=provider,
+        kind=kind,
     )
     await db_session.commit()
 
@@ -173,7 +173,7 @@ async def test_triggers_filtered_by_auth_config_provider(
     data = response.json()
     assert len(data["items"]) == 1
     item = data["items"][0]
-    assert item["provider"] == provider
+    assert item["kind"] == kind
     # The list endpoint returns the lightweight trigger summary, which omits the
     # heavy config_schema/payload_schema (see TriggerSummaryResponse). The full
     # config_schema is asserted on the detail endpoint below.
@@ -181,5 +181,5 @@ async def test_triggers_filtered_by_auth_config_provider(
     detail = await authenticated_client.get(f"{triggers_url}/new_message")
     assert detail.status_code == 200, detail.text
     detail_data = detail.json()
-    assert detail_data["provider"] == provider
+    assert detail_data["kind"] == kind
     assert expected_config_field in detail_data["config_schema"]["properties"]

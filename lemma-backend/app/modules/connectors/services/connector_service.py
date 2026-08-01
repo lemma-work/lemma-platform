@@ -458,7 +458,7 @@ class ConnectorService:
         connector: ConnectorEntity,
     ) -> ConnectorEntity:
         capabilities = []
-        for capability in connector.provider_capabilities:
+        for capability in connector.kinds:
             if isinstance(capability, LemmaProviderCapability):
                 has_system_default = (
                     capability.auth_scheme != AuthScheme.OAUTH2
@@ -511,7 +511,9 @@ class ConnectorService:
                 continue
             capabilities.append(capability)
 
-        return connector.model_copy(update={"provider_capabilities": capabilities})
+        # `kinds`, not `provider_capabilities`: the latter is a read-only view,
+        # so updating it here silently discarded the enrichment.
+        return connector.model_copy(update={"kinds": capabilities})
 
     def _validate_auth_config_request(
         self,

@@ -144,9 +144,12 @@ class KindSpecBase(BaseModel):
     # JSON Schema for the install's own config (``auth_configs.config``).
     # Validated on every create/update -- unlike the legacy path, which skipped
     # validation entirely for non-OAuth2 native connectors.
-    install_schema: dict[str, Any] | None = Field(
-        default=None, validation_alias="auth_config_schema"
-    )
+    #
+    # Named for the wire, not for the concept: this is what the catalog JSON,
+    # the stored capability blob and the public API all call it, and renaming it
+    # would break all three at once. `install_schema` below is the name the
+    # newer code reads it by.
+    auth_config_schema: dict[str, Any] | None = None
     # JSON Schema for a connected account's credentials.
     credential_schema: dict[str, Any] | None = None
     discovery: DiscoveryMode = DiscoveryMode.NONE
@@ -158,9 +161,9 @@ class KindSpecBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     @property
-    def auth_config_schema(self) -> dict[str, Any] | None:
-        """Deprecated alias for :attr:`install_schema`."""
-        return self.install_schema
+    def install_schema(self) -> dict[str, Any] | None:
+        """The install-config schema, under its conceptual name."""
+        return self.auth_config_schema
 
     @property
     def provider(self) -> AuthProvider:
