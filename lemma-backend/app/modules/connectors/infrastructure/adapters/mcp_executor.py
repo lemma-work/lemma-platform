@@ -41,6 +41,39 @@ _MCP_TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     ValueError,
 )
 
+
+def _is_transport_failure(exc: BaseException, *, depth: int = 0) -> bool:
+    """Whether ``exc`` is the upstream failing rather than a bug in this process.
+
+    fastmcp buries the real cause twice over. It runs its transport under an
+    anyio task group, so a refusal arrives inside an ``ExceptionGroup``; and it
+    re-raises connect failures as a bare ``RuntimeError`` with the original only
+    attached as ``__cause__``. Matching on the raised type alone therefore misses
+    both, which is how connection errors escaped as unhandled 500s instead of
+    clean domain failures. Rather than catching ``RuntimeError`` wholesale --
+    which would swallow our own bugs -- this follows the chain and only accepts
+    it when a genuine transport error is underneath.
+    """
+    if depth > 5:
+        return False
+    if isinstance(exc, BaseExceptionGroup):
+        return bool(exc.exceptions) and all(
+            _is_transport_failure(inner, depth=depth + 1) for inner in exc.exceptions
+        )
+    if isinstance(exc, _MCP_TRANSPORT_ERRORS):
+        return True
+    for nested in (exc.__cause__, exc.__context__):
+        if nested is not None and _is_transport_failure(nested, depth=depth + 1):
+            return True
+    return False
+
+
+def _flatten_message(exc: BaseException) -> str:
+    """Readable text for an error that may be a nested group."""
+    if isinstance(exc, BaseExceptionGroup):
+        return "; ".join(_flatten_message(inner) for inner in exc.exceptions)
+    return str(exc)
+
 # (server_url, headers) -> an async-context-manager MCP client exposing
 # ``list_tools()`` and ``call_tool(name, args)``.
 McpClientFactory = Callable[..., Any]
@@ -110,10 +143,15 @@ class McpExecutor:
                 result = await client.call_tool(tool_name, payload or {})
         except (OperationExecutionValidationError, OperationExecutionInfrastructureError):
             raise
-        except _MCP_TRANSPORT_ERRORS as exc:
+        except (*_MCP_TRANSPORT_ERRORS, BaseExceptionGroup, RuntimeError) as exc:
+            if not _is_transport_failure(exc):
+                # A group carrying something we do not recognise is a bug in this
+                # process, not an upstream fault; let it surface as itself.
+                raise
+            message = _flatten_message(exc)
             raise OperationExecutionInfrastructureError(
-                f"MCP tool '{tool_name}' failed: {exc}",
-                details={"provider": "mcp", "upstream_message": str(exc)},
+                f"MCP tool '{tool_name}' failed: {message}",
+                details={"provider": "mcp", "upstream_message": message},
             ) from exc
 
         return self._map_result(tool_name, result)

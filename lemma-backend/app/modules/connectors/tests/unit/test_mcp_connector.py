@@ -101,3 +101,81 @@ def test_build_mcp_headers_prefers_bearer_token():
     assert build_mcp_headers({}, {"access_token": "a"})["Authorization"] == "Bearer a"
     assert build_mcp_headers({"bearer_token": "c"}, None)["Authorization"] == "Bearer c"
     assert build_mcp_headers({}, None) == {}
+
+
+class TestTransportFailureClassification:
+    """fastmcp buries the real cause; these pin down how we dig it out.
+
+    Getting this wrong is not cosmetic: an unrecognised failure escapes as an
+    unhandled 500 instead of a clean domain error, which is what happened for
+    every connection refusal before the real-server e2e caught it.
+    """
+
+    def test_a_direct_transport_error_is_recognised(self):
+        import httpx
+
+        from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+            _is_transport_failure,
+        )
+
+        assert _is_transport_failure(httpx.ConnectError("refused")) is True
+
+    def test_an_exception_group_of_transport_errors_is_recognised(self):
+        import httpx
+
+        from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+            _is_transport_failure,
+        )
+
+        # anyio task groups wrap whatever the transport raised.
+        group = ExceptionGroup("tg", [httpx.ConnectError("refused")])
+        assert _is_transport_failure(group) is True
+
+    def test_a_runtime_error_caused_by_a_transport_error_is_recognised(self):
+        import httpx
+
+        from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+            _is_transport_failure,
+        )
+
+        # fastmcp re-raises connect failures as a bare RuntimeError.
+        try:
+            try:
+                raise httpx.ConnectError("refused")
+            except httpx.ConnectError as cause:
+                raise RuntimeError("Client failed to connect") from cause
+        except RuntimeError as exc:
+            assert _is_transport_failure(exc) is True
+
+    def test_our_own_bugs_are_not_reported_as_upstream_faults(self):
+        from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+            _is_transport_failure,
+        )
+
+        # A bare RuntimeError with nothing underneath is a defect in this
+        # process; misreporting it as an upstream failure would send us hunting
+        # the wrong system.
+        assert _is_transport_failure(RuntimeError("bad state")) is False
+        assert _is_transport_failure(KeyError("missing")) is False
+
+    def test_a_mixed_group_is_not_swallowed(self):
+        import httpx
+
+        from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+            _is_transport_failure,
+        )
+
+        group = ExceptionGroup("tg", [httpx.ConnectError("refused"), KeyError("bug")])
+        assert _is_transport_failure(group) is False
+
+    def test_a_self_referential_cause_chain_terminates(self):
+        from app.modules.connectors.infrastructure.adapters.mcp_executor import (
+            _is_transport_failure,
+        )
+
+        # Defensive: a cycle in __context__ must not spin forever.
+        first = RuntimeError("a")
+        second = RuntimeError("b")
+        first.__context__ = second
+        second.__context__ = first
+        assert _is_transport_failure(first) is False

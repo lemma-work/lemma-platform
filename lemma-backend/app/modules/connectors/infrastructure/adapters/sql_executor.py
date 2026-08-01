@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import quote_plus
 
 import sqlglot
+from asyncpg.exceptions import PostgresError
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -243,12 +244,21 @@ class SqlExecutor:
             async with engine.connect() as conn:
                 await conn.execute(text("SET TRANSACTION READ ONLY"))
                 await conn.execute(text(f"SET statement_timeout = {_DEFAULT_STATEMENT_TIMEOUT_MS}"))
-                result = await conn.execute(text(sql), params or {})
+                if params is None:
+                    # The tenant's own SQL goes to the driver verbatim.
+                    # `text()` would scan it for ``:name`` bind parameters, so a
+                    # legitimate query containing a colon -- a jsonb literal like
+                    # '{"a":1}', a cast, a time string -- would be rejected as a
+                    # missing bind rather than being run.
+                    result = await conn.exec_driver_sql(sql)
+                else:
+                    # Our own introspection statements, which do use binds.
+                    result = await conn.execute(text(sql), params)
                 columns = list(result.keys())
                 rows = result.fetchmany(row_cap + 1)
         except OperationExecutionValidationError:
             raise
-        except (SQLAlchemyError, OSError) as exc:
+        except (SQLAlchemyError, OSError, PostgresError) as exc:
             raise OperationExecutionInfrastructureError(
                 f"SQL execution failed: {exc}",
                 details={"provider": "sql", "upstream_message": str(exc)},
