@@ -47,7 +47,7 @@ function ConversationActivity({ tab }: { tab: Extract<PodWorkspaceTab, { kind: '
                 status.tone === 'live' && 'text-[var(--delight)]',
                 status.tone === 'warning' && 'text-[var(--state-warning)]',
                 status.tone === 'danger' && 'text-[var(--state-error)]',
-                status.isActive && 'animate-pulse',
+                status.isActive && 'lemma-live-pulse',
             )}
         />
     );
@@ -133,7 +133,7 @@ export function PodWorkspaceTabs({
                         {closable ? (
                             <Button
                                 type="button"
-                                variant="ghost"
+                                variant="quiet"
                                 size="icon"
                                 onClick={() => onClose(tab.id)}
                                 className={cn(

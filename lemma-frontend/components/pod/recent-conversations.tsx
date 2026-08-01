@@ -45,7 +45,7 @@ export function RecentConversations({
         <section className="mt-9">
             <div className="mb-4 flex items-center justify-between gap-3">
                 <h2 className="text-base font-normal leading-snug text-[var(--text-secondary)]">Recent conversations</h2>
-                <StartConversationButton podId={podId} agentName={agentName} label="New" variant="ghost" />
+                <StartConversationButton podId={podId} agentName={agentName} label="New" variant="quiet" />
             </div>
             <div className="lemma-index-list">
                 {conversations.map((conversation) => {
