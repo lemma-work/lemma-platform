@@ -118,7 +118,6 @@ pub struct TargetConfig {
     pub base_url: Url,
     pub host_id: Uuid,
     pub user_id: Uuid,
-    pub organization_id: Option<Uuid>,
     /// Bearer credential issued once at pairing; rotatable by re-pairing.
     pub host_secret: String,
     #[serde(default = "default_enabled")]
@@ -215,7 +214,6 @@ mod tests {
                 base_url: Url::parse("http://example.com").unwrap(),
                 host_id: Uuid::new_v4(),
                 user_id: Uuid::new_v4(),
-                organization_id: None,
                 host_secret: "test-secret".into(),
                 enabled: true,
                 allow_insecure_http: true,
@@ -241,7 +239,6 @@ mod tests {
                     "base_url": "http://localhost:8710/",
                     "host_id": Uuid::new_v4(),
                     "user_id": Uuid::new_v4(),
-                    "organization_id": null,
                     "public_key_fingerprint": "0d009517e46ab181",
                     "enabled": true,
                     "allow_insecure_http": true,
@@ -271,7 +268,6 @@ mod tests {
                     "base_url": "https://api.lemma.work/",
                     "host_id": Uuid::new_v4(),
                     "user_id": Uuid::new_v4(),
-                    "organization_id": null,
                     "host_secret": "secret",
                     "enabled": true,
                     "allow_insecure_http": false,

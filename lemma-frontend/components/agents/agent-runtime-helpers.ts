@@ -296,6 +296,21 @@ export type HarnessConfigControl = {
 // backend domain. Harnesses *do* enumerate these — Claude Code lists
 // `bypassPermissions` among its permission modes — and the host rejects them
 // anyway at session setup, so offering one here would be a dead choice.
+// Settings Lemma owns, so the dialog must not offer them per profile.
+//
+// `mode` is the agent's approval and sandboxing preset. Approvals are the
+// platform's job — a run asks, Lemma surfaces it, a human answers — and that
+// must behave identically whichever harness is executing. Letting each profile
+// pick a preset makes the same question answerable in several different ways.
+//
+// `collaboration_mode` decides how the agent carries state across turns. Lemma
+// maps one conversation to one session already, so this is decided by the
+// conversation, not by the profile.
+//
+// The harness keeps applying its own safe default for both, which is what
+// "the same as the Lemma server default harness" means in practice.
+export const PLATFORM_OWNED_OPTION_CATEGORIES = ['mode', 'collaboration_mode'];
+
 const POLICY_OPTION_MARKERS = ['mode', 'permission', 'approval', 'sandbox'];
 const DISALLOWED_POLICY_VALUES = new Set([
     'bypasspermissions',
@@ -340,7 +355,9 @@ export function harnessConfigControls(
     const controls: HarnessConfigControl[] = [];
     for (const option of configOptions ?? []) {
         const category = typeof option.category === 'string' ? option.category : '';
+        // `model` is chosen through default_model_name; the rest are Lemma's.
         if (category === 'model') continue;
+        if (PLATFORM_OWNED_OPTION_CATEGORIES.includes(category)) continue;
         const selectionKey = (typeof option.id === 'string' && option.id) || category;
         if (!selectionKey) continue;
 

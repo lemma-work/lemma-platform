@@ -4,5 +4,4 @@
 /* eslint-disable */
 export type AgentHostPairingCreate = {
     display_name: string;
-    organization_id?: (string | null);
 };

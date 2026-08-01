@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.6.10",
+    VERSION: "0.7.0",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10713,6 +10713,10 @@ var LemmaClient = (() => {
     /**
      * Create Agent Host Pairing
      * Mint a short-lived pairing code for a machine this user controls.
+     *
+     * A paired computer is the user's, not a workspace's: nothing here needs an
+     * organization. Sharing it happens later, by giving a runtime profile
+     * ORGANIZATION scope.
      * @param requestBody
      * @returns AgentHostPairingCreated Successful Response
      * @throws ApiError

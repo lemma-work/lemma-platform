@@ -87,11 +87,9 @@ function formatUptime(seconds: number | null): string | null {
 }
 
 export function ThisComputerCard({
-    organizationId,
     onHostIdChange,
     onPaired,
 }: {
-    organizationId: string;
     onHostIdChange?: (hostId: string | null) => void;
     onPaired?: () => void;
 }) {
@@ -136,7 +134,7 @@ export function ThisComputerCard({
             'pair',
             async () => {
                 const name = displayName.trim() || 'This computer';
-                const pairing = await createPairing.mutateAsync({ organizationId, displayName: name });
+                const pairing = await createPairing.mutateAsync({ displayName: name });
                 await agentHostBridge.pair(getLemmaApiBaseUrl(), pairing.pairing_code, name);
                 onPaired?.();
             },

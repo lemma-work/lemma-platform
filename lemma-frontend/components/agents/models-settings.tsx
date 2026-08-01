@@ -463,7 +463,7 @@ function AgentHostsSection({
         const name = displayName.trim();
         if (!name) return toast.error('Name this computer');
         try {
-            const created = await createPairing.mutateAsync({ organizationId, displayName: name });
+            const created = await createPairing.mutateAsync({ displayName: name });
             setPairing({ ...created, display_name: name });
         } catch (error) {
             toast.error(`Couldn't create a pairing code: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -479,7 +479,6 @@ function AgentHostsSection({
             />
             <div className="flex flex-col gap-3">
                 <ThisComputerCard
-                    organizationId={organizationId}
                     onHostIdChange={onHostIdChange}
                     onPaired={() => void hosts.refetch()}
                 />

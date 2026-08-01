@@ -355,13 +355,12 @@ class AgentRuntimeProfileService:
             host = await self.host_repository.get(host_id=harness.host_id)
         if host is None or host.revoked_at is not None:
             raise ValueError("Agent Host harness is not owned by the current user")
-        if host.organization_id not in {None, organization_id}:
-            raise ValueError("Agent Host is paired to a different organization")
-        if (
-            scope is RuntimeProfileScope.ORGANIZATION
-            and host.organization_id != organization_id
-        ):
-            raise ValueError("Shared Agent Host profiles require an organization pairing")
+        # A paired computer belongs to the person who paired it, not to a
+        # workspace: it runs on their machine, with their credentials. Sharing
+        # it is the *profile's* decision - giving a profile ORGANIZATION scope
+        # is the owner saying "my colleagues may send work here". The host
+        # carries no organization at all, and dispatch already works this way:
+        # it resolves a run through `harness.host_id` alone.
         if (
             effective_agent_host_status(host.status, host.last_seen_at)
             is not AgentHostStatus.ONLINE

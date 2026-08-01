@@ -139,7 +139,6 @@ class AgentHostHarnessSnapshot(BaseModel):
 
 class AgentHostPairingCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=255)
-    organization_id: UUID | None = None
 
 
 class AgentHostPairingCreated(BaseModel):
@@ -157,7 +156,6 @@ class AgentHostPairingComplete(BaseModel):
 class AgentHostPairingCompleted(BaseModel):
     host_id: UUID
     user_id: UUID
-    organization_id: UUID | None
     host_secret: str
 
 
@@ -401,8 +399,17 @@ def validate_agent_host_selections(
         option = options_by_key.get(normalized_key)
         if option is None:
             raise ValueError(f"Unknown Agent Host configuration selection: {key}")
-        if str(option.get("category") or "").strip() == "model":
+        option_category = str(option.get("category") or "").strip()
+        if option_category == "model":
             raise ValueError("Model must be configured through default_model_name")
+        if option_category in _PLATFORM_OWNED_OPTION_CATEGORIES:
+            # Approval/sandbox presets and turn-to-turn collaboration are
+            # Lemma's, not a per-profile choice: approvals must be answered the
+            # same way whichever harness runs, and a conversation already maps
+            # to one session. Dropped rather than rejected so a profile saved
+            # before this rule stays editable; the harness keeps applying its
+            # own safe default, which is what the built-in harness does too.
+            continue
         # Deny-list first, then membership - the order ``selection_is_allowed``
         # uses in acp.rs:625. It matters: harnesses *do* enumerate their
         # permission modes, so a value like ``bypassPermissions`` is a legal
@@ -449,6 +456,13 @@ def validate_agent_host_model(
 # Mirrors the Agent Host's own policy filter (agent-host/src/acp.rs:569-600):
 # an option whose id or category mentions one of these governs what the coding
 # agent is allowed to do without asking.
+# Settings the platform owns, so a profile may not carry them. `mode` is the
+# approval and sandboxing preset, and approvals are Lemma's job - a run asks, a
+# human answers, identically whichever harness executes. `collaboration_mode`
+# decides how state carries across turns, which the conversation already fixes
+# by mapping to one session.
+_PLATFORM_OWNED_OPTION_CATEGORIES = frozenset({"mode", "collaboration_mode"})
+
 _POLICY_OPTION_MARKERS = ("mode", "permission", "approval", "sandbox")
 _DISALLOWED_POLICY_VALUES = frozenset(
     {

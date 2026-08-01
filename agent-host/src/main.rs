@@ -158,7 +158,16 @@ async fn main() -> anyhow::Result<()> {
                 allow_insecure_http,
             )
             .await?;
-            config.targets.retain(|item| item.host_id != target.host_id);
+            // One target per Lemma server. Keying this on host_id alone was
+            // wrong: the id is issued by the server and changes whenever the
+            // host row goes away (revoked, or a workspace rebuilt), so
+            // re-pairing left the previous target behind with a credential the
+            // server no longer knows. That stale target then failed
+            // authentication forever, once per refresh, while the new one
+            // worked - the logs filled with 401s that could never recover.
+            config
+                .targets
+                .retain(|item| item.base_url != target.base_url && item.host_id != target.host_id);
             config.targets.push(target.clone());
             config.validate()?;
             config.save(&paths)?;

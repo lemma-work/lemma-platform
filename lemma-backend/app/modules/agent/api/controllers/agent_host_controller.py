@@ -130,32 +130,10 @@ async def _authenticated_host(
     return host
 
 
-async def _require_org_membership(
-    *,
-    user_id: UUID,
-    organization_id: UUID | None,
-    uow: UoWDep,
-) -> None:
-    if organization_id is None:
-        return
-    from app.composition.identity_notifications import user_is_organization_member
-
-    if not await user_is_organization_member(
-        uow,
-        user_id=user_id,
-        organization_id=organization_id,
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User is not a member of this organization",
-        )
-
-
 def _host_response(host: AgentHostModel) -> AgentHostResponse:
     return AgentHostResponse(
         id=host.id,
         user_id=host.user_id,
-        organization_id=host.organization_id,
         installation_id=host.installation_id,
         display_name=host.display_name,
         status=effective_agent_host_status(host.status, host.last_seen_at),
@@ -183,17 +161,16 @@ async def create_agent_host_pairing(
     user: CurrentUser,
     uow: UoWDep,
 ) -> AgentHostPairingCreated:
-    """Mint a short-lived pairing code for a machine this user controls."""
-    await _require_org_membership(
-        user_id=user.id,
-        organization_id=request.organization_id,
-        uow=uow,
-    )
+    """Mint a short-lived pairing code for a machine this user controls.
+
+    A paired computer is the user's, not a workspace's: nothing here needs an
+    organization. Sharing it happens later, by giving a runtime profile
+    ORGANIZATION scope.
+    """
     code = generate_pairing_code()
     pairing = await AgentHostRepository(uow).create_pairing(
         pairing_id=uuid7(),
         user_id=user.id,
-        organization_id=request.organization_id,
         code_hash=pairing_code_hash(code),
         display_name=request.display_name,
     )
@@ -287,7 +264,6 @@ async def complete_agent_host_pairing(
     return AgentHostPairingCompleted(
         host_id=host.id,
         user_id=host.user_id,
-        organization_id=host.organization_id,
         host_secret=secret,
     )
 

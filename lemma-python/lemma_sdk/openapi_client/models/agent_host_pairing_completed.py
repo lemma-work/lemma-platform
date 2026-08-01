@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 from uuid import UUID
 
 from attrs import define as _attrs_define
@@ -16,13 +16,11 @@ class AgentHostPairingCompleted:
     Attributes:
         host_id (UUID):
         host_secret (str):
-        organization_id (None | UUID):
         user_id (UUID):
     """
 
     host_id: UUID
     host_secret: str
-    organization_id: None | UUID
     user_id: UUID
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -30,12 +28,6 @@ class AgentHostPairingCompleted:
         host_id = str(self.host_id)
 
         host_secret = self.host_secret
-
-        organization_id: None | str
-        if isinstance(self.organization_id, UUID):
-            organization_id = str(self.organization_id)
-        else:
-            organization_id = self.organization_id
 
         user_id = str(self.user_id)
 
@@ -45,7 +37,6 @@ class AgentHostPairingCompleted:
             {
                 "host_id": host_id,
                 "host_secret": host_secret,
-                "organization_id": organization_id,
                 "user_id": user_id,
             }
         )
@@ -59,27 +50,11 @@ class AgentHostPairingCompleted:
 
         host_secret = d.pop("host_secret")
 
-        def _parse_organization_id(data: object) -> None | UUID:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                organization_id_type_0 = UUID(data)
-
-                return organization_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | UUID, data)
-
-        organization_id = _parse_organization_id(d.pop("organization_id"))
-
         user_id = UUID(d.pop("user_id"))
 
         agent_host_pairing_completed = cls(
             host_id=host_id,
             host_secret=host_secret,
-            organization_id=organization_id,
             user_id=user_id,
         )
 

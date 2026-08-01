@@ -1153,18 +1153,6 @@
             "title": "Host Secret",
             "type": "string"
           },
-          "organization_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Organization Id"
-          },
           "user_id": {
             "format": "uuid",
             "title": "User Id",
@@ -1174,7 +1162,6 @@
         "required": [
           "host_id",
           "user_id",
-          "organization_id",
           "host_secret"
         ],
         "title": "AgentHostPairingCompleted",
@@ -1187,18 +1174,6 @@
             "minLength": 1,
             "title": "Display Name",
             "type": "string"
-          },
-          "organization_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Organization Id"
           }
         },
         "required": [
@@ -1357,18 +1332,6 @@
             ],
             "title": "Last Seen At"
           },
-          "organization_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Organization Id"
-          },
           "protocol_version": {
             "anyOf": [
               {
@@ -1409,7 +1372,6 @@
         "required": [
           "id",
           "user_id",
-          "organization_id",
           "installation_id",
           "display_name",
           "status",
@@ -16364,7 +16326,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.6.10"
+    "version": "0.7.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -17021,7 +16983,7 @@
     },
     "/me/runtime/agent-host-pairings": {
       "post": {
-        "description": "Mint a short-lived pairing code for a machine this user controls.",
+        "description": "Mint a short-lived pairing code for a machine this user controls.\n\nA paired computer is the user's, not a workspace's: nothing here needs an\norganization. Sharing it happens later, by giving a runtime profile\nORGANIZATION scope.",
         "operationId": "agent.host.pairing.create",
         "requestBody": {
           "content": {

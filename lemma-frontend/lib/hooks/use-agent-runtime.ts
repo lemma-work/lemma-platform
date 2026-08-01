@@ -35,12 +35,26 @@ export type AgentHost = AgentHostResponse;
 export type AgentHostHarness = AgentHostHarnessResponse;
 export type AgentHostPairing = AgentHostPairingCreated;
 
+// A machine that has just been paired takes a few seconds to poll in and
+// publish what it found, and neither query had a refetchInterval — so the page
+// only ever updated when the window regained focus. Sitting on it after
+// `make agent-host`, a computer stayed "Offline" indefinitely. Poll quickly
+// while anything is still settling, then back off once every machine is online.
+const SETTLING_REFETCH_MS = 2000;
+const SETTLED_REFETCH_MS = 20000;
+
 export const useAgentHosts = () => {
     return useQuery({
         queryKey: agentHostsQueryKey(),
         queryFn: () => getLemmaClient().agentHost.list(),
-        staleTime: 15000,
+        staleTime: 2000,
         refetchOnWindowFocus: true,
+        refetchInterval: (query) => {
+            const items = query.state.data?.items ?? [];
+            const live = items.filter((host) => host.status !== 'REVOKED');
+            const settling = live.length === 0 || live.some((host) => host.status !== 'ONLINE');
+            return settling ? SETTLING_REFETCH_MS : SETTLED_REFETCH_MS;
+        },
     });
 };
 
@@ -49,18 +63,24 @@ export const useAgentHostHarnesses = (hostId?: string | null) => {
         queryKey: agentHostHarnessesQueryKey(hostId),
         queryFn: () => getLemmaClient().agentHost.listHarnesses(hostId!),
         enabled: Boolean(hostId),
-        staleTime: 15000,
+        staleTime: 2000,
         refetchOnWindowFocus: true,
+        // Discovery probes each installed agent, so the list arrives a little
+        // after the machine itself does. An empty list is "still looking".
+        refetchInterval: (query) =>
+            (query.state.data?.items?.length ?? 0) === 0
+                ? SETTLING_REFETCH_MS
+                : SETTLED_REFETCH_MS,
     });
 };
 
+// A paired computer belongs to the person who paired it, not to a workspace:
+// it runs on their machine with their credentials. Sharing is the runtime
+// profile's decision, which is where scope lives.
 export const useCreateAgentHostPairing = () => {
     return useMutation({
-        mutationFn: ({ organizationId, displayName }: { organizationId?: string | null; displayName: string }) =>
-            getLemmaClient().agentHost.createPairing({
-                display_name: displayName,
-                organization_id: organizationId ?? null,
-            }),
+        mutationFn: ({ displayName }: { displayName: string }) =>
+            getLemmaClient().agentHost.createPairing({ display_name: displayName }),
     });
 };
 

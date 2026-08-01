@@ -223,7 +223,6 @@ pub struct PairingCompleteRequest {
 pub struct PairingCompleteResponse {
     pub host_id: Uuid,
     pub user_id: Uuid,
-    pub organization_id: Option<Uuid>,
     pub host_secret: String,
 }
 

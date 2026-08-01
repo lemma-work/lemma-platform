@@ -86,6 +86,49 @@ async def test_a_machine_pairs_without_a_user_session(
 
 
 @pytest.mark.asyncio
+async def test_re_pairing_the_same_machine_updates_it_instead_of_duplicating(
+    authenticated_client, async_client
+):
+    """One physical machine is one paired computer, however often you pair it.
+
+    Identity is (user_id, installation_id) — the machine's own id, with no
+    organization in it. Pairing again rotates the secret on the row that is
+    already there, which is what lets `make agent-host` be safely re-runnable
+    and what stops one laptop appearing twice in a workspace's list.
+    """
+    hello = _hello()
+
+    first = await _pair(
+        authenticated_client, async_client, display_name="e2e same machine", hello=hello
+    )
+    second = await _pair(
+        authenticated_client, async_client, display_name="e2e renamed", hello=hello
+    )
+
+    assert second["host_id"] == first["host_id"]
+    # The secret really is re-issued, so the old one stops working.
+    assert second["host_secret"] != first["host_secret"]
+
+    listed = await authenticated_client.get("/me/runtime/agent-hosts")
+    matching = [
+        item for item in listed.json()["items"] if item["id"] == first["host_id"]
+    ]
+    assert len(matching) == 1
+    assert matching[0]["display_name"] == "e2e renamed"
+
+    poll_body = {
+        "hello": hello,
+        "capacity": {"max_runs": 1, "active_runs": 0, "available_runs": 1},
+    }
+    stale = await async_client.post(
+        "/agent-host/poll",
+        json=poll_body,
+        headers={"Authorization": f"Bearer {first['host_secret']}"},
+    )
+    assert stale.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
 async def test_a_pairing_code_is_single_use(authenticated_client, async_client):
     minted = await authenticated_client.post(
         "/me/runtime/agent-host-pairings",

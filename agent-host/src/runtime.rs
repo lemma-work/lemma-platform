@@ -143,11 +143,33 @@ impl HostRuntime {
                             let _ = shutdown.send(true);
                             match handle.await {
                                 Ok(Ok(())) => {}
-                                Ok(Err(error)) => tracing::warn!(
-                                    %target_id,
-                                    %error,
-                                    "target worker stopped; it will be restarted if still enabled"
-                                ),
+                                Ok(Err(error)) => {
+                                    // A rejected credential never recovers by
+                                    // retrying: the workspace has revoked this
+                                    // host, or its row is gone. Restarting the
+                                    // worker just re-authenticates and fails
+                                    // again, forever, once per scan. Turn the
+                                    // target off so the loop ends and the
+                                    // machine reports itself disconnected;
+                                    // pairing again re-enables it.
+                                    if error
+                                        .downcast_ref::<ApiError>()
+                                        .is_some_and(ApiError::is_unauthorized)
+                                    {
+                                        tracing::warn!(
+                                            %target_id,
+                                            %error,
+                                            "Lemma rejected this target's credential; disabling it until it is paired again"
+                                        );
+                                        Self::disable_target(&self.paths, target_id)?;
+                                    } else {
+                                        tracing::warn!(
+                                            %target_id,
+                                            %error,
+                                            "target worker stopped; it will be restarted if still enabled"
+                                        );
+                                    }
+                                }
                                 Err(error) => tracing::warn!(
                                     %target_id,
                                     %error,
@@ -188,6 +210,26 @@ impl HostRuntime {
             if let Ok(Err(error)) = handle.await {
                 tracing::warn!(%target_id, %error, "target worker failed during shutdown");
             }
+        }
+        Ok(())
+    }
+
+    /// Persist `enabled = false` for one target.
+    ///
+    /// Re-read and re-written rather than flipped in memory: the supervisor
+    /// reloads the config on every scan, so an in-memory flag would be undone
+    /// on the next tick and the failing worker would start again.
+    fn disable_target(paths: &HostPaths, target_id: Uuid) -> anyhow::Result<()> {
+        let mut config = HostConfig::load_or_create(paths)?;
+        let mut changed = false;
+        for target in &mut config.targets {
+            if target.target_id == target_id && target.enabled {
+                target.enabled = false;
+                changed = true;
+            }
+        }
+        if changed {
+            config.save(paths)?;
         }
         Ok(())
     }
@@ -1567,7 +1609,6 @@ mod target_worker_tests {
                 base_url: url::Url::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
                 host_id: Uuid::new_v4(),
                 user_id: Uuid::new_v4(),
-                organization_id: None,
                 host_secret: "test-secret".into(),
                 enabled: true,
                 allow_insecure_http: true,

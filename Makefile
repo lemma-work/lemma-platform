@@ -535,10 +535,17 @@ agent-host:
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Building Agent Host…"
 	@cd $(AGENT_HOST_DIR) && cargo build --quiet
+	@# Two hosts polling the same target fight over one credential, and the
+	@# loser's shutdown writes available_runs=0 — which the server reads as
+	@# DRAINING, so the workspace shows a healthy machine as unavailable. Only
+	@# ever run the binary this target just built.
+	@pkill -f 'lemma-agent-host serve' >/dev/null 2>&1 || true
 	@echo "→ Pairing with $(DEV_BACKEND_URL) (no-op if already paired)…"
 	@# `lemma agent-host connect` mints a pairing code from the CLI's own login
-	@# and consumes it immediately, so pairing is this one command. It picks up
-	@# the binary just built from agent-host/target/debug.
+	@# and consumes it immediately, so pairing is this one command.
+	@# LEMMA_AGENT_HOST_BIN pins it to the build above: without it the CLI can
+	@# resolve a previously downloaded release and pair with a different,
+	@# older binary than the one this target then serves.
 	@cd $(CLI_DIR) && LEMMA_AGENT_HOST_BIN=$(AGENT_HOST_BIN) \
 		uv run lemma agent-host connect --url $(DEV_BACKEND_URL) || { \
 		echo "  ✗ Pairing failed. Run 'cd $(CLI_DIR) && uv run lemma auth login' first."; \

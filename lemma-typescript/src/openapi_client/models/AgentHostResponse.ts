@@ -11,7 +11,6 @@ export type AgentHostResponse = {
     id: string;
     installation_id: string;
     last_seen_at: (string | null);
-    organization_id: (string | null);
     protocol_version: (number | null);
     revoked_at: (string | null);
     status: AgentHostStatus;

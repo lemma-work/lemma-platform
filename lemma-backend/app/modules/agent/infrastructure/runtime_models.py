@@ -50,11 +50,6 @@ class AgentHostPairingModel(UUIDCreatedBase):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    organization_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        index=True,
-        nullable=True,
-    )
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(
@@ -67,14 +62,13 @@ class AgentHostModel(UUIDAuditBase):
 
     __tablename__ = "agent_hosts"
     __table_args__ = (
+        # One row per person per machine. A paired computer belongs to whoever
+        # paired it, not to a workspace, so re-pairing the same installation
+        # updates that row instead of creating a second row for one machine.
         UniqueConstraint(
             "user_id",
-            "organization_id",
             "installation_id",
-            name="uq_agent_host_user_org_installation",
-            # Requires PostgreSQL 15+; without it a personal host
-            # (organization_id IS NULL) would not collide with itself.
-            postgresql_nulls_not_distinct=True,
+            name="uq_agent_host_user_installation",
         ),
         UniqueConstraint(
             "host_secret_hash",
@@ -88,11 +82,6 @@ class AgentHostModel(UUIDAuditBase):
     user_id: Mapped[UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
-    )
-    organization_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("organizations.id", ondelete="CASCADE"),
-        index=True,
-        nullable=True,
     )
     installation_id: Mapped[str] = mapped_column(String(255), nullable=False)
     host_secret_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -113,9 +102,6 @@ class AgentHostModel(UUIDAuditBase):
     )
 
     user: Mapped[Any] = relationship("User", foreign_keys=[user_id])
-    organization: Mapped[Any] = relationship(
-        "Organization", foreign_keys=[organization_id]
-    )
 
 
 class AgentHostHarnessModel(UUIDAuditBase):
