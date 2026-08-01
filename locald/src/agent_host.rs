@@ -15,6 +15,25 @@ const DETAILS_CACHE: Duration = Duration::from_secs(2);
 /// `connect` and `disconnect` reach the backend; `refresh` only bumps a
 /// generation counter locally but still opens the journal.
 const CLI_TIMEOUT: Duration = Duration::from_secs(45);
+/// `connect` is not a request, it is an installation.
+///
+/// Before it can report success it fetches and verifies the pinned adapter
+/// package for every certified agent — an npm download each, on a cache that is
+/// empty the first time anyone pairs. Judging that by the same deadline as
+/// `status` meant the very first pairing on a machine reported "Agent Host did
+/// not answer `connect` in time" while the install was still running normally.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(600);
+/// `refresh` re-probes every installed agent, and a probe spawns the agent and
+/// opens an ACP session with its own 20s ceiling.
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn cli_timeout(verb: &str) -> Duration {
+    match verb {
+        "connect" => CONNECT_TIMEOUT,
+        "refresh" => REFRESH_TIMEOUT,
+        _ => CLI_TIMEOUT,
+    }
+}
 
 #[derive(Debug)]
 struct SupervisorState {
@@ -278,7 +297,7 @@ impl AgentHostSupervisor {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        let deadline = Instant::now() + CLI_TIMEOUT;
+        let deadline = Instant::now() + cli_timeout(arguments[0]);
         loop {
             if child.try_wait()?.is_some() {
                 break;
