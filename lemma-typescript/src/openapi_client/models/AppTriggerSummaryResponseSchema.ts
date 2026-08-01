@@ -3,6 +3,7 @@
 /* tslint:disable */
 /* eslint-disable */
 import type { AuthProvider } from './AuthProvider.js';
+import type { ConnectorKind } from './ConnectorKind.js';
 /**
  * Lean trigger shape for list responses.
  *
@@ -14,6 +15,7 @@ export type AppTriggerSummaryResponseSchema = {
     created_at: string;
     description: (string | null);
     id: string;
+    kind: ConnectorKind;
     provider: AuthProvider;
     updated_at: string;
 };

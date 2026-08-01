@@ -9,6 +9,7 @@ from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
 from ..models.auth_provider import AuthProvider
+from ..models.connector_kind import ConnectorKind
 
 T = TypeVar("T", bound="AppTriggerSummaryResponseSchema")
 
@@ -25,7 +26,12 @@ class AppTriggerSummaryResponseSchema:
             created_at (datetime.datetime):
             description (None | str):
             id (str):
-            provider (AuthProvider):
+            kind (ConnectorKind): How an install authenticates, discovers and executes operations.
+            provider (AuthProvider): Deprecated. Use :class:`ConnectorKind`.
+
+                Retained so callers outside this module keep working for one release. Read
+                paths map through :func:`kind_to_provider`; ``LEMMA`` means "any non-Composio
+                kind" and therefore cannot round-trip back to a single kind on its own.
             updated_at (datetime.datetime):
     """
 
@@ -33,6 +39,7 @@ class AppTriggerSummaryResponseSchema:
     created_at: datetime.datetime
     description: None | str
     id: str
+    kind: ConnectorKind
     provider: AuthProvider
     updated_at: datetime.datetime
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -48,6 +55,8 @@ class AppTriggerSummaryResponseSchema:
 
         id = self.id
 
+        kind = self.kind.value
+
         provider = self.provider.value
 
         updated_at = self.updated_at.isoformat()
@@ -60,6 +69,7 @@ class AppTriggerSummaryResponseSchema:
                 "created_at": created_at,
                 "description": description,
                 "id": id,
+                "kind": kind,
                 "provider": provider,
                 "updated_at": updated_at,
             }
@@ -89,6 +99,8 @@ class AppTriggerSummaryResponseSchema:
 
         id = d.pop("id")
 
+        kind = ConnectorKind(d.pop("kind"))
+
         provider = AuthProvider(d.pop("provider"))
 
         updated_at = isoparse(d.pop("updated_at"))
@@ -98,6 +110,7 @@ class AppTriggerSummaryResponseSchema:
             created_at=created_at,
             description=description,
             id=id,
+            kind=kind,
             provider=provider,
             updated_at=updated_at,
         )

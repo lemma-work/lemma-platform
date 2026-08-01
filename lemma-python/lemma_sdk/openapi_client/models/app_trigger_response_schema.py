@@ -9,6 +9,7 @@ from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
 from ..models.auth_provider import AuthProvider
+from ..models.connector_kind import ConnectorKind
 
 if TYPE_CHECKING:
     from ..models.app_trigger_response_schema_config_schema_type_0 import (
@@ -35,9 +36,14 @@ class AppTriggerResponseSchema:
         created_at (datetime.datetime):
         description (None | str):
         id (str):
+        kind (ConnectorKind): How an install authenticates, discovers and executes operations.
         payload_example (AppTriggerResponseSchemaPayloadExampleType0 | None):
         payload_schema (AppTriggerResponseSchemaPayloadSchemaType0 | None):
-        provider (AuthProvider):
+        provider (AuthProvider): Deprecated. Use :class:`ConnectorKind`.
+
+            Retained so callers outside this module keep working for one release. Read
+            paths map through :func:`kind_to_provider`; ``LEMMA`` means "any non-Composio
+            kind" and therefore cannot round-trip back to a single kind on its own.
         updated_at (datetime.datetime):
     """
 
@@ -46,6 +52,7 @@ class AppTriggerResponseSchema:
     created_at: datetime.datetime
     description: None | str
     id: str
+    kind: ConnectorKind
     payload_example: AppTriggerResponseSchemaPayloadExampleType0 | None
     payload_schema: AppTriggerResponseSchemaPayloadSchemaType0 | None
     provider: AuthProvider
@@ -79,6 +86,8 @@ class AppTriggerResponseSchema:
 
         id = self.id
 
+        kind = self.kind.value
+
         payload_example: dict[str, Any] | None
         if isinstance(
             self.payload_example, AppTriggerResponseSchemaPayloadExampleType0
@@ -106,6 +115,7 @@ class AppTriggerResponseSchema:
                 "created_at": created_at,
                 "description": description,
                 "id": id,
+                "kind": kind,
                 "payload_example": payload_example,
                 "payload_schema": payload_schema,
                 "provider": provider,
@@ -166,6 +176,8 @@ class AppTriggerResponseSchema:
 
         id = d.pop("id")
 
+        kind = ConnectorKind(d.pop("kind"))
+
         def _parse_payload_example(
             data: object,
         ) -> AppTriggerResponseSchemaPayloadExampleType0 | None:
@@ -214,6 +226,7 @@ class AppTriggerResponseSchema:
             created_at=created_at,
             description=description,
             id=id,
+            kind=kind,
             payload_example=payload_example,
             payload_schema=payload_schema,
             provider=provider,
