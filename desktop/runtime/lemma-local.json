@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "0.6.2",
+  "version": "0.7.0",
   "released_at": "2026-07-29T11:15:00Z",
   "min_admin_version": "0.1.0",
   "images": {
@@ -30,7 +30,7 @@
       "format": "zip",
       "platform": "macos",
       "architecture": "aarch64",
-      "runtime_version": "0.6.2",
+      "runtime_version": "0.7.0",
       "resource": "host-runtime.zip"
     }
   },
@@ -43,7 +43,7 @@
       "format": "zip",
       "platform": "linux",
       "architecture": "aarch64",
-      "runtime_version": "0.6.2",
+      "runtime_version": "0.7.0",
       "resource": "guest-runtime.zip"
     }
   }

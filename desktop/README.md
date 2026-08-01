@@ -130,7 +130,7 @@ anything you intend to run.
 
 Run the **Release Local Images** workflow on the PR branch with:
 
-- `version`: the Desktop version, currently `0.6.2`;
+- `version`: the Desktop version, currently `0.7.0`;
 - `publish`: `false`.
 
 The workflow builds and verifies both runtimes, creates a resource-backed

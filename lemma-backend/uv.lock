@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "agentbox"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "../agentbox" }
 dependencies = [
     { name = "aiosqlite" },
@@ -61,7 +61,7 @@ dev = [
 
 [[package]]
 name = "agentbox-client"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "../agentbox-client" }
 dependencies = [
     { name = "httpx" },
@@ -1739,7 +1739,7 @@ wheels = [
 
 [[package]]
 name = "lemma-backend"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "." }
 dependencies = [
     { name = "agentbox-client" },
@@ -1903,7 +1903,7 @@ dev = [
 
 [[package]]
 name = "lemma-connectors"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "lemma-connectors" }
 dependencies = [
     { name = "attrs" },
@@ -1930,7 +1930,7 @@ dev = [
 
 [[package]]
 name = "lemma-pod-bundle"
-version = "0.1.0"
+version = "0.7.0"
 source = { editable = "../lemma-pod-bundle" }
 
 [[package]]
