@@ -162,6 +162,12 @@ pub struct RunSpec {
     pub config_selections: JsonMap,
     pub system_prompt: String,
     pub prompt: Vec<Value>,
+    /// The provider session this conversation has been using, when Lemma has
+    /// seen one and the harness can load it back. Absent on a conversation's
+    /// first turn, and absent for a harness that cannot resume — in both cases
+    /// the run opens a fresh session.
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
     #[serde(default)]
     pub context: JsonMap,
     /// Run-scoped Lemma MCP configuration, delivered inline with the command.

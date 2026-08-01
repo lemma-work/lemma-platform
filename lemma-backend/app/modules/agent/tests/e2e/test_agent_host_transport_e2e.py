@@ -20,12 +20,23 @@ These use `async_client` (no session) deliberately. Reaching for
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import status
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.api.controllers import agent_host_controller
+from app.modules.agent.domain.agent_host import (
+    AgentHostRunCheckpoint,
+    AgentHostRunState,
+)
+from app.modules.agent.infrastructure.agent_host_session_memory import (
+    remember_provider_session,
+    resume_session_id,
+)
+from app.modules.agent.infrastructure.models import AgentRunModel
+from app.modules.agent.infrastructure.runtime_models import AgentHostRunLeaseModel
 
 pytestmark = pytest.mark.e2e
 
@@ -245,6 +256,193 @@ async def test_a_paired_host_publishes_the_harnesses_the_workspace_can_use(
     )
     assert harnesses.status_code == status.HTTP_200_OK, harnesses.text
     assert "opencode" in {item["harness_key"] for item in harnesses.json()["items"]}
+
+
+async def _paired_harness(scenario) -> tuple[UUID, UUID]:
+    """A real paired machine with one published harness."""
+    paired = await _pair(
+        scenario.owner_client, scenario.async_client, display_name="e2e sessions"
+    )
+    published = await scenario.async_client.put(
+        "/agent-host/harnesses",
+        json={
+            "harnesses": [
+                {
+                    "harness_key": "codex",
+                    "display_name": "Codex",
+                    "adapter_version": "1.0.0",
+                    "health": "READY",
+                    "capabilities": {"load_session": True},
+                    "config_revision": "rev-1",
+                    "config_options": [],
+                    "stale_after": _stale_after(),
+                }
+            ]
+        },
+        headers={"Authorization": f"Bearer {paired['host_secret']}"},
+    )
+    assert published.status_code == status.HTTP_200_OK, published.text
+    return UUID(paired["host_id"]), UUID(published.json()["items"][0]["id"])
+
+
+async def _conversation_with_a_leased_run(
+    db_session, scenario, *, host_id: UUID, harness_id: UUID
+) -> tuple[UUID, UUID]:
+    """A conversation mid-run, as a real dispatched turn would leave it."""
+    created = await scenario.owner_client.post(
+        f"/pods/{scenario.pod_id}/conversations",
+        json={"title": "continuity"},
+    )
+    assert created.status_code in {200, 201}, created.text
+    conversation_id = UUID(created.json()["id"])
+
+    now = datetime.now(timezone.utc)
+    run = AgentRunModel(
+        conversation_id=conversation_id,
+        status="RUNNING",
+        started_at=now,
+    )
+    db_session.add(run)
+    await db_session.flush()
+    db_session.add(
+        AgentHostRunLeaseModel(
+            run_id=run.id,
+            host_id=host_id,
+            harness_id=harness_id,
+            lease_epoch=1,
+            state=AgentHostRunState.ACCEPTED.value,
+            lease_expires_at=now + timedelta(minutes=5),
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    await db_session.flush()
+    return conversation_id, run.id
+
+
+@pytest.mark.asyncio
+async def test_the_session_a_host_reports_comes_back_on_the_next_turn(
+    db_session, scenario
+):
+    """One conversation is one provider session, across turns.
+
+    Without this the agent meets the user again on every message: it cannot see
+    what it just said, so it re-asks answered questions and contradicts itself.
+    """
+    await scenario.create_org_with_pod(name_prefix="Session")
+    host_id, harness_id = await _paired_harness(scenario)
+    conversation_id, run_id = await _conversation_with_a_leased_run(
+        db_session, scenario, host_id=host_id, harness_id=harness_id
+    )
+    uow = SqlAlchemyUnitOfWork(db_session)
+
+    await remember_provider_session(
+        uow,
+        AgentHostRunCheckpoint(
+            run_id=run_id,
+            lease_epoch=1,
+            state=AgentHostRunState.DISPATCHING,
+            detail={"provider_session_id": "rollout-42"},
+        )
+    )
+
+    assert (
+        await resume_session_id(
+            uow,
+            conversation_id=conversation_id,
+            harness_id=harness_id,
+            capabilities={"load_session": True},
+        )
+        == "rollout-42"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_session_is_not_offered_to_a_harness_that_cannot_use_it(
+    db_session, scenario
+):
+    """A Codex rollout id means nothing to Claude Code.
+
+    Handing it over would fail a `session/load` on every turn before falling
+    back, so neither a different harness nor one that never advertised
+    `loadSession` is offered the stored id.
+    """
+    await scenario.create_org_with_pod(name_prefix="Session")
+    host_id, harness_id = await _paired_harness(scenario)
+    conversation_id, run_id = await _conversation_with_a_leased_run(
+        db_session, scenario, host_id=host_id, harness_id=harness_id
+    )
+    uow = SqlAlchemyUnitOfWork(db_session)
+    await remember_provider_session(
+        uow,
+        AgentHostRunCheckpoint(
+            run_id=run_id,
+            lease_epoch=1,
+            state=AgentHostRunState.DISPATCHING,
+            detail={"provider_session_id": "rollout-42"},
+        )
+    )
+
+    assert (
+        await resume_session_id(
+            uow,
+            conversation_id=conversation_id,
+            harness_id=uuid4(),
+            capabilities={"load_session": True},
+        )
+        is None
+    )
+    assert (
+        await resume_session_id(
+            uow,
+            conversation_id=conversation_id,
+            harness_id=harness_id,
+            capabilities={"load_session": False},
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_checkpoint_without_a_session_leaves_the_stored_one_alone(
+    db_session, scenario
+):
+    """Only the dispatching checkpoint carries the id; the rest must not erase
+    it, or a conversation would lose its memory the moment a run finished."""
+    await scenario.create_org_with_pod(name_prefix="Session")
+    host_id, harness_id = await _paired_harness(scenario)
+    conversation_id, run_id = await _conversation_with_a_leased_run(
+        db_session, scenario, host_id=host_id, harness_id=harness_id
+    )
+    uow = SqlAlchemyUnitOfWork(db_session)
+    await remember_provider_session(
+        uow,
+        AgentHostRunCheckpoint(
+            run_id=run_id,
+            lease_epoch=1,
+            state=AgentHostRunState.DISPATCHING,
+            detail={"provider_session_id": "rollout-42"},
+        )
+    )
+    await remember_provider_session(
+        uow,
+        AgentHostRunCheckpoint(
+            run_id=run_id,
+            lease_epoch=1,
+            state=AgentHostRunState.SUCCEEDED,
+            detail={"stop_reason": "end_turn"},
+        )
+    )
+
+    assert (
+        await resume_session_id(
+            uow,
+            conversation_id=conversation_id,
+            harness_id=harness_id,
+            capabilities={"load_session": True},
+        )
+        == "rollout-42"
+    )
 
 
 @pytest.mark.asyncio

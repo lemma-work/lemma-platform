@@ -317,6 +317,10 @@ struct TargetWorker {
     max_runs: u16,
     shutdown: watch::Receiver<bool>,
     harnesses: BTreeMap<Uuid, PublishedHarness>,
+    /// What each probed adapter said it can do, keyed by harness key. Lemma is
+    /// told the same thing, but a run needs it locally and synchronously to
+    /// decide whether resuming a session is even on the table.
+    capabilities: HashMap<String, HarnessCapabilities>,
     active_runs: HashMap<Uuid, JoinHandle<anyhow::Result<()>>>,
     permissions: PermissionGate,
     /// Runs whose event batches Lemma has rejected, and how often. Kept per
@@ -332,9 +336,15 @@ struct TargetWorker {
     /// Enriched harnesses from probes that ran off the poll loop's critical
     /// path. Drained each iteration so a slow probe never delays a heartbeat.
     probed: (
-        mpsc::UnboundedSender<Vec<PublishedHarness>>,
-        mpsc::UnboundedReceiver<Vec<PublishedHarness>>,
+        mpsc::UnboundedSender<ProbedHarnesses>,
+        mpsc::UnboundedReceiver<ProbedHarnesses>,
     ),
+}
+
+/// One completed refresh: what Lemma accepted, and what the probes learned.
+struct ProbedHarnesses {
+    published: Vec<PublishedHarness>,
+    capabilities: HashMap<String, HarnessCapabilities>,
 }
 
 impl TargetWorker {
@@ -366,6 +376,7 @@ impl TargetWorker {
             max_runs,
             shutdown,
             harnesses: BTreeMap::new(),
+            capabilities: HashMap::new(),
             active_runs: HashMap::new(),
             permissions: PermissionGate::new(),
             event_rejections: HashMap::new(),
@@ -556,6 +567,10 @@ impl TargetWorker {
         // fallback, so waiting on the semaphore after that point can duplicate
         // provider work.
         let adapter = self.manifest.resolve(&published.harness_key)?;
+        let can_load_session = self
+            .capabilities
+            .get(&published.harness_key)
+            .is_some_and(|capabilities| capabilities.load_session);
         let permit = Arc::clone(&self.global_capacity)
             .try_acquire_owned()
             .map_err(|_| anyhow::anyhow!("Agent Host capacity changed; command will be retried"))?;
@@ -569,11 +584,17 @@ impl TargetWorker {
         if outcome == AcceptOutcome::Duplicate {
             return Ok(());
         }
-        self.spawn_run(spec, adapter, permit);
+        self.spawn_run(spec, adapter, can_load_session, permit);
         Ok(())
     }
 
-    fn spawn_run(&mut self, spec: RunSpec, adapter: ResolvedAdapter, permit: OwnedSemaphorePermit) {
+    fn spawn_run(
+        &mut self,
+        spec: RunSpec,
+        adapter: ResolvedAdapter,
+        can_load_session: bool,
+        permit: OwnedSemaphorePermit,
+    ) {
         let target_id = self.target.target_id;
         let journal = self.journal.clone();
         let driver = Arc::clone(&self.driver);
@@ -643,6 +664,7 @@ impl TargetWorker {
                 run_spec: spec,
                 scratch_directory: scratch.clone(),
                 mcp_server: Some(mcp_server),
+                can_load_session,
                 permissions: permissions.clone(),
                 permission_timeout: PERMISSION_DECISION_TIMEOUT,
             };
@@ -872,20 +894,29 @@ impl TargetWorker {
         tokio::spawn(async move {
             let discovered = discover_manifest.discover();
             let enriched = futures_util::future::join_all(build_probes(discovered)).await;
+            let capabilities = enriched
+                .iter()
+                .map(|snapshot| (snapshot.harness_key.clone(), snapshot.capabilities.clone()))
+                .collect();
             match client.publish_harnesses(enriched).await {
                 Ok(published) => {
-                    let _ = sender.send(published);
+                    let _ = sender.send(ProbedHarnesses {
+                        published,
+                        capabilities,
+                    });
                 }
                 Err(error) => tracing::warn!(%error, "publishing probed harnesses failed"),
             }
         });
     }
 
-    fn store_published(&mut self, published: Vec<PublishedHarness>) {
-        self.harnesses = published
+    fn store_published(&mut self, probed: ProbedHarnesses) {
+        self.harnesses = probed
+            .published
             .into_iter()
             .map(|harness| (harness.id, harness))
             .collect();
+        self.capabilities = probed.capabilities;
     }
 
     /// The control updates due for delivery, minus the ones Lemma refuses.
@@ -1335,6 +1366,23 @@ impl AcpCallbacks for JournalCallbacks {
             self.lease_epoch,
             provider_session_id,
         )?;
+        // Lemma stores this against the conversation and hands it back as the
+        // next turn's `resume_session_id`. Reported here rather than with the
+        // terminal checkpoint so a run that fails, is cancelled, or has its
+        // machine sleep partway still leaves the conversation resumable.
+        let mut detail = JsonMap::new();
+        detail.insert(
+            "provider_session_id".to_owned(),
+            Value::String(provider_session_id.to_owned()),
+        );
+        self.journal.checkpoint(
+            self.target_id,
+            self.run_id,
+            self.lease_epoch,
+            RunState::Dispatching,
+            &detail,
+        )?;
+        self.events_ready.notify_one();
         Ok(())
     }
 
@@ -1779,6 +1827,7 @@ mod target_worker_tests {
                 config_selections: JsonMap::new(),
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+                resume_session_id: None,
                 context: JsonMap::new(),
                 mcp: serde_json::json!({}),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -2211,6 +2260,7 @@ mod stream_upsert_tests {
             config_selections: JsonMap::new(),
             system_prompt: String::new(),
             prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+            resume_session_id: None,
             context: JsonMap::new(),
             mcp: Value::Null,
             run_deadline: Utc::now() + chrono::Duration::minutes(5),

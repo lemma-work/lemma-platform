@@ -19,6 +19,12 @@ from app.modules.agent.domain.value_objects import JsonObject
 AGENT_HOST_PROTOCOL_VERSION = 2
 AGENT_HOST_OFFLINE_AFTER_SECONDS = 90
 
+# Conversation metadata key holding the provider session (a Codex rollout, a
+# Claude Code session) this conversation has been talking to. One conversation
+# is one provider session: the host reports the id it opened, and every later
+# turn is dispatched with it so the agent keeps the history.
+AGENT_HOST_SESSION_METADATA_KEY = "agent_host_provider_session_id"
+
 
 class AgentHostStatus(str, Enum):
     ONLINE = "ONLINE"
@@ -93,13 +99,16 @@ class AgentHostCapacity(BaseModel):
 class AgentHostHarnessCapabilities(BaseModel):
     """Harness capabilities the server actually branches on.
 
-    Only ``images`` changes server behaviour today (it adds the vision
-    capability to the runtime picker). Anything else a host reports is kept
-    verbatim by ``extra: allow`` rather than typed here, so the wire format
-    stays open without inventing fields no code reads.
+    ``images`` adds the vision capability to the runtime picker;
+    ``load_session`` is what lets a conversation keep one provider session
+    across turns, so it decides whether a run is dispatched with a
+    ``resume_session_id``. Anything else a host reports is kept verbatim by
+    ``extra: allow`` rather than typed here, so the wire format stays open
+    without inventing fields no code reads.
     """
 
     images: bool = False
+    load_session: bool = False
 
     model_config = {"extra": "allow"}
 
@@ -306,6 +315,7 @@ class AgentHostRunSpec(BaseModel):
     config_selections: JsonObject = Field(default_factory=dict)
     system_prompt: str
     prompt: list[JsonObject] = Field(min_length=1)
+    resume_session_id: str | None = Field(default=None, max_length=512)
     context: JsonObject = Field(default_factory=dict)
     run_deadline: datetime
 

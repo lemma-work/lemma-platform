@@ -860,11 +860,16 @@
       },
       "AgentHostHarnessCapabilities": {
         "additionalProperties": true,
-        "description": "Harness capabilities the server actually branches on.\n\nOnly ``images`` changes server behaviour today (it adds the vision\ncapability to the runtime picker). Anything else a host reports is kept\nverbatim by ``extra: allow`` rather than typed here, so the wire format\nstays open without inventing fields no code reads.",
+        "description": "Harness capabilities the server actually branches on.\n\n``images`` adds the vision capability to the runtime picker;\n``load_session`` is what lets a conversation keep one provider session\nacross turns, so it decides whether a run is dispatched with a\n``resume_session_id``. Anything else a host reports is kept verbatim by\n``extra: allow`` rather than typed here, so the wire format stays open\nwithout inventing fields no code reads.",
         "properties": {
           "images": {
             "default": false,
             "title": "Images",
+            "type": "boolean"
+          },
+          "load_session": {
+            "default": false,
+            "title": "Load Session",
             "type": "boolean"
           }
         },
@@ -16326,7 +16331,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.0"
+    "version": "0.7.1"
   },
   "openapi": "3.1.0",
   "paths": {

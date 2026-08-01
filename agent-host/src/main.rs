@@ -388,6 +388,8 @@ async fn main() -> anyhow::Result<()> {
                 config_selections: JsonMap::new(),
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": prompt})],
+                // A smoke run is one shot with no conversation behind it.
+                resume_session_id: None,
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(10),
@@ -399,6 +401,7 @@ async fn main() -> anyhow::Result<()> {
                         run_spec: spec,
                         scratch_directory: scratch,
                         mcp_server: None,
+                        can_load_session: false,
                         // A local one-off run has no Lemma target to ask, so a
                         // native permission request is denied immediately
                         // rather than stalling on a prompt nobody will see.
