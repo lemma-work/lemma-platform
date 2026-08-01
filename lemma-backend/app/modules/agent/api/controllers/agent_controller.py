@@ -17,7 +17,6 @@ from app.core.authorization.grants import (
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.helpers.slug import normalize_resource_name
 from app.modules.agent.api.dependencies import (
-    AgentResourceAdminDep,
     AgentResourceDeleteDep,
     AgentResourceEditorDep,
     AgentResourceViewerDep,
@@ -214,7 +213,13 @@ async def get_agent_permissions(
     operation_id="agent.permissions.replace",
     summary="Replace Agent Resource Permissions",
     description="Replace explicit resource grants assigned to an agent.",
-    dependencies=[AgentResourceAdminDep],
+    # Editing an agent's wiring is editing the agent: same permission as the
+    # PATCH above. It used to require agent.delete, which pod editors do not
+    # hold — so the people who build agents could not rewire the ones they
+    # had just built. That gate never contained anything either: create
+    # applies the same grants inline (below) on agent.create alone, so an
+    # editor could always reach any grant set by making a new agent.
+    dependencies=[AgentResourceEditorDep],
 )
 async def replace_agent_permissions(
     pod_id: UUID,
