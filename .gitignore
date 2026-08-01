@@ -42,6 +42,12 @@ __pycache__/
 # Rust build outputs (desktop and local daemon)
 **/target/
 **/.build/
+/local-runtime/guestd/target-linux/
+
+# Packaged Desktop runtime archives are reproducible release artifacts. Keep
+# their signed manifests and build inputs in git, but never commit the large
+# generated ZIP payloads.
+/desktop/runtime/bundled/*.zip
 
 # Local scratch output from screenshot/PDF tooling
 /out/

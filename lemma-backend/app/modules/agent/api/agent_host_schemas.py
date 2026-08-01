@@ -33,7 +33,6 @@ class AgentHostHarnessResponse(BaseModel):
 class AgentHostResponse(BaseModel):
     id: UUID
     user_id: UUID
-    organization_id: UUID | None
     installation_id: str
     display_name: str
     status: AgentHostStatus

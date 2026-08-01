@@ -279,16 +279,23 @@ export function ensureSuperTokensInit(): void {
           };
         },
       }),
-      EmailVerification.init({
-        mode: authConfig.emailVerificationRequired ? "REQUIRED" : "OPTIONAL",
-        preAPIHook: async (context) => {
-          if (context.action !== "SEND_VERIFY_EMAIL") return context;
-          return {
-            ...context,
-            requestInit: await addAltchaProof(context.requestInit, "verification"),
-          };
-        },
-      }),
+      ...(authConfig.emailVerificationRequired
+        ? [
+            EmailVerification.init({
+              mode: "REQUIRED",
+              preAPIHook: async (context) => {
+                if (context.action !== "SEND_VERIFY_EMAIL") return context;
+                return {
+                  ...context,
+                  requestInit: await addAltchaProof(
+                    context.requestInit,
+                    "verification",
+                  ),
+                };
+              },
+            }),
+          ]
+        : []),
       ThirdParty.init({
         signInAndUpFeature: {
           providers: isTelegramMiniApp()

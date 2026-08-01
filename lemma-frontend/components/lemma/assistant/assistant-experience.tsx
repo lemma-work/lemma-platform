@@ -53,6 +53,7 @@ import {
 import {
   currentRunStatusLabel,
   currentToolStatusLabel,
+  resolveThinkingOwner,
   isInlineToolStatusAlreadyVisible,
   stringifyAssistantError,
 } from "./assistant-format";
@@ -539,7 +540,19 @@ export function AssistantExperienceView({
     : "Assistant error";
   const headerTone: AssistantSurfaceTone = resolvedChromeStyle === "elevated" ? "default" : resolvedChromeStyle === "flat" ? "flat" : "subtle";
   const composerTone: AssistantSurfaceTone = resolvedChromeStyle === "flat" ? "flat" : resolvedChromeStyle === "subtle" ? "subtle" : "default";
-  const showThinkingStatus = !!inlineRunStatus && (inlineRunStatus.label !== "Thinking" || !lastAssistantTextHasContent);
+  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
+  const thinkingOwner = resolveThinkingOwner({
+    rows: displayMessageRows,
+    latestUser: currentRunLatestUserIndex,
+    hasRunStatus: !!inlineRunStatus,
+  });
+  // Progress labels ("Working for 12s", "Waiting for your input") describe the
+  // run rather than competing for the word "Thinking", so they stay whoever
+  // owns the thought. Only the bare placeholder yields.
+  const showThinkingStatus = !!inlineRunStatus
+    && (inlineRunStatus.label !== "Thinking"
+      ? true
+      : thinkingOwner === "run-status" && !lastAssistantTextHasContent);
   const showInlineStatus = statusPlacement === "inline" && showThinkingStatus;
   const showComposerStatus = statusPlacement === "composer" && showThinkingStatus;
   const uploadStatusLabel = controller.isUploadingFiles
@@ -560,7 +573,6 @@ export function AssistantExperienceView({
       ) : null}
     </>
   );
-  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const inlineToolStatusAlreadyVisible = isInlineToolStatusAlreadyVisible({
     rows: displayMessageRows,
     latestUser: currentRunLatestUserIndex,

@@ -47,6 +47,7 @@ from app.modules.agent.infrastructure.agent_host_event_stream import (
 from app.modules.agent.infrastructure.agent_host_repository import (
     AgentHostRepository,
 )
+from app.modules.agent.infrastructure import agent_host_session_memory
 from app.modules.agent.infrastructure.agent_host_repository_common import (
     AgentHostRepositoryError,
 )
@@ -495,6 +496,12 @@ class RemoteHarness:
             )
             if harness is None:
                 raise RuntimeError("Agent Host harness is unavailable")
+            resume_session_id = await agent_host_session_memory.resume_session_id(
+                uow,
+                conversation_id=conversation.id,
+                harness_id=run_config.harness_id,
+                capabilities=harness.capabilities,
+            )
             run_spec = AgentHostRunSpec(
                 agent_run_id=agent_run_id,
                 conversation_id=conversation.id,
@@ -508,6 +515,7 @@ class RemoteHarness:
                     or ""
                 ),
                 prompt=[{"type": "text", "text": str(prompt.get("user_prompt") or "")}],
+                resume_session_id=resume_session_id,
                 context={
                     "agent": payload.get("agent"),
                     "conversation": payload.get("conversation"),

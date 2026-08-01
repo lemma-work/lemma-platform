@@ -179,20 +179,20 @@ export function ThinkingIndicator({
 
   if (!shimmer) {
     return (
-      <div className="px-1 text-sm font-normal text-[var(--text-secondary)]" role="status" aria-live="polite">
+      <span className="px-1 text-sm font-normal text-[var(--text-secondary)]" role="status" aria-live="polite">
         {label}
-      </div>
+      </span>
     );
   }
 
   return (
-    <div role="status" aria-live="polite" aria-label="Generating response">
+    <span role="status" aria-live="polite" aria-label="Generating response">
       <span
         className="lemma-assistant-thinking-shimmer inline-block bg-clip-text text-sm font-normal text-transparent animate-[lemma-skeleton-breathe_1.5s_ease-in-out_infinite]"
       >
         {label}
       </span>
-    </div>
+    </span>
   );
 }
 
@@ -299,25 +299,36 @@ export function ReasoningPartCard({
   text,
   isStreaming,
   durationMs,
+  showSummary = true,
 }: {
   text: string;
   isStreaming: boolean;
   durationMs?: number;
+  showSummary?: boolean;
 }) {
   const label = reasoningPartLabel(isStreaming, durationMs);
+  const content = (
+    <div className={cn(showSummary && "mt-1 border-l border-[color:var(--row-border)] pl-4")}>
+      <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--text-secondary)]">{text}</pre>
+    </div>
+  );
+
+  if (!showSummary) return content;
 
   return (
-    <details className="flex flex-col gap-1">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)]">
-        <span
-          className={cn("font-normal text-[var(--text-secondary)]", isStreaming && "animate-pulse text-[var(--action-primary)]")}
-        >
-          {label}
-        </span>
+    <details className="group flex flex-col gap-1">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)] [&::-webkit-details-marker]:hidden">
+        {isStreaming ? (
+          <ThinkingIndicator label={label} shimmer />
+        ) : (
+          <span className="font-normal text-[var(--text-secondary)]">{label}</span>
+        )}
+        <ChevronDown
+          className="-rotate-90 size-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform group-open:rotate-0"
+          aria-hidden="true"
+        />
       </summary>
-      <div className="mt-1 border-l border-[color:var(--row-border)] pl-4">
-        <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--text-secondary)]">{text}</pre>
-      </div>
+      {content}
     </details>
   );
 }

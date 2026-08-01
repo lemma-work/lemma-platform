@@ -123,7 +123,6 @@ impl TargetClient {
             base_url,
             host_id: response.host_id,
             user_id: response.user_id,
-            organization_id: response.organization_id,
             host_secret: response.host_secret,
             enabled: true,
             allow_insecure_http,

@@ -15,6 +15,7 @@ import { usePodWorkspaceTabs } from "@/components/pod/use-pod-workspace-tabs";
 import { useOrganization } from "@/components/dashboard/org-context";
 import { PodTopbarProvider, type PodTopbarState } from "@/components/pod/pod-topbar-context";
 import { MobileSidebarDrawer } from "@/components/pod/mobile-sidebar-drawer";
+import { LocalSettingsButton } from "@/components/desktop/local-settings-button";
 import { PodLayoutProvider, usePodLayout } from "@/components/pod/pod-layout-context";
 import { WorkspaceSidebar } from "@/components/pod/workspace-sidebar";
 import { Button } from "@/components/ui/button";
@@ -617,6 +618,9 @@ function PodShell({
                             >
                                 <PanelLeftOpen className="h-4 w-4" strokeWidth={1.8} />
                             </button>
+                        </div>
+                        <div className="mt-auto flex justify-center pb-3">
+                            <LocalSettingsButton variant="rail" />
                         </div>
                     </div>
                 ) : null}

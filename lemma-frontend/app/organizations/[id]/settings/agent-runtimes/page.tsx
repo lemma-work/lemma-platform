@@ -26,9 +26,11 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
     const searchParams = useSearchParams();
     const returnPath = normalizeInternalReturnPath(searchParams.get('returnTo'));
     const { data: organization } = useOrganizationDetails(organizationId);
+    // ModelsSettings reads the management listing itself. This catalog query is
+    // what the rest of the app (the composer's model picker) shares, so keep
+    // refreshing it alongside — a rename here changes what that picker offers.
     const {
         data: runtimeCatalog,
-        isFetching: isFetchingRuntimeCatalog,
         isLoading: isLoadingRuntimeCatalog,
         refetch: refetchRuntimeCatalog,
     } = useAgentRuntimes(organizationId);
@@ -52,8 +54,6 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
                 ) : null}
                 <ModelsSettings
                     organizationId={organizationId}
-                    catalog={runtimeCatalog}
-                    isRefreshing={isFetchingRuntimeCatalog}
                     onRefresh={() => {
                         void refetchRuntimeCatalog();
                     }}

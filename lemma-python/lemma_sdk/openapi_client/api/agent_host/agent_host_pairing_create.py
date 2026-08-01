@@ -69,6 +69,10 @@ def sync_detailed(
 
      Mint a short-lived pairing code for a machine this user controls.
 
+    A paired computer is the user's, not a workspace's: nothing here needs an
+    organization. Sharing it happens later, by giving a runtime profile
+    ORGANIZATION scope.
+
     Args:
         body (AgentHostPairingCreate):
 
@@ -100,6 +104,10 @@ def sync(
 
      Mint a short-lived pairing code for a machine this user controls.
 
+    A paired computer is the user's, not a workspace's: nothing here needs an
+    organization. Sharing it happens later, by giving a runtime profile
+    ORGANIZATION scope.
+
     Args:
         body (AgentHostPairingCreate):
 
@@ -125,6 +133,10 @@ async def asyncio_detailed(
     """Create Agent Host Pairing
 
      Mint a short-lived pairing code for a machine this user controls.
+
+    A paired computer is the user's, not a workspace's: nothing here needs an
+    organization. Sharing it happens later, by giving a runtime profile
+    ORGANIZATION scope.
 
     Args:
         body (AgentHostPairingCreate):
@@ -154,6 +166,10 @@ async def asyncio(
     """Create Agent Host Pairing
 
      Mint a short-lived pairing code for a machine this user controls.
+
+    A paired computer is the user's, not a workspace's: nothing here needs an
+    organization. Sharing it happens later, by giving a runtime profile
+    ORGANIZATION scope.
 
     Args:
         body (AgentHostPairingCreate):

@@ -7,9 +7,14 @@ Companion: [product specification](local-desktop-product-spec.md)
 
 ```text
 Tauri Desktop
+  ├─ main workspace webview
+  ├─ trusted `control` child webview (Local settings, created on demand)
   │ authenticated local IPC
   ▼
 lemma-locald ─────────────── process ledger / network state / logs / config vault
+  ├─ lemma-agent-host sidecar (local coding agents over ACP)
+  ├─ optional canonical-origin sharing gateway
+  ├─ optional exact-owned ngrok or cloudflared child
   ├─ all-in-one Python backend (API + worker + scheduler + AgentBox + documents)
   ├─ Next.js frontend
   └─ lemma-runtime bridge
@@ -212,6 +217,83 @@ Normal stop and observed exits remove their entries. The stdin EOF watchdog
 remains a first-line cleanup path. Windows additionally assigns setup and
 service children to one Job Object with `KILL_ON_JOB_CLOSE`.
 
+Tunnel ownership uses a separate private marker with installation identity,
+provider, PID, canonical executable, and OS start identity. `locald` never
+searches by process name and never stops an unrelated ngrok/cloudflared
+process. Only one gateway/tunnel transition may run at a time.
+
+## 7.1 Integrated Local settings
+
+The main Tauri window owns the remote workspace webview and creates one
+full-client-size `control` child webview on demand. Creation always begins on a
+worker thread before `add_child`, avoiding Tauri's synchronous child-webview
+deadlock on Windows. Auto-resize follows the parent.
+
+The child loads only `tauri://localhost/control.html` in release builds. Debug
+builds additionally accept the exact Tauri asset server URL
+`http://127.0.0.1:1430/control.html`; other hosts, ports, and paths remain
+denied. Privileged commands verify both webview label and current URL.
+Escape, Close, and Back to Lemma destroy the child and focus the original
+workspace.
+
+The HTML, CSS, JavaScript modules, fonts, and icons are bundled without CDN
+dependencies. Navigation is Overview; AI provider; Sharing,
+Integrations/Channels; Runtime, Updates/Diagnostics.
+
+Local settings exists only in local mode, so it is deliberately not the
+canonical home for anything a cloud workspace also needs. The Agent Host is the
+case in point: its Runtime panel shows status, restart, and the log - what is
+useful when the workspace itself will not load - while connecting, choosing
+agents, and turning it off live in the workspace page, which a hosted user can
+also reach. See [Agent Host in the desktop app](agent-host-desktop.md).
+
+## 7.2 Sharing and canonical origin
+
+`SharingController` starts in This computer mode on every daemon launch. Its
+persisted schema contains only the last provider/interface/named-tunnel/
+hostname preferences. Active LAN/Public intent is never persisted.
+
+LAN binds an OS-selected gateway port to exactly one selected private IPv4
+interface. Public binds the same gateway to loopback and starts one owned
+tunnel adapter. The gateway:
+
+- streams request and response bodies without buffering, including SSE;
+- preserves WebSocket upgrades and relays both directions;
+- strips `/_lemma/api` before forwarding API requests to the backend;
+- forwards all other paths to the frontend;
+- removes client `Forwarded`/`X-Forwarded-*` headers and writes trusted values;
+- preserves the external Host value for canonical-origin behavior.
+
+Activation first starts the gateway/tunnel and discovers the final origin,
+then overlays backend/frontend environments and restarts both services.
+`API_URL`, frontend/auth URLs, matching `NEXT_PUBLIC_*`, exact CORS,
+`/_lemma/api/st`, and cookie security all derive from that origin. Health
+validation commits the transition. Failure restores the previous overlays,
+restarts the previous origin, stops the attempted gateway/tunnel, and reports
+both activation and rollback errors if needed.
+
+ngrok preflight checks the executable, version, and `config check` output
+without reading the token. Lemma supplies an additional app-owned agent config
+with a dedicated loopback inspection port, discovers HTTPS through the local
+Agent API, and validates it.
+
+Cloudflare preflight uses `cloudflared tunnel list --output json`. After the
+user completes `cloudflared tunnel login`, automatic setup creates a stable
+installation-scoped tunnel using `tunnel create --output json`, writes its
+generated credential directly to private app storage, and creates a DNS route
+without overwriting an existing record. Provisioning metadata is persisted
+before activation so partial failure is recoverable; disabling stops only the
+connector and preserves the Cloudflare resource for later reuse. Existing
+named tunnels with local credentials remain an advanced option. Lemma writes a
+temporary ingress config that points the selected hostname at its dynamic
+gateway and starts cloudflared with autoupdate disabled, loopback metrics,
+bounded logs, and graceful shutdown. Quick Tunnels are intentionally absent
+because they do not provide the SSE behavior Lemma requires.
+
+Desktop disconnect/crash, interface loss, tunnel exit, or full Quit restores
+This computer mode. Closing to tray leaves the Desktop connection and sharing
+active.
+
 ## 8. VM memory
 
 The macOS VM ceiling is adaptive from 4 GiB to 8 GiB based on host memory.
@@ -264,6 +346,10 @@ Hosted mode retains browser handoff and production auth policy.
 Operator configuration is schema validated. Secrets are stored in the OS vault.
 Apply writes a candidate, probes the provider, restarts only the backend,
 health-checks it, and commits; failure restores prior config and secrets.
+
+A local model is reached the same way as any other provider: Ollama and LM
+Studio prefill a loopback OpenAI-compatible endpoint that the user already
+runs, so Lemma never owns, downloads, or supervises a model process.
 
 The backend exposes safe capability health. The frontend local banner calls
 the validated native `open_control_center` command with `ai`; accepted

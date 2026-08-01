@@ -129,7 +129,24 @@ def build_manifest(
                 "timeout_seconds": 300,
                 "max_attempts": 3,
                 "retry_backoff_seconds": 2,
-            }
+            },
+            {
+                "id": "agentbox-migrations",
+                "command": [
+                    str(python),
+                    "-m",
+                    "alembic",
+                    "-c",
+                    "agentbox-alembic.ini",
+                    "upgrade",
+                    "head",
+                ],
+                "cwd": str(backend_dir),
+                "env": backend_env,
+                "timeout_seconds": 300,
+                "max_attempts": 3,
+                "retry_backoff_seconds": 2,
+            },
         ],
         "services": [
             {
@@ -170,7 +187,13 @@ def build_manifest(
                 "env": render.host_frontend_env(config),
                 "dependencies": ["backend"],
                 "health": {
-                    "url": f"http://127.0.0.1:{store.port(config, 'frontend')}/",
+                    # locald binds every service health check to the current
+                    # runtime generation. The generated runtime-config payload
+                    # carries that identity; the HTML shell does not.
+                    "url": (
+                        f"http://127.0.0.1:{store.port(config, 'frontend')}"
+                        "/runtime-config.js"
+                    ),
                     "timeout_seconds": 120,
                 },
                 "restart": {

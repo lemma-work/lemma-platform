@@ -138,6 +138,10 @@ async fn main() -> anyhow::Result<()> {
         .map_or_else(HostPaths::platform_default, Ok)?;
     match cli.command {
         Command::Serve => {
+            // Exactly one host per data directory. Two would poll the same
+            // pairing, split commands between them, and each mark the machine
+            // draining as it exits.
+            let _single = paths.lock_single_instance()?;
             let config = HostConfig::load_or_create(&paths)?;
             HostRuntime::new(config, paths)?.serve().await
         }
@@ -158,7 +162,16 @@ async fn main() -> anyhow::Result<()> {
                 allow_insecure_http,
             )
             .await?;
-            config.targets.retain(|item| item.host_id != target.host_id);
+            // One target per Lemma server. Keying this on host_id alone was
+            // wrong: the id is issued by the server and changes whenever the
+            // host row goes away (revoked, or a workspace rebuilt), so
+            // re-pairing left the previous target behind with a credential the
+            // server no longer knows. That stale target then failed
+            // authentication forever, once per refresh, while the new one
+            // worked - the logs filled with 401s that could never recover.
+            config
+                .targets
+                .retain(|item| item.base_url != target.base_url && item.host_id != target.host_id);
             config.targets.push(target.clone());
             config.validate()?;
             config.save(&paths)?;
@@ -375,6 +388,8 @@ async fn main() -> anyhow::Result<()> {
                 config_selections: JsonMap::new(),
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": prompt})],
+                // A smoke run is one shot with no conversation behind it.
+                resume_session_id: None,
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: chrono::Utc::now() + chrono::Duration::minutes(10),
@@ -386,6 +401,7 @@ async fn main() -> anyhow::Result<()> {
                         run_spec: spec,
                         scratch_directory: scratch,
                         mcp_server: None,
+                        can_load_session: false,
                         // A local one-off run has no Lemma target to ask, so a
                         // native permission request is denied immediately
                         // rather than stalling on a prompt nobody will see.

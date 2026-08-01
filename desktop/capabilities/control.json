@@ -1,7 +1,22 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "control-capability",
-  "description": "Bundled local Control Center with narrowly checked application commands",
-  "windows": ["control"],
-  "permissions": ["core:default"]
+  "description": "Bundled Local settings child webview with narrowly checked application commands. Every command here is additionally guarded in Rust by require_control_window, which re-checks the webview label and that its URL is a trusted packaged asset.",
+  "webviews": ["control"],
+  "permissions": [
+    "core:default",
+    "allow-start",
+    "allow-stop",
+    "allow-restart",
+    "allow-open-app",
+    "allow-open-logs",
+    "allow-runtime-info",
+    "allow-repair-runtime",
+    "allow-control-snapshot",
+    "allow-agent-host-action",
+    "allow-apply-operator-config",
+    "allow-sharing-action",
+    "allow-close-local-settings",
+    "allow-open-developer-tools"
+  ]
 }

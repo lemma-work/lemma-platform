@@ -234,6 +234,61 @@ function extractThinkingPart(msg: AssistantApiConversationMessage): {
   };
 }
 
+export interface HeldStreamingThinking {
+  conversationId: string;
+  text: string;
+}
+
+/** Bridge the streamed thought to its durable message.
+ *
+ * A thought arrives twice: as `thinking` tokens, and again as a durable
+ * `THINKING` message. The session clears the token buffer the moment that
+ * message upserts, but the runtime mirrors session messages through an effect,
+ * so the durable row is one commit behind. Without a bridge the reasoning row
+ * blanks in that window - and an empty run is exactly what makes the run-status
+ * placeholder flash its own "Thinking" into the gap, which reads as two
+ * competing indicators.
+ *
+ * So keep showing the last streamed thought until its durable message actually
+ * lands, the run ends, or the conversation changes. */
+export function resolveStreamingThinking({
+  held,
+  conversationId,
+  streamed,
+  messages,
+  isRunning,
+}: {
+  held: { current: HeldStreamingThinking | null };
+  conversationId: string;
+  streamed: string;
+  messages: AssistantApiConversationMessage[];
+  isRunning: boolean;
+}): string {
+  if (streamed.length > 0) {
+    held.current = { conversationId, text: streamed };
+    return streamed;
+  }
+
+  const pending = held.current;
+  if (!pending || pending.conversationId !== conversationId || !isRunning) {
+    held.current = null;
+    return "";
+  }
+
+  // The durable text is the streamed buffer plus whatever the model emitted
+  // between the last token flush and the message, so match by prefix.
+  const durableLanded = messages.some((message) => (
+    message.kind === "THINKING"
+    && typeof message.text === "string"
+    && message.text.trim().startsWith(pending.text)
+  ));
+  if (durableLanded) {
+    held.current = null;
+    return "";
+  }
+  return pending.text;
+}
+
 function normalizeToolResult(value: unknown): Record<string, unknown> {
   if (isRecord(value)) return value;
   if (Array.isArray(value)) return { output: value };
@@ -627,6 +682,7 @@ export function useAssistantController({
 
   const activeConversationIdRef = useRef<string | null>(null);
   const conversationsRef = useRef<Conversation[]>([]);
+  const heldStreamingThinkingRef = useRef<HeldStreamingThinking | null>(null);
   const isStreamingRef = useRef(false);
   const sessionIsStreamingRef = useRef(false);
   const lastAutoLoadedConversationIdRef = useRef<string | null>(null);
@@ -690,6 +746,7 @@ export function useAssistantController({
     isStreaming: sessionIsStreaming,
     messages: sessionMessages,
     streamingText: sessionStreamingText,
+    streamingThinking: sessionStreamingThinking,
     streamingTool: sessionStreamingTool,
     status: sessionStatus,
   } = assistantSession;
@@ -986,9 +1043,37 @@ export function useAssistantController({
 
     const normalized = sortMessagesByCreatedAt(runtimeMessages as AssistantApiConversationMessage[])
       .filter((message) => message.conversation_id === activeConversationId);
-    if (normalized.length === 0) return [];
+    if (
+      normalized.length === 0
+      && sessionStreamingText.trim().length === 0
+      && sessionStreamingThinking.trim().length === 0
+      && heldStreamingThinkingRef.current === null
+    ) return [];
 
     const nextMessages = mapConversationMessages(normalized);
+    const pendingThinking = resolveStreamingThinking({
+      held: heldStreamingThinkingRef,
+      conversationId: activeConversationId,
+      streamed: sessionStreamingThinking.trim(),
+      messages: normalized,
+      isRunning: isConversationRunning(sessionStatus),
+    });
+    if (pendingThinking.length > 0) {
+      const streamingId = `streaming-thinking-${activeConversationId}`;
+      nextMessages.push({
+        id: streamingId,
+        role: "assistant",
+        content: "",
+        createdAt: new Date(),
+        parts: [{
+          id: `${streamingId}-reasoning`,
+          type: "reasoning",
+          text: pendingThinking,
+          state: "streaming",
+        }],
+        kind: "THINKING",
+      });
+    }
     const pendingText = sessionStreamingText.trim();
     if (pendingText.length > 0) {
       const streamingId = `streaming-${activeConversationId}`;
@@ -1002,7 +1087,7 @@ export function useAssistantController({
     }
 
     return nextMessages;
-  }, [activeConversationId, runtimeMessages, sessionStreamingText]);
+  }, [activeConversationId, runtimeMessages, sessionStatus, sessionStreamingText, sessionStreamingThinking]);
 
   useEffect(() => {
     if (!sessionConversation || sessionConversation.id !== activeConversationId) return;

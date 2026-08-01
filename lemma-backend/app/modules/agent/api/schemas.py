@@ -22,6 +22,8 @@ from app.modules.agent.domain.value_objects import (
     JsonValue,
     MessageKind,
 )
+from app.modules.agent.api.agent_host_schemas import AgentHostHarnessResponse
+from app.modules.agent.domain.agent_host import AgentHostStatus
 from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCatalogEntry,
     RuntimeProfileKind,
@@ -287,6 +289,7 @@ class CreateAgentHostRuntimeProfileRequest(BaseModel):
     description: str | None = None
     default_model_name: str | None = Field(default=None, min_length=1)
     config_selections: JsonObject = Field(default_factory=dict)
+    host_wait_timeout_seconds: int | None = Field(default=None, ge=1)
 
 
 class CreateOpenAICompatibleRuntimeProfileRequest(BaseModel):
@@ -319,6 +322,69 @@ CreateAgentRuntimeProfileRequest = Annotated[
     | CreateAnthropicCompatibleRuntimeProfileRequest,
     Field(discriminator="source"),
 ]
+
+
+# Every field below is optional AND nullable, because for an edit those mean
+# different things: omitting ``api_key`` keeps the stored one, sending null
+# clears it. The controller reads ``model_fields_set`` to tell them apart -
+# collapsing the two would silently destroy a credential on every rename.
+# ``headers`` is deliberately absent: it can carry an authorization value, so it
+# needs the same absent-vs-null discipline and no UI asks for it yet.
+
+
+class UpdateAgentHostRuntimeProfileRequest(BaseModel):
+    source: Literal["AGENT_HOST"] = "AGENT_HOST"
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    default_model_name: str | None = Field(default=None, min_length=1)
+    config_selections: JsonObject | None = None
+    host_wait_timeout_seconds: int | None = Field(default=None, ge=1)
+
+
+class UpdateOpenAICompatibleRuntimeProfileRequest(BaseModel):
+    source: Literal["OPENAI_COMPATIBLE"] = "OPENAI_COMPATIBLE"
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    base_url: HttpUrl | None = None
+    api_key: str | None = Field(default=None, min_length=1)
+    default_model_name: str | None = Field(default=None, min_length=1)
+    model_names: list[str] | None = None
+    model_settings: JsonObject | None = None
+    refresh_models: bool = False
+
+
+class UpdateAnthropicCompatibleRuntimeProfileRequest(BaseModel):
+    source: Literal["ANTHROPIC_COMPATIBLE"] = "ANTHROPIC_COMPATIBLE"
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    # Null resets to the default Anthropic endpoint - unlike the
+    # OpenAI-compatible profile, which has no default to fall back to.
+    base_url: HttpUrl | None = None
+    api_key: str | None = Field(default=None, min_length=1)
+    default_model_name: str | None = Field(default=None, min_length=1)
+    model_names: list[str] | None = None
+    model_settings: JsonObject | None = None
+    refresh_models: bool = False
+
+
+UpdateAgentRuntimeProfileRequest = Annotated[
+    UpdateAgentHostRuntimeProfileRequest
+    | UpdateOpenAICompatibleRuntimeProfileRequest
+    | UpdateAnthropicCompatibleRuntimeProfileRequest,
+    Field(discriminator="source"),
+]
+
+
+class AgentRuntimeProfileDetailResponse(AgentRuntimeProfileResponse):
+    """One profile plus the live harness it is bound to.
+
+    An editor has to render the harness's *current* config options, not the ones
+    the profile was saved against - those are what the edit will be validated
+    and re-pinned to.
+    """
+
+    harness: AgentHostHarnessResponse | None = None
+    host_status: AgentHostStatus | None = None
 
 
 class AgentRunResponse(BaseModel):

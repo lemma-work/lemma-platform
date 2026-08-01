@@ -21,6 +21,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { Logo } from '@/components/brand/logo';
 import { FileTypeIcon } from '@/components/documents/file-type-icon';
+import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
@@ -927,6 +928,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             </div>
 
             <div className="shrink-0 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_62%,transparent)] px-3 pb-3 pt-3">
+                <LocalSettingsButton className="mb-1" />
                 <div className="space-y-0.5">
                     {rails.map((rail) => (
                         <RailLink key={rail.href} {...rail} />

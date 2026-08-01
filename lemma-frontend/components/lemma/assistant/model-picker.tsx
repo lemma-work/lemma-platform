@@ -178,6 +178,18 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
   const selectedKey = selectedRuntime ? runtimeKey(selectedRuntime) : value ?? AUTO_VALUE;
   const isAuto = !value && !runtime;
 
+  // A pinned profile the catalog no longer offers — archived, or gone with the
+  // computer it ran on. `selectedRuntime` short-circuits on the prop, so without
+  // this the trigger keeps printing its stale model name confidently while no
+  // row inside the dialog is checked. An empty `options` means still loading.
+  const selectionIsMissing = useMemo(() => {
+    const profileId = selectedRuntime?.profile_id;
+    if (!profileId || options.length === 0) return false;
+    return !options.some(
+      (option) => (modelRuntime(option)?.profile_id ?? option.profile_id) === profileId,
+    );
+  }, [options, selectedRuntime]);
+
   const selectedModelLabel = selectedRuntime?.model_name
     ? shortModelName(selectedRuntime.model_name)
     : value
@@ -189,7 +201,9 @@ export const ModelPicker = forwardRef<HTMLDivElement, ModelPickerProps>(function
     ? `${typeof autoLabel === "string" ? autoLabel : "Auto"} · ${autoModelLabel}`
     : autoLabel);
   // With Auto hidden, an unset value has nothing to inherit — prompt a pick.
-  const triggerLabel = selectedModelLabel ?? (allowAuto ? resolvedAutoTriggerLabel : "Choose a model");
+  const triggerLabel = selectionIsMissing
+    ? "Model unavailable"
+    : selectedModelLabel ?? (allowAuto ? resolvedAutoTriggerLabel : "Choose a model");
 
   const groups = useMemo<ProviderGroup[]>(() => {
     const byKey = new Map<string, ProviderGroup>();

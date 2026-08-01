@@ -14,7 +14,7 @@ SHELL := /bin/bash
 #   make coverage      full coverage report (unit + e2e per component)
 # ──────────────────────────────────────────────────────────────────────────────
 
-.PHONY: help init dev dev-public agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+.PHONY: help init dev dev-public agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
         _ensure-native-connectors \
         test-dev-workflow \
@@ -89,6 +89,11 @@ DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY ?= dev-agentbox-runtime-credential-key-0001
 DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
 DEV_LOG_LEVEL         ?= DEBUG
 DEV_JSON_LOGS_ENABLED ?= true
+# DEV_LOG_LEVEL is DEBUG so you can read the application's own story. SQLAlchemy
+# emits a record per mapped column at import — thousands of lines before the
+# first request — which buries exactly that. Hold the chatty dependencies at
+# WARNING; set DEV_QUIET_DEPENDENCY_LOGS=0 when debugging one of them.
+DEV_QUIET_DEPENDENCY_LOGS ?= 1
 OTEL_DEBUG_GRPC_PORT  ?= 14317
 OTEL_DEBUG_LLM_GRPC_PORT ?= 15317
 OTEL_DEBUG_HEALTH_PORT ?= 14333
@@ -144,6 +149,7 @@ BACKEND_DEV_ENV := \
 	ENVIRONMENT=local \
 	DEBUG=true \
 	LOG_LEVEL=$(DEV_LOG_LEVEL) \
+	LOG_QUIET_DEPENDENCIES=$(DEV_QUIET_DEPENDENCY_LOGS) \
 	JSON_LOGS_ENABLED=$(DEV_JSON_LOGS_ENABLED) \
 	API_URL=$(BACKEND_API_URL) \
 	FRONTEND_URL=$(BACKEND_FRONTEND_URL) \
@@ -524,16 +530,36 @@ dev-public:
 # `make dev` and hard-fail for anyone without a Rust toolchain; and it is meant
 # to outlive individual dev-stack restarts rather than be swept by `make stop`.
 # So `make dev` prints one line pointing here, and this target is that one line.
+stop-agent-host:
+	@# The managed background service first: it is what re-appears on its own.
+	@if [ "$$(uname)" = "Darwin" ]; then \
+		launchctl bootout gui/$$(id -u)/ai.lemma.agent-host >/dev/null 2>&1 || true; \
+	else \
+		systemctl --user stop lemma-agent-host >/dev/null 2>&1 || true; \
+	fi
+	@pkill -f 'lemma-agent-host serve' >/dev/null 2>&1 || true
+
 agent-host:
 	@command -v cargo >/dev/null 2>&1 || \
 		(echo "  ✗ cargo not found — install Rust from https://rustup.rs"; exit 1)
 	@echo "→ Building Agent Host…"
 	@cd $(AGENT_HOST_DIR) && cargo build --quiet
+	@# Only ever run the binary this target just built. Two hosts polling the
+	@# same target fight over one credential, and the loser's shutdown writes
+	@# available_runs=0 — which the server reads as DRAINING, so the workspace
+	@# shows a healthy machine as unavailable. The background service counts:
+	@# `lemma agent-host connect` installs a launchd/systemd job pinned to a
+	@# downloaded release, which then runs alongside this one, speaking an
+	@# older protocol against the same pairing.
+	@$(MAKE) --no-print-directory stop-agent-host
 	@echo "→ Pairing with $(DEV_BACKEND_URL) (no-op if already paired)…"
 	@# `lemma agent-host connect` mints a pairing code from the CLI's own login
-	@# and consumes it immediately, so pairing is this one command. It picks up
-	@# the binary just built from agent-host/target/debug.
-	@cd $(CLI_DIR) && uv run lemma agent-host connect --url $(DEV_BACKEND_URL) || { \
+	@# and consumes it immediately, so pairing is this one command.
+	@# LEMMA_AGENT_HOST_BIN pins it to the build above: without it the CLI can
+	@# resolve a previously downloaded release and pair with a different,
+	@# older binary than the one this target then serves.
+	@cd $(CLI_DIR) && LEMMA_AGENT_HOST_BIN=$(AGENT_HOST_BIN) \
+		uv run lemma agent-host connect --url $(DEV_BACKEND_URL) || { \
 		echo "  ✗ Pairing failed. Run 'cd $(CLI_DIR) && uv run lemma auth login' first."; \
 		exit 1; \
 	}

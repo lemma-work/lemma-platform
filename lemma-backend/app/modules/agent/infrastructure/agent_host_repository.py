@@ -47,7 +47,6 @@ class AgentHostRepository:
         *,
         pairing_id: UUID,
         user_id: UUID,
-        organization_id: UUID | None,
         code_hash: str,
         display_name: str,
         now: datetime | None = None,
@@ -62,7 +61,6 @@ class AgentHostRepository:
         pairing = AgentHostPairingModel(
             id=pairing_id,
             user_id=user_id,
-            organization_id=organization_id,
             code_hash=code_hash,
             display_name=display_name.strip(),
             expires_at=timestamp + timedelta(seconds=ttl_seconds),
@@ -106,7 +104,6 @@ class AgentHostRepository:
                 select(AgentHostModel)
                 .where(
                     AgentHostModel.user_id == pairing.user_id,
-                    AgentHostModel.organization_id == pairing.organization_id,
                     AgentHostModel.installation_id == hello.installation_id,
                 )
                 .with_for_update()
@@ -115,7 +112,6 @@ class AgentHostRepository:
         if host is None:
             host = AgentHostModel(
                 user_id=pairing.user_id,
-                organization_id=pairing.organization_id,
                 installation_id=hello.installation_id,
                 host_secret_hash=host_secret_hash,
                 display_name=display_name.strip() or pairing.display_name,

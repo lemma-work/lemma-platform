@@ -79,6 +79,17 @@ Build Desktop sidecars:
 desktop/scripts/build-sidecar.sh
 ```
 
+To iterate on Local settings without building a DMG every time, use the
+isolated dev launcher:
+
+```bash
+desktop/scripts/dev-local.sh /absolute/path/to/local-runtime
+```
+
+It rebuilds the native sidecars, gracefully replaces the prior isolated dev
+daemon, and keeps its state under `/tmp/lemma-desktop-dev` so an installed
+Lemma daemon cannot capture the dev UI.
+
 For source-level installer testing, prepare an exact manifest and archives and
 set:
 
@@ -133,13 +144,38 @@ Acceptance flow:
 3. Confirm download/extraction stages show real progress and no Start button.
 4. Create a local account inside WKWebView; verify it remains authenticated.
 5. Confirm the workspace does not return to the installer after Ready.
-6. Configure Ollama, LM Studio, or an API provider; verify the AI banner clears.
-7. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
-8. Open a built React app at `*.apps.lemma.localhost`.
-9. Close the window; verify schedules/services remain available from the tray.
-10. Restart and confirm ports and data persist.
-11. Inspect every Diagnostics source and exercise runtime repair.
-12. Use **Quit and stop Lemma** and confirm the VM releases memory.
+6. Open **Local settings** from the workspace footer, close it with Escape,
+   reopen it from the tray, and confirm the underlying workspace state was not
+   remounted or lost.
+7. On the AI provider page, use **Use Ollama** and **Use LM Studio** to
+   prefill a loopback endpoint, apply it, and verify model discovery, thinking,
+   and structured tool calls. Also verify an API provider can replace them.
+8. Open **Models**, press **Connect this computer**, and confirm pairing needs
+   no code and no terminal. Add a detected agent with **Add to chat models**,
+   pick it in a chat, run a prompt, and approve a permission. Confirm the tray
+   reads `Agent Host: connected`, that turning it off from either the tray or
+   the card stops the process and survives an app restart, and that a full quit
+   stops it without turning it off. Repeat in hosted mode: no locald appears
+   until the Agent Host is enabled, and no host pack is downloaded.
+9. Enable **Local network** on a trusted Wi-Fi interface. Scan the QR code in a
+   second browser, create/sign into an account, and verify streamed chat, a
+   tool call, and a file transfer. Disable it and confirm the LAN port closes.
+10. Verify ngrok preflight without exposing credentials. Activate a public link
+    only after the open-signup confirmation, repeat streamed chat/file/webhook
+    checks, then disable it. After `cloudflared tunnel login`, verify automatic
+    setup creates one installation-owned named tunnel and DNS route, reuses it
+    after disable, and still offers an existing tunnel as an advanced option.
+    Quick Tunnels must not appear.
+11. Run an AgentBox operation that uses `lemma` CLI against the dynamic API.
+12. Open a built React app at `*.apps.lemma.localhost`; while sharing, verify
+    the UI honestly says published pod apps remain local-only.
+13. Close the window; verify schedules, the Agent Host, and active sharing
+    remain available from the tray. Full Quit must stop sharing and the Agent
+    Host before exiting.
+14. Restart and confirm ports and data persist, but LAN/Public mode does not
+    resume automatically.
+15. Inspect every Diagnostics source and exercise runtime repair.
+16. Use **Quit and stop Lemma** and confirm the VM also releases its memory.
 
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
 and unrelated listeners occupying persisted ports.

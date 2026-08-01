@@ -141,6 +141,54 @@ def pytest_collection_modifyitems(config, items):
             )
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _e2e_llm_mode_baseline() -> str:
+    """The LLM mode before any e2e bootstrap has run.
+
+    Autouse and session-scoped, so it is resolved before ``e2e_settings`` - which
+    is requested by other fixtures rather than autouse - can mutate it.
+    """
+    from app.core.config import settings
+
+    return settings.e2e_llm_mode
+
+
+@pytest.fixture(autouse=True)
+def _isolate_e2e_llm_mode(request, _e2e_llm_mode_baseline: str):
+    """Keep e2e's mock model out of every test that did not ask for it.
+
+    The e2e bootstrap sets ``settings.e2e_llm_mode`` process-wide (it has to:
+    the worker subprocess inherits the mode through ``os.environ``) and never
+    restores it. ``is_mock_llm_enabled`` reads that setting, and
+    ``pydantic_ai_model_from_runtime_profile`` short-circuits to the
+    deterministic FunctionModel when it is true - so a unit test that builds a
+    model and merely happens to run after an e2e test in the same process gets
+    the mock instead of the real provider model, and fails on a type assertion
+    that has nothing to do with what it is testing.
+
+    ``tests/e2e`` sorts before ``tests/unit``, so ``pytest app/modules/agent``
+    hits this while CI does not, because CI runs the two suites separately
+    (``pytest -m "not e2e"``). That asymmetry is what makes it expensive: it
+    only ever bites someone running a module locally, and it looks like a real
+    regression in whatever they were working on.
+
+    ``e2e_sandbox_mode`` leaks the same way but is read by no production code,
+    so it needs no equivalent guard.
+    """
+    from app.core.config import settings
+
+    if "e2e" in request.keywords:
+        yield
+        return
+
+    previous = settings.e2e_llm_mode
+    settings.e2e_llm_mode = _e2e_llm_mode_baseline
+    try:
+        yield
+    finally:
+        settings.e2e_llm_mode = previous
+
+
 @pytest.fixture(autouse=True)
 def _isolate_shared_redis_clients():
     """Keep the process-wide Redis client registry from leaking across tests.

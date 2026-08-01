@@ -19,6 +19,12 @@ from app.modules.agent.domain.value_objects import JsonObject
 AGENT_HOST_PROTOCOL_VERSION = 2
 AGENT_HOST_OFFLINE_AFTER_SECONDS = 90
 
+# Conversation metadata key holding the provider session (a Codex rollout, a
+# Claude Code session) this conversation has been talking to. One conversation
+# is one provider session: the host reports the id it opened, and every later
+# turn is dispatched with it so the agent keeps the history.
+AGENT_HOST_SESSION_METADATA_KEY = "agent_host_provider_session_id"
+
 
 class AgentHostStatus(str, Enum):
     ONLINE = "ONLINE"
@@ -93,13 +99,16 @@ class AgentHostCapacity(BaseModel):
 class AgentHostHarnessCapabilities(BaseModel):
     """Harness capabilities the server actually branches on.
 
-    Only ``images`` changes server behaviour today (it adds the vision
-    capability to the runtime picker). Anything else a host reports is kept
-    verbatim by ``extra: allow`` rather than typed here, so the wire format
-    stays open without inventing fields no code reads.
+    ``images`` adds the vision capability to the runtime picker;
+    ``load_session`` is what lets a conversation keep one provider session
+    across turns, so it decides whether a run is dispatched with a
+    ``resume_session_id``. Anything else a host reports is kept verbatim by
+    ``extra: allow`` rather than typed here, so the wire format stays open
+    without inventing fields no code reads.
     """
 
     images: bool = False
+    load_session: bool = False
 
     model_config = {"extra": "allow"}
 
@@ -139,7 +148,6 @@ class AgentHostHarnessSnapshot(BaseModel):
 
 class AgentHostPairingCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=255)
-    organization_id: UUID | None = None
 
 
 class AgentHostPairingCreated(BaseModel):
@@ -157,7 +165,6 @@ class AgentHostPairingComplete(BaseModel):
 class AgentHostPairingCompleted(BaseModel):
     host_id: UUID
     user_id: UUID
-    organization_id: UUID | None
     host_secret: str
 
 
@@ -308,6 +315,7 @@ class AgentHostRunSpec(BaseModel):
     config_selections: JsonObject = Field(default_factory=dict)
     system_prompt: str
     prompt: list[JsonObject] = Field(min_length=1)
+    resume_session_id: str | None = Field(default=None, max_length=512)
     context: JsonObject = Field(default_factory=dict)
     run_deadline: datetime
 
@@ -401,8 +409,27 @@ def validate_agent_host_selections(
         option = options_by_key.get(normalized_key)
         if option is None:
             raise ValueError(f"Unknown Agent Host configuration selection: {key}")
-        if str(option.get("category") or "").strip() == "model":
+        option_category = str(option.get("category") or "").strip()
+        if option_category == "model":
             raise ValueError("Model must be configured through default_model_name")
+        if option_category in _PLATFORM_OWNED_OPTION_CATEGORIES:
+            # Approval/sandbox presets and turn-to-turn collaboration are
+            # Lemma's, not a per-profile choice: approvals must be answered the
+            # same way whichever harness runs, and a conversation already maps
+            # to one session. Dropped rather than rejected so a profile saved
+            # before this rule stays editable; the harness keeps applying its
+            # own safe default, which is what the built-in harness does too.
+            continue
+        # Deny-list first, then membership - the order ``selection_is_allowed``
+        # uses in acp.rs:625. It matters: harnesses *do* enumerate their
+        # permission modes, so a value like ``bypassPermissions`` is a legal
+        # member of the option's own list and the host refuses it anyway.
+        # Checking membership first would let exactly the common case through,
+        # to save cleanly and then fail at session setup on the first run.
+        if _is_disallowed_policy_selection(option, value):
+            raise ValueError(
+                f"That value is not allowed for Agent Host configuration: {key}"
+            )
         allowed_values = _agent_host_option_values(option.get("options"))
         if allowed_values and value not in allowed_values:
             raise ValueError(
@@ -434,6 +461,39 @@ def validate_agent_host_model(
     if not has_model_option or normalized not in model_options:
         raise ValueError("default_model_name is not offered by this harness")
     return normalized
+
+
+# Mirrors the Agent Host's own policy filter (agent-host/src/acp.rs:569-600):
+# an option whose id or category mentions one of these governs what the coding
+# agent is allowed to do without asking.
+# Settings the platform owns, so a profile may not carry them. `mode` is the
+# approval and sandboxing preset, and approvals are Lemma's job - a run asks, a
+# human answers, identically whichever harness executes. `collaboration_mode`
+# decides how state carries across turns, which the conversation already fixes
+# by mapping to one session.
+_PLATFORM_OWNED_OPTION_CATEGORIES = frozenset({"mode", "collaboration_mode"})
+
+_POLICY_OPTION_MARKERS = ("mode", "permission", "approval", "sandbox")
+_DISALLOWED_POLICY_VALUES = frozenset(
+    {
+        "bypasspermissions",
+        "agentfullaccess",
+        "fullaccess",
+        "acceptedits",
+        "yolo",
+        "auto",
+    }
+)
+
+
+def _is_disallowed_policy_selection(option: dict[str, object], value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    identity = f"{option.get('id') or ''} {option.get('category') or ''}".lower()
+    if not any(marker in identity for marker in _POLICY_OPTION_MARKERS):
+        return False
+    normalized = "".join(ch for ch in value if ch.isalnum()).lower()
+    return normalized in _DISALLOWED_POLICY_VALUES
 
 
 def _agent_host_option_values(raw_options: object) -> list[object]:

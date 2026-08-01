@@ -96,6 +96,35 @@ _INFO_NOISE_LOGGER_PREFIXES = (
     "streaq",
     "uvicorn.access",
 )
+
+
+def _dependency_floor_applies(configured_level: int, name: str) -> bool:
+    """Whether a chatty dependency is held at WARNING.
+
+    At INFO, always: these libraries narrate every successful operation and the
+    console is for the application's own story.
+
+    At DEBUG, only when ``LOG_QUIET_DEPENDENCIES`` is set. Asking for DEBUG
+    deliberately means "show me everything", and a developer debugging
+    SQLAlchemy itself must still be able to get it - so the default stays as it
+    was. `make dev` opts in, because SQLAlchemy alone emits a record per mapped
+    column at import: thousands of lines before the first request, which buries
+    the application logs the flag was turned on to read.
+    """
+    if not name.startswith(_INFO_NOISE_LOGGER_PREFIXES):
+        return False
+    if configured_level == logging.INFO:
+        return True
+    if configured_level < logging.INFO:
+        return os.getenv("LOG_QUIET_DEPENDENCIES", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    return False
+
+
 _PROHIBITED_FIELDS = {
     "authorization",
     "body",
@@ -445,9 +474,7 @@ def _reconcile_named_loggers(configured_level: int) -> None:
             _install_safe_exception_filter(handler)
         logger.propagate = True
         logger_level = configured_level
-        if configured_level == logging.INFO and name.startswith(
-            _INFO_NOISE_LOGGER_PREFIXES
-        ):
+        if _dependency_floor_applies(configured_level, name):
             logger_level = logging.WARNING
         logger.setLevel(logger_level)
 
@@ -567,9 +594,7 @@ def get_dependency_logger(name: str, *, level: int | None = None) -> logging.Log
         _install_safe_exception_filter(handler)
     dependency_logger.propagate = True
     requested_level = _configured_log_level if level is None else level
-    if _configured_log_level == logging.INFO and name.startswith(
-        _INFO_NOISE_LOGGER_PREFIXES
-    ):
+    if level is None and _dependency_floor_applies(_configured_log_level, name):
         requested_level = max(requested_level, logging.WARNING)
     dependency_logger.setLevel(
         max(

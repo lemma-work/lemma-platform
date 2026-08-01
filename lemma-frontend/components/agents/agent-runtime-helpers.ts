@@ -273,6 +273,186 @@ export function runtimeAvailabilityLabel(profile: AgentRuntimeProfileResponse): 
     }
 }
 
+// A profile the workspace has retired. It keeps working for history and can be
+// restored, but it is out of the catalog and cannot be picked for new runs.
+export function isArchivedProfile(profile: { status?: string | null }): boolean {
+    return profile.status === 'DISABLED';
+}
+
+export type HarnessConfigControl = {
+    id: string;
+    /** The key the backend expects in `config_selections`. */
+    selectionKey: string;
+    label: string;
+    description: string | null;
+    /** What that computer is set to now, when it names one of the choices. */
+    currentValue: string | null;
+    choices: Array<{ value: string; label: string }>;
+};
+
+// Options whose value decides how much the agent may do unattended, and the
+// values Agent Host refuses for them. Mirrors `is_policy_bearing_option` /
+// `is_disallowed_policy_value` (agent-host/src/acp.rs) and the same pair in the
+// backend domain. Harnesses *do* enumerate these — Claude Code lists
+// `bypassPermissions` among its permission modes — and the host rejects them
+// anyway at session setup, so offering one here would be a dead choice.
+// Settings Lemma owns, so the dialog must not offer them per profile.
+//
+// `mode` is the agent's approval and sandboxing preset. Approvals are the
+// platform's job — a run asks, Lemma surfaces it, a human answers — and that
+// must behave identically whichever harness is executing. Letting each profile
+// pick a preset makes the same question answerable in several different ways.
+//
+// `collaboration_mode` decides how the agent carries state across turns. Lemma
+// maps one conversation to one session already, so this is decided by the
+// conversation, not by the profile.
+//
+// The harness keeps applying its own safe default for both, which is what
+// "the same as the Lemma server default harness" means in practice.
+export const PLATFORM_OWNED_OPTION_CATEGORIES = ['mode', 'collaboration_mode'];
+
+const POLICY_OPTION_MARKERS = ['mode', 'permission', 'approval', 'sandbox'];
+const DISALLOWED_POLICY_VALUES = new Set([
+    'bypasspermissions',
+    'agentfullaccess',
+    'fullaccess',
+    'acceptedits',
+    'yolo',
+    'auto',
+]);
+
+function isPolicyBearing(selectionKey: string, category: string): boolean {
+    const identity = `${selectionKey} ${category}`.toLowerCase();
+    return POLICY_OPTION_MARKERS.some((marker) => identity.includes(marker));
+}
+
+function isDisallowedPolicyValue(value: string): boolean {
+    return DISALLOWED_POLICY_VALUES.has(value.replace(/[^a-z0-9]/gi, '').toLowerCase());
+}
+
+/**
+ * The harness config options this UI can safely offer a control for.
+ *
+ * Mirrors `validate_agent_host_selections` in the backend domain: a selection is
+ * keyed by the option's `id` or its `category`, `model` is rejected outright
+ * (models are chosen through `default_model_name`), and an allowed value is
+ * `item.value ?? item.id`.
+ *
+ * Options that enumerate no values are dropped rather than rendered as a text
+ * box, and escalating values are dropped from the ones that do — either would
+ * let a selection save cleanly and then fail on the user's first run.
+ */
+export function harnessConfigControls(
+    configOptions?: Array<{
+        id?: string | null;
+        name?: string | null;
+        category?: string | null;
+        description?: string | null;
+        current_value?: unknown;
+        options?: Array<Record<string, unknown>> | null;
+    }> | null,
+): HarnessConfigControl[] {
+    const controls: HarnessConfigControl[] = [];
+    for (const option of configOptions ?? []) {
+        const category = typeof option.category === 'string' ? option.category : '';
+        // `model` is chosen through default_model_name; the rest are Lemma's.
+        if (category === 'model') continue;
+        if (PLATFORM_OWNED_OPTION_CATEGORIES.includes(category)) continue;
+        const selectionKey = (typeof option.id === 'string' && option.id) || category;
+        if (!selectionKey) continue;
+
+        const policyBearing = isPolicyBearing(selectionKey, category);
+        const choices: Array<{ value: string; label: string }> = [];
+        for (const item of option.options ?? []) {
+            const value = item.value ?? item.id;
+            if (typeof value !== 'string' || !value) continue;
+            if (policyBearing && isDisallowedPolicyValue(value)) continue;
+            const label = typeof item.name === 'string' && item.name ? item.name : value;
+            choices.push({ value, label });
+        }
+        if (!choices.length) continue;
+
+        const currentValue = typeof option.current_value === 'string' ? option.current_value : null;
+        controls.push({
+            id: selectionKey,
+            selectionKey,
+            label: (typeof option.name === 'string' && option.name) || selectionKey,
+            description: typeof option.description === 'string' && option.description
+                ? option.description
+                : null,
+            currentValue: choices.some((choice) => choice.value === currentValue) ? currentValue : null,
+            choices,
+        });
+    }
+    return controls;
+}
+
+// Radix Select refuses value="", so "let the agent decide" needs a real token.
+// The composer solves the same problem with POD_DEFAULT_AGENT_VALUE.
+export const HARNESS_DEFAULT_VALUE = '__harness_default__';
+
+export type HarnessProfileFields = {
+    name: string;
+    description: string;
+    /** A model name, or HARNESS_DEFAULT_VALUE for "let the agent choose". */
+    defaultModel: string;
+    selections: Record<string, string>;
+};
+
+/**
+ * The PATCH body for a harness profile: only what the user actually changed.
+ *
+ * This is not just tidiness. The backend contacts the paired computer *only*
+ * when an edit touches `default_model_name` or `config_selections`, precisely so
+ * that a rename works while that machine is asleep
+ * (`touches_configuration` in runtime_profile_editor.py). Sending those fields
+ * unconditionally would require the machine to be online and READY to rename a
+ * coding agent, and fail with "not available" when it is not.
+ */
+export function harnessProfileChanges(
+    original: HarnessProfileFields,
+    next: HarnessProfileFields,
+): Record<string, unknown> {
+    const changes: Record<string, unknown> = {};
+
+    const name = next.name.trim();
+    if (name !== original.name.trim()) changes.name = name;
+
+    const description = next.description.trim();
+    if (description !== original.description.trim()) {
+        changes.description = description || null;
+    }
+
+    if (next.defaultModel !== original.defaultModel) {
+        changes.default_model_name =
+            next.defaultModel === HARNESS_DEFAULT_VALUE ? null : next.defaultModel;
+    }
+
+    const nextSelections = liveConfigSelections(next.selections);
+    if (!sameSelections(nextSelections, liveConfigSelections(original.selections))) {
+        changes.config_selections = nextSelections;
+    }
+
+    return changes;
+}
+
+/** Drop the "use this computer's setting" sentinel and any empty choice. */
+export function liveConfigSelections(
+    selections: Record<string, string>,
+): Record<string, string> {
+    return Object.fromEntries(
+        Object.entries(selections).filter(
+            ([, value]) => value && value !== HARNESS_DEFAULT_VALUE,
+        ),
+    );
+}
+
+function sameSelections(a: Record<string, string>, b: Record<string, string>): boolean {
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every((key) => a[key] === b[key]);
+}
+
 // Flatten the runtime-profile catalog into the flat, plain-language model list
 // the ModelPicker consumes. Every pickable model across every saved profile
 // (Lemma built-in, BYO providers, coding agents) becomes one row, tagged with
@@ -304,4 +484,40 @@ export function splitModelNames(value: string): string[] {
         .split(/[\n,]/)
         .map((item) => item.trim())
         .filter(Boolean);
+}
+
+// The CLI auto-trusts plain HTTP only on loopback, so a self-hosted API on a
+// LAN address needs the flag spelled out or `connect` refuses the URL.
+function needsInsecureHttpOptIn(apiBaseUrl: string): boolean {
+    try {
+        const url = new URL(apiBaseUrl);
+        if (url.protocol !== 'http:') return false;
+        return !['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname);
+    } catch {
+        return false;
+    }
+}
+
+export function pairingCommands(
+    pairing: { pairing_code: string; display_name: string },
+    apiBaseUrl: string,
+): string[] {
+    const name = pairing.display_name.replaceAll('"', '\\"');
+    // `connect` already resolves the binary itself - PATH, a dev checkout, then
+    // a managed download - so there is no separate install step. Asking for one
+    // would also fail outright on any build whose release assets aren't
+    // published, which is every self-hosted and development install.
+    const connect = [
+        'lemma agent-host connect',
+        `--url ${apiBaseUrl}`,
+        `--pairing-code ${pairing.pairing_code}`,
+        `--name "${name}"`,
+        ...(needsInsecureHttpOptIn(apiBaseUrl) ? ['--allow-insecure-http'] : []),
+    ].join(' ');
+
+    return [
+        'uv tool install lemma-terminal',
+        connect,
+        'lemma agent-host status',
+    ];
 }

@@ -12,10 +12,16 @@ import type {
 } from 'lemma-sdk';
 
 import {
+    HARNESS_DEFAULT_VALUE,
     formatAgentRuntime,
+    harnessConfigControls,
+    harnessProfileChanges,
     hydrateRuntimeModel,
+    isArchivedProfile,
+    pairingCommands,
     resolveDefaultAgentRuntime,
     resolveRuntimeModelName,
+    runtimeAvailabilityLabel,
 } from './agent-runtime-helpers';
 
 function profile(
@@ -140,5 +146,261 @@ describe('formatAgentRuntime', () => {
     it("resolves through the runtime's own profile, not the catalog default", () => {
         expect(formatAgentRuntime({ profile_id: 'org:byo' }, catalog))
             .toBe('Acme · claude-sonnet-5');
+    });
+});
+
+describe('pairing commands', () => {
+    const pairing = { pairing_code: 'code-123', display_name: 'Ana"s laptop' };
+
+    it('does not ask for a separate install step', () => {
+        // `connect` resolves the binary itself, and `install` only ever downloads
+        // a release asset - which does not exist for a self-hosted or dev build,
+        // so the first line of the old instructions stopped those users outright.
+        expect(pairingCommands(pairing, 'https://api.lemma.work').join('\n')).not.toContain(
+            'agent-host install',
+        );
+    });
+
+    it('installs the CLI, pairs, then verifies', () => {
+        expect(pairingCommands(pairing, 'https://api.lemma.work')).toEqual([
+            'uv tool install lemma-terminal',
+            'lemma agent-host connect --url https://api.lemma.work --pairing-code code-123 --name "Ana\\"s laptop"',
+            'lemma agent-host status',
+        ]);
+    });
+
+    it('opts in to plain HTTP only when the CLI would refuse the URL', () => {
+        const connectFor = (apiBaseUrl: string) => pairingCommands(pairing, apiBaseUrl)[1];
+
+        expect(connectFor('http://10.0.0.4:8710')).toContain('--allow-insecure-http');
+        // Loopback is already trusted, so the flag would be noise.
+        expect(connectFor('http://127.0.0.1:8710')).not.toContain('--allow-insecure-http');
+        expect(connectFor('http://localhost:8710')).not.toContain('--allow-insecure-http');
+        expect(connectFor('https://api.example.com')).not.toContain('--allow-insecure-http');
+    });
+});
+
+describe('runtimeAvailabilityLabel', () => {
+    // Until the backend started populating availability_status this always
+    // returned null, so an offline machine's profile looked exactly like a
+    // healthy one. Every state the API can send needs a name here.
+    const harnessProfile = (availability: string | null) =>
+        profile({
+            id: 'org:codex',
+            kind: RuntimeProfileKind.HARNESS,
+            protocol: RuntimeProfileProtocol.AGENT_HOST,
+            scope: RuntimeProfileScope.ORGANIZATION,
+            harness_id: 'harness-1',
+            availability_status: availability,
+        });
+
+    it('says nothing when the agent is ready', () => {
+        expect(runtimeAvailabilityLabel(harnessProfile('READY'))).toBeNull();
+    });
+
+    it('names every unavailable state', () => {
+        expect(runtimeAvailabilityLabel(harnessProfile('OFFLINE'))).toBe('Offline');
+        expect(runtimeAvailabilityLabel(harnessProfile('NOT_INSTALLED'))).toBe('Not installed');
+        expect(runtimeAvailabilityLabel(harnessProfile('UNAVAILABLE'))).toBe('Unavailable');
+        expect(runtimeAvailabilityLabel(harnessProfile('UNAVAILABLE_FOR_YOU'))).toBe('Unavailable');
+    });
+
+    it('reports nothing for a provider profile, which is always reachable', () => {
+        // The short-circuit on harness_id — never exercised before, because the
+        // field was null on every profile the UI had ever seen.
+        expect(runtimeAvailabilityLabel(profile({ id: 'org:byo', availability_status: 'OFFLINE' })))
+            .toBeNull();
+    });
+
+    it('stays quiet on a status this build does not know', () => {
+        expect(runtimeAvailabilityLabel(harnessProfile('SOMETHING_NEW'))).toBeNull();
+        expect(runtimeAvailabilityLabel(harnessProfile(null))).toBeNull();
+    });
+});
+
+describe('isArchivedProfile', () => {
+    it('is what separates the catalog from the management listing', () => {
+        expect(isArchivedProfile(profile({ id: 'a', status: RuntimeProfileStatus.DISABLED }))).toBe(true);
+        expect(isArchivedProfile(profile({ id: 'b' }))).toBe(false);
+    });
+});
+
+describe('harnessConfigControls', () => {
+    it('renders a control only for options that enumerate their values', () => {
+        // A free-text box here is how a policy-bearing value like
+        // bypassPermissions would save cleanly and then be refused by the host
+        // at session setup — a failure the user only sees on their first run.
+        const controls = harnessConfigControls([
+            {
+                id: 'permission_mode',
+                category: 'permission',
+                name: 'Permission mode',
+                description: 'How much the agent may do unattended',
+                current_value: 'ask',
+                options: [
+                    { id: 'ask', name: 'Ask every time', value: 'ask' },
+                    { id: 'plan', name: 'Plan only', value: 'plan' },
+                ],
+            },
+            { id: 'workdir', category: 'path', name: 'Working directory', options: [] },
+            { id: 'notes', category: 'misc', name: 'Notes' },
+        ]);
+
+        expect(controls.map((control) => control.id)).toEqual(['permission_mode']);
+        expect(controls[0].choices).toEqual([
+            { value: 'ask', label: 'Ask every time' },
+            { value: 'plan', label: 'Plan only' },
+        ]);
+        expect(controls[0].currentValue).toBe('ask');
+    });
+
+    it('drops an escalating value from an option that enumerates it', () => {
+        // Claude Code lists bypassPermissions among its own permission modes,
+        // and Agent Host refuses it anyway at session setup. Offering it would
+        // be a choice that can only ever fail on the user's first run.
+        const [control] = harnessConfigControls([
+            {
+                id: 'permission_mode',
+                category: 'permission',
+                name: 'Permission mode',
+                options: [
+                    { id: 'default', name: 'Ask' },
+                    { id: 'plan', name: 'Plan' },
+                    { id: 'bypassPermissions', name: 'Bypass' },
+                    { id: 'acceptEdits', name: 'Accept edits' },
+                ],
+            },
+        ]);
+
+        expect(control.choices.map((choice) => choice.value)).toEqual(['default', 'plan']);
+    });
+
+    it('leaves an ordinary option list alone', () => {
+        // The filter keys off the option being policy-bearing, so a value that
+        // merely looks alarming elsewhere is untouched.
+        const [control] = harnessConfigControls([
+            {
+                id: 'startup',
+                category: 'lifecycle',
+                name: 'Startup',
+                options: [{ id: 'auto' }, { id: 'manual' }],
+            },
+        ]);
+
+        expect(control.choices.map((choice) => choice.value)).toEqual(['auto', 'manual']);
+    });
+
+    it('drops the model category, which default_model_name owns', () => {
+        // Mirrors validate_agent_host_selections, which rejects a `model`
+        // selection outright rather than quietly ignoring it.
+        expect(
+            harnessConfigControls([
+                {
+                    id: 'model',
+                    category: 'model',
+                    name: 'Model',
+                    options: [{ id: 'gpt-5.1', value: 'gpt-5.1' }],
+                },
+            ]),
+        ).toEqual([]);
+    });
+
+    it('keys by category when an option has no id, as the backend does', () => {
+        const [control] = harnessConfigControls([
+            {
+                category: 'reasoning',
+                name: 'Thinking effort',
+                options: [{ id: 'low' }, { id: 'high', value: 'high' }],
+            },
+        ]);
+
+        expect(control.selectionKey).toBe('reasoning');
+        // `item.value ?? item.id` — the same fallback the backend allows.
+        expect(control.choices).toEqual([
+            { value: 'low', label: 'low' },
+            { value: 'high', label: 'high' },
+        ]);
+    });
+
+    it('ignores a current_value that is not one of the choices', () => {
+        const [control] = harnessConfigControls([
+            {
+                id: 'effort',
+                category: 'reasoning',
+                name: 'Effort',
+                current_value: 'ludicrous',
+                options: [{ id: 'low', value: 'low' }],
+            },
+        ]);
+
+        expect(control.currentValue).toBeNull();
+    });
+
+    it('survives a harness that publishes nothing', () => {
+        expect(harnessConfigControls(undefined)).toEqual([]);
+        expect(harnessConfigControls(null)).toEqual([]);
+        expect(harnessConfigControls([])).toEqual([]);
+    });
+});
+
+describe('harnessProfileChanges', () => {
+    const stored = {
+        name: 'Codex',
+        description: 'Repo work',
+        defaultModel: 'gpt-5.1',
+        selections: { permission_mode: 'plan' },
+    };
+
+    it('sends nothing when nothing moved', () => {
+        expect(harnessProfileChanges(stored, { ...stored })).toEqual({});
+    });
+
+    it('keeps a rename off the harness path', () => {
+        // The backend contacts the paired computer only when an edit touches
+        // default_model_name or config_selections. Including them here would
+        // make renaming a coding agent fail whenever that laptop is asleep.
+        const changes = harnessProfileChanges(stored, { ...stored, name: 'Codex (main)' });
+
+        expect(changes).toEqual({ name: 'Codex (main)' });
+        expect(changes).not.toHaveProperty('default_model_name');
+        expect(changes).not.toHaveProperty('config_selections');
+    });
+
+    it('clears a description the user emptied, rather than omitting it', () => {
+        expect(harnessProfileChanges(stored, { ...stored, description: '   ' }))
+            .toEqual({ description: null });
+    });
+
+    it('maps the sentinel back to null when unpinning the model', () => {
+        expect(
+            harnessProfileChanges(stored, { ...stored, defaultModel: HARNESS_DEFAULT_VALUE }),
+        ).toEqual({ default_model_name: null });
+    });
+
+    it('ignores a selection left on the sentinel', () => {
+        // Rendering a control defaults it to "use this computer's setting",
+        // which is the absence of a selection - not a change to send.
+        expect(
+            harnessProfileChanges(stored, {
+                ...stored,
+                selections: { permission_mode: 'plan', reasoning: HARNESS_DEFAULT_VALUE },
+            }),
+        ).toEqual({});
+    });
+
+    it('sends the whole selection map when one entry changes', () => {
+        // Selections replace wholesale server-side, so a partial map would drop
+        // the others.
+        expect(
+            harnessProfileChanges(stored, {
+                ...stored,
+                selections: { permission_mode: 'default', reasoning: 'high' },
+            }),
+        ).toEqual({ config_selections: { permission_mode: 'default', reasoning: 'high' } });
+    });
+
+    it('notices a selection that was removed', () => {
+        expect(harnessProfileChanges(stored, { ...stored, selections: {} }))
+            .toEqual({ config_selections: {} });
     });
 });
