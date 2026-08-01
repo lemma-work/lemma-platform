@@ -1191,7 +1191,7 @@ async def test_gmail_schedule_event_runs_from_outbox_to_composio_provider(
 ):
     _ = worker
     from app.core.infrastructure.events.publisher import EventPublisher
-    from app.modules.schedule.infrastructure.schedule_managers.manager_factory import (
+    from app.composition.schedule_connectors import (
         ManagersFactory,
     )
 
@@ -1324,7 +1324,7 @@ async def test_outlook_schedule_event_runs_from_outbox_to_composio_provider(
 ):
     _ = worker
     from app.core.infrastructure.events.publisher import EventPublisher
-    from app.modules.schedule.infrastructure.schedule_managers.manager_factory import (
+    from app.composition.schedule_connectors import (
         ManagersFactory,
     )
 

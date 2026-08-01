@@ -1863,7 +1863,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.60b1" },
     { name = "opentelemetry-instrumentation-sqlalchemy", specifier = ">=0.60b1" },
     { name = "pgvector", specifier = ">=0.4.1" },
-    { name = "pillow", specifier = ">=12.0.0" },
+    { name = "pillow", specifier = ">=12.3.0" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.2" },
     { name = "pydantic", specifier = ">=2.11.9" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "fastmcp", "mcp", "openai", "retries"], specifier = ">=1.104.0" },

@@ -310,10 +310,10 @@ export function AddColumnDialog({ podId, datastoreName, tableName, onClose, avai
                     ) : null}
 
                     <DialogFooter className="-mx-5 -mb-5 border-t border-[color:var(--border-subtle)] bg-[var(--bg-subtle)] px-5 pb-5 pt-3">
-                        <Button type="button" variant="ghost" onClick={onClose}>
+                        <Button type="button" variant="quiet" onClick={onClose}>
                             Cancel
                         </Button>
-                        <Button type="submit" disabled={addColumnMutation.isPending}>
+                        <Button variant="primary" type="submit" disabled={addColumnMutation.isPending}>
                             {addColumnMutation.isPending ? 'Adding...' : 'Add Column'}
                         </Button>
                     </DialogFooter>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ExternalLink, Loader2, Plug, Plus, X } from '@/components/ui/icons';
+import { Check, ExternalLink, Plug, Plus, X } from '@/components/ui/icons';
 import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 
@@ -28,6 +28,7 @@ import {
     type SchemaValues,
 } from '@/components/connectors/connector-utils';
 import type { Account, Connector } from '@/lib/types';
+import { StepLoader } from '@/components/brand/loader';
 
 interface AccountVariableFieldProps {
     organizationId?: string;
@@ -320,7 +321,7 @@ export function AccountVariableField({
                                 emptyMessage="No credentials are required for this app."
                                 autoFocusFirst
                             />
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 size="sm"
                                 className="w-full"
@@ -334,7 +335,7 @@ export function AccountVariableField({
                     ) : awaitingOAuth ? (
                         <div className="flex items-center justify-between gap-2 rounded-lg border border-[var(--border-subtle)] px-3 py-2 text-sm text-[var(--text-secondary)]">
                             <span className="flex items-center gap-2">
-                                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--action-primary)]" />
+                                <StepLoader size="xs" className="text-[var(--action-primary)]" />
                                 Waiting for {title} authorization…
                             </span>
                             <button

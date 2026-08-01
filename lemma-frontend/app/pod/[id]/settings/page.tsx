@@ -3,12 +3,12 @@
 import Link from 'next/link';
 import { use, useState } from 'react';
 import type { AgentRuntimeConfig } from 'lemma-sdk';
-import { Info, Loader2, Settings2 } from '@/components/ui/icons';
+import { Info, Settings2 } from '@/components/ui/icons';
 
 import { toast } from 'sonner';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { findProfileByRuntime, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodSettingsPanel, PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { PodBundleSettingsPanel } from '@/components/bundle/pod-bundle-settings';
@@ -20,6 +20,7 @@ import {
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod, useUpdatePod } from '@/lib/hooks/use-pods';
 import { PodJoinPolicy } from '@/lib/types';
+import { FieldRowsSkeleton } from '@/components/shared/loading';
 
 export default function PodSettingsPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -44,7 +45,16 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
         ?? (pod?.config?.default_profile_id
             ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id)
             : null);
-    const selectedRuntime = runtimeDraft ?? storedRuntime;
+    // A stored default can name a profile that has since been archived. The
+    // picker sets allowAuto={false}, so there is no Auto row to fall back to and
+    // every agent in the pod would silently inherit a dead default. Resolve the
+    // modern path through the catalog too, and say so rather than degrade.
+    const storedRuntimeIsMissing = Boolean(
+        storedRuntime?.profile_id
+        && runtimeCatalog
+        && !findProfileByRuntime(runtimeCatalog, storedRuntime),
+    );
+    const selectedRuntime = runtimeDraft ?? (storedRuntimeIsMissing ? null : storedRuntime);
     const manageModelsHref = pod?.organization_id
         ? `/organizations/${pod.organization_id}/settings/agent-runtimes`
         : undefined;
@@ -61,10 +71,8 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
 
     if (isLoadingPod) {
         return (
-            <div className="context-shell flex min-h-full items-center justify-center bg-transparent">
-                <div className="surface-panel px-5 py-4">
-                    <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-                </div>
+            <div className="context-shell min-h-full bg-transparent">
+                <FieldRowsSkeleton rows={5} className="max-w-2xl" />
             </div>
         );
     }
@@ -100,6 +108,12 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
                     scopeHint="Pod default"
                     manageHref={manageModelsHref}
                 />
+                {storedRuntimeIsMissing ? (
+                    <p className="mt-2 text-sm text-[var(--state-warning)]">
+                        This pod&apos;s default model is no longer available — it was removed from
+                        the workspace. Pick another one, or restore it under Manage models.
+                    </p>
+                ) : null}
             </PodSettingsPanel>
 
             <PodJoinPolicyPanel

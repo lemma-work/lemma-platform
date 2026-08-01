@@ -1,7 +1,14 @@
 import { CheckCircle2, Upload } from "@/components/ui/icons";
 
-import { InlineLoader, LoadingState, StepLoader, WordmarkLoader } from "@/components/brand/loader";
+import { InlineLoader, StepLoader, WordmarkLoader } from "@/components/brand/loader";
 import { Button } from "@/components/ui/button";
+import {
+    ListSkeleton,
+    ResourceCardGridSkeleton,
+    Skeleton,
+    TranscriptSkeleton,
+} from "@/components/shared/loading";
+import { EmptyState } from "@/components/shared/empty-state";
 
 export default function LoadingPreviewPage() {
     return (
@@ -11,10 +18,11 @@ export default function LoadingPreviewPage() {
                     <div>
                         <p className="type-eyebrow">Lemma loading system</p>
                         <h1 className="mt-3 text-3xl font-semibold tracking-normal text-[var(--text-primary)]">
-                            Fast, alive, consistent
+                            One shape, three fills
                         </h1>
                         <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--text-secondary)]">
-                            Route loading wakes up, actions metabolize, and background work breathes instead of spinning.
+                            A region&apos;s box belongs to the settled layout. Loading and empty change
+                            what is inside it, never the box itself.
                         </p>
                     </div>
                     <div className="surface-panel-muted flex items-center gap-4 px-4 py-3">
@@ -23,12 +31,27 @@ export default function LoadingPreviewPage() {
                     </div>
                 </header>
 
-                <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-                    <LoadingState
-                        title="Gathering pods"
-                        description="Your workspaces are taking shape."
-                        shape="cards"
+                {/* The two unsettled fills of one index region. Both occupy the
+                    box the settled grid will occupy — that is the whole point. */}
+                <section className="flex flex-col gap-3">
+                    <p className="type-eyebrow">Index region — loading</p>
+                    <ResourceCardGridSkeleton count={3} />
+                </section>
+
+                <section className="flex flex-col gap-3">
+                    <p className="type-eyebrow">Index region — empty</p>
+                    <EmptyState
+                        variant="region"
+                        title="No agents yet"
+                        description="Add the first agent this pod can run."
                     />
+                </section>
+
+                <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+                    <section className="surface-panel flex flex-col gap-4 p-5">
+                        <p className="type-eyebrow">List</p>
+                        <ListSkeleton rows={4} />
+                    </section>
 
                     <section className="surface-panel flex flex-col justify-between gap-6 p-5">
                         <div>
@@ -41,14 +64,14 @@ export default function LoadingPreviewPage() {
                             </p>
                         </div>
                         <div className="flex flex-wrap items-center gap-3">
-                            <Button loading loadingLabel="Creating pod">
+                            <Button variant="primary" loading loadingLabel="Creating pod">
                                 Create pod
                             </Button>
                             <Button variant="secondary" loading loadingLabel="Uploading">
                                 <Upload className="h-4 w-4" />
                                 Upload
                             </Button>
-                            <Button variant="ghost" className="gap-2">
+                            <Button variant="quiet" className="gap-2">
                                 Saved
                                 <CheckCircle2 className="h-4 w-4 text-[var(--state-success)]" />
                             </Button>
@@ -64,10 +87,10 @@ export default function LoadingPreviewPage() {
                         </div>
                     </section>
                     <section className="surface-panel p-5">
-                        <p className="type-eyebrow">Section</p>
-                        <div className="mt-4 flex items-center gap-3">
-                            <StepLoader size="sm" />
-                            <span className="text-sm text-[var(--text-secondary)]">Reading recent runs</span>
+                        <p className="type-eyebrow">Atom</p>
+                        <div className="mt-4 space-y-2">
+                            <Skeleton shape="block" className="h-8 w-full" />
+                            <Skeleton className="h-3 w-3/5" />
                         </div>
                     </section>
                     <section className="surface-panel p-5">
@@ -79,11 +102,10 @@ export default function LoadingPreviewPage() {
                     </section>
                 </div>
 
-                <LoadingState
-                    title="Preparing your workspace"
-                    description="Checking profile, organization, and invitations."
-                    shape="table"
-                />
+                <section className="surface-panel flex flex-col gap-4 p-5">
+                    <p className="type-eyebrow">Transcript</p>
+                    <TranscriptSkeleton turns={2} />
+                </section>
 
                 <footer className="border-t border-[var(--border-subtle)] pt-5 text-xs leading-5 text-[var(--text-tertiary)]">
                     Preview route for reviewing the shared loading primitives in real browser chrome.

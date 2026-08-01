@@ -14,6 +14,7 @@ from lemma_sdk.openapi_client.models.operation_execution_response import (
 from lemma_sdk.openapi_client.models.record_create_response_record_create import (
     RecordCreateResponseRecordCreate,
 )
+from lemma_sdk.openapi_client.models.schedule_run_response import ScheduleRunResponse
 from lemma_sdk.transport import LemmaTransport
 
 
@@ -48,6 +49,26 @@ class StubTransport:
                     "user_id": "55555555-5555-4555-8555-555555555555",
                     "input_data": body.get("input_data"),
                     "output_data": {"ok": True},
+                }
+            )
+        if endpoint.__name__.endswith("schedule_run_retry"):
+            return ScheduleRunResponse.from_dict(
+                {
+                    "attempts": 0,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "id": "66666666-6666-4666-8666-666666666666",
+                    "llm_output": {},
+                    "metadata": {},
+                    "payload": {},
+                    "redrive_of_run_id": "77777777-7777-4777-8777-777777777777",
+                    "redriven_by_user_id": "55555555-5555-4555-8555-555555555555",
+                    "schedule_id": "33333333-3333-4333-8333-333333333333",
+                    "source_event_id": "manual-retry:77777777-7777-4777-8777-777777777777",
+                    "status": "RECEIVED",
+                    "target_kind": "WORKFLOW",
+                    "target_run_id": "88888888-8888-4888-8888-888888888888",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                    "user_id": "55555555-5555-4555-8555-555555555555",
                 }
             )
         if endpoint.__name__.endswith("connector_operation_execute"):
@@ -133,6 +154,31 @@ def test_pod_functions_run_binds_pod_and_returns_typed_run():
         "triage_ticket",
     )
     assert transport.calls[0]["body"] == {"input_data": {"ticket_id": "rec-1"}}
+
+
+def test_pod_schedules_retry_run_binds_schedule_and_source_run():
+    transport = StubTransport()
+    pod = Pod(
+        "22222222-2222-4222-8222-222222222222",
+        org_id="11111111-1111-4111-8111-111111111111",
+        token="token",
+        base_url="https://api.example.test",
+    )
+    pod._transport = transport
+    pod.schedules._transport = transport
+
+    run = pod.schedules.retry_run(
+        "33333333-3333-4333-8333-333333333333",
+        "77777777-7777-4777-8777-777777777777",
+    )
+
+    assert isinstance(run, ScheduleRunResponse)
+    assert str(run.redrive_of_run_id) == "77777777-7777-4777-8777-777777777777"
+    assert transport.calls[0]["path_args"] == (
+        UUID("22222222-2222-4222-8222-222222222222"),
+        UUID("33333333-3333-4333-8333-333333333333"),
+        UUID("77777777-7777-4777-8777-777777777777"),
+    )
 
 
 def test_pod_connectors_execute_uses_bound_org_id():

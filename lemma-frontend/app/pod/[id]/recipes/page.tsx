@@ -83,7 +83,7 @@ export default function PodRecipesPage({ params }: { params: Promise<{ id: strin
                         </section>
                     ) : (
                         <EmptyState
-                            variant="compact"
+                            variant="region"
                             icon={<PackageOpen className="h-4 w-4" />}
                             title="No starters match this search"
                             description="Try a product shape, channel, or operating loop."

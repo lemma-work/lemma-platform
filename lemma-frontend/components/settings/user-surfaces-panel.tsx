@@ -1,12 +1,13 @@
 'use client';
 
-import { Check, Loader2 } from '@/components/ui/icons';
+import { Check } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { useSetDefaultSurface, useUserSurfaces } from '@/lib/hooks/use-pod-surfaces';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
 import { cn } from '@/lib/utils';
 import type { SurfacePlatform } from 'lemma-sdk';
+import { StepLoader } from '@/components/brand/loader';
 
 const PLATFORM_LABEL: Record<string, string> = {
     SLACK: 'Slack',
@@ -52,7 +53,7 @@ export function UserSurfacesPanel() {
     if (isLoading) {
         return (
             <div className="flex items-center gap-2 text-sm text-[var(--text-tertiary)]">
-                <Loader2 className="h-4 w-4 animate-spin" /> Loading your surfaces…
+                <StepLoader size="sm" /> Loading your surfaces…
             </div>
         );
     }
@@ -110,7 +111,7 @@ export function UserSurfacesPanel() {
                                             >
                                                 <span className="surface-choice-icon">
                                                     {isSaving ? (
-                                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                                        <StepLoader size="sm" />
                                                     ) : isDefault ? (
                                                         <Check className="h-4 w-4" />
                                                     ) : (

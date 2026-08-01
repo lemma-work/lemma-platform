@@ -567,7 +567,7 @@ export default function NewAgentPage({
                     <div className="flex shrink-0 items-center gap-2">
                         <Button
                             type="button"
-                            variant="outline"
+                            variant="secondary"
                             onClick={goToPreviousStep}
                             disabled={safeStepIndex === 0 || createAgent.isPending}
                             className="gap-2"
@@ -576,7 +576,7 @@ export default function NewAgentPage({
                             Previous
                         </Button>
                         {isFinalStep ? (
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 onClick={handleCreate}
                                 disabled={createAgent.isPending || !hasName}
@@ -586,7 +586,7 @@ export default function NewAgentPage({
                                 {createAgent.isPending ? 'Creating...' : 'Create agent'}
                             </Button>
                         ) : (
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 onClick={goToNextStep}
                                 disabled={createAgent.isPending || !canGoNext}
@@ -867,7 +867,7 @@ function SchemaMiniPanel({
             {isOpen ? (
                 <div className="mt-3">{children}</div>
             ) : (
-                <Button type="button" variant="outline" size="sm" onClick={onOpen} className="mt-3 h-8 w-full gap-2 border-dashed text-xs">
+                <Button type="button" variant="secondary" size="sm" onClick={onOpen} className="mt-3 h-8 w-full gap-2 border-dashed text-xs">
                     <Plus className="h-3.5 w-3.5" />
                     {actionLabel}
                 </Button>

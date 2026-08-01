@@ -19,6 +19,7 @@ from app.modules.schedule.scheduler.api.schemas import (
 from app.core.config import reveal_secret
 from app.core.log.log import get_logger
 from app.modules.schedule.config import schedule_settings
+from app.modules.schedule.domain.errors import ScheduleDomainError
 
 logger = get_logger(__name__)
 
@@ -72,6 +73,7 @@ async def schedule_cron_job(
     try:
         scheduler.add_cron_job(
             schedule_id=data.schedule_id,
+            user_id=data.user_id,
             cron_expression=data.cron_expression,
             payload=data.payload,
             replace_existing=data.replace_existing,
@@ -89,13 +91,18 @@ async def schedule_cron_job(
             schedule_id=data.schedule_id,
             next_run_time=next_run_time,
         )
+    except ScheduleDomainError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid cron expression: {e}",
         )
     except Exception:
-        logger.debug('schedule.scheduler_controller.cron_job.propagated', exc_info=True)
+        logger.debug("schedule.scheduler_controller.cron_job.propagated", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule cron job",
@@ -119,9 +126,11 @@ async def schedule_once_job(
     try:
         scheduler.add_once_job(
             schedule_id=data.schedule_id,
+            user_id=data.user_id,
             run_date=data.run_date,
             payload=data.payload,
             replace_existing=data.replace_existing,
+            logical_schedule=data.logical_schedule,
         )
 
         # Use schedule_id as job_id
@@ -137,7 +146,9 @@ async def schedule_once_job(
             next_run_time=next_run_time,
         )
     except Exception:
-        logger.debug('schedule.scheduler_controller.one_time_job.propagated', exc_info=True)
+        logger.debug(
+            "schedule.scheduler_controller.one_time_job.propagated", exc_info=True
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule one-time job",
@@ -159,17 +170,10 @@ async def list_jobs() -> JobListResponse:
 
     job_responses = []
     for job in jobs:
-        # job_id is the same as schedule_id (as string)
-        try:
-            schedule_id = UUID(job.id)
-        except ValueError:
-            # Fallback if job_id is not a valid UUID
-            schedule_id = UUID("00000000-0000-0000-0000-000000000000")
-
         job_responses.append(
             JobResponse(
                 job_id=job.id,
-                schedule_id=schedule_id,
+                schedule_id=UUID(job.id),
                 next_run_time=job.next_run_time,
                 job_state=job.state.name if hasattr(job, "state") else None,
             )

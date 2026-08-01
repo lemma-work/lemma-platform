@@ -12,7 +12,6 @@ import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
     ArrowLeft,
-    Loader2,
     Maximize2,
     Minimize2,
     Play,
@@ -53,6 +52,8 @@ import {
 } from './run-format';
 import { RunListCard } from './run-cards';
 import { RunPlayback, RunStepRail } from './run-detail';
+import { ListSkeleton } from '@/components/shared/loading';
+import { StepLoader } from '@/components/brand/loader';
 
 interface FlowExecutionPanelProps {
     podId: string;
@@ -150,13 +151,13 @@ export function FlowExecutionPanel({ podId, flowName, view = 'run' }: FlowExecut
 
         return (
             <div className="flow-dock-run">
-                <Button
+                <Button variant="primary"
                     type="button"
                     className="w-full"
                     onClick={() => void handleRun()}
                     disabled={isStartingRun || nodes.length === 0}
                 >
-                    {isStartingRun ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    {isStartingRun ? <StepLoader size="sm" /> : <Play className="h-4 w-4" />}
                     Run now
                 </Button>
 
@@ -181,21 +182,19 @@ export function FlowExecutionPanel({ podId, flowName, view = 'run' }: FlowExecut
             <div className="flow-dock-history-bar">
                 <span>{runCount} run{runCount === 1 ? '' : 's'} · newest first</span>
                 <Button
-                    variant="ghost"
+                    variant="quiet"
                     size="icon"
                     className="h-7 w-7"
                     onClick={() => void refreshRuns()}
                     disabled={isLoadingRuns}
                     aria-label="Refresh runs"
                 >
-                    <RefreshCw className={cn('h-3.5 w-3.5', isLoadingRuns && 'animate-spin')} />
+                    <RefreshCw className={cn('h-3.5 w-3.5', isLoadingRuns && 'lemma-spin')} />
                 </Button>
             </div>
 
             {isLoadingRuns ? (
-                <div className="flex items-center justify-center px-4 py-16">
-                    <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-                </div>
+                <ListSkeleton rows={5} className="px-3" />
             ) : (runs || []).length === 0 ? (
                 // Just the fact. The verb lives on the Run tab and the steps are
                 // on the document, so neither belongs here as well.
@@ -220,13 +219,13 @@ export function FlowExecutionPanel({ podId, flowName, view = 'run' }: FlowExecut
                         <div className="flex justify-center py-4">
                             <Button
                                 type="button"
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="h-8 gap-2 text-xs"
                                 disabled={isFetchingNextPage}
                                 onClick={() => void fetchNextPage()}
                             >
-                                {isFetchingNextPage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                                {isFetchingNextPage ? <StepLoader size="xs" /> : null}
                                 {isFetchingNextPage ? 'Loading more' : 'Load more'}
                             </Button>
                         </div>
@@ -332,7 +331,7 @@ export function RunExperienceDialog({
                                 <span>Updated {formatTimestamp(lastActivityAt)}</span>
                             </div>
                             <Button
-                                variant="outline"
+                                variant="secondary"
                                 size="icon"
                                 className="h-8 w-8 shrink-0"
                                 onClick={onOpenFullPage ?? onToggleMaximized}
@@ -361,8 +360,8 @@ export function RunExperienceDialog({
 
                 <div className="min-h-0 flex-1 overflow-hidden bg-[var(--bg-canvas)]">
                     {!run ? (
-                        <div className="flex h-full items-center justify-center">
-                            <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
+                        <div className="h-full p-4">
+                            <ListSkeleton rows={6} />
                         </div>
                     ) : (
                         <RunPlayback
@@ -523,8 +522,8 @@ export function FlowRunPageSurface({
 
             <div className="min-h-0 flex-1 overflow-hidden">
                 {isLoadingFlow || isLoadingRun || !run ? (
-                    <div className="flex h-full items-center justify-center">
-                        <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
+                    <div className="h-full p-4">
+                        <ListSkeleton rows={6} />
                     </div>
                 ) : (
                     <RunPlayback

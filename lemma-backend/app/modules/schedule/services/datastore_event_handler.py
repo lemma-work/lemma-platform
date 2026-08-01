@@ -57,6 +57,7 @@ class DatastoreEventHandler:
                 fired = await self.schedule_processor.process_event(
                     schedule=schedule,
                     payload=event.payload or {},
+                    user_id=event.owner_user_id or schedule.user_id,
                     metadata=metadata,
                     source_event_id=str(event.event_id),
                 )

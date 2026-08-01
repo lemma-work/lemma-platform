@@ -66,7 +66,7 @@ function phasePresentation(phase: SubagentActivityPhase): {
     return {
       label: "Working",
       className: "text-[var(--action-primary)]",
-      icon: <Circle className="size-3 fill-current animate-pulse" />,
+      icon: <Circle className="size-3 fill-current lemma-live-pulse" />,
     };
   }
   if (phase === "waiting") {
@@ -239,7 +239,7 @@ export function SubagentActivityRollup({
           {summary}
         </span>
         {hasWorkingChild ? (
-          <span className="size-1.5 shrink-0 rounded-full bg-[var(--action-primary)] animate-pulse" aria-label="Sub-agents working" />
+          <span className="size-1.5 shrink-0 rounded-full bg-[var(--action-primary)] lemma-live-pulse" aria-label="Sub-agents working" />
         ) : null}
         <ChevronDown
           className={cn(

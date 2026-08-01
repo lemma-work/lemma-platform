@@ -9,6 +9,19 @@ from typing import Any
 
 HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 
+# The server-internal surface the public SDK/CLI never calls. Both client
+# generators and ``lemma-backend/scripts/dump_openapi_spec.py`` use these, so the
+# committed spec and the clients built from it are pruned identically. Kept here
+# rather than spelled out at each call site: a list that disagrees between them
+# produces a spec whose shape can never match, which reads as permanent drift.
+DEFAULT_EXCLUDED_TAGS = (
+    "billing-subscriptions",
+    "billing-webhooks",
+    "scheduler",
+    "webhooks",
+)
+DEFAULT_EXCLUDED_PREFIXES = ("/billing", "/scheduler", "/webhooks")
+
 
 def _operation_is_excluded(operation: Mapping[str, Any], path: str, excluded_tags: set[str], excluded_prefixes: tuple[str, ...]) -> bool:
     tags = {str(tag).lower() for tag in operation.get("tags", [])}
@@ -94,14 +107,16 @@ def main() -> None:
     parser.add_argument(
         "--exclude-tag",
         action="append",
-        default=[],
-        help="OpenAPI tag to exclude. Case-insensitive. Can be provided multiple times.",
+        default=None,
+        help="OpenAPI tag to exclude. Case-insensitive. Repeatable. "
+        f"Defaults to {', '.join(DEFAULT_EXCLUDED_TAGS)}.",
     )
     parser.add_argument(
         "--exclude-prefix",
         action="append",
-        default=[],
-        help="Path prefix to exclude. Can be provided multiple times.",
+        default=None,
+        help="Path prefix to exclude. Repeatable. "
+        f"Defaults to {', '.join(DEFAULT_EXCLUDED_PREFIXES)}.",
     )
     parser.add_argument(
         "--keep-unreferenced-schemas",
@@ -113,8 +128,10 @@ def main() -> None:
     schema = json.loads(args.input.read_text(encoding="utf-8"))
     prepared = prepare_client_openapi(
         schema,
-        excluded_tags={tag.lower() for tag in args.exclude_tag},
-        excluded_prefixes=tuple(args.exclude_prefix),
+        excluded_tags={
+            tag.lower() for tag in (args.exclude_tag or DEFAULT_EXCLUDED_TAGS)
+        },
+        excluded_prefixes=tuple(args.exclude_prefix or DEFAULT_EXCLUDED_PREFIXES),
         prune_unreferenced_schemas=not args.keep_unreferenced_schemas,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

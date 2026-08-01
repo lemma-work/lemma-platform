@@ -145,6 +145,10 @@ export class AgentHostService {
     /**
      * Create Agent Host Pairing
      * Mint a short-lived pairing code for a machine this user controls.
+     *
+     * A paired computer is the user's, not a workspace's: nothing here needs an
+     * organization. Sharing it happens later, by giving a runtime profile
+     * ORGANIZATION scope.
      * @param requestBody
      * @returns AgentHostPairingCreated Successful Response
      * @throws ApiError

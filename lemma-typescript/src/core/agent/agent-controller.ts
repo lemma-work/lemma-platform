@@ -79,6 +79,7 @@ export interface AgentSessionState {
   status?: string;
   messages: ConversationMessage[];
   streamingText: string;
+  streamingThinking: string;
   streamingTool: AssistantStreamingTool | null;
   isStreaming: boolean;
   error: Error | null;
@@ -279,10 +280,12 @@ export class AgentController {
 
   private abort: AbortController | null = null;
   private streamingBuffer = "";
+  private streamingThinkingBuffer = "";
   private streamingToolToken = "";
   private autoResumedKey: string | null = null;
   private streamReconnectCount = 0;
   private pendingFlush: ReturnType<typeof setTimeout> | null = null;
+  private pendingThinkingFlush: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: AgentControllerOptions) {
     this.options = options;
@@ -292,6 +295,7 @@ export class AgentController {
       status: undefined,
       messages: [],
       streamingText: "",
+      streamingThinking: "",
       streamingTool: null,
       isStreaming: false,
       error: null,
@@ -362,6 +366,26 @@ export class AgentController {
     this.patch({ streamingText: "" });
   }
 
+  private appendStreamingThinking(token: string): void {
+    if (!token) return;
+    this.streamingThinkingBuffer += token;
+    if (!this.pendingThinkingFlush) {
+      this.pendingThinkingFlush = setTimeout(() => {
+        this.pendingThinkingFlush = null;
+        this.patch({ streamingThinking: this.streamingThinkingBuffer });
+      }, 0);
+    }
+  }
+
+  private clearStreamingThinking(): void {
+    if (this.pendingThinkingFlush) {
+      clearTimeout(this.pendingThinkingFlush);
+      this.pendingThinkingFlush = null;
+    }
+    this.streamingThinkingBuffer = "";
+    this.patch({ streamingThinking: "" });
+  }
+
   private clearStreamingTool(): void {
     this.streamingToolToken = "";
     this.patch({ streamingTool: null });
@@ -382,6 +406,10 @@ export class AgentController {
       clearTimeout(this.pendingFlush);
       this.pendingFlush = null;
     }
+    if (this.pendingThinkingFlush) {
+      clearTimeout(this.pendingThinkingFlush);
+      this.pendingThinkingFlush = null;
+    }
     this.listeners.clear();
   };
 
@@ -393,11 +421,16 @@ export class AgentController {
     }
     this.autoResumedKey = null;
     this.streamingBuffer = "";
+    this.streamingThinkingBuffer = "";
     this.streamingToolToken = "";
     this.streamReconnectCount = 0;
     if (this.pendingFlush) {
       clearTimeout(this.pendingFlush);
       this.pendingFlush = null;
+    }
+    if (this.pendingThinkingFlush) {
+      clearTimeout(this.pendingThinkingFlush);
+      this.pendingThinkingFlush = null;
     }
     this.patch({
       conversationId: nextConversationId,
@@ -405,6 +438,7 @@ export class AgentController {
       status: undefined,
       messages: [],
       streamingText: "",
+      streamingThinking: "",
       streamingTool: null,
       isStreaming: false,
       error: null,
@@ -481,15 +515,21 @@ export class AgentController {
       if (input.setActive !== false) {
         this.autoResumedKey = null;
         this.streamingBuffer = "";
+        this.streamingThinkingBuffer = "";
         if (this.pendingFlush) {
           clearTimeout(this.pendingFlush);
           this.pendingFlush = null;
+        }
+        if (this.pendingThinkingFlush) {
+          clearTimeout(this.pendingThinkingFlush);
+          this.pendingThinkingFlush = null;
         }
         this.patch({
           conversationId: created.id,
           conversation: created,
           messages: [],
           streamingText: "",
+          streamingThinking: "",
         });
         this.setConversationStatus(created.status ?? undefined);
       }
@@ -590,6 +630,7 @@ export class AgentController {
   }): Promise<void> => {
     this.patch({ isStreaming: true, error: null });
     this.clearStreamingText();
+    this.clearStreamingThinking();
     let sawTerminalStatus = false;
     let streamFailure: unknown = null;
 
@@ -608,6 +649,7 @@ export class AgentController {
           this.setConversationStatus(parsed.status ?? "FAILED");
           sawTerminalStatus = true;
           this.clearStreamingText();
+          this.clearStreamingThinking();
           this.clearStreamingTool();
           continue;
         }
@@ -632,6 +674,8 @@ export class AgentController {
             }
           } else if (!parsed.tokenKind || parsed.tokenKind === "text") {
             this.appendStreamingToken(parsed.token);
+          } else if (parsed.tokenKind === "thinking") {
+            this.appendStreamingThinking(parsed.token);
           }
         }
         if (parsed.message) {
@@ -642,6 +686,7 @@ export class AgentController {
             : "";
           if (role === "assistant" || role === "tool") {
             this.clearStreamingText();
+            this.clearStreamingThinking();
             this.clearStreamingTool();
           }
         }
@@ -650,6 +695,7 @@ export class AgentController {
           if (!isConversationRunningStatus(parsed.status)) {
             sawTerminalStatus = true;
             this.clearStreamingText();
+            this.clearStreamingThinking();
             this.clearStreamingTool();
           }
         }
@@ -716,6 +762,7 @@ export class AgentController {
       }
     } finally {
       this.clearStreamingText();
+      this.clearStreamingThinking();
       this.clearStreamingTool();
       if (controller.signal.aborted) this.streamReconnectCount = 0;
       if (this.abort === controller) {
@@ -857,6 +904,7 @@ export class AgentController {
       await scopedClient.conversations.stopRun(id, { pod_id: scope.podId ?? undefined });
       this.setConversationStatus("WAITING");
       this.clearStreamingText();
+      this.clearStreamingThinking();
     } catch (stopError) {
       const normalized = normalizeError(stopError, "Failed to stop conversation.");
       this.patch({ error: normalized });

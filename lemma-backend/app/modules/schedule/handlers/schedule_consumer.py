@@ -61,6 +61,9 @@ async def handle_llm_filter_task(
     await processor.process_event(
         schedule=schedule,
         payload=payload,
+        # Only webhook fires are deferred to this queue, and they carry no row
+        # owner, so the schedule owner is the authoritative owner here.
+        user_id=schedule.user_id,
         metadata=metadata,
         source_event_id=source_event_id,
     )

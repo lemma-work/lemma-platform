@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { PodAssistantEmbedded } from '@/components/ai/pod-assistant';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
-import { InlineLoader } from '@/components/brand/loader';
+import { Skeleton, TranscriptSkeleton } from '@/components/shared/loading';
 import { ConversationComposerContext } from '@/components/conversations/conversation-composer-context';
 import { PodNewWorkspace } from '@/components/pod/pod-new-workspace';
 import { ConversationPresentationStage } from '@/components/pod/conversation-presentation-stage';
@@ -94,6 +94,7 @@ export default function PodConversationPage({
         podId,
         isNewConversation ? '' : conversationId,
     );
+    const newWorkspaceRef = useRef<HTMLDivElement>(null);
     const newRouteScopeRef = useRef<string | null>(null);
     const ignoredConversationIdAfterNewRef = useRef<string | null>(null);
     const openedConversationIdRef = useRef<string | null>(openedConversationId);
@@ -122,7 +123,6 @@ export default function PodConversationPage({
         ? 'New conversation'
         : activeConversation?.title?.trim() || 'Untitled conversation';
     const isRouteConversationSelected = isNewConversation || openedConversationId === conversationId;
-    const isSelectingRouteConversation = !isNewConversation && openedConversationId !== conversationId;
     const canWriteConversations = podAccess.can('conversation.write');
     const podDefaultRuntime = pod?.config?.default_runtime
         ?? resolveDefaultAgentRuntime(runtimeCatalog, pod?.config?.default_profile_id);
@@ -140,6 +140,18 @@ export default function PodConversationPage({
         setRuntimeOverride(runtime);
         void setConversationModel((runtime?.model_name ?? null) as never, runtime)
             .catch(() => setRuntimeOverride(undefined));
+    };
+    // Handing the composer a prompt without the caret is a dead end — a starter
+    // that leaves "Build an app that " sitting in an unfocused box asks the
+    // reader to click twice to finish a sentence we started.
+    const prepareWorkspacePrompt = (prompt: string) => {
+        setNewWorkspaceDraft(prompt);
+        window.requestAnimationFrame(() => {
+            const textarea = newWorkspaceRef.current?.querySelector<HTMLTextAreaElement>('.assistant-composer-textarea');
+            if (!textarea) return;
+            textarea.focus();
+            textarea.setSelectionRange(prompt.length, prompt.length);
+        });
     };
     const handleAgentChange = (agentName: string | null) => {
         setRuntimeOverride(undefined);
@@ -251,7 +263,7 @@ export default function PodConversationPage({
 
     if (isNewConversation) {
         return (
-            <div className="h-full min-h-0 bg-[var(--pod-main-bg)]">
+            <div ref={newWorkspaceRef} className="h-full min-h-0 bg-[var(--pod-main-bg)]">
                 <PodAssistantEmbedded
                     title="New"
                     subtitle=""
@@ -266,10 +278,13 @@ export default function PodConversationPage({
                     className="h-full rounded-none border-0 bg-transparent shadow-none"
                     draft={newWorkspaceDraft}
                     onDraftChange={setNewWorkspaceDraft}
+                    emptyStateFillsViewport
                     emptyState={(
                         <PodNewWorkspace
                             podId={podId}
-                            onPreparePrompt={setNewWorkspaceDraft}
+                            selectedAgentName={selectedAgentName}
+                            onPreparePrompt={prepareWorkspacePrompt}
+                            onSelectAgent={handleAgentChange}
                         />
                     )}
                 />
@@ -295,12 +310,14 @@ export default function PodConversationPage({
                         className="h-full rounded-none border-0 bg-transparent shadow-none"
                     />
                 ) : (
-                    <div className="flex h-full min-h-0 items-center justify-center px-6">
-                        <InlineLoader
-                            size="sm"
-                            label="Loading conversation"
-                            className={isSelectingRouteConversation ? "animate-in fade-in duration-200" : undefined}
-                        />
+                    /* The transcript is what we are waiting for — the header band
+                       and the composer rail below it are the same whatever the
+                       conversation turns out to be. Showing one centred loader for
+                       the whole pane meant the header, transcript, and composer all
+                       appeared at once, on top of a screen that had been blank. */
+                    <div className="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col justify-end gap-6 px-6 pb-6">
+                        <TranscriptSkeleton turns={2} />
+                        <Skeleton shape="block" className="h-24 w-full rounded-2xl" />
                     </div>
                 )}
             </section>

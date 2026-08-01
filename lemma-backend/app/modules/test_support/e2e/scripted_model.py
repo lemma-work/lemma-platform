@@ -17,6 +17,22 @@ def script_text(text: str) -> ScriptTurn:
     return {"text": text, "tool_calls": []}
 
 
+def script_tool_result_ref(tool_call_id: str, path: str) -> str:
+    """Refer to a field of an earlier tool call's result.
+
+    A script is static JSON, so it can only pass literals - but ids the
+    workspace mints at runtime (a process id, say) are not knowable when the
+    script is written. Pass this instead of inventing one: a made-up id proves
+    nothing, because the tool correctly reports that no such thing exists.
+
+        script_tool_call("manage_process", {
+            "action": "input",
+            "process_id": script_tool_result_ref("shell-tty-1", "process_id"),
+        })
+    """
+    return f"${{{tool_call_id}.{path}}}"
+
+
 def script_model_error(
     kind: str,
     *,

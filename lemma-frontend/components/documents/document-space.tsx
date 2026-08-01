@@ -9,9 +9,9 @@ import {
     FileText,
     Folder,
     FolderPlus,
-    Loader2,
     Search,
     Share2,
+    Sparkles,
     Upload,
 } from '@/components/ui/icons';
 import { toast } from 'sonner';
@@ -42,10 +42,33 @@ import {
     useSearchDatastoreFiles,
     useUploadDatastoreFile,
 } from '@/lib/hooks/use-datastores';
+import { DocsSectionSwitcher } from '@/components/documents/docs-section-switcher';
+import { SkillEntriesList } from '@/components/documents/skill-entries-list';
+import {
+    docSection,
+    docSectionForPath,
+    isPersonalPath,
+    isSectionRoot,
+    type DocSectionId,
+} from '@/lib/files/doc-sections';
+import {
+    SKILLS_ROOT,
+    SKILL_MANIFEST_NAME,
+    buildSkillScaffold,
+    isSkillManifestPath,
+    isSkillsRootPath,
+    skillNameFromPath,
+    skillFolderPath,
+    skillManifestPath,
+    suggestSkillName,
+    validateSkillName,
+} from '@/lib/files/skills';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import type { DatastoreFile } from '@/lib/types';
 import type { FileSearchResultSchema } from 'lemma-sdk';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
+import { Skeleton } from '@/components/shared/loading';
 
 type DocSearchResult = FileSearchResultSchema;
 
@@ -66,8 +89,39 @@ type DocsUploadStatus = {
 };
 
 const DATASTORE_NAME = 'default';
-const PERSONAL_FILES_ROOT = '/me';
-const PERSONAL_FILES_LABEL = 'Personal files';
+
+/** Names vary, so the placeholders do — equal bars read as a table, not a list. */
+const DOCS_ROW_WIDTHS = ['w-2/5', 'w-1/3', 'w-1/2', 'w-5/12', 'w-1/3', 'w-2/5'];
+
+/**
+ * The docs list, waiting.
+ *
+ * Built from the settled row — `surface-list-row`, `h-11`, the 5×5 icon slot,
+ * and the fixed trailing columns — so the panel holds its height and the columns
+ * do not step sideways when the real rows land.
+ */
+function DocsRowsSkeleton({ rows = 6 }: { rows?: number }) {
+    return (
+        <div role="status" aria-label="Loading docs">
+            {DOCS_ROW_WIDTHS.slice(0, rows).map((width, index) => (
+                <div key={index} className="surface-list-row h-11 min-w-0 gap-2 px-3" data-skeleton="true">
+                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                            <Skeleton shape="block" className="h-4 w-4" />
+                        </span>
+                        <Skeleton className={cn('h-3', width)} />
+                        <span className="ml-auto hidden w-10 shrink-0 lg:block">
+                            <Skeleton className="h-2.5 w-full" />
+                        </span>
+                        <span className="hidden w-16 shrink-0 md:block">
+                            <Skeleton className="h-2.5 w-full" />
+                        </span>
+                    </div>
+                </div>
+            ))}
+        </div>
+    );
+}
 
 function activeDirectoryPath(folderPath: string | null): string {
     return folderPath || '/';
@@ -86,9 +140,10 @@ function getParentDirectoryPath(path: string | null | undefined): string | null 
     return `/${parts.slice(0, -1).join('/')}`;
 }
 
+/** A section root is titled by its section; everything else by its folder name. */
 function getDirectoryLabel(path: string | null | undefined): string {
     if (!path || path === '/') return 'Docs';
-    if (isPersonalRootPath(path)) return PERSONAL_FILES_LABEL;
+    if (isSectionRoot(path)) return docSection(docSectionForPath(path)).title;
     return getFileNameFromPath(path);
 }
 
@@ -96,24 +151,8 @@ function isFolder(file: DatastoreFile): boolean {
     return file.kind === 'FOLDER';
 }
 
-function isPersonalPath(path: string | null | undefined): boolean {
-    if (!path) return false;
-    const normalized = path.startsWith('/') ? path : `/${path}`;
-    return normalized === PERSONAL_FILES_ROOT || normalized.startsWith(`${PERSONAL_FILES_ROOT}/`);
-}
-
-function isPersonalRootPath(path: string | null | undefined): boolean {
-    if (!path) return false;
-    const normalized = path.startsWith('/') ? path : `/${path}`;
-    return normalized === PERSONAL_FILES_ROOT;
-}
-
 function getFilePath(file: DatastoreFile): string {
     return file.path || file.id;
-}
-
-function getDocEntryLabel(file: DatastoreFile): string {
-    return isFolder(file) && isPersonalRootPath(getFilePath(file)) ? PERSONAL_FILES_LABEL : file.name;
 }
 
 function getDocEntryVisibility(file: DatastoreFile): string {
@@ -128,6 +167,16 @@ function joinPath(basePath: string | null, segment: string): string {
     return `${normalizedBase.replace(/\/+$/, '')}/${cleanSegment}`;
 }
 
+/**
+ * What the typed name will actually become. Skill names are constrained — the
+ * runtime only loads lowercase-and-hyphens — so showing the slug up front beats
+ * rejecting the input after the fact.
+ */
+function skillNameHint(input: string): string {
+    const name = suggestSkillName(input);
+    return validateSkillName(name) || `Creates ${skillManifestPath(name)}`;
+}
+
 function isMarkdownName(value: string): boolean {
     return /\.mdx?$/i.test(value) || /\.markdown$/i.test(value);
 }
@@ -136,6 +185,26 @@ function pageFileName(rawName: string): string {
     const clean = rawName.trim();
     if (!clean) return '';
     return isMarkdownName(clean) ? clean : `${clean}.md`;
+}
+
+/** Extension, upper-cased — the one word that says what a row is. */
+function getFileKindLabel(file: DatastoreFile): string {
+    const extension = /\.([a-z0-9]{1,8})$/i.exec(file.name)?.[1];
+    if (!extension) return '';
+    return extension.toUpperCase();
+}
+
+function formatFileSize(bytes: number | null | undefined): string {
+    if (!bytes || bytes < 0) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let value = bytes / 1024;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unitIndex]}`;
 }
 
 export function DocumentSpace({ podId }: { podId: string }) {
@@ -156,6 +225,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
     const [dragFileCount, setDragFileCount] = useState(0);
     const [docsUploadStatus, setDocsUploadStatus] = useState<DocsUploadStatus | null>(null);
     const [newPageName, setNewPageName] = useState('');
+    const [newSkillName, setNewSkillName] = useState('');
     const [newFolderName, setNewFolderName] = useState('');
     const [docsSearchQuery, setDocsSearchQuery] = useState('');
     const [debouncedDocsSearchQuery, setDebouncedDocsSearchQuery] = useState('');
@@ -165,6 +235,12 @@ export function DocumentSpace({ podId }: { podId: string }) {
     const folderPath = searchParams.get('folder');
     const isAssistantPresentation = Boolean(searchParams.get('assistantConversationId') || searchParams.get('conversationId'));
     const currentDirectoryPath = activeDirectoryPath(folderPath);
+    const activeSectionId = docSectionForPath(currentDirectoryPath);
+    const activeSection = docSection(activeSectionId);
+    /** Inside `/skills` the thing you make is a skill, so the action says so. */
+    const isSkillsFolder = isSkillsRootPath(currentDirectoryPath);
+    const isSkillsSection = activeSectionId === 'SKILLS';
+    const isPersonalSection = activeSectionId === 'PERSONAL';
     const selectedFilePath = searchParams.get('file');
     const selectedFileName = selectedFilePath ? getFileNameFromPath(selectedFilePath) : '';
     const selectedFileIsPersonal = isPersonalPath(selectedFilePath);
@@ -184,11 +260,28 @@ export function DocumentSpace({ podId }: { podId: string }) {
     );
 
     const docsEntries = useMemo(() => {
-        return [...(docsFilesData?.items || [])].sort((left, right) => {
+        // Skills and personal files answer to the switcher now. Leaving their
+        // folders in the pod listing as well would offer two doors into one room
+        // — and the folder row is the door that describes them worst.
+        const items = (docsFilesData?.items || []).filter((entry) => !isSectionRoot(getFilePath(entry)));
+
+        // Personal files are a drafting space, not a library: what you touched
+        // last is what you came back for.
+        if (isPersonalSection) {
+            return [...items].sort((left, right) => {
+                if (isFolder(left) !== isFolder(right)) return isFolder(left) ? -1 : 1;
+                const leftTime = left.updated_at ? Date.parse(left.updated_at) : 0;
+                const rightTime = right.updated_at ? Date.parse(right.updated_at) : 0;
+                if (leftTime !== rightTime) return rightTime - leftTime;
+                return left.name.localeCompare(right.name);
+            });
+        }
+
+        return [...items].sort((left, right) => {
             if (isFolder(left) !== isFolder(right)) return isFolder(left) ? -1 : 1;
             return left.name.localeCompare(right.name);
         });
-    }, [docsFilesData?.items]);
+    }, [docsFilesData?.items, isPersonalSection]);
 
     const handleShareEntryVisibilityChange = async (entry: DatastoreFile, visibility: ResourceVisibilityValue) => {
         await getLemmaClient(podId).files.update(getFilePath(entry), {
@@ -249,6 +342,8 @@ export function DocumentSpace({ podId }: { podId: string }) {
     }, [currentDirectoryPath, debouncedDocsSearchQuery, podId, searchFiles]);
 
     const isSearchMode = debouncedDocsSearchQuery.trim().length > 0;
+    /** Settled, browsing, and nothing in this folder — the one state that gets a single region. */
+    const isFolderBlank = !isSearchMode && !isLoadingDocsFiles && docsEntries.length === 0;
 
     const searchResultItems = useMemo(() => {
         if (!isSearchMode) return [];
@@ -288,12 +383,16 @@ export function DocumentSpace({ podId }: { podId: string }) {
         router.push(buildDocsHref(updates), { scroll: false });
     };
 
-    const handleCopyPersonalFileToPod = async () => {
-        if (!selectedFilePath || !selectedFileIsPersonal) return;
+    /**
+     * The one gesture personal files need that pod docs do not: this stops
+     * being mine and starts being ours.
+     */
+    const handleCopyToPodDocs = async (filePath: string) => {
+        if (!isPersonalPath(filePath)) return;
         setIsCopyingAcrossNamespace(true);
         try {
-            const blob = await getLemmaClient(podId).files.download(selectedFilePath);
-            const filename = getFileNameFromPath(selectedFilePath);
+            const blob = await getLemmaClient(podId).files.download(filePath);
+            const filename = getFileNameFromPath(filePath);
             const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
             await uploadFile({
                 podId,
@@ -342,6 +441,52 @@ export function DocumentSpace({ podId }: { podId: string }) {
             toast.success('Page created');
         } catch (error) {
             toast.error(error instanceof Error ? error.message : 'Failed to create page');
+        }
+    };
+
+    /**
+     * A skill is a folder plus a `SKILL.md` whose frontmatter names it — and the
+     * runtime refuses the skill if the two names disagree. So the name is typed
+     * once here and written to both places, rather than left for someone to
+     * keep in sync by hand.
+     */
+    const handleCreateSkill = async () => {
+        const name = suggestSkillName(newSkillName);
+        const problem = validateSkillName(name);
+        if (problem) {
+            toast.error(problem);
+            return;
+        }
+
+        if (docsEntries.some((entry) => isFolder(entry) && entry.name === name)) {
+            toast.error(`A skill named "${name}" already exists`);
+            return;
+        }
+
+        const manifest = new File(
+            [buildSkillScaffold(name, '')],
+            SKILL_MANIFEST_NAME,
+            { type: 'text/markdown' }
+        );
+
+        try {
+            await createFolder({
+                podId,
+                datastoreName: DATASTORE_NAME,
+                name,
+                directory_path: SKILLS_ROOT,
+            });
+            await uploadFile({
+                podId,
+                datastoreName: DATASTORE_NAME,
+                file: manifest,
+                directory_path: skillFolderPath(name),
+            });
+            setNewSkillName('');
+            openDocFile(skillManifestPath(name));
+            toast.success('Skill created');
+        } catch (error) {
+            toast.error(error instanceof Error ? error.message : 'Failed to create skill');
         }
     };
 
@@ -486,14 +631,142 @@ export function DocumentSpace({ podId }: { podId: string }) {
         const parentFolderPath = getParentDirectoryPath(folderPath);
         const folderBackLabel = getDirectoryLabel(parentFolderPath);
         const folderBackHref = buildDocsHref({ folder: parentFolderPath, file: null });
-        const currentFolderName = folderPath
-            ? isPersonalRootPath(folderPath) ? PERSONAL_FILES_LABEL : getFileNameFromPath(folderPath)
-            : 'Home';
+        // Inside a section root the heading is the section's own title; deeper
+        // in, it is the folder you opened.
+        const isSectionHome = !folderPath || isSectionRoot(folderPath);
+        const currentFolderName = isSectionHome ? activeSection.title : getFileNameFromPath(folderPath);
+        const openSection = (sectionId: DocSectionId) => openDocsFolder(docSection(sectionId).root);
+
+        const folderCount = docsEntries.filter((entry) => isFolder(entry)).length;
+        const fileCount = docsEntries.length - folderCount;
+        /** A skill is a folder, but counting folders is not what you came to know. */
+        const sectionListLabel = isSkillsSection ? 'Skills' : isPersonalSection ? 'Recent first' : 'Folders and docs';
+        const sectionCountLabel = isSkillsSection
+            ? `${folderCount} skill${folderCount === 1 ? '' : 's'}`
+            : `${folderCount} folders · ${fileCount} docs`;
+        /** Skill rows lead with the description; every other listing is a file list. */
+        const showsSkillRows = isSkillsFolder && !isSearchMode;
+
+        const indexingNote = 'Documents are indexed for search; data and binary files are stored as-is.';
+        const dropTargetHint = isSkillsSection
+            ? 'Drop a skill folder here, or use New skill to write one. Each skill needs a SKILL.md naming and describing it.'
+            : isPersonalSection
+                ? `Only you can see what lands here. Share one to the pod from its row when it is ready. ${indexingNote}`
+                : isFolderBlank
+                    ? `You can also create a page or a folder from the top of this pane. ${indexingNote}`
+                    : indexingNote;
+
+        const renderEntryActions = (entry: DatastoreFile) => {
+            const folder = isFolder(entry);
+            const path = getFilePath(entry);
+            return (
+                <ResourceActionsMenu
+                    ariaLabel={`Open actions for ${entry.name}`}
+                    triggerClassName="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                >
+                    <ResourceShareButton
+                        value={getDocEntryVisibility(entry)}
+                        podId={podId}
+                        resourceType={folder ? 'folder' : 'document'}
+                        resourceId={path}
+                        resourceLabel="files"
+                        resourceName={entry.name}
+                        shareUrl={typeof window === 'undefined' ? undefined : `${window.location.origin}${buildDocsHref({ folder: folder ? path : null, file: folder ? null : path })}`}
+                        onChange={(visibility) => handleShareEntryVisibilityChange(entry, visibility)}
+                        className="contents"
+                        trigger={({ openShare, disabled }) => (
+                            <DropdownMenuItem
+                                disabled={disabled}
+                                onSelect={(event) => {
+                                    event.preventDefault();
+                                    openShare();
+                                }}
+                            >
+                                <Share2 className="mr-2 h-4 w-4" />
+                                Share
+                            </DropdownMenuItem>
+                        )}
+                    />
+                    {/* Promotion, on the row rather than three clicks into the
+                        viewer — it is the move personal files exist to make. */}
+                    {!folder && isPersonalPath(path) ? (
+                        <DropdownMenuItem
+                            disabled={isCopyingAcrossNamespace}
+                            onSelect={(event) => {
+                                event.preventDefault();
+                                void handleCopyToPodDocs(path);
+                            }}
+                        >
+                            <Files className="mr-2 h-4 w-4" />
+                            Copy to pod docs
+                        </DropdownMenuItem>
+                    ) : null}
+                    <DestructiveResourceActionItem onSelect={() => setEntryPendingDelete(entry)}>
+                        Delete {folder ? 'folder' : 'file'}
+                    </DestructiveResourceActionItem>
+                </ResourceActionsMenu>
+            );
+        };
+
+        const renderDocRow = (entry: DatastoreFile) => {
+            const folder = isFolder(entry);
+            const path = getFilePath(entry);
+            const kindLabel = folder ? '' : getFileKindLabel(entry);
+            const sizeLabel = folder ? '' : formatFileSize(entry.size_bytes);
+            return (
+                <div
+                    key={entry.id}
+                    className="surface-list-row custom-focus-ring group h-11 min-w-0 gap-2 px-3 text-left text-sm"
+                >
+                    <button
+                        type="button"
+                        onClick={() => folder ? openDocsFolder(path) : openDocFile(path)}
+                        className="document-space-entry-button custom-focus-ring flex min-w-0 flex-1 items-center gap-2.5 rounded text-left"
+                    >
+                        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                            <ProductIcon kind={folder ? 'folders' : 'docs'} size="sm" />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">{entry.name}</span>
+                        {/* What a row is, how big it is, whether the pod can read
+                            it — the three facts that were missing while the row
+                            still spent 56px.
+
+                            The badge goes first because it is the only
+                            variable-width thing here: with the name absorbing the
+                            slack and every column after the badge a fixed width,
+                            type / size / date line up down the list instead of
+                            stepping left and right with each status label. */}
+                        {!folder ? (
+                            <FileIndexStatusBadge file={entry} className="hidden md:inline-flex" />
+                        ) : null}
+                        {/* Rendered even when empty: a folder row with no type or
+                            size still has to hold the columns open, or the dates
+                            zig-zag. */}
+                        <span className="type-eyebrow-sm hidden w-10 shrink-0 text-right lg:inline">
+                            {kindLabel}
+                        </span>
+                        <span className="hidden w-16 shrink-0 text-right text-xs tabular-nums text-[var(--text-tertiary)] md:inline">
+                            {sizeLabel}
+                        </span>
+                        <span className="hidden w-14 shrink-0 text-right text-xs text-[var(--text-tertiary)] sm:inline">
+                            {entry.updated_at ? new Date(entry.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}
+                        </span>
+                        {/* Inside Personal every row is personal, so the badge is
+                            a column of the same word. It earns its place in the
+                            pod listing, where visibility actually varies. */}
+                        {isPersonalSection ? null : (
+                            <ResourceVisibilityBadge visibility={getDocEntryVisibility(entry)} resourceLabel="files" compact />
+                        )}
+                    </button>
+                    {renderEntryActions(entry)}
+                </div>
+            );
+        };
 
         return (
-            <ResourceIndexShell>
+            <ResourceIndexShell className="flex flex-col">
                 <div
-                    className="relative w-full min-w-0"
+                    className="relative flex min-h-0 w-full min-w-0 flex-1 flex-col"
                     onDragEnter={handleDocsDragEnter}
                     onDragOver={handleDocsDragOver}
                     onDragLeave={handleDocsDragLeave}
@@ -522,36 +795,52 @@ export function DocumentSpace({ podId }: { podId: string }) {
                     />
 
                     <ResourceHeader
-                        title={folderPath ? currentFolderName : 'Docs'}
-                        backHref={folderPath ? folderBackHref : undefined}
-                        backLabel={folderPath ? folderBackLabel : undefined}
+                        title={currentFolderName}
+                        backHref={isSectionHome ? undefined : folderBackHref}
+                        backLabel={isSectionHome ? undefined : folderBackLabel}
                         actions={(
                             <TooltipProvider>
                             <div className="flex shrink-0 items-center gap-1">
-                                <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    className="docs-topbar-action gap-2 px-2 sm:px-3"
-                                    onClick={() => setNewPageName((current) => current || 'Untitled')}
-                                    aria-label="New page"
-                                    title="New page"
-                                >
-                                    <FileText className="h-4 w-4" />
-                                    <span className="docs-action-label">New page</span>
-                                </Button>
+                                {isSkillsFolder ? (
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        className="docs-topbar-action gap-2 px-2 sm:px-3"
+                                        disabled={isCreatingFolder || isUploadingFile}
+                                        onClick={() => setNewSkillName((current) => current || 'untitled-skill')}
+                                        aria-label="New skill"
+                                        title="New skill"
+                                    >
+                                        <Sparkles className="h-4 w-4" />
+                                        <span className="docs-action-label">New skill</span>
+                                    </Button>
+                                ) : (
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        className="docs-topbar-action gap-2 px-2 sm:px-3"
+                                        onClick={() => setNewPageName((current) => current || 'Untitled')}
+                                        aria-label="New page"
+                                        title="New page"
+                                    >
+                                        <FileText className="h-4 w-4" />
+                                        <span className="docs-action-label">New page</span>
+                                    </Button>
+                                )}
                                 <Tooltip>
                                     <TooltipTrigger asChild>
                                         <Button
                                             type="button"
-                                            variant="ghost"
+                                            variant="quiet"
                                             size="icon"
                                             className="h-8 w-8 rounded"
                                             disabled={isUploadingFile}
                                             onClick={() => docsUploadInputRef.current?.click()}
                                             aria-label="Upload"
                                         >
-                                            {isUploadingFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+                                            {isUploadingFile ? <StepLoader size="sm" /> : <Upload className="h-4 w-4" />}
                                         </Button>
                                     </TooltipTrigger>
                                     <TooltipContent>Upload</TooltipContent>
@@ -560,36 +849,53 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                     <TooltipTrigger asChild>
                                         <Button
                                             type="button"
-                                            variant="ghost"
+                                            variant="quiet"
                                             size="icon"
                                             className="h-8 w-8 rounded"
                                             disabled={isUploadingFile || folderUpload.isFolderUploading}
                                             onClick={() => void folderUpload.handleUploadFolderClick()}
                                             aria-label="Upload folder"
                                         >
-                                            {folderUpload.isFolderUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Folder className="h-4 w-4" />}
+                                            {folderUpload.isFolderUploading ? <StepLoader size="sm" /> : <Folder className="h-4 w-4" />}
                                         </Button>
                                     </TooltipTrigger>
                                     <TooltipContent>Upload folder</TooltipContent>
                                 </Tooltip>
-                                <Button
-                                    type="button"
-                                    size="sm"
-                                    className="docs-topbar-action gap-2 px-2 sm:px-3"
-                                    disabled={isCreatingFolder}
-                                    onClick={() => setNewFolderName((current) => current || 'Untitled folder')}
-                                    aria-label="New folder"
-                                    title="New folder"
-                                >
-                                    {isCreatingFolder ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}
-                                    <span className="docs-action-label">New folder</span>
-                                </Button>
+                                {/* A bare folder under `/skills` is not a skill —
+                                    it is a row that will only ever say it won't
+                                    load. "New skill" is the way in there. */}
+                                {isSkillsFolder ? null : (
+                                    <Button variant="primary"
+                                        type="button"
+                                        size="sm"
+                                        className="docs-topbar-action gap-2 px-2 sm:px-3"
+                                        disabled={isCreatingFolder}
+                                        onClick={() => setNewFolderName((current) => current || 'Untitled folder')}
+                                        aria-label="New folder"
+                                        title="New folder"
+                                    >
+                                        {isCreatingFolder ? <StepLoader size="sm" /> : <FolderPlus className="h-4 w-4" />}
+                                        <span className="docs-action-label">New folder</span>
+                                    </Button>
+                                )}
                             </div>
                             </TooltipProvider>
                         )}
                     />
 
-                    {!folderPath ? <SectionPrimer concept="file" className="mb-4" /> : null}
+                    {/* The three doors, always in the same place. Which one you
+                        are behind decides what the rest of this pane offers. */}
+                    <div className="mb-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                        <DocsSectionSwitcher activeSection={activeSectionId} onSectionChange={openSection} />
+                        <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-tertiary)]">
+                            {activeSection.blurb}
+                        </p>
+                    </div>
+
+                    {/* Teaching where it helps, gone once it doesn't. The primer
+                        used to sit above every listing, so a folder with content
+                        carried three bands of chrome over two rows of substance. */}
+                    {!folderPath && isFolderBlank ? <SectionPrimer concept="file" className="mb-4" /> : null}
 
                     {isDocsDragActive ? (
                         <div className="state-surface-info pointer-events-none absolute inset-x-0 top-2 z-10 flex h-[calc(100vh-10rem)] min-h-80 max-h-[44rem] items-center justify-center rounded-lg border-2 border-dashed shadow-[var(--shadow-sm)]">
@@ -604,7 +910,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
                         </div>
                     ) : null}
 
-                    {newPageName || newFolderName ? (
+                    {newPageName || newSkillName || newFolderName ? (
                         <div className="mb-5 grid gap-3 md:grid-cols-2">
                             {newPageName ? (
                                 <InlineCreateRow
@@ -614,6 +920,17 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                     onSubmit={handleCreateDocPage}
                                     onCancel={() => setNewPageName('')}
                                     isBusy={isUploadingFile}
+                                />
+                            ) : null}
+                            {newSkillName ? (
+                                <InlineCreateRow
+                                    value={newSkillName}
+                                    onChange={setNewSkillName}
+                                    placeholder="Skill name"
+                                    onSubmit={handleCreateSkill}
+                                    onCancel={() => setNewSkillName('')}
+                                    isBusy={isCreatingFolder || isUploadingFile}
+                                    hint={skillNameHint(newSkillName)}
                                 />
                             ) : null}
                             {newFolderName ? (
@@ -629,7 +946,12 @@ export function DocumentSpace({ podId }: { podId: string }) {
                         </div>
                     ) : null}
 
-                    <div>
+                    {/* One column that owns the pane. The listing takes the space
+                        it needs and the drop target takes the rest, so a folder
+                        with two rows in it stops looking like a failed render.
+                        The height comes down the flex chain from `pod-page-surface`
+                        rather than from a guessed `100dvh - chrome` subtraction. */}
+                    <div className="flex min-h-0 flex-1 flex-col">
                         <DocsUploadProgress status={docsUploadStatus} />
                         <FolderUploadProgress
                             activeFolderUpload={folderUpload.activeFolderUpload}
@@ -640,40 +962,57 @@ export function DocumentSpace({ podId }: { podId: string }) {
                             onDismiss={folderUpload.removeFolderUploadSession}
                             disabled={isUploadingFile || folderUpload.isFolderUploading}
                         />
-                        <div className="docs-list-toolbar mb-3 flex min-w-0 flex-wrap items-end gap-3">
-                            <div className="docs-list-toolbar-title min-w-0 flex-[1_1_14rem]">
-                                <h2 className="text-sm font-normal text-[var(--text-primary)]">
-                                    {folderPath ? 'In this folder' : 'Folders and docs'}
-                                </h2>
-                                <p className="mt-1 text-xs text-[var(--text-tertiary)]">
-                                    {isSearchMode
-                                        ? isSearchingFiles ? 'Searching inside documents' : `${searchResultItems.length} result${searchResultItems.length === 1 ? '' : 's'}`
-                                        : `${docsEntries.filter((entry) => isFolder(entry)).length} folders, ${docsEntries.filter((entry) => !isFolder(entry)).length} docs`}
-                                </p>
-                            </div>
-                            <div className="docs-list-toolbar-search relative min-w-[min(18rem,100%)] flex-[1_1_18rem] max-w-sm">
+                        {/* Label and count on one line with the search field. Two
+                            stacked lines of heading for a two-row list read as a
+                            section that lost its content. */}
+                        <div className="docs-list-toolbar mb-2 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                            <p className="docs-list-toolbar-title min-w-0 flex-1 truncate text-xs text-[var(--text-tertiary)]">
+                                <span className="text-[var(--text-secondary)]">
+                                    {isSectionHome ? sectionListLabel : 'In this folder'}
+                                </span>
+                                <span className="px-1.5 text-[var(--border-strong)]">·</span>
+                                {isSearchMode
+                                    ? isSearchingFiles ? 'Searching inside documents' : `${searchResultItems.length} result${searchResultItems.length === 1 ? '' : 's'}`
+                                    : sectionCountLabel}
+                            </p>
+                            <div className="docs-list-toolbar-search relative min-w-[min(16rem,100%)] flex-[0_1_17rem]">
                                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
                                 <Input
                                     value={docsSearchQuery}
                                     onChange={(event) => setDocsSearchQuery(event.target.value)}
-                                    placeholder="Search inside docs"
-                                    className="form-field-control h-10 pl-9 text-sm shadow-none"
+                                    placeholder={activeSection.searchPlaceholder}
+                                    className="form-field-control h-9 pl-9 text-sm shadow-none"
                                 />
                             </div>
                         </div>
 
-                        <div className="overflow-hidden">
+                        {/* The listing has an edge now. Rows on bare canvas gave
+                            the content no bottom, which is most of why the page
+                            read as empty even when it wasn't.
+
+                            An empty folder skips the panel entirely: an empty box
+                            stacked on top of the drop target is two ways of saying
+                            "nothing here", and the drop target already says it
+                            while also being the thing you act on. */}
+                        {/* `min-h-0` is what makes this scroll rather than clip: a
+                            flex item's automatic minimum size is its content, so
+                            without it the panel refuses to shrink and the rows
+                            past the fold are simply cut off. `overflow-x-hidden`
+                            keeps the rounded corners clipping rows as before. */}
+                        <div
+                            className={cn(
+                                'surface-panel-quiet min-h-0 overflow-y-auto overflow-x-hidden',
+                                isFolderBlank && 'hidden'
+                            )}
+                        >
+                            {/* Rows, at the row's own height. An `h-28` caption is
+                                one box where the list will be six, so the panel
+                                used to shrink or grow the moment docs arrived. */}
                             {isLoadingDocsFiles ? (
-                                <div className="flex h-28 items-center justify-center gap-2 text-sm text-[var(--text-tertiary)]">
-                                    <Loader2 className="h-4 w-4 animate-spin" />
-                                    Loading docs
-                                </div>
+                                <DocsRowsSkeleton />
                             ) : isSearchMode ? (
                                 isSearchingFiles ? (
-                                    <div className="flex h-28 items-center justify-center gap-2 text-sm text-[var(--text-tertiary)]">
-                                        <Loader2 className="h-4 w-4 animate-spin" />
-                                        Searching docs
-                                    </div>
+                                    <DocsRowsSkeleton rows={4} />
                                 ) : searchResultItems.length === 0 ? (
                                     <QuietEmptyState className="h-28 justify-center px-6 text-center">
                                         No matching passages in this folder.
@@ -684,7 +1023,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                             key={`${result.path}-${result.chunkIndex}`}
                                             type="button"
                                             onClick={() => openDocFile(result.path)}
-                                            className="document-space-result-button surface-list-row custom-focus-ring items-start gap-3 px-0 py-3 text-left text-sm"
+                                            className="document-space-result-button surface-list-row custom-focus-ring items-start gap-3 px-3 py-3 text-left text-sm"
                                         >
                                             <ProductIcon kind="docs" size="sm" />
                                             <span className="min-w-0 flex-1">
@@ -704,77 +1043,50 @@ export function DocumentSpace({ podId }: { podId: string }) {
                                 )
                             ) : docsEntries.length === 0 ? (
                                 <QuietEmptyState className="h-28 justify-center px-6 text-center">
-                                    No docs here yet. Create a page, upload source material, or make a folder.
+                                    {activeSection.emptyLine}
                                 </QuietEmptyState>
+                            ) : showsSkillRows ? (
+                                <>
+                                    <SkillEntriesList
+                                        podId={podId}
+                                        folders={docsEntries.filter((entry) => isFolder(entry))}
+                                        onOpenSkill={(skillName) => openDocFile(skillManifestPath(skillName))}
+                                        renderActions={renderEntryActions}
+                                    />
+                                    {/* A loose file dropped into `/skills` is not a
+                                        skill and should not pretend to be one. */}
+                                    {docsEntries.filter((entry) => !isFolder(entry)).map(renderDocRow)}
+                                </>
                             ) : (
-                                docsEntries.map((entry) => {
-                                    const folder = isFolder(entry);
-                                    const path = getFilePath(entry);
-                                    const label = getDocEntryLabel(entry);
-                                    return (
-                                        <div
-                                            key={entry.id}
-                                            className="surface-list-row custom-focus-ring group h-14 min-w-0 gap-3 px-0 text-left text-sm"
-                                        >
-                                            <button
-                                                type="button"
-                                                onClick={() => folder ? openDocsFolder(path) : openDocFile(path)}
-                                                className="document-space-entry-button custom-focus-ring flex min-w-0 flex-1 items-center gap-3 rounded text-left"
-                                            >
-                                                {folder ? (
-                                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center">
-                                                        <ProductIcon kind="folders" size="lg" />
-                                                    </span>
-                                                ) : (
-                                                    <span className="flex h-8 w-8 shrink-0 items-center justify-center">
-                                                        <ProductIcon kind="docs" size="lg" />
-                                                    </span>
-                                                )}
-                                                <span className="min-w-0 flex-1 truncate text-[var(--text-primary)]">{label}</span>
-                                                {!folder ? (
-                                                    <FileIndexStatusBadge file={entry} className="hidden md:inline-flex" />
-                                                ) : null}
-                                                <span className="hidden shrink-0 text-xs text-[var(--text-tertiary)] sm:inline">
-                                                    {entry.updated_at ? new Date(entry.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}
-                                                </span>
-                                                <ResourceVisibilityBadge visibility={getDocEntryVisibility(entry)} resourceLabel="files" compact />
-                                            </button>
-                                            <ResourceActionsMenu
-                                                ariaLabel={`Open actions for ${label}`}
-                                                triggerClassName="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-                                            >
-                                                <ResourceShareButton
-                                                    value={getDocEntryVisibility(entry)}
-                                                    podId={podId}
-                                                    resourceType={folder ? 'folder' : 'document'}
-                                                    resourceId={path}
-                                                    resourceLabel="files"
-                                                    resourceName={label}
-                                                    shareUrl={typeof window === 'undefined' ? undefined : `${window.location.origin}${buildDocsHref({ folder: folder ? path : null, file: folder ? null : path })}`}
-                                                    onChange={(visibility) => handleShareEntryVisibilityChange(entry, visibility)}
-                                                    className="contents"
-                                                    trigger={({ openShare, disabled }) => (
-                                                        <DropdownMenuItem
-                                                            disabled={disabled}
-                                                            onSelect={(event) => {
-                                                                event.preventDefault();
-                                                                openShare();
-                                                            }}
-                                                        >
-                                                            <Share2 className="mr-2 h-4 w-4" />
-                                                            Share
-                                                        </DropdownMenuItem>
-                                                    )}
-                                                />
-                                                <DestructiveResourceActionItem onSelect={() => setEntryPendingDelete(entry)}>
-                                                    Delete {folder ? 'folder' : 'file'}
-                                                </DestructiveResourceActionItem>
-                                            </ResourceActionsMenu>
-                                        </div>
-                                    );
-                                })
+                                docsEntries.map(renderDocRow)
                             )}
                         </div>
+
+                        {/* The space under a short listing was doing nothing, and
+                            drop-to-upload was already wired — it just had no
+                            standing target. Now the leftover height is the target. */}
+                        {!isSearchMode ? (
+                            <Button
+                                type="button"
+                                variant="quiet"
+                                onClick={() => docsUploadInputRef.current?.click()}
+                                disabled={isUploadingFile}
+                                className={cn(
+                                    'flex h-auto min-h-[8rem] flex-1 flex-col items-center justify-center gap-1.5 whitespace-normal rounded-lg border border-dashed border-[color:color-mix(in_srgb,var(--border-subtle)_88%,transparent)] px-6 py-8 text-center hover:border-[color:var(--border-strong)] hover:bg-[color:color-mix(in_srgb,var(--surface-2)_42%,transparent)]',
+                                    isFolderBlank ? 'mt-0' : 'mt-3'
+                                )}
+                            >
+                                <Upload className="h-4 w-4 text-[var(--text-tertiary)]" />
+                                <span className="text-sm text-[var(--text-secondary)]">
+                                    {isFolderBlank
+                                        ? activeSection.emptyLine
+                                        : 'Drop files here, or click to browse'}
+                                </span>
+                                <span className="max-w-sm text-xs leading-5 text-[var(--text-tertiary)]">
+                                    {dropTargetHint}
+                                </span>
+                            </Button>
+                        ) : null}
                     </div>
 
                     <FolderUploadConfirmDialog
@@ -809,15 +1121,23 @@ export function DocumentSpace({ podId }: { podId: string }) {
         );
     }
 
-    const selectedFileParentPath = getParentDirectoryPath(selectedFilePath);
+    /**
+     * Opening a skill opens the skill, so closing it returns to the skills
+     * list. Walking up one directory would strand you in `/skills/<name>` — a
+     * folder holding the single file you just closed, which is a dead end
+     * dressed as a destination.
+     */
+    const selectedSkillName = isSkillManifestPath(selectedFilePath) ? skillNameFromPath(selectedFilePath) : null;
+    const selectedFileParentPath = selectedSkillName ? SKILLS_ROOT : getParentDirectoryPath(selectedFilePath);
     const selectedFileBackHref = buildDocsHref({ folder: selectedFileParentPath, file: null });
     const selectedFileBackLabel = getDirectoryLabel(selectedFileParentPath);
+    const selectedFileTitle = selectedSkillName || selectedFileName || 'Docs';
 
     return (
         <div className="h-full min-h-0 bg-[var(--bg-canvas)]">
             {!isAssistantPresentation ? (
                 <ResourceHeader
-                    title={selectedFileName || 'Docs'}
+                    title={selectedFileTitle}
                     backHref={selectedFileBackHref}
                     backLabel={selectedFileBackLabel}
                 />
@@ -830,7 +1150,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
                 headerMode="topbar"
                 topbarBackHref={selectedFileBackHref}
                 topbarBackLabel={selectedFileBackLabel}
-                contextLabel={selectedFileIsPersonal ? 'Personal file' : 'Shared doc'}
+                contextLabel={selectedSkillName ? 'Skill' : selectedFileIsPersonal ? 'Personal file' : 'Shared doc'}
                 onClose={() => updateQuery({ file: null })}
                 onDeleted={() => updateQuery({ file: null })}
                 extraActions={selectedFileIsPersonal ? (
@@ -838,15 +1158,15 @@ export function DocumentSpace({ podId }: { podId: string }) {
                         <TooltipTrigger asChild>
                         <Button
                             type="button"
-                            variant="ghost"
+                            variant="quiet"
                             size="icon"
                             className="h-8 w-8 rounded"
                             disabled={isCopyingAcrossNamespace}
-                            onClick={() => void handleCopyPersonalFileToPod()}
+                            onClick={() => void handleCopyToPodDocs(selectedFilePath)}
                             aria-label="Duplicate to pod"
                         >
                             {isCopyingAcrossNamespace ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <StepLoader size="sm" />
                             ) : (
                                 <Files className="h-4 w-4" />
                             )}
@@ -874,7 +1194,7 @@ function DocsUploadProgress({ status }: { status: DocsUploadStatus | null }) {
                     {isComplete ? (
                         <CheckCircle2 className={cn('h-4 w-4 shrink-0', hasFailures ? 'text-[var(--state-warning)]' : 'text-[var(--state-success)]')} />
                     ) : (
-                        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--state-info)]" />
+                        <StepLoader size="sm" className="shrink-0 text-[var(--state-info)]" />
                     )}
                     <p className="min-w-0 truncate text-xs font-medium text-[var(--text-primary)]">
                         {isComplete
@@ -906,6 +1226,7 @@ function InlineCreateRow({
     onSubmit,
     onCancel,
     isBusy,
+    hint,
 }: {
     value: string;
     onChange: (value: string) => void;
@@ -913,6 +1234,7 @@ function InlineCreateRow({
     onSubmit: () => void | Promise<void>;
     onCancel: () => void;
     isBusy?: boolean;
+    hint?: string;
 }) {
     return (
         <div className="rounded-lg bg-[color:color-mix(in_srgb,var(--surface-2)_30%,transparent)] p-2">
@@ -934,6 +1256,9 @@ function InlineCreateRow({
                 }}
             />
             <div className="mt-2 flex items-center justify-end gap-2">
+                {hint ? (
+                    <p className="min-w-0 flex-1 truncate px-2 text-xs text-[var(--text-tertiary)]">{hint}</p>
+                ) : null}
                 <button
                     type="button"
                     onClick={onCancel}
@@ -950,7 +1275,7 @@ function InlineCreateRow({
                         'bg-[var(--action-primary)]'
                     )}
                 >
-                    {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Create'}
+                    {isBusy ? <StepLoader size="xs" /> : 'Create'}
                 </button>
             </div>
         </div>

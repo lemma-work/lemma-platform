@@ -94,7 +94,7 @@ export function ShareLinkRow({
                         <TooltipTrigger asChild>
                             <Button
                                 type="button"
-                                variant="ghost"
+                                variant="quiet"
                                 size="icon"
                                 className="h-8 w-8 shrink-0"
                                 onClick={() => void nativeShare()}

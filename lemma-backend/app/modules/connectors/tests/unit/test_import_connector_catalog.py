@@ -374,6 +374,57 @@ async def test_sync_composio_catalog_uses_googlecalendar_toolkit_with_google_cal
 
 
 @pytest.mark.asyncio
+async def test_sync_composio_catalog_backfills_toolkit_logo_for_iconless_native_app():
+    """Natively-supported apps ship with icon=None in lemma_apps_config.json; without
+    a fallback they are the only connectors that never render a brand mark."""
+    connector_repository = SimpleNamespace(
+        get=AsyncMock(
+            return_value=ConnectorEntity(
+                id="slack",
+                title="Slack",
+                description="Slack connector",
+                icon=None,
+                provider_capabilities=[LemmaProviderCapability()],
+                is_active=True,
+            )
+        )
+    )
+    operation_repository = SimpleNamespace()
+    trigger_repository = SimpleNamespace()
+
+    toolkit_item = _toolkit("slack", name="Slack")
+    composio = SimpleNamespace(
+        toolkits=SimpleNamespace(get=MagicMock(return_value=_toolkit_detail()))
+    )
+
+    with (
+        patch.dict(os.environ, {"COMPOSIO_API_KEY": "test-api-key"}, clear=False),
+        patch.object(importer, "Composio", return_value=composio),
+        patch.object(importer, "_list_composio_toolkits", return_value=[toolkit_item]),
+        patch.object(importer, "_paginate_tools", return_value=iter([])),
+        patch.object(importer, "_paginate_triggers", return_value=iter([])),
+        patch.object(importer, "_upsert_connector", AsyncMock()) as upsert_connector,
+        patch.object(importer, "_upsert_operation", AsyncMock()),
+        patch.object(importer, "_upsert_trigger", AsyncMock()),
+    ):
+        await importer._sync_composio_catalog(
+            connector_repository,
+            operation_repository,
+            trigger_repository,
+            app_filters={"slack"},
+            managed_by="composio",
+            page_size=100,
+            max_composio_apps=10,
+        )
+
+    entity = upsert_connector.await_args.args[1]
+    assert entity.icon == "slack.png"
+    # The curated title/description are still preserved for native apps.
+    assert entity.title == "Slack"
+    assert entity.description == "Slack connector"
+
+
+@pytest.mark.asyncio
 async def test_sync_composio_catalog_keeps_composio_operations_for_non_native_apps():
     connector_repository = SimpleNamespace(get=AsyncMock(return_value=None))
     operation_repository = SimpleNamespace()

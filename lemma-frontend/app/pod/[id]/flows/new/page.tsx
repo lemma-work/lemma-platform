@@ -6,7 +6,6 @@ import {
     ArrowLeft,
     ArrowRight,
     CheckCircle2,
-    Loader2,
     Plus,
     Sparkles,
     Workflow,
@@ -27,6 +26,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useCreateFlow, useUpdateFlowGraph } from '@/lib/hooks/use-flows';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
 
 type BuilderStepId = 'details' | 'starter';
 
@@ -155,7 +155,7 @@ export default function NewFlowPage({
         return (
             <div className="context-shell flex min-h-full items-center justify-center bg-transparent p-6">
                 <EmptyState
-                    variant="panel"
+                    variant="region"
                     icon={<Workflow className="h-5 w-5" />}
                     title="No access to create workflows"
                     description="You can still open workflows you have permission to read."
@@ -301,7 +301,7 @@ export default function NewFlowPage({
                     <div className="flex shrink-0 items-center gap-2">
                         <Button
                             type="button"
-                            variant="outline"
+                            variant="secondary"
                             onClick={goToPreviousStep}
                             disabled={currentStep === 'details' || isBusy}
                             className="gap-2"
@@ -310,21 +310,21 @@ export default function NewFlowPage({
                             Previous
                         </Button>
                         {isFinalStep ? (
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 onClick={handleSubmit}
                                 disabled={isBusy || !hasName || !selectedTemplate}
                                 className="gap-2"
                             >
                                 {isBusy ? (
-                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                    <StepLoader size="sm" />
                                 ) : (
                                     <Sparkles className="h-4 w-4" />
                                 )}
                                 {isBusy ? 'Creating...' : 'Create workflow'}
                             </Button>
                         ) : (
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 onClick={goToNextStep}
                                 disabled={!hasName || isBusy}

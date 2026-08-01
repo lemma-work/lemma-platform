@@ -39,11 +39,23 @@ struct ArtifactRef {
 struct ReleaseManifest {
     schema_version: u64,
     version: String,
+    /// How this manifest was produced, when whoever produced it wants to say.
+    /// CI's desktop job stamps `ci-build-check`; see [`BUILD_CHECK_SOURCE`].
+    #[serde(default)]
+    artifact_source: Option<String>,
     #[serde(default)]
     host_packs: HashMap<String, ArtifactRef>,
     #[serde(default)]
     guest_runtimes: HashMap<String, ArtifactRef>,
 }
+
+/// The marker CI puts on the manifest it bakes into its build-check DMG.
+///
+/// That job exists to prove the app compiles and codesigns, so it stages
+/// unresolvable URLs and zero digests rather than real artifacts. The DMG is
+/// still signed and still launches, so without this it fails at first run with
+/// a generic connection error and sends people looking for a firewall problem.
+const BUILD_CHECK_SOURCE: &str = "ci-build-check";
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -350,6 +362,16 @@ fn load_manifest_with_policy(
             format!("invalid local release manifest: {error}"),
         )
     })?;
+    // Checked before anything is downloaded, and on the marker rather than on
+    // the placeholder hostname: the unresolvable URL is an implementation
+    // detail of the stub, the marker is the statement of intent.
+    if manifest.artifact_source.as_deref() == Some(BUILD_CHECK_SOURCE) {
+        return Err(invalid(
+            "this app came from a CI build-check DMG, which carries no runtime to \
+             install. Build an installable one with the Release Local Images \
+             workflow (publish: false) - see desktop/README.md",
+        ));
+    }
     if manifest.schema_version != MANIFEST_SCHEMA_VERSION
         || manifest.version.is_empty()
         || manifest.version.len() > 128
@@ -1428,6 +1450,74 @@ mod tests {
             .replace("1.2.3", "../escape");
         fs::write(&path, unsafe_manifest).unwrap();
         assert!(load_manifest(&path).is_err());
+    }
+
+    #[test]
+    fn a_ci_build_check_manifest_is_refused_by_name_not_by_connection_error() {
+        // The CI desktop job builds a real, signed, launchable DMG whose
+        // manifest points nowhere. Without the marker check the first launch
+        // reports "could not connect to the artifact host", which reads as a
+        // network fault and costs whoever hit it an hour.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("lemma-local.json");
+        let artifact = serde_json::json!({
+            "url": "https://downloads.example.invalid/lemma-host-pack.zip",
+            "sha256": "0".repeat(64),
+            "size": 1,
+            "expanded_size": 1,
+            "format": "zip",
+            "platform": "macos",
+            "architecture": "aarch64",
+            "runtime_version": "1.2.3",
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "version": "1.2.3",
+                "artifact_source": "ci-build-check",
+                "host_packs": {host_target(): artifact.clone()},
+                "guest_runtimes": {guest_target(): artifact},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = load_manifest(&path).expect_err("a build-check manifest must not install");
+        let message = error.to_string();
+        assert!(
+            message.contains("build-check") && message.contains("Release Local Images"),
+            "the refusal must name what this is and how to get a real one: {message}"
+        );
+    }
+
+    #[test]
+    fn a_manifest_without_the_marker_is_unaffected() {
+        // `artifact_source` is optional and every real manifest omits it today.
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("lemma-local.json");
+        let artifact = serde_json::json!({
+            "url": "https://downloads.example.test/runtime.zip",
+            "sha256": "a".repeat(64),
+            "size": 42,
+            "expanded_size": 84,
+            "format": "zip",
+            "platform": "macos",
+            "architecture": "aarch64",
+            "runtime_version": "1.2.3",
+        });
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "version": "1.2.3",
+                "host_packs": {host_target(): artifact.clone()},
+                "guest_runtimes": {guest_target(): artifact},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(load_manifest(&path).unwrap().version, "1.2.3");
     }
 
     #[test]

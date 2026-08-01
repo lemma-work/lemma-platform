@@ -44,12 +44,22 @@ async def redis_client(e2e_settings):
     # deletes its consumer groups, and FastStream permanently stops subscribers
     # that observe NOGROUP. Trim entries instead so every test starts without
     # stale events while the live worker keeps its group topology.
-    for stream in ("schedule_events", "datastore.events"):
+    for stream in (
+        "schedule_events",
+        "datastore.events",
+        "workflow_run_events",
+        "agent_events",
+    ):
         await client.xtrim(stream, maxlen=0)
     try:
         yield client
     finally:
-        for stream in ("schedule_events", "datastore.events"):
+        for stream in (
+            "schedule_events",
+            "datastore.events",
+            "workflow_run_events",
+            "agent_events",
+        ):
             await client.xtrim(stream, maxlen=0)
         await client.aclose()
 

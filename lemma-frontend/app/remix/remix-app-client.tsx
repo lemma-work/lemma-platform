@@ -67,7 +67,7 @@ function RemixAppLanding({ rawSource }: { rawSource?: string }) {
                         Open the Remix on Lemma badge from a hosted app so its source can be
                         handed to your assistant.
                     </p>
-                    <Button className="mt-5" onClick={() => router.push('/')}>
+                    <Button variant="quiet" className="mt-5" onClick={() => router.push('/')}>
                         Go to Lemma
                     </Button>
                 </section>
@@ -152,7 +152,7 @@ function RemixAppLanding({ rawSource }: { rawSource?: string }) {
                                         ))}
                                     </SelectContent>
                                 </Select>
-                                <Button
+                                <Button variant="primary"
                                     className="remix-command-action"
                                     disabled={!effectivePod}
                                     onClick={() => {
@@ -172,7 +172,7 @@ function RemixAppLanding({ rawSource }: { rawSource?: string }) {
                                     Create a pod for this remix. The source app will follow
                                     you into its first assistant conversation.
                                 </p>
-                                <Button
+                                <Button variant="secondary"
                                     className="remix-command-action"
                                     onClick={() =>
                                         router.push(buildCreatePodForRemixHref(source))

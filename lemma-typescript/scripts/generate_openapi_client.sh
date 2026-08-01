@@ -59,14 +59,7 @@ fi
 normalize_json_file "$SPEC_TMP"
 "$PYTHON_BIN" "$REPO_ROOT/scripts/prepare_client_openapi.py" \
   "$SPEC_TMP" \
-  "$CLIENT_SPEC_TMP" \
-  --exclude-tag billing-subscriptions \
-  --exclude-tag billing-webhooks \
-  --exclude-tag scheduler \
-  --exclude-tag webhooks \
-  --exclude-prefix /billing \
-  --exclude-prefix /scheduler \
-  --exclude-prefix /webhooks
+  "$CLIENT_SPEC_TMP"
 normalize_json_file "$CLIENT_SPEC_TMP"
 
 cd "$SDK_DIR"

@@ -185,6 +185,7 @@ async def test_schedule_surface_event_is_inbox_backed_and_deterministically_queu
         user_id=uuid4(),
         schedule_type=ScheduleType.TIME,
         payload={"message": "hello"},
+        source_event_id="time:test-fire",
         pod_id=uuid4(),
     )
 

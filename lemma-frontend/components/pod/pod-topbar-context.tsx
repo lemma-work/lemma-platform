@@ -29,6 +29,14 @@ export type PodTopbarState = {
     tabs?: ReactNode;
     actions?: ReactNode;
     fullscreen?: boolean;
+    /**
+     * Which `ResourceHeader` owns the bar right now.
+     *
+     * A leaving route must not blank a bar that the arriving route has already
+     * claimed — during a transition the two can commit in either order, and the
+     * bar going empty for a frame is the most visible flicker in the shell.
+     */
+    claim?: number;
 };
 
 type PodTopbarContextValue = {

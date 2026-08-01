@@ -47,16 +47,12 @@ describe("AgentHostNamespace", () => {
       .mockResolvedValue({ id: "host-1" } as never);
     const hosts = new AgentHostNamespace(passthroughAdapter);
 
-    await hosts.createPairing({
-      display_name: "My computer",
-      organization_id: "org-1",
-    });
+    // A paired computer belongs to the person who paired it: there is no
+    // organization on the wire, and scope lives on the runtime profile instead.
+    await hosts.createPairing({ display_name: "My computer" });
     await hosts.revoke("host-1");
 
-    expect(pairingSpy).toHaveBeenCalledWith({
-      display_name: "My computer",
-      organization_id: "org-1",
-    });
+    expect(pairingSpy).toHaveBeenCalledWith({ display_name: "My computer" });
     expect(revokeSpy).toHaveBeenCalledWith("host-1");
   });
 });

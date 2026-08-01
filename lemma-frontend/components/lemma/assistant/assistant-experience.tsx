@@ -43,16 +43,13 @@ import {
   type AssistantSurfaceTone,
 } from "./assistant-chrome";
 import {
-  extractAgentFinalOutput,
-  type AgentFinalOutput,
-} from "@/lib/utils/agent-output";
-import {
   type DisplayResourceRequest,
 } from "@/lib/assistant/display-resource";
 // Pure formatting / label / tool-payload helpers (extracted from this file).
 import {
   currentRunStatusLabel,
   currentToolStatusLabel,
+  resolveThinkingOwner,
   isInlineToolStatusAlreadyVisible,
   stringifyAssistantError,
 } from "./assistant-format";
@@ -65,7 +62,6 @@ import {
 } from "./assistant-message-group";
 // Standalone presentational parts (plan strip, thinking, empty state, icons) extracted.
 import {
-  DefaultFinalOutputPanel,
   EmptyState,
   LemmaMarkIcon,
   ThinkingIndicator,
@@ -155,6 +151,7 @@ export function AssistantExperienceView({
   placeholder = "Message Lemma Assistant",
   emptyState,
   emptyStateSuggestions,
+  emptyStateFillsViewport = false,
   resourceMentions = [],
   draft: controlledDraft,
   onDraftChange,
@@ -172,10 +169,6 @@ export function AssistantExperienceView({
   renderMessageContent = defaultMessageContent,
   renderPendingFile = defaultPendingFile,
   renderToolInvocation,
-  finalOutput,
-  outputSchema,
-  showFinalOutput = true,
-  renderFinalOutput = DefaultFinalOutputPanel,
 }: AssistantExperienceViewProps) {
   const [draft, setDraft] = useControllableDraft(controlledDraft, onDraftChange);
   const [isPlanHidden, setIsPlanHidden] = useState(false);
@@ -230,6 +223,8 @@ export function AssistantExperienceView({
   const isLoadingMessages = controller.isLoadingMessages;
   const isLoadingOlderMessages = controller.isLoadingOlderMessages;
   const isInitialMessageLoading = isLoadingMessages && controllerMessages.length === 0;
+  const isConversationEmpty = controllerMessages.length === 0 && !isConversationBusy && !isInitialMessageLoading;
+  const centerEmptyConversation = emptyStateFillsViewport && isConversationEmpty;
   const sendMessage = controller.sendMessage;
   const uploadFiles = controller.uploadFiles;
   const loadOlderMessages = controller.loadOlderMessages;
@@ -403,13 +398,6 @@ export function AssistantExperienceView({
   useEffect(() => {
     setIsPlanHidden(false);
   }, [activeConversationId, latestUserMessageId, planIdentity]);
-  const inferredFinalOutput = useMemo(
-    () => showFinalOutput ? extractAgentFinalOutput(controllerMessages, { parseTextFallback: false }) : null,
-    [controllerMessages, showFinalOutput],
-  );
-  const resolvedFinalOutput: AgentFinalOutput | null = showFinalOutput
-    ? (typeof finalOutput === "undefined" ? inferredFinalOutput : finalOutput)
-    : null;
   const lastAssistantTextHasContent = useMemo(() => {
     if (controllerMessages.length === 0) return false;
     const lastMsg = controllerMessages[controllerMessages.length - 1];
@@ -539,7 +527,19 @@ export function AssistantExperienceView({
     : "Assistant error";
   const headerTone: AssistantSurfaceTone = resolvedChromeStyle === "elevated" ? "default" : resolvedChromeStyle === "flat" ? "flat" : "subtle";
   const composerTone: AssistantSurfaceTone = resolvedChromeStyle === "flat" ? "flat" : resolvedChromeStyle === "subtle" ? "subtle" : "default";
-  const showThinkingStatus = !!inlineRunStatus && (inlineRunStatus.label !== "Thinking" || !lastAssistantTextHasContent);
+  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
+  const thinkingOwner = resolveThinkingOwner({
+    rows: displayMessageRows,
+    latestUser: currentRunLatestUserIndex,
+    hasRunStatus: !!inlineRunStatus,
+  });
+  // Progress labels ("Working for 12s", "Waiting for your input") describe the
+  // run rather than competing for the word "Thinking", so they stay whoever
+  // owns the thought. Only the bare placeholder yields.
+  const showThinkingStatus = !!inlineRunStatus
+    && (inlineRunStatus.label !== "Thinking"
+      ? true
+      : thinkingOwner === "run-status" && !lastAssistantTextHasContent);
   const showInlineStatus = statusPlacement === "inline" && showThinkingStatus;
   const showComposerStatus = statusPlacement === "composer" && showThinkingStatus;
   const uploadStatusLabel = controller.isUploadingFiles
@@ -560,7 +560,6 @@ export function AssistantExperienceView({
       ) : null}
     </>
   );
-  const currentRunLatestUserIndex = latestUserIndex(controllerMessages);
   const inlineToolStatusAlreadyVisible = isInlineToolStatusAlreadyVisible({
     rows: displayMessageRows,
     latestUser: currentRunLatestUserIndex,
@@ -624,7 +623,6 @@ export function AssistantExperienceView({
       data-show-model-picker={showModelPicker ? "true" : "false"}
       data-busy={isConversationBusy ? "true" : "false"}
       data-has-plan={planSummary ? "true" : "false"}
-      data-has-final-output={resolvedFinalOutput ? "true" : "false"}
       data-has-pending-files={controller.pendingFiles.length > 0 ? "true" : "false"}
       data-show-conversation-list={showConversationList ? "true" : "false"}
     >
@@ -639,7 +637,15 @@ export function AssistantExperienceView({
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--pod-main-bg)]">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--pod-main-bg)]",
+            // An empty conversation is a cold start, not a transcript: centre the
+            // empty state and the composer as one group rather than pinning the
+            // composer to the floor of a blank page.
+            centerEmptyConversation && "justify-center",
+          )}
+        >
           {showHeader ? (
             <AssistantExperienceHeader
               controller={controller}
@@ -665,11 +671,8 @@ export function AssistantExperienceView({
             onScroll={updatePinnedState}
             contentWidthClassName={contentWidthClassName}
             activeConversationId={activeConversationId}
-            resolvedFinalOutput={resolvedFinalOutput ? renderFinalOutput({
-              output: resolvedFinalOutput,
-              schema: outputSchema,
-            }) : null}
-            showEmptyState={controller.messages.length === 0 && !isConversationBusy && !isInitialMessageLoading}
+            showEmptyState={isConversationEmpty}
+            fillEmptyState={emptyStateFillsViewport}
             emptyState={emptyState || (
               <EmptyState
                 onSendMessage={(message) => { void handleSuggestionSend(message); }}

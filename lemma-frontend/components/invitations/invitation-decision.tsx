@@ -94,10 +94,10 @@ export function InvitationDecision({
                             </CardDescription>
                         </CardHeader>
                         <CardFooter className="gap-3">
-                            <Button onClick={() => void refetch()} disabled={isFetching}>
+                            <Button variant="secondary" onClick={() => void refetch()} disabled={isFetching}>
                                 {isFetching ? "Retrying..." : "Retry"}
                             </Button>
-                            <Button asChild variant="ghost">
+                            <Button asChild variant="quiet">
                                 <Link href="/">Back to home</Link>
                             </Button>
                         </CardFooter>
@@ -143,7 +143,7 @@ export function InvitationDecision({
 
                         <CardFooter className="flex-col gap-4 pt-6">
                             {invitation.status === OrganizationInvitationStatus.PENDING ? (
-                                <Button
+                                <Button variant="primary"
                                     onClick={handleAccept}
                                     disabled={isBusy}
                                     loading={isAccepting}
@@ -154,11 +154,11 @@ export function InvitationDecision({
                                     <ArrowRight className="h-5 w-5 shrink-0" />
                                 </Button>
                             ) : (
-                                <Button asChild className="h-14 w-full text-base">
+                                <Button variant="quiet" asChild className="h-14 w-full text-base">
                                     <Link href="/">Go to home</Link>
                                 </Button>
                             )}
-                            <Button asChild variant="ghost" className="text-base">
+                            <Button asChild variant="quiet" className="text-base">
                                 <Link href="/">Back</Link>
                             </Button>
                         </CardFooter>
@@ -229,13 +229,13 @@ export function InvitationDecision({
                                             <XCircle className="h-4 w-4" />
                                             Reject invitation
                                         </Button>
-                                        <Button asChild variant="ghost">
+                                        <Button asChild variant="quiet">
                                             <Link href={`/invitations/${invitationId}/accept`}>Back to accept</Link>
                                         </Button>
                                     </>
                                 ) : (
                                     <>
-                                        <Button
+                                        <Button variant="primary"
                                             onClick={handleAccept}
                                             disabled={isBusy}
                                             loading={isAccepting}
@@ -245,16 +245,16 @@ export function InvitationDecision({
                                             <CheckCircle2 className="h-4 w-4" />
                                             Accept invitation
                                         </Button>
-                                        <Button asChild variant="outline">
+                                        <Button asChild variant="secondary">
                                             <Link href={`/invitations/${invitationId}/reject`}>Reject</Link>
                                         </Button>
-                                        <Button asChild variant="ghost">
+                                        <Button asChild variant="quiet">
                                             <Link href="/">Cancel</Link>
                                         </Button>
                                     </>
                                 )
                             ) : (
-                                <Button asChild>
+                                <Button variant="quiet" asChild>
                                     <Link href="/">Go to home</Link>
                                 </Button>
                             )}

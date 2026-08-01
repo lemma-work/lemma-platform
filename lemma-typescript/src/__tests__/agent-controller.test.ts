@@ -16,6 +16,24 @@ function sseStream(events: unknown[]): ReadableStream<Uint8Array> {
   });
 }
 
+function pacedSseStream(events: unknown[], intervalMs: number): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let index = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const event = events[index];
+      if (event === undefined) {
+        controller.close();
+        return;
+      }
+      index += 1;
+      const data = typeof event === "string" ? event : JSON.stringify(event);
+      controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    },
+  });
+}
+
 function droppedStream(): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -27,9 +45,10 @@ function droppedStream(): ReadableStream<Uint8Array> {
 interface FakeClientHooks {
   events: unknown[];
   onSend?: (conversationId: string, content: string) => void;
+  paceMs?: number;
 }
 
-function fakeClient({ events, onSend }: FakeClientHooks): LemmaClient {
+function fakeClient({ events, onSend, paceMs }: FakeClientHooks): LemmaClient {
   const conversations = {
     create: async (payload: { pod_id?: string }) => ({
       id: "conv-1",
@@ -46,7 +65,7 @@ function fakeClient({ events, onSend }: FakeClientHooks): LemmaClient {
       body: { content: string },
     ) => {
       onSend?.(conversationId, body.content);
-      return sseStream(events);
+      return paceMs ? pacedSseStream(events, paceMs) : sseStream(events);
     },
     resumeStream: async () => sseStream([]),
     stopRun: async () => ({ id: "conv-1", status: "WAITING" }),
@@ -103,6 +122,7 @@ describe("AgentController", () => {
     expect(state.messages[0]?.id).toBe("msg-1");
     // Streaming buffer is cleared once the assistant message lands.
     expect(state.streamingText).toBe("");
+    expect(state.streamingThinking).toBe("");
     expect(notifications).toBeGreaterThan(0);
 
     const outputs = selectAgentOutputs(state);
@@ -110,6 +130,50 @@ describe("AgentController", () => {
     expect(outputs.finalOutput?.id).toBe("msg-1");
 
     unsubscribe();
+  });
+
+  it("streams thinking separately from answer text", async () => {
+    const controller = makeController([
+      { type: "token", data: "Considering", kind: "thinking" },
+      {
+        id: "thought-1",
+        role: "assistant",
+        kind: "thinking",
+        text: "Considering",
+        created_at: "2026-06-18T00:00:00.000Z",
+      },
+      { type: "token", data: "Done", kind: "text" },
+      {
+        id: "answer-1",
+        role: "assistant",
+        kind: "text",
+        text: "Done",
+        created_at: "2026-06-18T00:00:01.000Z",
+      },
+      { type: "completed" },
+    ], { paceMs: 5 });
+
+    const snapshots: Array<{ thinking: string; text: string }> = [];
+    controller.subscribe(() => {
+      const state = controller.getState();
+      snapshots.push({
+        thinking: state.streamingThinking,
+        text: state.streamingText,
+      });
+    });
+
+    await controller.createConversation();
+    await controller.sendMessage("work");
+
+    expect(controller.getState().messages.map((message) => message.kind)).toEqual([
+      "thinking",
+      "text",
+    ]);
+    expect(controller.getState().streamingThinking).toBe("");
+    expect(controller.getState().streamingText).toBe("");
+    expect(snapshots.some(({ thinking }) => thinking === "Considering")).toBe(true);
+    expect(snapshots.some(({ text }) => text === "Done")).toBe(true);
+    expect(snapshots.every(({ thinking, text }) => !(thinking && text))).toBe(true);
   });
 
   it("surfaces a stream error as FAILED + error state", async () => {

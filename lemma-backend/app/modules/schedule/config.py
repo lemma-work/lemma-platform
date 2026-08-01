@@ -21,6 +21,11 @@ class ScheduleSettings(BaseSettings):
         default=5,
         description="Deactivate a schedule after this many consecutive execution errors.",
     )
+    schedule_minimum_interval_minutes: int = Field(
+        default=15,
+        ge=1,
+        description="Minimum interval between recurring TIME schedule executions.",
+    )
     scheduler_internal_token: SecretStr | None = Field(
         default=None,
         description="Optional bearer token shared with the scheduler sidecar.",

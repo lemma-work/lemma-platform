@@ -13,12 +13,15 @@ export type ScheduleRunResponse = {
     llm_output: Record<string, any>;
     metadata: Record<string, any>;
     payload: Record<string, any>;
+    redrive_of_run_id?: (string | null);
+    redriven_by_user_id?: (string | null);
     schedule_id: string;
     source_event_id: string;
     source_occurred_at?: (string | null);
     started_at?: (string | null);
     status: ScheduleRunStatus;
     target_kind: string;
-    target_run_id?: (string | null);
+    target_run_id: (string | null);
     updated_at: string;
+    user_id: (string | null);
 };

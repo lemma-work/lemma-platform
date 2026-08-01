@@ -521,6 +521,12 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
     from app.core.config import settings as app_settings
 
     monkeypatch.setattr(app_settings, "api_url", "https://api.example.test")
+    # SYSTEM mode - the Lemma-managed number - is only offered when this
+    # deployment actually has WhatsApp native credentials, so the catalog can
+    # only publish a claim on it when they are configured. Without these the
+    # test asserted a claim on an option the catalog was correctly not offering.
+    monkeypatch.setattr(surface_settings, "whatsapp_access_token", "system-whatsapp")
+    monkeypatch.setattr(surface_settings, "whatsapp_phone_number_id", "system-phone")
     primary_pod_id = test_pod["id"]
     sibling = await authenticated_client.post(
         "/pods",
@@ -605,7 +611,9 @@ async def test_surface_credentials_are_unique_within_org_until_deleted(
         f"/pods/{sibling_pod_id}/surfaces",
         json={"platform": "SLACK", "account_id": str(account.id)},
     )
-    assert duplicate_account.status_code == 422, duplicate_account.text
+    # Same AgentSurfaceCredentialConflict as the SYSTEM case above, so the same
+    # 409 - a conflict, not an unprocessable body.
+    assert duplicate_account.status_code == 409, duplicate_account.text
     assert "connected account is already used" in duplicate_account.text
 
     deleted_account = await authenticated_client.delete(

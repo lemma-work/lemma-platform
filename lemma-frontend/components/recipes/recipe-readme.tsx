@@ -4,13 +4,14 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ExternalLink, Loader2 } from '@/components/ui/icons';
+import { ExternalLink } from '@/components/ui/icons';
 
 import {
     absolutizeReadmeAssetUrls,
     getReadmeRawCandidates,
     type KitDefinition,
 } from '@/lib/kits/catalog';
+import { StepLoader } from '@/components/brand/loader';
 
 type ReadmeState =
     | { status: 'loading' }
@@ -65,7 +66,7 @@ export function RecipeReadme({ kit }: { kit: KitDefinition }) {
     if (readmeState.status === 'loading') {
         return (
             <div className="flex min-h-72 items-center justify-center gap-2 text-sm text-[var(--text-secondary)]">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <StepLoader size="sm" />
                 Loading README...
             </div>
         );

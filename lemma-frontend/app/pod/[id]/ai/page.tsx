@@ -19,6 +19,7 @@ import { LemmaMark } from '@/components/brand/logo';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
+import { AsyncRegion, ResourceCardSkeleton } from '@/components/shared/loading';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell, ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
@@ -67,9 +68,9 @@ export default function AgentsPage({
     const canReadSchedules = podAccess.can('schedule.read');
     const canReadWorkflows = podAccess.can('workflow.read');
     const canUseSurfaces = podAccess.canAccessRoute('surfaces');
-    const { data: agentsData, isLoading } = useAgents(podId);
-    const { data: schedulesData } = useSchedules(canReadSchedules ? podId : undefined, { limit: 100 });
-    const { data: flowsData } = useFlows(canReadWorkflows ? podId : undefined);
+    const { data: agentsData, isLoading, isFetching } = useAgents(podId);
+    const { data: schedulesData, isPending: schedulesPending } = useSchedules(canReadSchedules ? podId : undefined, { limit: 100 });
+    const { data: flowsData, isPending: flowsPending } = useFlows(canReadWorkflows ? podId : undefined);
     // Surfaces that fall to the pod default assistant (the virtual Super Agent).
     const automation = usePodAutomation(podId, { schedules: false, surfaces: canUseSurfaces });
     const defaultSurfaceCount = automation.defaultSurfaces.length;
@@ -100,6 +101,11 @@ export default function AgentsPage({
         });
     }, [agentFilter, agentUsage, agents, scheduledAgentNames]);
     const agentsInWorkflows = agents.filter((agent) => (agentUsage.get(agent.name)?.size || 0) > 0).length;
+    // Three queries land at three different times, and each one used to re-flow
+    // the strip. A count nobody has fetched yet is `undefined`, which the metric
+    // button prints as a dash — never a zero that turns into a three.
+    const workflowCount = canReadWorkflows && flowsPending ? undefined : agentsInWorkflows;
+    const scheduledCount = canReadSchedules && schedulesPending ? undefined : activeAgentScheduleCount;
     const agentPendingDeleteScheduleCount = agentPendingDelete
         ? schedules.filter((schedule) => schedule.agent_name === agentPendingDelete.name && schedule.is_active !== false).length
         : 0;
@@ -129,7 +135,7 @@ export default function AgentsPage({
                 meta={<ConceptHint concept="agent" />}
                 actions={(
                     canCreateAgent ? <Link href={`/pod/${podId}/agents/new`}>
-                        <Button className="gap-2" size="sm">
+                        <Button variant="secondary" className="gap-2" size="sm">
                             <Plus className="h-4 w-4" />
                             New agent
                         </Button>
@@ -139,86 +145,103 @@ export default function AgentsPage({
 
             <SectionPrimer concept="agent" className="mb-4" />
 
-            {isLoading ? (
-                <div className="space-y-3" role="status" aria-label="Loading agents">
-                    <div className="flex items-center gap-2 py-1">
-                        {[1, 2, 3].map((item) => (
-                            <div key={`agent-metric-skeleton-${item}`} className="lemma-skeleton h-7 w-24 rounded-md" />
-                        ))}
-                    </div>
-                    <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {[1, 2, 3].map((item) => (
-                            <div key={`resource-card-skeleton-${item}`} className="surface-panel h-48 space-y-4 p-4">
-                                <div className="lemma-skeleton h-11 w-11 rounded-lg" />
-                                <div className="space-y-2">
-                                    <div className="lemma-skeleton h-4 w-32 rounded-md" />
-                                    <div className="lemma-skeleton h-3 w-full rounded-full" />
-                                    <div className="lemma-skeleton h-3 w-4/5 rounded-full" />
-                                </div>
-                                <div className="lemma-skeleton h-3 w-24 rounded-full" />
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            ) : agents.length === 0 ? (
-                <EmptyState
-                    variant="panel"
-                    icon={<Bot className="h-5 w-5" />}
-                    title="No agents yet"
-                    description={canCreateAgent
-                        ? "Add the first agent this pod can run. Start with a role, instructions, and the context it can access."
-                        : "No agents are available to you yet."}
-                    action={canCreateAgent ? (
-                        <Link href={`/pod/${podId}/agents/new`}>
-                            <Button size="sm" className="gap-2">
-                                <Plus className="h-4 w-4" />
-                                New agent
-                            </Button>
-                        </Link>
-                    ) : undefined}
+            {/* The strip is chrome, not content: its labels are known before any
+                query resolves, so it renders in every state and the row below it
+                never starts at a different offset. */}
+            <ResourceMetricStrip>
+                <ResourceMetricButton
+                    active={agentFilter === 'all'}
+                    label="Agents"
+                    count={isLoading ? undefined : agents.length}
+                    onClick={() => setAgentFilter('all')}
                 />
-            ) : (
-                <div>
-                    <ResourceMetricStrip>
-                        <ResourceMetricButton active={agentFilter === 'all'} label="Agents" count={agents.length} onClick={() => setAgentFilter('all')} />
-                        <ResourceMetricButton active={agentFilter === 'workflows'} label="In workflows" count={agentsInWorkflows} onClick={() => setAgentFilter('workflows')} />
-                        <ResourceMetricButton active={agentFilter === 'scheduled'} label="Scheduled" count={activeAgentScheduleCount} onClick={() => setAgentFilter('scheduled')} />
-                    </ResourceMetricStrip>
+                <ResourceMetricButton
+                    active={agentFilter === 'workflows'}
+                    label="In workflows"
+                    count={isLoading ? undefined : workflowCount}
+                    onClick={() => setAgentFilter('workflows')}
+                />
+                <ResourceMetricButton
+                    active={agentFilter === 'scheduled'}
+                    label="Scheduled"
+                    count={isLoading ? undefined : scheduledCount}
+                    onClick={() => setAgentFilter('scheduled')}
+                />
+            </ResourceMetricStrip>
 
+            {/* One grid, three fills. The assistant card is static — it depends on
+                nothing this page is fetching — so it holds its slot from the first
+                frame rather than pushing every other card sideways on arrival. */}
+            <AsyncRegion
+                isLoading={isLoading}
+                isEmpty={agents.length === 0}
+                isRefreshing={isFetching && !isLoading}
+                label="Loading agents"
+                skeleton={(
                     <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {canUseSurfaces && agentFilter === 'all' ? (
-                            <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} />
-                        ) : null}
-                        {filteredAgents.map((agent) => (
-                            <AgentProfileCard
-                                key={agent.id}
-                                agent={agent}
-                                podId={podId}
-                                activeScheduleCount={schedules.filter((schedule) => schedule.agent_name === agent.name && schedule.is_active !== false).length}
-                                workflowCount={agentUsage.get(agent.name)?.size || 0}
-                                onDelete={setAgentPendingDelete}
-                                canUpdate={resourceAllows(agent, 'agent.update', canUpdateAgent)}
-                                canDelete={resourceAllows(agent, 'agent.delete', canDeleteAgent)}
-                                onShareVisibilityChange={async (visibility) => {
-                                    await updateAgent.mutateAsync({
-                                        podId,
-                                        agentName: agent.name,
-                                        data: { visibility: visibility as UpdateAgentData['visibility'] },
-                                    });
-                                }}
-                            />
-                        ))}
-                        {filteredAgents.length === 0 ? (
-                            <EmptyState
-                                variant="compact"
-                                icon={<Bot className="h-4 w-4" />}
-                                title="No agents match this search"
-                                description="Try a different agent name or description."
-                            />
-                        ) : null}
+                        {canUseSurfaces ? <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} /> : null}
+                        <ResourceCardSkeleton />
+                        <ResourceCardSkeleton />
+                        {canUseSurfaces ? null : <ResourceCardSkeleton />}
                     </section>
-                </div>
-            )}
+                )}
+                empty={(
+                    <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {canUseSurfaces ? <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} /> : null}
+                        <EmptyState
+                            variant="region"
+                            className="col-span-full"
+                            icon={<Bot className="h-5 w-5" />}
+                            title="No agents yet"
+                            description={canCreateAgent
+                                ? "Add the first agent this pod can run. Start with a role, instructions, and the context it can access."
+                                : "No agents are available to you yet."}
+                            action={canCreateAgent ? (
+                                <Link href={`/pod/${podId}/agents/new`}>
+                                    <Button variant="primary" size="sm" className="gap-2">
+                                        <Plus className="h-4 w-4" />
+                                        New agent
+                                    </Button>
+                                </Link>
+                            ) : undefined}
+                        />
+                    </section>
+                )}
+            >
+                <section className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {canUseSurfaces && agentFilter === 'all' ? (
+                        <PodAssistantCard podId={podId} channelCount={defaultSurfaceCount} />
+                    ) : null}
+                    {filteredAgents.map((agent) => (
+                        <AgentProfileCard
+                            key={agent.id}
+                            agent={agent}
+                            podId={podId}
+                            activeScheduleCount={schedules.filter((schedule) => schedule.agent_name === agent.name && schedule.is_active !== false).length}
+                            workflowCount={agentUsage.get(agent.name)?.size || 0}
+                            onDelete={setAgentPendingDelete}
+                            canUpdate={resourceAllows(agent, 'agent.update', canUpdateAgent)}
+                            canDelete={resourceAllows(agent, 'agent.delete', canDeleteAgent)}
+                            onShareVisibilityChange={async (visibility) => {
+                                await updateAgent.mutateAsync({
+                                    podId,
+                                    agentName: agent.name,
+                                    data: { visibility: visibility as UpdateAgentData['visibility'] },
+                                });
+                            }}
+                        />
+                    ))}
+                    {filteredAgents.length === 0 ? (
+                        <EmptyState
+                            variant="region"
+                            className="col-span-full"
+                            icon={<Bot className="h-4 w-4" />}
+                            title="No agents match this filter"
+                            description="Try another filter, or clear it to see every agent."
+                        />
+                    ) : null}
+                </section>
+            </AsyncRegion>
             <DestructiveConfirmationDialog
                 open={Boolean(agentPendingDelete)}
                 onOpenChange={(open) => {

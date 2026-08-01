@@ -20,14 +20,9 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  previewAgentOutputValue,
-  schemaFieldKeys,
-} from "@/lib/utils/agent-output";
 import type { DisplayResourceRequest } from "@/lib/assistant/display-resource";
-import { humanizeKey, reasoningPartLabel } from "./assistant-format";
+import { reasoningPartLabel } from "./assistant-format";
 import type {
-  AssistantFinalOutputRenderArgs,
   EmptyStateSuggestion,
   LemmaAssistantDensity,
 } from "./assistant-types";
@@ -41,44 +36,6 @@ export function suggestionIconForTitle(title: string): ReactNode {
   if (normalized.includes("email") || normalized.includes("thread")) return <Mail className={className} />;
   if (normalized.includes("task") || normalized.includes("reminder")) return <CheckSquare className={className} />;
   return <ArrowUp className={className} />;
-}
-
-export function DefaultFinalOutputPanel({ output, schema }: AssistantFinalOutputRenderArgs): ReactNode {
-  const keys = schemaFieldKeys(schema, output).filter((key) => typeof output[key] !== "undefined");
-
-  return (
-    <details open className="group w-fit max-w-full min-w-[min(100%,420px)] rounded-lg border border-[color:color-mix(in_srgb,var(--row-border)_70%,transparent)] bg-[var(--bg-canvas)] shadow-[var(--shadow-sm)]">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 [&::-webkit-details-marker]:hidden">
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--action-primary-soft)] text-[var(--action-primary)]">
-            <FileOutput className="size-3.5" />
-          </span>
-          <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold text-[var(--text-primary)]">Result</span>
-            <span className="block truncate text-xs text-[var(--text-secondary)]">Structured final answer</span>
-          </span>
-        </span>
-        <ChevronDown className="size-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform group-open:rotate-180" aria-hidden="true" />
-      </summary>
-
-      <div className="px-3 pb-3">
-        {keys.length > 0 ? (
-          <div className={cn("grid max-w-3xl gap-2", keys.length > 1 && "sm:grid-cols-2")}>
-            {keys.map((key) => (
-              <div key={key} className="max-w-2xl rounded-md border border-[color:color-mix(in_srgb,var(--row-border)_50%,transparent)] bg-[color:color-mix(in_srgb,var(--surface-2)_20%,transparent)] px-2.5 py-2">
-                <p className="text-xs font-medium text-[var(--text-secondary)]">{humanizeKey(key)}</p>
-                <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-5 text-[var(--text-primary)]">
-                  {previewAgentOutputValue(output[key])}
-                </p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-[var(--text-secondary)]">No result fields were returned.</p>
-        )}
-      </div>
-    </details>
-  );
 }
 
 export function PlanSummaryStrip({ plan, onHide }: { plan: PlanSummaryState; onHide: () => void }) {
@@ -111,7 +68,7 @@ export function PlanSummaryStrip({ plan, onHide }: { plan: PlanSummaryState; onH
         {plan.steps.length > 0 ? (
           <Button
             type="button"
-            variant="ghost"
+            variant="quiet"
             size="sm"
             onClick={() => setShowDetails((prev) => !prev)}
             className="h-6 shrink-0 px-2 text-xs"
@@ -121,7 +78,7 @@ export function PlanSummaryStrip({ plan, onHide }: { plan: PlanSummaryState; onH
         ) : null}
         <Button
           type="button"
-          variant="ghost"
+          variant="quiet"
           size="sm"
           onClick={onHide}
           className="h-6 shrink-0 px-2 text-xs"
@@ -175,24 +132,32 @@ export function ThinkingIndicator({
     return () => clearTimeout(timer);
   }, []);
 
-  if (!show) return null;
-
-  if (!shimmer) {
-    return (
-      <div className="px-1 text-sm font-normal text-[var(--text-secondary)]" role="status" aria-live="polite">
-        {label}
-      </div>
-    );
-  }
-
+  // The 350ms wait is still right — a reply that starts immediately should not
+  // flash the word "Thinking" first. What was wrong is that it used to return
+  // null and take up no room, so the transcript jumped a line when the label
+  // appeared and jumped again when the first token replaced it. Now the line is
+  // reserved from the start and only its contents fade in.
+  //
+  // A span, not a div: the tool rollup renders this inside its toggle <button>,
+  // which only admits phrasing content.
   return (
-    <div role="status" aria-live="polite" aria-label="Generating response">
-      <span
-        className="lemma-assistant-thinking-shimmer inline-block bg-clip-text text-sm font-normal text-transparent animate-[lemma-skeleton-breathe_1.5s_ease-in-out_infinite]"
-      >
-        {label}
-      </span>
-    </div>
+    <span
+      className="lemma-assistant-thinking inline-flex h-5 items-center px-1"
+      role="status"
+      aria-live="polite"
+      aria-label={show ? "Generating response" : undefined}
+      data-visible={show ? "true" : undefined}
+    >
+      {show ? (
+        shimmer ? (
+          <span className="lemma-assistant-thinking-shimmer inline-block bg-clip-text text-sm font-normal text-transparent animate-[lemma-skeleton-breathe_1.5s_ease-in-out_infinite]">
+            {label}
+          </span>
+        ) : (
+          <span className="text-sm font-normal text-[var(--text-secondary)]">{label}</span>
+        )
+      ) : null}
+    </span>
   );
 }
 
@@ -299,25 +264,36 @@ export function ReasoningPartCard({
   text,
   isStreaming,
   durationMs,
+  showSummary = true,
 }: {
   text: string;
   isStreaming: boolean;
   durationMs?: number;
+  showSummary?: boolean;
 }) {
   const label = reasoningPartLabel(isStreaming, durationMs);
+  const content = (
+    <div className={cn(showSummary && "mt-1 border-l border-[color:var(--row-border)] pl-4")}>
+      <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--text-secondary)]">{text}</pre>
+    </div>
+  );
+
+  if (!showSummary) return content;
 
   return (
-    <details className="flex flex-col gap-1">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)]">
-        <span
-          className={cn("font-normal text-[var(--text-secondary)]", isStreaming && "animate-pulse text-[var(--action-primary)]")}
-        >
-          {label}
-        </span>
+    <details className="group flex flex-col gap-1">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)] [&::-webkit-details-marker]:hidden">
+        {isStreaming ? (
+          <ThinkingIndicator label={label} shimmer />
+        ) : (
+          <span className="font-normal text-[var(--text-secondary)]">{label}</span>
+        )}
+        <ChevronDown
+          className="-rotate-90 size-3.5 shrink-0 text-[var(--text-tertiary)] transition-transform group-open:rotate-0"
+          aria-hidden="true"
+        />
       </summary>
-      <div className="mt-1 border-l border-[color:var(--row-border)] pl-4">
-        <pre className="whitespace-pre-wrap font-mono text-xs text-[var(--text-secondary)]">{text}</pre>
-      </div>
+      {content}
     </details>
   );
 }

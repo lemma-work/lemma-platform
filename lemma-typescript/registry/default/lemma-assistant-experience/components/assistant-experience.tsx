@@ -573,16 +573,35 @@ function defaultMessageContent({ message }: AssistantMessageRenderArgs): ReactNo
   );
 }
 
+/** A GFM delimiter row on a line of its own — `| --- | :---: |`, `|---|---|`. */
+const TABLE_DELIMITER_ROW_PATTERN = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+/**
+ * Unpack one squashed line: a ` --- ` separator into a paragraph break, and
+ * cells that were run together back onto their own rows.
+ *
+ * A delimiter row that already has its own line is finished markdown, and every
+ * one of these rules would take it apart — so it is left alone.
+ */
+function repairCompactLine(line: string): string {
+  if (TABLE_DELIMITER_ROW_PATTERN.test(line)) return line;
+
+  return line
+    .replace(/[ \t]+---[ \t]+/g, "\n\n")
+    .replace(/\|\s+\|/g, "|\n|")
+    .replace(/\|\s+(?=\|?\s*:?-{3,})/g, "|\n")
+    .replace(/(\|\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|)\s+/g, "$1\n");
+}
+
 function normalizeAssistantMarkdown(content: string): string {
   const trimmed = content.trim();
   const isCompactMarkdown = trimmed.split(/\r?\n/).length <= 2 && /(?:[ \t]---[ \t]|[ \t]#{1,6}\s|\|\s+\|)/.test(trimmed);
   const normalized = trimmed
-    .replace(/[ \t]+---[ \t]+/g, "\n\n")
+    .split(/(\r?\n)/)
+    .map(repairCompactLine)
+    .join("")
     .replace(/([.!?)\]])[ \t]+(?=#{1,6}\s)/g, "$1\n\n")
-    .replace(/[ \t]+(?=#{1,6}\s)/g, "\n\n")
-    .replace(/\|\s+\|/g, "|\n|")
-    .replace(/\|\s+(?=\|?\s*:?-{3,})/g, "|\n")
-    .replace(/(\|\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|)\s+/g, "$1\n");
+    .replace(/[ \t]+(?=#{1,6}\s)/g, "\n\n");
 
   if (!isCompactMarkdown) return normalized;
 

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-import { ExternalLink, Github, Loader2 } from '@/components/ui/icons';
+import { ExternalLink, Github } from '@/components/ui/icons';
 import {
     extractReadmePresentation,
     fetchPublicGitHubReadme,
@@ -13,6 +13,7 @@ import {
     resolveReadmeLinkUrl,
     type PublicGitHubReadme,
 } from '@/lib/github/public-repository';
+import { StepLoader } from '@/components/brand/loader';
 
 type ReadmeState =
     | { status: 'loading' }
@@ -52,7 +53,7 @@ export function GitHubReadmePage({
     if (state.status === 'loading') {
         return (
             <div className="github-import-readme-loading">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <StepLoader size="sm" />
                 Loading the README from GitHub…
             </div>
         );

@@ -1,10 +1,10 @@
 'use client';
 
-import { Loader2 } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 
 import type { FolderUploadSession } from '../_lib/folder-upload';
+import { StepLoader } from '@/components/brand/loader';
 
 export interface FolderUploadStatusBannerProps {
     activeFolderUpload: FolderUploadSession | null;
@@ -42,14 +42,14 @@ export function FolderUploadStatusBanner({
                                 {activeFolderUpload.completedFiles + activeFolderUpload.failedFiles}/{activeFolderUpload.totalFiles}
                             </span>
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="h-6 px-2 text-xs"
                                 onClick={onStopFolderUpload}
                                 disabled={stoppingFolderUploadId === activeFolderUpload.id}
                             >
                                 {stoppingFolderUploadId === activeFolderUpload.id
-                                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ? <StepLoader size="xs" />
                                     : 'Stop Upload'}
                             </Button>
                         </div>
@@ -76,7 +76,7 @@ export function FolderUploadStatusBanner({
                                 {recentFolderUpload.completedFiles}/{recentFolderUpload.totalFiles}
                             </span>
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="h-6 px-2 text-xs"
                                 onClick={() => onDismissFolderUpload(recentFolderUpload.id)}
@@ -104,7 +104,7 @@ export function FolderUploadStatusBanner({
                     {recentFolderUpload.status === 'interrupted' && (
                         <div className="mt-2">
                             <Button
-                                variant="outline"
+                                variant="secondary"
                                 size="sm"
                                 className="h-7 text-xs"
                                 onClick={() => void onResumeFolderUpload()}

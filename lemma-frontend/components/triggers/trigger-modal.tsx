@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, Pause, Play, Sparkles } from '@/components/ui/icons';
+import { Pause, Play, Sparkles } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ProductIcon } from '@/components/pod/product-icon';
@@ -39,6 +39,7 @@ import {
 import { formatAgentName } from '@/lib/utils/agents';
 import { ScheduleType, type Account, type CreateScheduleRequest, type Schedule, type Workflow } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
 
 /**
  * A trigger, set up where the thing it wakes up lives.
@@ -564,23 +565,23 @@ export function TriggerModal({
                         {/* Back exists only mid-journey — an existing trigger has
                             nowhere behind it to go. */}
                         {step === 'details' && !isEditing ? (
-                            <Button type="button" variant="ghost" size="sm" onClick={() => setStep('kind')} disabled={isSaving}>
+                            <Button type="button" variant="quiet" size="sm" onClick={() => setStep('kind')} disabled={isSaving}>
                                 Back
                             </Button>
                         ) : <span />}
                         <div className="flex items-center gap-2">
-                            <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={isSaving}>
+                            <Button type="button" variant="quiet" size="sm" onClick={() => onOpenChange(false)} disabled={isSaving}>
                                 Cancel
                             </Button>
                             {step === 'details' ? (
-                                <Button
+                                <Button variant="primary"
                                     type="button"
                                     size="sm"
                                     className="gap-1.5"
                                     onClick={() => void handleSave()}
                                     disabled={!detailsReady || isSaving || (isEditing && !canUpdate)}
                                 >
-                                    {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                    {isSaving ? <StepLoader size="xs" /> : <Sparkles className="h-3.5 w-3.5" />}
                                     {isEditing ? 'Save' : 'Create trigger'}
                                 </Button>
                             ) : null}

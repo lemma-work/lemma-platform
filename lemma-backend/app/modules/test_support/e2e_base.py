@@ -442,6 +442,45 @@ async def cleanup_workspace_containers_function():
     await _close_e2e_process_clients()
 
 
+def _import_e2e_models() -> None:
+    """Populate shared SQLAlchemy metadata before schema creation."""
+    from app.core.infrastructure.events import models as event_models
+    from app.modules.agent.infrastructure import models as agent_models
+    from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
+    from app.modules.apps.infrastructure import models as app_models
+    from app.modules.connectors.infrastructure import models as connector_models
+    from app.modules.datastore.infrastructure.models import datastore_models
+    from app.modules.function.infrastructure import models as function_models
+    from app.modules.identity.infrastructure.models import (
+        organization_models,
+        user_models,
+    )
+    from app.modules.pod.infrastructure import models as pod_role_models
+    from app.modules.pod.infrastructure.models import pod_models
+    from app.modules.pod_bundle.infrastructure import models as pod_bundle_models
+    from app.modules.schedule.infrastructure import models as schedule_models
+    from app.modules.usage.infrastructure import models as usage_models
+    from app.modules.workflow.infrastructure import models as workflow_models
+
+    _ = (
+        event_models,
+        user_models,
+        organization_models,
+        pod_models,
+        agent_models,
+        datastore_models,
+        workflow_models,
+        function_models,
+        app_models,
+        connector_models,
+        schedule_models,
+        usage_models,
+        agent_surface_models,
+        pod_role_models,
+        pod_bundle_models,
+    )
+
+
 @pytest_asyncio.fixture(scope="session")
 async def worker(e2e_settings):
     """Run the real streaq worker process used in production.
@@ -457,6 +496,17 @@ async def worker(e2e_settings):
     """
     import asyncio
     import redis.asyncio as redis
+
+    # Worker lifespans may reconcile persisted state before any function-scoped
+    # db_manager fixture runs. Build the schema once before starting the
+    # session-scoped production worker; per-test db_manager still truncates it.
+    _ensure_repo_root_on_path()
+    _import_e2e_models()
+    schema_manager = DatabaseManager(e2e_settings.database_url)
+    async with schema_manager.engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    await schema_manager.create_tables()
+    await schema_manager.close()
 
     redis_client = redis.from_url(e2e_settings.redis_url, decode_responses=False)
     await redis_client.flushdb()
@@ -574,41 +624,7 @@ async def db_manager(e2e_settings) -> AsyncGenerator[DatabaseManager, None]:
     _ensure_repo_root_on_path()
     manager = DatabaseManager(e2e_settings.database_url)
 
-    from app.modules.identity.infrastructure.models import (
-        user_models,
-        organization_models,
-    )
-    from app.modules.pod.infrastructure.models import pod_models
-    from app.modules.agent.infrastructure import models as agent_models
-    from app.modules.datastore.infrastructure.models import datastore_models
-    from app.modules.workflow.infrastructure import models as workflow_models
-    from app.modules.function.infrastructure import models as function_models
-    from app.modules.apps.infrastructure import models as app_models
-    from app.modules.connectors.infrastructure import models as connector_models
-    from app.modules.schedule.infrastructure import models as schedule_models
-    from app.modules.usage.infrastructure import models as usage_models
-    from app.modules.agent_surfaces.infrastructure import models as agent_surface_models
-    from app.modules.pod.infrastructure import models as pod_role_models
-    from app.core.infrastructure.events import models as event_models
-    from app.modules.pod_bundle.infrastructure import models as pod_bundle_models
-
-    _ = (
-        event_models,
-        user_models,
-        organization_models,
-        pod_models,
-        agent_models,
-        datastore_models,
-        workflow_models,
-        function_models,
-        app_models,
-        connector_models,
-        schedule_models,
-        usage_models,
-        agent_surface_models,
-        pod_role_models,
-        pod_bundle_models,
-    )
+    _import_e2e_models()
 
     import asyncio as _asyncio
 

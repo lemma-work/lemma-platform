@@ -51,88 +51,15 @@ export function InlineLoader({
     );
 }
 
-export function LoadingState({
-    title = "Loading",
-    description,
-    variant = "panel",
-    shape = "lines",
-    className,
-}: {
-    title?: string;
-    description?: string;
-    variant?: "inline" | "panel" | "page";
-    shape?: "none" | "lines" | "cards" | "table";
-    className?: string;
-}) {
-    const isPage = variant === "page";
-    const isInline = variant === "inline";
-
-    return (
-        <div
-            className={cn(
-                "lemma-loading-state",
-                isPage
-                    ? "flex min-h-screen flex-col items-center justify-center gap-6"
-                    : isInline
-                        ? "inline-flex items-center gap-2"
-                        : "surface-panel flex min-h-[12rem] flex-col items-center justify-center gap-5 px-6 py-10 text-center",
-                className
-            )}
-            role="status"
-            aria-live="polite"
-        >
-            <StepLoader size={isPage ? "md" : isInline ? "xs" : "sm"} />
-            <div className={cn("min-w-0", isInline ? "text-left" : "text-center")}>
-                <p className={cn("font-medium text-[var(--text-primary)]", isInline ? "text-sm" : "text-base")}>
-                    {title}
-                </p>
-                {description ? (
-                    <p className={cn("mt-1 text-[var(--text-tertiary)]", isInline ? "text-xs" : "text-sm")}>
-                        {description}
-                    </p>
-                ) : null}
-            </div>
-            {!isInline && shape !== "none" ? <LoadingSkeleton shape={shape} /> : null}
-        </div>
-    );
-}
-
-export function LoadingSkeleton({
-    shape = "lines",
-    className,
-}: {
-    shape?: "lines" | "cards" | "table";
-    className?: string;
-}) {
-    if (shape === "cards") {
-        return (
-            <div className={cn("grid w-full max-w-2xl gap-3 sm:grid-cols-3", className)} aria-hidden="true">
-                {[0, 1, 2].map((item) => (
-                    <div key={item} className="lemma-skeleton h-24 rounded-lg" />
-                ))}
-            </div>
-        );
-    }
-
-    if (shape === "table") {
-        return (
-            <div className={cn("w-full max-w-2xl space-y-2", className)} aria-hidden="true">
-                <div className="lemma-skeleton h-8 rounded-md" />
-                {[0, 1, 2, 3].map((item) => (
-                    <div key={item} className="lemma-skeleton h-10 rounded-md" />
-                ))}
-            </div>
-        );
-    }
-
-    return (
-        <div className={cn("w-full max-w-sm space-y-2", className)} aria-hidden="true">
-            <div className="lemma-skeleton h-3 w-4/5 rounded-full" />
-            <div className="lemma-skeleton h-3 w-full rounded-full" />
-            <div className="lemma-skeleton h-3 w-3/5 rounded-full" />
-        </div>
-    );
-}
+/*
+ * `LoadingState` and `LoadingSkeleton` used to live here: a centred panel with
+ * a caption and a generic bar-chart of placeholders. They were removed because
+ * they matched no screen in the product — a region that settles into a card
+ * grid was showing three grey rectangles in a box, so data arrival always
+ * re-flowed the page. Skeletons now live next to the shapes they imitate, in
+ * `components/shared/loading`, and are built from the same class names as the
+ * real thing.
+ */
 
 /**
  * WordmarkLoader — Loader D: "Wordmark Build"

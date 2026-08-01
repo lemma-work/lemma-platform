@@ -276,6 +276,7 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
+        event_factory: Callable[["RecordEntity"], "DomainEvent"] | None = None,
     ): ...
 
     async def delete_record(
@@ -285,7 +286,8 @@ class DatastoreRecordRepositoryPort(Protocol):
         user_id: UUID,
         *,
         enforce_user_scope: bool = True,
-    ) -> bool: ...
+        event_factory: Callable[["RecordEntity"], "DomainEvent"] | None = None,
+    ) -> "RecordEntity": ...
 
 
 class DatastoreStoragePort(Protocol):

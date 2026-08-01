@@ -1502,9 +1502,12 @@ async def _sync_single_composio_toolkit(
             if supports_native and existing
             else _toolkit_meta_value(toolkit_item, "description")
         ),
+        # Native connectors keep a curated icon when they have one, but fall back to
+        # the Composio toolkit logo rather than staying blank — otherwise the apps we
+        # support natively are the only ones rendering without a brand mark.
         icon=(
             existing.icon
-            if supports_native and existing
+            if supports_native and existing and existing.icon
             else _toolkit_meta_value(toolkit_item, "logo")
         ),
         provider_capabilities=_merge_provider_capabilities(

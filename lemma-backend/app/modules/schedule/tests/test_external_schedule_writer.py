@@ -10,10 +10,10 @@ from app.modules.connectors.domain.connector import ConnectorEntity, AuthProvide
 from app.modules.connectors.domain.auth_config import AuthConfigEntity
 from app.modules.connectors.domain.connector_trigger import ConnectorTriggerEntity
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
-from app.modules.schedule.infrastructure.adapters.external_schedule_writer import (
+from app.composition.schedule_connectors import (
     ExternalScheduleWriterAdapter,
 )
-from app.modules.schedule.infrastructure.schedule_managers import manager_factory
+from app.composition import schedule_connectors as manager_factory
 
 
 @pytest.mark.asyncio

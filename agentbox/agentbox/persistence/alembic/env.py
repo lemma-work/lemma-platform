@@ -17,7 +17,10 @@ if config.config_file_name is not None:
     # disable the service's already-configured loggers as a migration side effect.
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
-database_url = os.getenv("AGENTBOX_DATABASE_URL")
+# The same variable AgentBox itself reads (agentbox/config.py), so a migration
+# run and the service it migrates for can never disagree about which database
+# they mean.
+database_url = os.getenv("AGENTBOX_STATE_DATABASE_URL")
 if database_url:
     config.set_main_option("sqlalchemy.url", database_url)
 

@@ -126,6 +126,7 @@ class WorkflowRunEntity(AggregateRoot):
     def create(
         cls,
         *,
+        run_id: UUID | None = None,
         flow_id: UUID,
         pod_id: UUID,
         user_id: UUID,
@@ -138,16 +139,21 @@ class WorkflowRunEntity(AggregateRoot):
         start_type comes from the trigger (the call site is the source of
         truth), never from the flow's declared start config.
         """
+        values: dict[str, Any] = {
+            "flow_id": flow_id,
+            "pod_id": pod_id,
+            "user_id": user_id,
+            "start_type": trigger.trigger_type.value if trigger else "MANUAL",
+            "schedule_event_id": schedule_event_id,
+            "start_payload": trigger.to_context_value() if trigger else {},
+            "status": WorkflowRunStatus.RUNNING,
+            "current_node_id": entry_node_id,
+            "started_at": datetime.now(timezone.utc),
+        }
+        if run_id is not None:
+            values["id"] = run_id
         run = cls(
-            flow_id=flow_id,
-            pod_id=pod_id,
-            user_id=user_id,
-            start_type=trigger.trigger_type.value if trigger else "MANUAL",
-            schedule_event_id=schedule_event_id,
-            start_payload=trigger.to_context_value() if trigger else {},
-            status=WorkflowRunStatus.RUNNING,
-            current_node_id=entry_node_id,
-            started_at=datetime.now(timezone.utc),
+            **values,
         )
         if trigger is not None:
             run.execution_context.set_start(trigger)

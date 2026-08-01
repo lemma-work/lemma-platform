@@ -137,7 +137,7 @@ function OrgCreatePageContent() {
                         </div>
 
                         <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center">
-                            <Button
+                            <Button variant="primary"
                                 type="submit"
                                 disabled={!name.trim() || missingDomain}
                                 loading={isPending}
@@ -147,7 +147,7 @@ function OrgCreatePageContent() {
                                 Create organization
                                 <ArrowRight className="h-4 w-4" />
                             </Button>
-                            <Button variant="ghost" type="button" asChild>
+                            <Button variant="quiet" type="button" asChild>
                                 <Link href="/home">Cancel</Link>
                             </Button>
                         </div>

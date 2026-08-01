@@ -27,7 +27,7 @@ export function RecipeCard({ podId, recipe, onLaunch }: { podId: string; recipe:
             {isPrompt ? (
                 <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     onClick={onLaunch}
                     className="h-auto flex-1 items-stretch justify-start whitespace-normal rounded-none p-4 text-left"
                 >
@@ -39,7 +39,7 @@ export function RecipeCard({ podId, recipe, onLaunch }: { podId: string; recipe:
                 </Link>
             )}
             <div className="flex items-center gap-2 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_60%,transparent)] px-4 py-3">
-                <Button size="sm" onClick={onLaunch} className="h-8 gap-1.5 rounded-md px-3 text-xs">
+                <Button variant="primary" size="sm" onClick={onLaunch} className="h-8 gap-1.5 rounded-md px-3 text-xs">
                     <ActionIcon recipe={recipe} />
                     {actionLabel(recipe)}
                 </Button>

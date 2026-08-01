@@ -1,0 +1,109 @@
+/* ── CONNECTORS
+   Catalog masthead and the brand-mark fallbacks behind it. */
+
+/* Third-party logos are overwhelmingly dark-on-transparent, so they need a
+   light chip in BOTH themes — on a dark surface a black GitHub or X mark
+   disappears entirely. Deliberately not themed: the tile belongs to the logo,
+   not to our palette. */
+.connector-logo-tile {
+  background: #fff;
+}
+
+.dark .connector-logo-tile {
+  background: #f2f2ef;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%);
+}
+
+/* Monogram tiles for connectors the catalog has no logo for. Tints come from
+   the brand ramp and are picked by a stable hash of the connector id, so a
+   screen full of fallbacks still reads as one product rather than a rainbow. */
+.connector-monogram {
+  background-color: color-mix(in srgb, var(--connector-tint) 14%, transparent);
+  color: var(--connector-tint);
+}
+
+/* Two initials inside a 32px tile need the dense end of the type scale. */
+.connector-monogram-sm {
+  font-size: var(--text-2xs);
+}
+
+.connector-monogram-1 {
+  --connector-tint: var(--brand-coral);
+}
+
+.connector-monogram-2 {
+  --connector-tint: var(--brand-lilac);
+}
+
+.connector-monogram-3 {
+  --connector-tint: var(--brand-sky);
+}
+
+.connector-monogram-4 {
+  --connector-tint: var(--brand-blue);
+}
+
+.connector-monogram-5 {
+  --connector-tint: var(--brand-accent);
+}
+
+.connector-monogram-6 {
+  --connector-tint: var(--brand-green);
+}
+
+.connector-monogram-7 {
+  --connector-tint: var(--brand-cyan);
+}
+
+.connector-monogram-8 {
+  --connector-tint: var(--brand-primary);
+}
+
+/* The masthead needs a ground distinct from the white logo chips sitting on it,
+   otherwise the wall dissolves into floating marks with holes where a brand
+   ships a white-on-transparent logo. */
+.connector-masthead {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--surface-2);
+}
+
+/* The masthead band: a full-width wall of real catalog logos that dissolves
+   downward into the search row, so it reads as masthead rather than as a second
+   grid of things to click. Overflow clips the tail — the rail always holds more
+   tiles than fit, which is what keeps the bottom edge dense instead of ragged. */
+.connector-mosaic {
+  height: 7.5rem;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 42%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 42%, transparent 100%);
+}
+
+.connector-mosaic-rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.connector-mosaic-tile {
+  display: flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-lg);
+  padding: var(--space-1-5);
+  opacity: 1;
+}
+
+/* Slight variation stops the wall reading as a uniform stamp. Kept high — a
+   faded logo on a light panel is indistinguishable from a loading skeleton. */
+.connector-mosaic-tile:nth-child(3n) {
+  opacity: 0.82;
+}
+
+.connector-mosaic-tile:nth-child(7n) {
+  opacity: 0.68;
+}

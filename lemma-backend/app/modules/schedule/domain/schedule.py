@@ -11,6 +11,7 @@ from app.modules.schedule.domain.value_objects import (
     normalize_datastore_operations,
 )
 
+
 class ScheduleType(str, Enum):
     """Type of schedule source."""
 
@@ -41,11 +42,19 @@ class WebhookScheduleConfig(BaseModel):
 class DatastoreScheduleConfig(BaseModel):
     """Configuration for datastore-based schedules."""
 
-    table_name: str | None = Field(None, description="Table name to watch")
+    table_name: str = Field(..., min_length=1, description="Table name to watch")
     operations: list[DatastoreOperation] | None = Field(
         default=None,
         description="Operations to watch. One or more of INSERT, UPDATE, DELETE.",
     )
+
+    @field_validator("table_name")
+    @classmethod
+    def normalize_table_name(cls, value: str) -> str:
+        table_name = value.strip()
+        if not table_name:
+            raise ValueError("table_name must not be blank")
+        return table_name
 
     @field_validator("operations", mode="before")
     @classmethod
@@ -73,7 +82,11 @@ def normalize_datastore_schedule_config(
             "DATASTORE schedules must declare operations explicitly. "
             "Valid values: INSERT, UPDATE, DELETE."
         )
-    return {**config, "operations": [op.value for op in cfg.operations]}
+    return {
+        **config,
+        "table_name": cfg.table_name,
+        "operations": [op.value for op in cfg.operations],
+    }
 
 
 class ScheduleFireStatus(str, Enum):
@@ -88,6 +101,9 @@ class ScheduleRunStatus(str, Enum):
     RECEIVED = "RECEIVED"
     PROCESSING = "PROCESSING"
     DISPATCHED = "DISPATCHED"
+    COMPLETED = "COMPLETED"
+    TARGET_FAILED = "TARGET_FAILED"
+    CANCELLED = "CANCELLED"
     FILTERED = "FILTERED"
     FAILED = "FAILED"
     DEAD_LETTERED = "DEAD_LETTERED"
@@ -95,11 +111,14 @@ class ScheduleRunStatus(str, Enum):
 
 class ScheduleRunEntity(Entity):
     schedule_id: UUID
+    user_id: UUID | None
     source_event_id: str
     status: ScheduleRunStatus
     attempts: int = 0
     target_kind: str
-    target_run_id: str | None = None
+    target_run_id: str | None
+    redrive_of_run_id: UUID | None = None
+    redriven_by_user_id: UUID | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     llm_output: dict[str, Any] = Field(default_factory=dict)
@@ -184,8 +203,8 @@ class ScheduleCreateEntity(BaseModel):
     filter_output_schema: dict[str, Any] | None = None
     account_id: UUID | None = None
     connector_trigger_id: str | None = None
-    # None means "caller did not specify": the service derives the default
-    # (PERSONAL, or POD when the schedule targets a GLOBAL workflow).
+    # None means "caller did not specify": DATASTORE and GLOBAL-workflow
+    # schedules default to POD; other schedules default to PERSONAL.
     visibility: str | None = None
     is_internal: bool = False
 

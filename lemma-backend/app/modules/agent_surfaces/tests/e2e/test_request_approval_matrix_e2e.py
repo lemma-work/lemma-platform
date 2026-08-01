@@ -65,7 +65,7 @@ from app.modules.agent_surfaces.tests.e2e.scripted_llm import (
     script_text,
 )
 from app.modules.connectors.domain.connector import AuthProvider
-from app.modules.schedule.infrastructure.schedule_managers.manager_factory import (
+from app.composition.schedule_connectors import (
     ManagersFactory,
 )
 
@@ -84,6 +84,40 @@ class _FakeScheduleManager:
 
 
 _TOOL_CALL_ID = "tool-approval-1"
+
+
+async def _run_deferred_approval_reconciliation(
+    db_session: AsyncSession,
+    *,
+    conversation_id: UUID,
+    pod_id: UUID,
+) -> None:
+    """Do the half a platform webhook defers to the worker.
+
+    Surface interactions call ``resolve_user_approval_internal`` with
+    ``defer_reconciliation=True``: the decision commits inline, but running the
+    approved tool and starting the resume run are handed to the
+    ``reconcile_agent_approval`` job so the webhook can answer immediately.
+    These tests drive the ingress directly and run no worker, so without this
+    no resume run is ever created. A denial needs nothing here — only an
+    approved tool defers.
+    """
+    from contextlib import asynccontextmanager
+
+    from app.modules.agent.events.handlers import reconcile_agent_approval_now
+
+    @asynccontextmanager
+    async def uow_factory():
+        yield SqlAlchemyUnitOfWork(db_session)
+
+    await reconcile_agent_approval_now(
+        {
+            "conversation_id": str(conversation_id),
+            "approval_id": _TOOL_CALL_ID,
+            "pod_id": str(pod_id),
+        },
+        uow_factory=uow_factory,
+    )
 _INNER_TOOL_ARGS = {
     "type": "WIDGET",
     "content": "<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4'/></svg>",
@@ -223,12 +257,20 @@ async def test_request_approval_slack_native_buttons_then_resumes_on_approve(
     assert handled is True
     await uow.commit()
 
+    await _run_deferred_approval_reconciliation(
+        db_session,
+        conversation_id=context.conversation_id,
+        pod_id=context.pod_id,
+    )
+
     await resume_latest_scripted_run(
         db_session,
         conversation_id=context.conversation_id,
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
@@ -323,6 +365,8 @@ async def test_request_approval_slack_native_deny_skips_wrapped_tool(
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
@@ -519,12 +563,20 @@ async def test_request_approval_teams_native_buttons_then_resumes_on_approve(
     assert handled is True
     await uow.commit()
 
+    await _run_deferred_approval_reconciliation(
+        db_session,
+        conversation_id=context.conversation_id,
+        pod_id=context.pod_id,
+    )
+
     await resume_latest_scripted_run(
         db_session,
         conversation_id=context.conversation_id,
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=2)
@@ -631,12 +683,20 @@ async def test_request_approval_telegram_native_buttons_then_resumes_on_approve(
     assert handled is True
     await uow.commit()
 
+    await _run_deferred_approval_reconciliation(
+        db_session,
+        conversation_id=context.conversation_id,
+        pod_id=context.pod_id,
+    )
+
     await resume_latest_scripted_run(
         db_session,
         conversation_id=context.conversation_id,
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     telegram_messages = message_store.get_all("TELEGRAM")
@@ -769,12 +829,20 @@ async def test_request_approval_whatsapp_native_buttons_then_resumes_on_approve(
     assert handled is True
     await uow.commit()
 
+    await _run_deferred_approval_reconciliation(
+        db_session,
+        conversation_id=context.conversation_id,
+        pod_id=context.pod_id,
+    )
+
     await resume_latest_scripted_run(
         db_session,
         conversation_id=context.conversation_id,
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=2)

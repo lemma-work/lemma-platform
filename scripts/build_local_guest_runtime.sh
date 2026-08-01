@@ -38,6 +38,10 @@ case "$target" in
 esac
 
 work_dir="$(mktemp -d /tmp/lemma-guest-runtime.XXXXXX)"
+# Docker-compatible VMs see macOS's physical /private/tmp path, not the
+# user-facing /tmp symlink. Normalize once so later bind mounts address the
+# same file from both the host and the build VM.
+work_dir="$(cd "$work_dir" && pwd -P)"
 trap 'rm -rf "$work_dir"' EXIT
 context="$work_dir/context"
 rootfs="$work_dir/rootfs"

@@ -9835,7 +9835,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.6.3";
+  var SDK_VERSION = "0.7.3";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
   function shouldSendClientHeader(apiUrl, method) {
@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.6.9",
+    VERSION: "0.7.3",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -10713,6 +10713,10 @@ var LemmaClient = (() => {
     /**
      * Create Agent Host Pairing
      * Mint a short-lived pairing code for a machine this user controls.
+     *
+     * A paired computer is the user's, not a workspace's: nothing here needs an
+     * organization. Sharing it happens later, by giving a runtime profile
+     * ORGANIZATION scope.
      * @param requestBody
      * @returns AgentHostPairingCreated Successful Response
      * @throws ApiError
@@ -10802,15 +10806,19 @@ var LemmaClient = (() => {
     /**
      * List Available Agent Runtime Profiles
      * @param orgId
+     * @param includeDisabled
      * @returns AgentRuntimeProfileListResponse Successful Response
      * @throws ApiError
      */
-    static agentRuntimeProfilesList(orgId) {
+    static agentRuntimeProfilesList(orgId, includeDisabled = false) {
       return request(OpenAPI, {
         method: "GET",
         url: "/organizations/{org_id}/agent-runtime/profiles",
         path: {
           "org_id": orgId
+        },
+        query: {
+          "include_disabled": includeDisabled
         },
         errors: {
           422: `Validation Error`
@@ -10838,6 +10846,89 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Archive Agent Runtime Profile
+     * @param orgId
+     * @param profileId
+     * @returns void
+     * @throws ApiError
+     */
+    static agentRuntimeProfilesArchive(orgId, profileId) {
+      return request(OpenAPI, {
+        method: "DELETE",
+        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Get Agent Runtime Profile
+     * @param orgId
+     * @param profileId
+     * @returns AgentRuntimeProfileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static agentRuntimeProfilesGet(orgId, profileId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Agent Runtime Profile
+     * @param orgId
+     * @param profileId
+     * @param requestBody
+     * @returns AgentRuntimeProfileResponse Successful Response
+     * @throws ApiError
+     */
+    static agentRuntimeProfilesUpdate(orgId, profileId, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
+        body: requestBody,
+        mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Restore Agent Runtime Profile
+     * @param orgId
+     * @param profileId
+     * @returns AgentRuntimeProfileResponse Successful Response
+     * @throws ApiError
+     */
+    static agentRuntimeProfilesRestore(orgId, profileId) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore",
+        path: {
+          "org_id": orgId,
+          "profile_id": profileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/agent-runtime.ts
@@ -10848,14 +10939,49 @@ var LemmaClient = (() => {
     listRuntimes(orgId) {
       return this.listProfiles(orgId);
     }
-    listProfiles(orgId) {
-      return this.client.request(() => AgentRuntimeService.agentRuntimeProfilesList(orgId));
+    listProfiles(orgId, options = {}) {
+      return this.client.request(
+        () => {
+          var _a;
+          return AgentRuntimeService.agentRuntimeProfilesList(orgId, (_a = options.includeDisabled) != null ? _a : false);
+        }
+      );
+    }
+    /** Read one profile, including the live harness and host status behind it. */
+    getProfile(orgId, profileId) {
+      return this.client.request(
+        () => AgentRuntimeService.agentRuntimeProfilesGet(orgId, profileId)
+      );
     }
     createRuntime(orgId, request2) {
       return this.createProfile(orgId, request2);
     }
     createProfile(orgId, request2) {
       return this.client.request(() => AgentRuntimeService.agentRuntimeProfilesCreate(orgId, request2));
+    }
+    /**
+     * Patch a profile. Send only the fields that changed - a key left out keeps
+     * its stored value, which is how a rename avoids resending the API key.
+     */
+    updateProfile(orgId, profileId, request2) {
+      return this.client.request(
+        () => AgentRuntimeService.agentRuntimeProfilesUpdate(orgId, profileId, request2)
+      );
+    }
+    /**
+     * Archive a profile: it stops appearing in the catalog and cannot be selected
+     * for new runs, but is retained and can be restored. There is no hard delete.
+     */
+    archiveProfile(orgId, profileId) {
+      return this.client.request(
+        () => AgentRuntimeService.agentRuntimeProfilesArchive(orgId, profileId)
+      );
+    }
+    /** Bring an archived profile back into the catalog. */
+    restoreProfile(orgId, profileId) {
+      return this.client.request(
+        () => AgentRuntimeService.agentRuntimeProfilesRestore(orgId, profileId)
+      );
     }
     /**
      * @deprecated Runtime defaults are now pod config (`default_profile_id`) or
@@ -14284,8 +14410,9 @@ var LemmaClient = (() => {
     /**
      * List Available Surfaces
      * The connectable-surface catalog: every surface platform with its connector,
-     * supported credential modes, and the schema to connect an account. Platform-
-     * level (no surface need exist); the pod scopes authorization only.
+     * supported credential modes, the schema to connect an account, and whether this
+     * pod's org can still claim the platform's Lemma-managed bot/number. Otherwise
+     * platform-level — no surface need exist.
      * @param podId
      * @returns AvailableSurfacesResponse Successful Response
      * @throws ApiError

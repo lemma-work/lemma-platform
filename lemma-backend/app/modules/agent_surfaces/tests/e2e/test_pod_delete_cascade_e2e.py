@@ -22,6 +22,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
 
+from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent_surfaces.infrastructure.models import AgentSurface
 from app.modules.agent_surfaces.tests.e2e.helpers import _ensure_connector_account
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
@@ -56,7 +57,7 @@ async def _seed_datastore_schedule(
     name: str,
     is_internal: bool = False,
 ) -> None:
-    repo = ScheduleRepository(session=db_session)
+    repo = ScheduleRepository(SqlAlchemyUnitOfWork(db_session))
     await repo.create(
         ScheduleEntity(
             user_id=user_id,
