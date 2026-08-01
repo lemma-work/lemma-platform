@@ -252,6 +252,42 @@ describe('harnessConfigControls', () => {
         expect(controls[0].currentValue).toBe('ask');
     });
 
+    it('drops an escalating value from an option that enumerates it', () => {
+        // Claude Code lists bypassPermissions among its own permission modes,
+        // and Agent Host refuses it anyway at session setup. Offering it would
+        // be a choice that can only ever fail on the user's first run.
+        const [control] = harnessConfigControls([
+            {
+                id: 'permission_mode',
+                category: 'permission',
+                name: 'Permission mode',
+                options: [
+                    { id: 'default', name: 'Ask' },
+                    { id: 'plan', name: 'Plan' },
+                    { id: 'bypassPermissions', name: 'Bypass' },
+                    { id: 'acceptEdits', name: 'Accept edits' },
+                ],
+            },
+        ]);
+
+        expect(control.choices.map((choice) => choice.value)).toEqual(['default', 'plan']);
+    });
+
+    it('leaves an ordinary option list alone', () => {
+        // The filter keys off the option being policy-bearing, so a value that
+        // merely looks alarming elsewhere is untouched.
+        const [control] = harnessConfigControls([
+            {
+                id: 'startup',
+                category: 'lifecycle',
+                name: 'Startup',
+                options: [{ id: 'auto' }, { id: 'manual' }],
+            },
+        ]);
+
+        expect(control.choices.map((choice) => choice.value)).toEqual(['auto', 'manual']);
+    });
+
     it('drops the model category, which default_model_name owns', () => {
         // Mirrors validate_agent_host_selections, which rejects a `model`
         // selection outright rather than quietly ignoring it.

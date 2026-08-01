@@ -290,6 +290,31 @@ export type HarnessConfigControl = {
     choices: Array<{ value: string; label: string }>;
 };
 
+// Options whose value decides how much the agent may do unattended, and the
+// values Agent Host refuses for them. Mirrors `is_policy_bearing_option` /
+// `is_disallowed_policy_value` (agent-host/src/acp.rs) and the same pair in the
+// backend domain. Harnesses *do* enumerate these — Claude Code lists
+// `bypassPermissions` among its permission modes — and the host rejects them
+// anyway at session setup, so offering one here would be a dead choice.
+const POLICY_OPTION_MARKERS = ['mode', 'permission', 'approval', 'sandbox'];
+const DISALLOWED_POLICY_VALUES = new Set([
+    'bypasspermissions',
+    'agentfullaccess',
+    'fullaccess',
+    'acceptedits',
+    'yolo',
+    'auto',
+]);
+
+function isPolicyBearing(selectionKey: string, category: string): boolean {
+    const identity = `${selectionKey} ${category}`.toLowerCase();
+    return POLICY_OPTION_MARKERS.some((marker) => identity.includes(marker));
+}
+
+function isDisallowedPolicyValue(value: string): boolean {
+    return DISALLOWED_POLICY_VALUES.has(value.replace(/[^a-z0-9]/gi, '').toLowerCase());
+}
+
 /**
  * The harness config options this UI can safely offer a control for.
  *
@@ -299,9 +324,8 @@ export type HarnessConfigControl = {
  * `item.value ?? item.id`.
  *
  * Options that enumerate no values are dropped rather than rendered as a text
- * box. Agent Host keeps its own deny-list and refuses policy-bearing values like
- * `bypassPermissions` at session setup, so a free-text field here would only let
- * a value save cleanly and then fail on the first run.
+ * box, and escalating values are dropped from the ones that do — either would
+ * let a selection save cleanly and then fail on the user's first run.
  */
 export function harnessConfigControls(
     configOptions?: Array<{
@@ -320,10 +344,12 @@ export function harnessConfigControls(
         const selectionKey = (typeof option.id === 'string' && option.id) || category;
         if (!selectionKey) continue;
 
+        const policyBearing = isPolicyBearing(selectionKey, category);
         const choices: Array<{ value: string; label: string }> = [];
         for (const item of option.options ?? []) {
             const value = item.value ?? item.id;
             if (typeof value !== 'string' || !value) continue;
+            if (policyBearing && isDisallowedPolicyValue(value)) continue;
             const label = typeof item.name === 'string' && item.name ? item.name : value;
             choices.push({ value, label });
         }

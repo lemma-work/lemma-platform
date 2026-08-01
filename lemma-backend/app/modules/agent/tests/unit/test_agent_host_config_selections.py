@@ -31,6 +31,31 @@ def test_an_enumerated_option_still_enforces_membership():
         )
 
 
+def test_the_deny_list_beats_the_harness_own_option_list():
+    """The case that actually happens.
+
+    Harnesses enumerate their permission modes - Claude Code lists
+    ``bypassPermissions`` among its own - so this value passes a membership
+    check. The host refuses it regardless (``selection_is_allowed`` tests the
+    deny-list first), so checking membership first here would let precisely the
+    common case save and then fail at session setup.
+    """
+    options = [
+        _option(options=[{"id": "default"}, {"id": "plan"}, {"id": "bypassPermissions"}])
+    ]
+
+    with pytest.raises(ValueError, match="not allowed"):
+        validate_agent_host_selections(
+            config_options=options,
+            selections={"permission_mode": "bypassPermissions"},
+        )
+
+    # The safe members of the very same list still go through.
+    assert validate_agent_host_selections(
+        config_options=options, selections={"permission_mode": "plan"}
+    ) == {"permission_mode": "plan"}
+
+
 @pytest.mark.parametrize(
     "value",
     [

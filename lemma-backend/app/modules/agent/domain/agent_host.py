@@ -403,18 +403,20 @@ def validate_agent_host_selections(
             raise ValueError(f"Unknown Agent Host configuration selection: {key}")
         if str(option.get("category") or "").strip() == "model":
             raise ValueError("Model must be configured through default_model_name")
+        # Deny-list first, then membership - the order ``selection_is_allowed``
+        # uses in acp.rs:625. It matters: harnesses *do* enumerate their
+        # permission modes, so a value like ``bypassPermissions`` is a legal
+        # member of the option's own list and the host refuses it anyway.
+        # Checking membership first would let exactly the common case through,
+        # to save cleanly and then fail at session setup on the first run.
+        if _is_disallowed_policy_selection(option, value):
+            raise ValueError(
+                f"That value is not allowed for Agent Host configuration: {key}"
+            )
         allowed_values = _agent_host_option_values(option.get("options"))
         if allowed_values and value not in allowed_values:
             raise ValueError(
                 f"Invalid value for Agent Host configuration selection: {key}"
-            )
-        if not allowed_values and _is_disallowed_policy_selection(option, value):
-            # An option that advertises no values accepts anything here, but the
-            # Agent Host still refuses these for a permission-bearing setting
-            # (is_disallowed_policy_value in acp.rs). Without this the profile
-            # saves cleanly and every run fails at session setup instead.
-            raise ValueError(
-                f"That value is not allowed for Agent Host configuration: {key}"
             )
         normalized[normalized_key] = value
     return normalized
