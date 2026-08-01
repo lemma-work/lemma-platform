@@ -327,7 +327,14 @@ Each is enforced in the backend today and invisible in the UI until it fails.
 5. **`GET /surfaces/me` and `PUT /surfaces/me/default` exist, expose a `conflict` flag, and nothing consumes them.** The `live` state's default picker is the first consumer.
 6. **A surface has a reach handle** — `@botname`, phone, mailbox — resolved lazily and cached ([surface_reach_resolver.py](lemma-backend/app/modules/agent_surfaces/services/surface_reach_resolver.py)), with client-side deep links already written ([`getSurfaceDeepLink`](lemma-frontend/lib/utils/surfaces.ts:66)). This is what makes the `live` state possible.
 7. **Channel routes are an after-creation step** for Slack/Teams; in a channel the agent answers only on mention or in a thread it's already in.
-8. **Proactive messaging never cold-opens a thread** — it reuses an existing one. Keep that caveat wherever the toggle lands (Configure → Behavior).
+8. ~~**Proactive messaging never cold-opens a thread** — it reuses an existing one.~~
+   *Superseded by [proactive-messaging.md](./proactive-messaging.md).* This was stated
+   as universal and was only ever true of chat bots: email surfaces can address someone
+   who never wrote first. It now lives as data — `can_cold_open` and
+   `reply_window_hours` on `platform_capabilities.py` — rather than as a rule in prose.
+   The caveat that *does* still belong next to the toggle is narrower: `surface.send`
+   targets one named surface and needs a thread that already exists, whereas `notify`
+   picks a channel and always leaves a copy in the recipient's Lemma inbox.
 
 ## API: what exists, what's missing
 

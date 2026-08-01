@@ -30,7 +30,7 @@ one operating loop, one coherent data model.
 | **Files** | Document store under shared `/…` folders (e.g. `/knowledge`) and personal `/me`; uploaded documents are auto-indexed and semantically searchable — **built-in RAG** — with converted-markdown reading | The pod's knowledge and artifacts: contracts, manuals, reports, generated deliverables |
 | **Functions** | Typed Python entrypoints run server-side as workload principals | Deterministic logic: validation, multi-table writes, external API calls, transforms |
 | **Agents** | LLM workers with instructions, toolsets, and granted resources | Judgment: classification, drafting, extraction, research, conversation |
-| **Workflows** | Node graphs of FORM / AGENT / FUNCTION / DECISION / LOOP / WAIT_UNTIL steps with durable runs | The process layer — orchestrates functions, agents, **and humans** (form nodes are assigned to pod members) |
+| **Workflows** | Node graphs of FORM / AGENT / FUNCTION / DECISION / LOOP / WAIT_UNTIL / NOTIFY steps with durable runs | The process layer — orchestrates functions, agents, **and humans** (form nodes are assigned to pod members) |
 | **Schedules** | Time-based (TIME cron) or event-based — DATASTORE (table row events) and WEBHOOK (connector events) | Starting agents or workflows automatically |
 | **Connectors** | Third-party apps (Gmail, Slack, …) via org auth configs, accounts, and executable operations | Acting on external systems |
 | **Surfaces** | A pod agent exposed on Slack/Teams/Telegram/WhatsApp/Gmail/Outlook | Meeting users where they already chat |

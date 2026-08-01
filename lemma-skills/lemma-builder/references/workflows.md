@@ -60,7 +60,7 @@ model from `pod-model.md`.
   - `loop.item`, `loop.index`, `loop.count`, `loop.<item_var>` — current loop iteration, only inside loop bodies
 - **One expression dialect**: everything is **JMESPath** — input mappings, decision conditions, loop `items_path`, assignee expressions.
 - **Missing paths fail loudly**: a required input mapping that resolves to nothing FAILS the run naming the path (use `"optional": true` or a literal binding for genuinely optional values). Decision conditions treat missing paths as falsy — they probe, mappings demand.
-- **Waits**: FORM waits for a pod member's submission; AGENT waits for an agent conversation; FUNCTION can wait on async runs; WAIT_UNTIL waits on a timer. The run's `active_wait` shows the type, node, assignee, and external reference.
+- **Waits**: FORM waits for a pod member's submission; AGENT waits for an agent conversation; FUNCTION can wait on async runs; WAIT_UNTIL waits on a timer. NOTIFY is the odd one out — it reaches a person but never suspends. The run's `active_wait` shows the type, node, assignee, and external reference.
 
 Start types: `MANUAL`, `SCHEDULED`, `DATASTORE_EVENT`, `EVENT`. Create schedules (see `schedules-and-triggers.md`) for non-manual starts; keep the graph focused on what happens after `start.payload` arrives.
 
@@ -232,6 +232,30 @@ Inside the body, read the current item from the reserved `loop` namespace: `loop
 ```
 
 Use for cooldowns, SLA holds, follow-up gaps. Suspends on a TIME wait (`active_wait.payload.scheduled_at` shows when it fires).
+
+### NOTIFY — tell a person
+
+```json
+{ "id": "tell_owner", "type": "NOTIFY", "label": "Tell the owner",
+  "config": { "recipient_user_id_expression": "steps.lookup.output.owner_id",
+              "message": "The nightly sync finished with 3 rejects.",
+              "title": "Nightly sync" } }
+```
+
+Use when the run needs somebody **informed**, not blocked. NOTIFY never suspends — it
+delivers and advances. If the run genuinely cannot continue without an answer, that is
+a FORM, not a NOTIFY.
+
+`recipient_user_id_expression` (JMESPath) wins over a literal `recipient_user_id`, the
+same precedence FORM uses for its assignee. One of the two is required, and a bad
+expression is caught at save time rather than at 3am.
+
+Delivery is the same as `message_person`: always the recipient's Lemma inbox, plus
+whichever chat platform they last used. The step output records what happened —
+`{ delivered, delivered_via, notification_id, conversation_id }` — so "did anyone
+actually get told" is answerable from the run timeline. A recipient who cannot be
+resolved, or who is not a pod member, advances with `delivered: false` and a reason
+rather than failing a run that may already have done real work.
 
 ### END
 

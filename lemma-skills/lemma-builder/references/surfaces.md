@@ -52,7 +52,8 @@ name** everywhere (`slack`, `gmail`, …) — there is no separate surface id to
   system bot).
 - **`config`** — user-editable behavior: `dm_conversation_reset_after_hours`
   (default 24 — don't let one DM thread accumulate forever), `identity`
-  (allow-list of senders), and `channels` (Slack/Teams channel→agent routes).
+  (allow-list of senders), `channels` (Slack/Teams channel→agent routes), and
+  `send_policy` (who the agent may reach unprompted — see *Reaching a person* below).
 - **`default_agent_name`** — the pod agent that answers. Per-channel routing can
   send specific channels to other agents.
 
@@ -132,11 +133,61 @@ lemma surfaces setup slack                                    # what's still mis
 lemma surfaces delete slack --yes                             # frees the account for another pod
 ```
 
+## Reaching a person (the other direction)
+
+A surface is where a person reaches an agent. The reverse — where the pod can reach
+*them* — is a **reach**: one row per person per channel per pod, written automatically
+from every DM they send. You never create these; they accumulate as people talk to the
+pod.
+
+Every pod member also has an **app reach**, which is the Lemma inbox. It cannot 403,
+expire, or be muted, which makes it both the fallback for a failed chat delivery and
+the reason someone who has never connected a chat platform still hears from their
+agents. *"Nobody was told"* is not a possible outcome for a pod member.
+
+**Two ways to send, and they answer different questions:**
+
+| | Question it answers | Needs |
+| --- | --- | --- |
+| `pod.notifications.notify(user_id, body)` | "reach this person" | nothing — Lemma picks the channel, inbox always gets a copy |
+| `pod.surfaces.send(name, {...})` | "reach this person **on Slack**" | an existing thread on that surface |
+
+Prefer `notify` unless the channel genuinely matters. `surfaces.send` still cannot
+cold-open a thread, so it 404s for anyone who has not messaged that surface before.
+
+**`config.send_policy`** gates what an agent on the surface may do unprompted:
+
+```jsonc
+{ "send_policy": { "audience": "POD_MEMBERS",              // NOBODY (default) | SELF | POD_MEMBERS
+                   "max_messages_per_recipient_per_hour": 6 } }
+```
+
+- `NOBODY` — nothing proactive. The default, and what every surface created before
+  this feature already did.
+- `SELF` — the agent may message the person whose conversation it is already in
+  (the `surface_send_message` tool). The old `allow_send: true` means exactly this and
+  still works.
+- `POD_MEMBERS` — the agent may also reach *other* members via `message_person`, which
+  additionally requires the `MESSAGING` toolset on the agent.
+
+Grant `POD_MEMBERS` deliberately. The recipient sees the pod's bot, not "the agent
+someone else's schedule is running", so every such message is attributed to both the
+agent and the human whose authority the run carries.
+
+**Cold opens are a per-platform fact, not a universal rule.** Email surfaces
+(Gmail/Outlook/Resend) can address someone who has never written first. Chat bots
+cannot. WhatsApp additionally closes a 24-hour reply window after the person's last
+message, after which free-form sends are rejected — a reach that has aged out is
+skipped and the inbox takes the message instead.
+
 ## Patterns
 
 - **DM assistant.** A `DM` surface maps one external identity to one pod
   conversation until the reset window — always set `dm_conversation_reset_after_hours`
   so threads don't grow forever.
+- **Notify from a schedule.** A scheduled agent that ends by calling `message_person`,
+  or a workflow with a `NOTIFY` node, is how "tell me when X" works. Without one, a
+  scheduled run finishes into a conversation nobody is watching.
 - **Channel triage (Slack/Teams).** Default agent for general channels, with
   `config.channels` routing `#billing` or `#security` to specialist agents. The
   agent replies in-thread where the platform supports it.
@@ -213,4 +264,6 @@ lemma conversations messages <id> # the exchange is recorded
 
 - The model → `pod-model.md` · credentials/accounts → `connectors.md`
 - The agent behind the surface → `agents.md` · the paired operator UI → `apps.md`
-- Operate a live surface → the `lemma-user` skill
+- Reaching a person unprompted → `message_person` in `agent-tools.md`, the `NOTIFY`
+  node in `workflows.md`
+- Operate a live surface, and read your own inbox → the `lemma-user` skill

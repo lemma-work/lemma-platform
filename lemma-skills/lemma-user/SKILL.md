@@ -218,6 +218,37 @@ form wait is assigned to you (`runs waiting` lists them), `runs submit-form --da
 with the form's fields completes it and advances the run. This is how you
 participate in human-agent workflows.
 
+A run can also **tell** you something without waiting on you — a `NOTIFY` node, or an
+agent calling `message_person`. Those land in your notifications rather than your form
+queue, so check both: `runs waiting` is what is blocked on you, notifications are what
+you have been told.
+
+## Notifications — what your agents told you
+
+Agents and workflows can start a conversation with you. Everything they send lands in
+your Lemma inbox regardless of where else it went, so this is the complete record.
+
+```python
+from lemma_sdk import Lemma
+
+lemma = Lemma.from_env()
+lemma.notifications.unread_count()                      # just the badge number
+lemma.notifications.list(unread_only=True, limit=20)    # newest first
+lemma.notifications.mark_read(notification_id)
+lemma.notifications.mark_all_read(pod_id=pod.pod_id)
+
+# Reach a teammate from a script or function — Lemma picks the channel and always
+# leaves a copy in their inbox, so it cannot silently reach nobody.
+pod.notifications.notify(user_id, "The Northwind reconciliation is ready for review.")
+```
+
+Each notification carries `conversation_id` — the conversation the message lands in and
+where a reply continues, with the agent's own message already in it. Replying there is
+how you answer "yes, do it" hours later and have the agent know what "it" was.
+
+`origin_type` (`SCHEDULE_RUN` / `WORKFLOW_RUN` / `AGENT_RUN`) plus `origin_id` answer
+*why am I being told this* — trace it back to the schedule or run that produced it.
+
 ## Agents and chat
 
 ```bash

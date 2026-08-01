@@ -162,6 +162,7 @@ Everything in Lemma lives in a **pod** — a self-contained environment for one 
 | **Approvals** | Workflow steps that pause, route to a specific person, and resume on their decision — in the app or in Slack. |
 | **Apps** | The UI where people see the job, direct work, and handle decisions — deployed at a URL and built on the same pod APIs as the agents. |
 | **Surfaces** | Slack, Microsoft Teams, Gmail, Outlook, Telegram, and WhatsApp — wired to pod agents with identity resolution and conversation linking. |
+| **Notifications** | Agents start conversations too: a schedule that has something to report, or an agent that needs a teammate's answer. Delivered on whichever channel that person actually uses, and always to their Lemma inbox — so it never quietly reaches nobody. |
 
 ## One app, many surfaces
 
