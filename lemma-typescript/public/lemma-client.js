@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.0",
+    VERSION: "0.7.1",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
