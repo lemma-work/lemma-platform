@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Maximize2 } from "@/components/ui/icons";
+import { Maximize2 } from "@/components/ui/icons";
 import { useTheme } from "next-themes";
 
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
@@ -25,6 +25,7 @@ import {
     selectWidgetLoadingMessage,
 } from "@/lib/assistant/widget-loading";
 import { cn } from "@/lib/utils";
+import { StepLoader } from "@/components/brand/loader";
 
 function isHttpUrl(value: string | null | undefined): string | null {
     if (!value) return null;
@@ -183,7 +184,7 @@ export function InlineWidget({
                 "flex items-center justify-center gap-2 py-8 text-sm text-[var(--text-secondary)]",
                 !isInline && "min-h-full",
             )}>
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <StepLoader size="sm" />
                 {loadingMessage}
             </div>
         );
@@ -221,7 +222,7 @@ export function InlineWidget({
                 />
                 {loading ? (
                     <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--pod-main-bg)] text-sm text-[var(--text-secondary)]">
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <StepLoader size="sm" />
                         {loadingMessage}
                     </div>
                 ) : null}
@@ -248,7 +249,7 @@ export function InlineWidget({
             />
             {loading ? (
                 <div className="absolute inset-0 flex items-center justify-center gap-2 bg-[var(--pod-main-bg)] text-sm text-[var(--text-secondary)]">
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <StepLoader size="sm" />
                     {loadingMessage}
                 </div>
             ) : null}

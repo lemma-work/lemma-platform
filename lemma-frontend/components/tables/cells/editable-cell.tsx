@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Check, Loader2 } from '@/components/ui/icons';
+import { Check } from '@/components/ui/icons';
 import { getEnumColor } from '@/lib/utils/enum-color-utils';
+import { StepLoader } from '@/components/brand/loader';
 
 interface EditableCellProps {
     value: unknown;
@@ -38,7 +39,7 @@ function toDateInput(value: unknown): string {
 function SavingIndicator() {
     return (
         <div className="absolute right-2 top-1/2 -translate-y-1/2">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--action-primary)]" />
+            <StepLoader size="xs" className="text-[var(--action-primary)]" />
         </div>
     );
 }

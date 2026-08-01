@@ -82,7 +82,7 @@ export function ConversationPresentationStage({
                 <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] px-3">
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         onClick={onClose}
                         className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
@@ -96,7 +96,7 @@ export function ConversationPresentationStage({
                     </div>
                     <Button
                         asChild
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0"
                     >

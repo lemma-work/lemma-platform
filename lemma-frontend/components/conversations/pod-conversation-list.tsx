@@ -3,13 +3,18 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
-import { ArrowRight, Loader2, Plus, Sparkles } from '@/components/ui/icons';
+import { ArrowRight, Plus, Sparkles } from '@/components/ui/icons';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { ResourceList, ResourceMetric, ResourceMetricStrip, ResourceRow } from '@/components/pod/resource-layout';
-import { InlineEmptyState } from '@/components/shared/empty-state';
+import { EmptyState } from '@/components/shared/empty-state';
+import { Skeleton } from '@/components/shared/loading';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getConversationStatusView, isConversationRunningStatus } from '@/lib/utils/conversations';
+
+/** Titles vary, so the placeholders do — equal bars read as a table, not a list.
+ * Widths double as the row count: five lines, matching the settled row height. */
+const CONVERSATION_SKELETON_WIDTHS = ['w-3/5', 'w-5/12', 'w-2/3', 'w-1/2', 'w-7/12'];
 
 interface PodConversationListProps {
     podId: string;
@@ -58,22 +63,32 @@ export function PodConversationList({
 
     const listBody = (
         <ResourceList className={isCompact ? 'gap-px' : 'gap-1'}>
+            {/* One placeholder line per row, at the row's own height. A centred
+                spinner-and-caption was a third box of a third size between the
+                empty state and the list, so this sidebar changed shape twice on
+                every load. */}
             {isLoadingConversations && items.length === 0 && (
-                <div className="flex items-center gap-2 px-2 py-5 text-sm text-[var(--text-tertiary)]">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading conversations
+                <div role="status" aria-label="Loading conversations">
+                    {CONVERSATION_SKELETON_WIDTHS.map((width, index) => (
+                        <div key={index} className="px-1 py-1">
+                            <div className="flex min-h-12 flex-col justify-center gap-1.5 px-1.5">
+                                <Skeleton className={cn('h-3', width)} />
+                                <Skeleton className="h-2.5 w-20" />
+                            </div>
+                        </div>
+                    ))}
                 </div>
             )}
 
             {!isLoadingConversations && items.length === 0 && (
-                <InlineEmptyState
+                <EmptyState variant="inline"
                     icon={<Sparkles className="h-4 w-4" />}
                     title="No conversations yet"
                     description={isAssistantScope
                         ? 'Start a conversation with this assistant and continue it here later.'
                         : 'Start a Lemma Assistant conversation and continue it here later.'}
                     action={(
-                        <Button size="sm" onClick={startNewConversation} className="shrink-0 gap-1.5">
+                        <Button variant="secondary" size="sm" onClick={startNewConversation} className="shrink-0 gap-1.5">
                             <Plus className="h-3.5 w-3.5" />
                             New
                         </Button>
@@ -174,7 +189,7 @@ export function PodConversationList({
                                 : 'Reopen and continue assistant threads for this pod.'}
                         </p>
                     </div>
-                    <Button onClick={startNewConversation} className="gap-2">
+                    <Button variant="primary" onClick={startNewConversation} className="gap-2">
                         <Plus className="h-4 w-4" />
                         New conversation
                     </Button>

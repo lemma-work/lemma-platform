@@ -4,10 +4,10 @@ import { useState } from 'react';
 import { PanelsTopLeft } from '@/components/ui/icons';
 import { useApp } from '@/components/app/app-context';
 import { AppFrame } from '@/components/app/app-launch';
-import { StepLoader } from '@/components/brand/loader';
-import { RecoveryState } from '@/components/shared/empty-state';
+import { EmptyState } from '@/components/shared/empty-state';
 import { resourceAllows } from '@/lib/authz/resource-actions';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
 
 // Keep at most this many app iframes alive at once; opening a further app evicts
 // the oldest (FIFO). The active app is always the newest insertion, so it is
@@ -88,7 +88,7 @@ export function AppFrameHost({
 
             {missingSlug ? (
                 <div className="absolute inset-0 flex items-center justify-center">
-                    <RecoveryState
+                    <EmptyState variant="region"
                         icon={<PanelsTopLeft className="h-5 w-5" />}
                         title="Missing app page"
                         description="Open an app from the Apps list so Lemma knows which workspace to show."
@@ -98,7 +98,7 @@ export function AppFrameHost({
 
             {unavailable ? (
                 <div className="absolute inset-0 flex items-center justify-center">
-                    <RecoveryState
+                    <EmptyState variant="region"
                         icon={<PanelsTopLeft className="h-5 w-5" />}
                         title="App unavailable"
                         description="This app didn't return a web app URL. Try opening it again from the Apps list."

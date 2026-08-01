@@ -205,7 +205,7 @@ export function PasswordResetScreen() {
         <div className="verification-state" role="status" aria-live="polite">
           <ResetIcon phase={phase} />
         </div>
-        <Button
+        <Button variant="secondary"
           type="button"
           className="primary-button auth-portal-session-button"
           onClick={() => window.location.replace(signInUrl())}
@@ -227,7 +227,7 @@ export function PasswordResetScreen() {
         <div className="verification-state" role="alert">
           <ResetIcon phase={phase} />
         </div>
-        <Button
+        <Button variant="secondary"
           type="button"
           className="primary-button auth-portal-session-button"
           onClick={() => {
@@ -257,7 +257,7 @@ export function PasswordResetScreen() {
           <ResetIcon phase={phase} />
         </div>
         <div className="button-row">
-          <Button
+          <Button variant="secondary"
             type="button"
             className="primary-button auth-portal-session-button"
             onClick={() => {
@@ -303,7 +303,7 @@ export function PasswordResetScreen() {
             />
           </label>
           {fieldError ? <p className="auth-owned-error" role="alert">{fieldError}</p> : null}
-          <Button type="submit" className="primary-button auth-portal-session-button">
+          <Button variant="primary" type="submit" className="primary-button auth-portal-session-button">
             Update password
           </Button>
         </form>
@@ -331,7 +331,7 @@ export function PasswordResetScreen() {
           />
         </label>
         {fieldError ? <p className="auth-owned-error" role="alert">{fieldError}</p> : null}
-        <Button type="submit" className="primary-button auth-portal-session-button">
+        <Button variant="primary" type="submit" className="primary-button auth-portal-session-button">
           Send reset link
         </Button>
         <Button type="button" variant="link" className="auth-text-button" onClick={() => window.location.replace(signInUrl())}>

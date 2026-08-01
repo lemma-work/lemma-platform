@@ -1,6 +1,5 @@
 'use client';
 
-import { Loader2 } from '@/components/ui/icons';
 
 import { ProductIcon } from '@/components/pod/product-icon';
 import { ResourceList, ResourceRow } from '@/components/pod/resource-layout';
@@ -8,6 +7,7 @@ import { EmptyState } from '@/components/shared/empty-state';
 import { Button } from '@/components/ui/button';
 
 import type { SearchResultItem } from '../_lib/file-helpers';
+import { ListSkeleton } from '@/components/shared/loading';
 
 export interface FileSearchResultsProps {
     currentFolderPath: string | null;
@@ -36,14 +36,12 @@ export function FileSearchResults({
             </div>
 
             {isSearchingFiles && (
-                <div className="flex h-full min-h-[200px] items-center justify-center py-12">
-                    <Loader2 className="h-6 w-6 animate-spin text-[var(--text-tertiary)]" />
-                </div>
+                <ListSkeleton rows={6} className="px-1" />
             )}
 
             {!isSearchingFiles && searchResultItems.length === 0 && (
                 <EmptyState
-                    variant="compact"
+                    variant="region"
                     icon={<ProductIcon kind="files" size="sm" />}
                     title="No files match this search"
                     description="Try different keywords or search from a higher-level folder."
@@ -79,7 +77,7 @@ export function FileSearchResults({
                                         {Math.round((result.score || 0) * 100)}%
                                     </span>
                                     <Button
-                                        variant="ghost"
+                                        variant="quiet"
                                         size="sm"
                                         className="h-7 px-2 text-xs"
                                         onClick={() => void onDownloadByPath(result.path, result.fileName)}

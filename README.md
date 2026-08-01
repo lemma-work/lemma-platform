@@ -346,10 +346,14 @@ must release your modified source under the same terms.
 These are intended for broad embedding, installation, and adaptation, so they
 remain Apache-2.0 and include their own `LICENSE` files.
 
-**Commercial licensing and exceptions** are available from Lemma for
-organizations whose procurement policies do not accommodate AGPLv3. The
+**Commercial licensing and exceptions** are available from Folks and Machines,
+Inc. for organizations whose procurement policies do not accommodate AGPLv3. The
 commercial exception neutralizes the AGPL procurement friction while keeping the
 core genuinely open source.
 
-**Trademark:** The Lemma name, logos, and marks are trademarks of Lemma and are
-not granted by the software licenses. Fork the code, not the brand.
+**Trademark:** The Lemma name, logos, and marks are trademarks of Folks and
+Machines, Inc. and are not granted by the software licenses. Fork the code, not
+the brand.
+
+Lemma is built by [Folks and Machines, Inc.](https://lemma.work), a Delaware
+corporation. © 2026 Folks and Machines, Inc.

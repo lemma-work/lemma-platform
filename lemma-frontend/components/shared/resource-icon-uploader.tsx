@@ -1,12 +1,13 @@
 'use client';
 
 import { ChangeEvent, useMemo, useRef, useState } from 'react';
-import { ImagePlus, Loader2, Sparkles, Trash2 } from '@/components/ui/icons';
+import { ImagePlus, Sparkles, Trash2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { ResourceIcon } from './resource-icon';
+import { StepLoader } from '@/components/brand/loader';
 
 type IconTemplate = {
     id: string;
@@ -137,7 +138,7 @@ export function ResourceIconUploader({
                             'resource-icon-hero-shell p-2'
                     )}
                 >
-                    {isHero && <div aria-hidden="true" className="resource-icon-hero-glow pointer-events-none absolute -inset-3 animate-pulse" />}
+                    {isHero && <div aria-hidden="true" className="resource-icon-hero-glow pointer-events-none absolute -inset-3 lemma-live-pulse" />}
                     <ResourceIcon
                         iconUrl={value}
                         alt={`${kind} icon`}
@@ -167,7 +168,7 @@ export function ResourceIconUploader({
                     <Button
                         type="button"
                         size={compact ? 'sm' : 'sm'}
-                        variant={compact && !isHero ? 'ghost' : 'outline'}
+                        variant={compact && !isHero ? 'quiet' : 'secondary'}
                         className={cn(
                             compact ? 'h-8 gap-1 px-2 text-xs text-[var(--text-secondary)]' : 'gap-1.5',
                             isHero && 'h-9 rounded-lg border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] px-3 text-xs text-[var(--button-secondary-fg)]'
@@ -175,14 +176,14 @@ export function ResourceIconUploader({
                         disabled={isBusy}
                         onClick={() => inputRef.current?.click()}
                     >
-                        {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+                        {isUploading ? <StepLoader size="xs" /> : <ImagePlus className="h-3.5 w-3.5" />}
                         Upload
                     </Button>
 
                     <Button
                         type="button"
                         size={compact ? 'sm' : 'sm'}
-                        variant={compact && !isHero ? 'ghost' : 'outline'}
+                        variant={compact && !isHero ? 'quiet' : 'secondary'}
                         className={cn(
                             compact ? 'h-8 gap-1 px-2 text-xs text-[var(--text-secondary)]' : 'gap-1.5',
                             isHero && 'h-9 rounded-lg border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] px-3 text-xs text-[var(--button-secondary-fg)]'
@@ -198,7 +199,7 @@ export function ResourceIconUploader({
                         <Button
                             type="button"
                             size={compact ? 'sm' : 'sm'}
-                            variant="ghost"
+                            variant="quiet"
                             className={cn('gap-1.5 text-[var(--state-error)]', compact && 'h-8 px-2 text-xs', isHero && 'h-9 rounded-lg px-3')}
                             disabled={isBusy}
                             onClick={() => onChange(null)}

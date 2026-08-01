@@ -5,11 +5,9 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import {
     ArrowLeft,
     ImagePlus,
-    Loader2,
     Share2,
 } from '@/components/ui/icons';
 import { toast } from 'sonner';
-import { StepLoader } from '@/components/brand/loader';
 
 import { TriggersRow } from '@/components/triggers/triggers-row';
 import { FlowEditor } from '@/components/flows/flow-editor';
@@ -39,6 +37,7 @@ import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { FlowDefinition, Workflow, WorkflowUpdateInput } from '@/lib/types';
 import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
+import { StepLoader } from '@/components/brand/loader';
 
 /**
  * Two surfaces, not three. `overview` is the document — what this workflow is,
@@ -338,7 +337,7 @@ export default function FlowDetailPage({
                                                     nodes={flowNodes}
                                                     edges={flowEdges}
                                                     action={canUpdateCurrentWorkflow ? (
-                                                        <Button type="button" variant="outline" size="sm" onClick={() => setActiveTab('edit')}>
+                                                        <Button type="button" variant="secondary" size="sm" onClick={() => setActiveTab('edit')}>
                                                             Edit
                                                         </Button>
                                                     ) : null}
@@ -635,7 +634,7 @@ function HeaderIconEditor({
                 fallback={<ProductIcon kind="workflows" size="lg" />}
             />
             <span className="absolute -bottom-1 -right-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-[var(--row-border)] bg-[var(--card-bg)] text-[var(--text-tertiary)] shadow-[var(--shadow-xs)]">
-                {isUploading ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <ImagePlus className="h-2.5 w-2.5" />}
+                {isUploading ? <StepLoader size="xs" /> : <ImagePlus className="h-2.5 w-2.5" />}
             </span>
         </button>
     );

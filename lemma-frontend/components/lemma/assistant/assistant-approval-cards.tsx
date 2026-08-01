@@ -151,7 +151,7 @@ export function UserApprovalCard({
 
           {!isResolved ? (
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button
+              <Button variant="primary"
                 type="button"
                 size="sm"
                 onClick={() => { void resolve("APPROVE_ONCE"); }}
@@ -163,7 +163,7 @@ export function UserApprovalCard({
               {details.canApproveForSession ? (
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="secondary"
                   size="sm"
                   onClick={() => { void resolve("APPROVE_FOR_SESSION"); }}
                   disabled={!canResolve}
@@ -174,7 +174,7 @@ export function UserApprovalCard({
               ) : null}
               <Button
                 type="button"
-                variant="ghost"
+                variant="quiet"
                 size="sm"
                 onClick={() => { void resolve("DENY"); }}
                 disabled={!canResolve}
@@ -251,7 +251,7 @@ export function ComposerApprovalPanel({
         {details.canApproveForSession ? (
           <Button
             type="button"
-            variant="outline"
+            variant="secondary"
             size="sm"
             onClick={() => { void resolve("APPROVE_FOR_SESSION"); }}
             disabled={!canResolve}
@@ -262,7 +262,7 @@ export function ComposerApprovalPanel({
         ) : null}
         <Button
           type="button"
-          variant="ghost"
+          variant="quiet"
           size="sm"
           onClick={() => { void resolve("DENY"); }}
           disabled={!canResolve}
@@ -538,7 +538,7 @@ function AskUserQuestionsForm({
         {safeIndex > 0 ? (
           <Button
             type="button"
-            variant="ghost"
+            variant="quiet"
             size="sm"
             onClick={() => setIndex(safeIndex - 1)}
             disabled={pending !== null}
@@ -572,7 +572,7 @@ function AskUserQuestionsForm({
         )}
         <Button
           type="button"
-          variant="ghost"
+          variant="quiet"
           size="sm"
           onClick={() => { void submit("DENY", "dismiss"); }}
           disabled={!onResolveUserApproval || pending !== null}

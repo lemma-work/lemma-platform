@@ -1,7 +1,7 @@
 'use client';
 
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
-import { forwardRef, useLayoutEffect, useRef } from 'react';
+import { forwardRef, useLayoutEffect, useRef, useState } from 'react';
 
 import { usePodTopbar, type PodTopbarTitleOwner } from '@/components/pod/pod-topbar-context';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -13,6 +13,13 @@ export type ResourceTabItem<TValue extends string = string> = {
 };
 
 export type ResourceLayoutMode = 'ledger' | 'workbench' | 'inspector' | 'builder';
+
+/** Monotonic id so each mounted `ResourceHeader` can tell its own bar from another's. */
+let topbarClaimCounter = 0;
+function nextTopbarClaim() {
+    topbarClaimCounter += 1;
+    return topbarClaimCounter;
+}
 
 export const ResourceTitleButton = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLButtonElement> & {
     icon?: ReactNode;
@@ -120,6 +127,10 @@ export function ResourceHeader({
     fullscreen,
 }: ResourceHeaderProps) {
     const topbar = usePodTopbar();
+    // State, not a ref: this is read during render to build the bar payload, and
+    // it must be stable for the life of the mount so the cleanup below can tell
+    // "still ours" from "someone else's".
+    const [claim] = useState(nextTopbarClaim);
 
     useLayoutEffect(() => {
         topbar?.setTopbar({
@@ -135,9 +146,14 @@ export function ResourceHeader({
             tabs,
             actions,
             fullscreen,
+            claim,
         });
-        return () => topbar?.setTopbar({});
-    }, [actions, backHref, backLabel, eyebrow, fullscreen, icon, meta, switcher, tabTitle, tabs, title, titleOwner, topbar]);
+
+        // Only clear a bar we still own. A route change can commit the arriving
+        // header before the leaving one tears down, and clearing unconditionally
+        // would wipe chrome that already belongs to the new page.
+        return () => topbar?.setTopbar((current) => (current.claim === claim ? {} : current));
+    }, [actions, backHref, backLabel, claim, eyebrow, fullscreen, icon, meta, switcher, tabTitle, tabs, title, titleOwner, topbar]);
 
     return null;
 }
@@ -412,15 +428,20 @@ export function ResourceMetric({
     active,
 }: {
     label: ReactNode;
-    value: ReactNode;
+    /** Undefined until fetched — see `ResourceMetricButton` for why it prints a dash. */
+    value?: ReactNode;
     active?: boolean;
 }) {
+    const isKnown = value !== undefined && value !== null;
+
     return (
         <span
             className="lemma-index-tab"
             data-active={active}
         >
-            <strong className="font-medium text-[var(--text-primary)]">{value}</strong>
+            <strong className="font-medium text-[var(--text-primary)]" aria-hidden={!isKnown}>
+                {isKnown ? value : '—'}
+            </strong>
             <span>{label}</span>
         </span>
     );
@@ -435,10 +456,17 @@ export function ResourceMetricButton({
 }: {
     active: boolean;
     label: ReactNode;
-    count: ReactNode;
+    /**
+     * Leave undefined while the count's query is in flight. The strip renders a
+     * dash — a number you have not fetched is a claim, and "0 waiting for you"
+     * that becomes "3 waiting for you" a moment later was never true.
+     */
+    count?: ReactNode;
     onClick: () => void;
     className?: string;
 }) {
+    const isKnown = count !== undefined && count !== null;
+
     return (
         <button
             type="button"
@@ -448,7 +476,9 @@ export function ResourceMetricButton({
             onClick={onClick}
         >
             <span className="font-medium">{label}</span>
-            <span className="lemma-index-tab-count">{count}</span>
+            <span className="lemma-index-tab-count" aria-hidden={!isKnown}>
+                {isKnown ? count : '—'}
+            </span>
         </button>
     );
 }

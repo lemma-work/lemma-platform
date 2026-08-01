@@ -15,7 +15,7 @@ import { Logo } from '@/components/brand/logo';
 import { HomeImportButton } from '@/components/bundle/home-import-button';
 import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
-import { SidebarEmptyState } from '@/components/shared/empty-state';
+import { QuietEmptyState } from '@/components/shared/empty-state';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -144,7 +144,7 @@ function SidebarContent({
                                         />
                                     ))
                                 ) : (
-                                    <SidebarEmptyState>No pods yet.</SidebarEmptyState>
+                                    <QuietEmptyState className="lemma-sidebar-empty">No pods yet.</QuietEmptyState>
                                 )}
                             </div>
                         ) : null}

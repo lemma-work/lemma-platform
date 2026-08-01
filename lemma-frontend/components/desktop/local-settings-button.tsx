@@ -73,7 +73,7 @@ export function LocalSettingsButton({
           <TooltipTrigger asChild>
             <Button
               type="button"
-              variant="ghost"
+              variant="quiet"
               size="icon"
               onClick={() => void open()}
               className={cn("lemma-sidebar-rail-icon relative", className)}
@@ -95,7 +95,7 @@ export function LocalSettingsButton({
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="quiet"
       size="sm"
       onClick={() => void open()}
       className={cn(

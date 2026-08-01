@@ -375,7 +375,7 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
                                             <Button
                                                 key={mode}
                                                 type="button"
-                                                variant={publishMode === mode ? 'default' : 'secondary'}
+                                                variant={publishMode === mode ? 'primary' : 'secondary'}
                                                 size="sm"
                                                 onClick={() => setPublishMode(mode)}
                                             >
@@ -429,7 +429,7 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
                                     </div>
                                 ) : null}
 
-                                <Button
+                                <Button variant="primary"
                                     className="w-full"
                                     onClick={handlePublish}
                                     disabled={!repoName.trim() || !githubAccountId}

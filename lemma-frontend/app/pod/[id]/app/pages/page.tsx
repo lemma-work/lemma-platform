@@ -3,11 +3,10 @@
 import { use, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ArrowUpRight, ExternalLink, Loader2, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
+import { ArrowUpRight, ExternalLink, PanelsTopLeft, Plus, Share2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
-import { StepLoader } from '@/components/brand/loader';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { ResourceHeader, ResourceIndexShell } from '@/components/pod/resource-layout';
@@ -25,6 +24,7 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { appRecipes } from '@/lib/recipes/recipes';
 import { useLaunchRecipe } from '@/lib/recipes/use-launch-recipe';
 import type { AppPageRef } from '@/lib/types/app';
+import { StepLoader } from '@/components/brand/loader';
 
 function formatDisplayName(value: string | null | undefined) {
     const cleaned = (value || '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -123,7 +123,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                 meta={<ConceptHint concept="app" />}
                 actions={(
                     canCreateApp ? (
-                        <Button
+                        <Button variant="primary"
                             type="button"
                             onClick={() => {
                                 void createAppWithAssistant();
@@ -132,7 +132,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                             className="h-9 w-fit gap-2 rounded-md px-3 text-sm"
                         >
                             {assistant.isLoading || assistant.isOpenedConversationRunning ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <StepLoader size="sm" />
                             ) : (
                                 <Plus className="h-4 w-4" />
                             )}
@@ -184,7 +184,7 @@ export default function AppPagesRoute({ params }: { params: Promise<{ id: string
                     </div>
                 ) : (
                     <EmptyState
-                        variant="panel"
+                        variant="region"
                         icon={<PanelsTopLeft className="h-5 w-5" />}
                         title="No apps yet"
                         description="Build a screen where your team works with the pod's agents — drafts, reviews, and decisions in one place."

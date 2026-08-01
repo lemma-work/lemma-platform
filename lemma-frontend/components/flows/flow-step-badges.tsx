@@ -162,22 +162,22 @@ export function EditorActionFooter({
                 <div className="flex shrink-0 items-center gap-2">
                     {selectedStep && !isStartSelected ? (
                         <>
-                            <Button type="button" variant="outline" size="icon" className="h-9 w-9" onClick={() => onMoveSelected('up')} title="Move step up" aria-label="Move step up">
+                            <Button type="button" variant="secondary" size="icon" className="h-9 w-9" onClick={() => onMoveSelected('up')} title="Move step up" aria-label="Move step up">
                                 <ArrowUp className="h-3.5 w-3.5" />
                             </Button>
-                            <Button type="button" variant="outline" size="icon" className="h-9 w-9" onClick={() => onMoveSelected('down')} title="Move step down" aria-label="Move step down">
+                            <Button type="button" variant="secondary" size="icon" className="h-9 w-9" onClick={() => onMoveSelected('down')} title="Move step down" aria-label="Move step down">
                                 <ArrowDown className="h-3.5 w-3.5" />
                             </Button>
-                            <Button type="button" variant="ghost" size="icon" className="h-9 w-9 text-[var(--state-error)]" onClick={onDeleteSelected} title="Delete step" aria-label="Delete step">
+                            <Button type="button" variant="quiet" size="icon" className="h-9 w-9 text-[var(--state-error)]" onClick={onDeleteSelected} title="Delete step" aria-label="Delete step">
                                 <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                         </>
                     ) : null}
-                    <Button type="button" variant="outline" className="h-9 gap-2" onClick={() => onAddStep(NodeType.FORM)}>
+                    <Button type="button" variant="secondary" className="h-9 gap-2" onClick={() => onAddStep(NodeType.FORM)}>
                         <Plus className="h-3.5 w-3.5" />
                         Add step
                     </Button>
-                    <Button type="button" className="h-9 gap-2 px-4" onClick={onSave} disabled={isSaving}>
+                    <Button variant="primary" type="button" className="h-9 gap-2 px-4" onClick={onSave} disabled={isSaving}>
                         <Save className="h-3.5 w-3.5" />
                         {isSaving ? 'Saving...' : 'Save'}
                     </Button>

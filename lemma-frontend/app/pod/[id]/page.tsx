@@ -3,10 +3,9 @@
 import { use, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, ArrowUp, ChevronDown, ChevronUp, Loader2, Plus, UserPlus, X } from '@/components/ui/icons';
+import { ArrowRight, ArrowUp, ChevronDown, ChevronUp, Plus, UserPlus, X } from '@/components/ui/icons';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
-import { StepLoader } from '@/components/brand/loader';
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
@@ -37,6 +36,8 @@ import {
     type PodHomeResourceSignals,
 } from '@/lib/pods/pod-home-starters';
 import type { AgentRuntimeConfig, Conversation } from '@/lib/types';
+import { StepLoader } from '@/components/brand/loader';
+import { Skeleton } from '@/components/shared/loading';
 
 const RUNNING_RUN_STATUSES = new Set(['PENDING', 'RUNNING', 'EXECUTING', 'IN_PROGRESS', 'PROCESSING']);
 const FAILED_RUN_STATUSES = new Set(['FAILED', 'ERROR', 'CANCELLED', 'CANCELED']);
@@ -378,15 +379,21 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                             disabled={!canSend}
                             className="pod-home-send-button custom-focus-ring inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--action-primary)] text-[var(--text-on-brand)] transition-colors hover:bg-[var(--action-primary-hover)] disabled:bg-[var(--surface-2)] disabled:text-[var(--text-tertiary)]"
                         >
-                            {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+                            {isBusy ? <StepLoader size="sm" /> : <ArrowUp className="h-4 w-4" />}
                         </button>
                     </form>
                 </div>
-                {!showStarterHome
-                    ? showHomePanels
+                {/* Nothing until we know which home this is. A fresh pod shows the
+                    starter section above and no activity region at all, so drawing
+                    the activity skeleton first promised a panel that never arrived
+                    and then took it away again. Once `isLoadingHomeState` settles
+                    the region either exists or it does not, and from there it only
+                    ever goes skeleton → content. */}
+                {isLoadingHomeState || showStarterHome
+                    ? null
+                    : showHomePanels
                         ? <PodAgentWorkflowKanban podId={podId} baseResourceSignals={podHomeResourceSignals} />
-                        : <PodHomePanelsSkeleton />
-                    : null}
+                        : <PodHomePanelsSkeleton />}
             </main>
             {launchAnimation && launchAnimationStyle ? (
                 <div
@@ -403,7 +410,7 @@ function PodBlankChatHome({ podId }: { podId: string }) {
                             {launchAnimation.message}
                         </span>
                         <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--action-primary)] text-[var(--text-on-brand)]">
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <StepLoader size="sm" />
                         </span>
                     </div>
                 </div>
@@ -412,37 +419,47 @@ function PodBlankChatHome({ podId }: { podId: string }) {
     );
 }
 
+/**
+ * The Activity section, waiting.
+ *
+ * Rendered twice on the way in and it has to be the same both times: once while
+ * the panels are deliberately deferred so the composer paints first, and again
+ * by the kanban itself while its five queries land. Those used to be different
+ * looks — a skeleton, then a real heading over an empty panel with a spinner in
+ * the status pill — which is most of why this page felt like it loaded three or
+ * four times.
+ *
+ * It no longer draws a placeholder for the join-requests panel above it: that
+ * panel renders for almost no one, so the placeholder was a box that appeared
+ * and then vanished on nearly every visit.
+ */
+function PodHomeActivitySkeleton() {
+    return (
+        <div className="space-y-3" role="status" aria-label="Loading pod activity">
+            <div className="pod-home-work-heading flex items-center justify-between gap-4">
+                <Skeleton shape="block" className="h-4 w-20" />
+                <Skeleton className="h-3 w-24" />
+            </div>
+            <div className="pod-home-work-panel">
+                {[0, 1, 2].map((item) => (
+                    <div key={item} className="pod-home-work-section-row space-y-2" data-skeleton="true">
+                        <Skeleton className="h-2.5 w-24" />
+                        <div className="flex items-center gap-3 py-1">
+                            <Skeleton shape="circle" className="h-1.5 w-1.5" />
+                            <Skeleton className="h-3 w-36" />
+                            <Skeleton className="ml-auto h-3 w-28" />
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
 function PodHomePanelsSkeleton() {
     return (
-        <div className="mt-8 w-full space-y-6" role="status" aria-label="Loading pod activity">
-            <div className="space-y-2">
-                <div className="lemma-skeleton h-3 w-20 rounded-md" />
-                <div className="surface-panel flex items-center gap-3 p-3">
-                    <div className="lemma-skeleton h-8 w-8 rounded-md" />
-                    <div className="min-w-0 flex-1 space-y-2">
-                        <div className="lemma-skeleton h-3 w-28 rounded-md" />
-                        <div className="lemma-skeleton h-2.5 w-48 max-w-full rounded-md" />
-                    </div>
-                </div>
-            </div>
-            <div className="space-y-3">
-                <div className="flex items-center justify-between gap-4">
-                    <div className="lemma-skeleton h-4 w-20 rounded-md" />
-                    <div className="lemma-skeleton h-3 w-24 rounded-md" />
-                </div>
-                <div className="pod-home-work-panel">
-                    {[0, 1, 2].map((item) => (
-                        <div key={item} className="pod-home-work-section-row space-y-2">
-                            <div className="lemma-skeleton h-2.5 w-24 rounded-md" />
-                            <div className="flex items-center gap-3 py-1">
-                                <div className="lemma-skeleton h-1.5 w-1.5 rounded-full" />
-                                <div className="lemma-skeleton h-3 w-36 rounded-md" />
-                                <div className="lemma-skeleton ml-auto h-3 w-28 rounded-md" />
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
+        <div className="mt-8 w-full space-y-6">
+            <PodHomeActivitySkeleton />
         </div>
     );
 }
@@ -646,14 +663,19 @@ function PodAgentWorkflowKanban({
         <>
             <div className="mt-8 w-full space-y-6">
                 <PodJoinRequestsHomePanel podId={podId} />
-                {isLoading || hasKanbanItems ? (
+                {/* The same skeleton the deferred region just showed, so the hand-off
+                    from "not mounted yet" to "mounted and fetching" is invisible.
+                    It used to render the real heading over an empty panel with a
+                    spinner in the status pill — a third look, and one that stated
+                    "0 scheduled" before it knew. */}
+                {isLoading ? (
+                    <PodHomeActivitySkeleton />
+                ) : hasKanbanItems ? (
                     <section className="pod-home-work-section">
                         <div className="pod-home-work-heading flex items-center justify-between gap-4">
                             <h2 className="pod-home-work-title">Activity</h2>
                             <div className="pod-home-work-live-pill">
-                                {isLoading ? (
-                                    <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : movingItems.length > 0 ? (
+                                {movingItems.length > 0 ? (
                                     <span className="pod-home-work-live-dot" />
                                 ) : null}
                                 <span>
@@ -745,7 +767,7 @@ function PodRecipesHomeNudge({ podId }: { podId: string }) {
                 <div className="flex shrink-0 items-center gap-1">
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="sm"
                         onClick={() => setExpanded((value) => !value)}
                         aria-expanded={expanded}
@@ -763,7 +785,7 @@ function PodRecipesHomeNudge({ podId }: { podId: string }) {
                     </Link>
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         onClick={dismiss}
                         aria-label="Dismiss starter suggestions for this pod"
@@ -796,7 +818,7 @@ function KanbanCard({ item }: { item: KanbanItem }) {
             <span
                 className={cn(
                     'h-1.5 w-1.5 shrink-0 rounded-full',
-                    item.statusTone === 'live' && 'animate-pulse',
+                    item.statusTone === 'live' && 'lemma-live-pulse',
                     kanbanDotClass(item.statusTone),
                 )}
                 aria-hidden="true"
@@ -888,17 +910,15 @@ export default function PodPage({
     params: Promise<{ id: string }>;
 }) {
     const { id: podId } = use(params);
-    const { isLoading: isLoadingPod } = usePod(podId);
 
+    // No gate on `usePod` here. It used to blank the entire page behind a centred
+    // loader while that query resolved — but nothing on this branch read the pod
+    // record, the shell above has already resolved it, and the composer is static
+    // markup that can paint immediately. The one thing that genuinely waits is
+    // the activity region, and it says so itself.
     return (
         <ProtectedRoute>
-            {isLoadingPod ? (
-                <div className="flex h-full items-center justify-center">
-                    <StepLoader size="sm" />
-                </div>
-            ) : (
-                <PodBlankChatHome podId={podId} />
-            )}
+            <PodBlankChatHome podId={podId} />
         </ProtectedRoute>
     );
 }

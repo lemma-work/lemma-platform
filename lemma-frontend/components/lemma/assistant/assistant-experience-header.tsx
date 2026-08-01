@@ -71,7 +71,7 @@ export function AssistantExperienceHeader({
           {showNewConversationButton ? (
             <Button
               type="button"
-              variant="ghost"
+              variant="quiet"
               size="icon"
               onClick={controller.clearMessages}
               title="New conversation"

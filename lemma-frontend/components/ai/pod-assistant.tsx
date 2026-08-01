@@ -58,7 +58,7 @@ function ConversationStatusPill({ statusView }: { statusView: ConversationStatus
         <span
           className={cn(
             "h-1.5 w-1.5 rounded-full bg-current",
-            statusView.isActive && "animate-pulse"
+            statusView.isActive && "lemma-live-pulse"
           )}
         />
       )}
@@ -86,6 +86,7 @@ interface PodAssistantEmbeddedProps {
   contentWidthClassName?: string;
   composerWidthClassName?: string;
   emptyState?: ReactNode;
+  emptyStateFillsViewport?: boolean;
   draft?: string;
   onDraftChange?: (value: string) => void;
 }
@@ -213,6 +214,7 @@ function PodAssistantSurface({
   contentWidthClassName,
   composerWidthClassName,
   emptyState,
+  emptyStateFillsViewport,
 }: {
   title: ReactNode;
   subtitle: ReactNode;
@@ -231,6 +233,7 @@ function PodAssistantSurface({
   contentWidthClassName?: string;
   composerWidthClassName?: string;
   emptyState?: ReactNode;
+  emptyStateFillsViewport?: boolean;
 }) {
   const assistant = useAIAssistant();
   const mentionPodId = assistant.conversationPodId || assistant.podContext?.pod?.id;
@@ -295,6 +298,7 @@ function PodAssistantSurface({
         contentWidthClassName={contentWidthClassName}
         composerWidthClassName={composerWidthClassName}
         emptyState={emptyState}
+        emptyStateFillsViewport={emptyStateFillsViewport}
         emptyStateSuggestions={
           assistant.hasPodContext
             ? [
@@ -363,7 +367,7 @@ export function PodAssistant() {
     <>
       <Button
         type="button"
-        variant="outline"
+        variant="secondary"
         size="sm"
         onClick={() => setIsHistoryOpen((prev) => !prev)}
         aria-label={
@@ -389,7 +393,7 @@ export function PodAssistant() {
       </Button>
       <Button
         type="button"
-        variant="ghost"
+        variant="quiet"
         size="icon"
         onClick={() => setIsMaximized((prev) => !prev)}
         aria-label={
@@ -408,7 +412,7 @@ export function PodAssistant() {
       </Button>
       <Button
         type="button"
-        variant="ghost"
+        variant="quiet"
         size="icon"
         onClick={() => {
           handleCloseAssistant();
@@ -551,7 +555,7 @@ export function PodAssistantSidebar({
     <>
       <Button
         type="button"
-        variant="ghost"
+        variant="quiet"
         size="icon"
         onClick={openConversationPage}
         aria-label="Open conversation page"
@@ -562,7 +566,7 @@ export function PodAssistantSidebar({
       </Button>
       <Button
         type="button"
-        variant="ghost"
+        variant="quiet"
         size="icon"
         onClick={handleCollapseAssistant}
         aria-label="Close Lemma Assist"
@@ -646,6 +650,7 @@ export function PodAssistantEmbedded({
   contentWidthClassName,
   composerWidthClassName,
   emptyState,
+  emptyStateFillsViewport,
   draft,
   onDraftChange,
 }: PodAssistantEmbeddedProps = {}) {
@@ -662,6 +667,7 @@ export function PodAssistantEmbedded({
         contentWidthClassName={contentWidthClassName}
         composerWidthClassName={composerWidthClassName}
         emptyState={emptyState}
+        emptyStateFillsViewport={emptyStateFillsViewport}
         draft={draft}
         onDraftChange={onDraftChange}
         density={density}

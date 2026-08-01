@@ -182,7 +182,7 @@ export function WhatsAppMobileVerification({
       <div className="space-y-2">
         <Button
           type="button"
-          variant="outline"
+          variant="secondary"
           size="sm"
           disabled={!mobileNumber || !mobileNumberValid}
           loading={starting}
@@ -235,7 +235,7 @@ export function WhatsAppMobileVerification({
             </code>
             <Button
               type="button"
-              variant="outline"
+              variant="secondary"
               size="sm"
               className="mt-3"
               onClick={() => void copyVerificationMessage()}
@@ -267,13 +267,13 @@ export function WhatsAppMobileVerification({
         WhatsApp on another device with the number and message already filled in.
       </p>
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button asChild type="button" size="sm">
+        <Button variant="primary" asChild type="button" size="sm">
           <a href={transaction.whatsapp_url} target="_blank" rel="noreferrer">
             Open WhatsApp
             <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
           </a>
         </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setTransaction(null)}>
+        <Button type="button" variant="quiet" size="sm" onClick={() => setTransaction(null)}>
           Cancel
         </Button>
       </div>

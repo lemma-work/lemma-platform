@@ -130,7 +130,7 @@ export default function PodAssistantPage({
                                     <span className="truncate text-xs text-[var(--text-tertiary)]">
                                         Enter to send · Shift + Enter for a new line
                                     </span>
-                                    <Button
+                                    <Button variant="primary"
                                         type="button"
                                         size="icon"
                                         className="h-8 w-8 shrink-0 rounded-full"

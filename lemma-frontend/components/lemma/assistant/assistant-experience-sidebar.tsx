@@ -46,7 +46,7 @@ export function AssistantExperienceSidebar({
           {showNewConversationButton ? (
             <Button
               type="button"
-              variant="outline"
+              variant="secondary"
               size="sm"
               onClick={controller.clearMessages}
               className="h-8 px-3 text-sm"

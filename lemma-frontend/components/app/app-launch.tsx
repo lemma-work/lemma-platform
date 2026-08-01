@@ -106,7 +106,7 @@ export function AppFrame({
                         <div className="flex shrink-0 items-center gap-1">
                             <Tooltip>
                                 <TooltipTrigger asChild>
-                                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded" onClick={reloadFrame} aria-label="Reload app">
+                                    <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={reloadFrame} aria-label="Reload app">
                                         <RefreshCw className="h-4 w-4" />
                                     </Button>
                                 </TooltipTrigger>
@@ -114,7 +114,7 @@ export function AppFrame({
                             </Tooltip>
                             <Tooltip>
                                 <TooltipTrigger asChild>
-                                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded" onClick={copyLink} aria-label="Copy app link">
+                                    <Button type="button" variant="quiet" size="icon" className="h-8 w-8 rounded" onClick={copyLink} aria-label="Copy app link">
                                         <Copy className="h-4 w-4" />
                                     </Button>
                                 </TooltipTrigger>
@@ -141,7 +141,7 @@ export function AppFrame({
                                             <TooltipTrigger asChild>
                                                 <Button
                                                     type="button"
-                                                    variant="ghost"
+                                                    variant="quiet"
                                                     size="icon"
                                                     className="h-8 w-8 rounded"
                                                     onClick={openShare}
@@ -158,7 +158,7 @@ export function AppFrame({
                             ) : null}
                             <Tooltip>
                                 <TooltipTrigger asChild>
-                                    <Button asChild variant="ghost" size="icon" className="h-8 w-8 rounded" aria-label="Open app in new tab">
+                                    <Button asChild variant="quiet" size="icon" className="h-8 w-8 rounded" aria-label="Open app in new tab">
                                         <a href={url} target="_blank" rel="noreferrer">
                                             <ExternalLink className="h-4 w-4" />
                                         </a>
@@ -175,7 +175,7 @@ export function AppFrame({
                 {!frameLoaded && !frameFailed ? (
                     <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg-canvas)]">
                         <div className="flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
-                            <RefreshCw className="h-4 w-4 animate-spin" />
+                            <RefreshCw className="h-4 w-4 lemma-spin" />
                             Opening app...
                         </div>
                     </div>
@@ -188,7 +188,7 @@ export function AppFrame({
                             <p className="mt-1 text-sm text-[var(--text-secondary)]">
                                 The app may be blocking embedded views. Open it in a tab while we tune the framing policy.
                             </p>
-                            <Button asChild className="mt-4 gap-2">
+                            <Button variant="primary" asChild className="mt-4 gap-2">
                                 <a href={url} target="_blank" rel="noreferrer">
                                     <ExternalLink className="h-4 w-4" />
                                     Open app

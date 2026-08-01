@@ -109,8 +109,8 @@ export function ModelsSettings({
                         </Switch>
                         Show archived
                     </label>
-                    <Button type="button" variant="ghost" size="sm" onClick={refreshAll} disabled={isRefreshing} className="gap-1.5">
-                        <RefreshCw className={cn('size-3.5', isRefreshing && 'animate-spin')} />
+                    <Button type="button" variant="quiet" size="sm" onClick={refreshAll} disabled={isRefreshing} className="gap-1.5">
+                        <RefreshCw className={cn('size-3.5', isRefreshing && 'lemma-spin')} />
                         Recheck
                     </Button>
                 </div>
@@ -524,7 +524,7 @@ function AgentHostsSection({
                                     className="w-64"
                                 />
                             </Field>
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 size="sm"
                                 onClick={() => void pair()}
@@ -563,7 +563,7 @@ function PairingInstructions({
         <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
             <div className="flex items-start justify-between gap-3">
                 <div className="text-sm font-medium text-[var(--text-primary)]">Run these on that computer</div>
-                <Button type="button" variant="ghost" size="sm" onClick={() => void copy()} className="gap-1.5">
+                <Button type="button" variant="quiet" size="sm" onClick={() => void copy()} className="gap-1.5">
                     <Copy className="size-3.5" />
                     Copy
                 </Button>
@@ -584,7 +584,7 @@ function PairingInstructions({
                     once, and expires{' '}
                     {Number.isNaN(expiresAt.valueOf()) ? 'shortly' : expiresAt.toLocaleTimeString()}.
                 </p>
-                <Button type="button" size="sm" onClick={onDone}>
+                <Button variant="secondary" type="button" size="sm" onClick={onDone}>
                     I ran them
                 </Button>
             </div>
@@ -642,17 +642,17 @@ function AgentHostCard({
                 <StatusBadge label={agentHostStatusLabel(host.status)} tone={online ? 'ok' : 'muted'} />
                 <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     size="sm"
                     onClick={() => void harnesses.refetch()}
                     disabled={harnesses.isFetching}
                     aria-label={`Recheck ${host.display_name}`}
                 >
-                    <RefreshCw className={cn('size-4', harnesses.isFetching && 'animate-spin')} />
+                    <RefreshCw className={cn('size-4', harnesses.isFetching && 'lemma-spin')} />
                 </Button>
                 <Button
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     size="sm"
                     onClick={() => setConfirmDisconnect(true)}
                     loading={revoke.isPending}
@@ -775,7 +775,7 @@ function AgentHostHarnessRow({
                     <Button
                         type="button"
                         size="sm"
-                        variant="ghost"
+                        variant="quiet"
                         className="gap-1.5 px-2"
                         onClick={() => setDialog({ mode: 'create', harness })}
                     >
@@ -789,7 +789,7 @@ function AgentHostHarnessRow({
                     <Button
                         type="button"
                         size="sm"
-                        variant="ghost"
+                        variant="quiet"
                         className="gap-1.5 px-2"
                         loading={restore.isPending}
                         loadingLabel="Restoring"

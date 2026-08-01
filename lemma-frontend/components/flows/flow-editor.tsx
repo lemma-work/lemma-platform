@@ -278,7 +278,7 @@ function StepsView({
                                             <Button
                                                 type="button"
                                                 size="sm"
-                                                variant={configStepId === step.id ? 'default' : 'outline'}
+                                                variant={configStepId === step.id ? 'primary' : 'secondary'}
                                                 className="h-8 gap-2"
                                                 onClick={(event) => {
                                                     event.stopPropagation();
@@ -850,7 +850,7 @@ export function FlowEditor({
                         <div className="mt-4 flex items-center gap-2">
                             <Button
                                 type="button"
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="h-8 text-[var(--state-error)]"
                                 onClick={handleDeleteSelected}

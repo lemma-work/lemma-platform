@@ -50,7 +50,7 @@ export function SetupStandalonePage({
           {onBack ? (
             <Button
               type="button"
-              variant="ghost"
+              variant="quiet"
               onClick={onBack}
               className="h-auto gap-1.5 px-0 text-sm text-[var(--text-tertiary)] hover:bg-transparent hover:text-[var(--text-primary)]"
             >
@@ -157,7 +157,7 @@ export function SetupSplitPanel({
           {onBack ? (
             <Button
               type="button"
-              variant="ghost"
+              variant="quiet"
               onClick={onBack}
               className="h-auto gap-1.5 px-0 text-sm text-[var(--text-tertiary)] hover:bg-transparent hover:text-[var(--text-primary)]"
             >
@@ -205,7 +205,7 @@ export function SetupPrimaryButton({
   ...props
 }: React.ComponentProps<typeof Button>) {
   return (
-    <Button
+    <Button variant="primary"
       {...props}
       className={[
         "setup-primary-action !flex mx-auto mt-8 h-12 min-w-56 gap-3 px-7 text-sm font-medium",

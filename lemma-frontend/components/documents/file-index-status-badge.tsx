@@ -76,7 +76,7 @@ export function FileIndexStatusBadge({
             className={cn('chip chip-pill chip-sm shrink-0 gap-1', config.className, className)}
             title={title}
         >
-            <Icon className={cn('h-3 w-3', state === 'indexing' && 'animate-spin')} />
+            <Icon className={cn('h-3 w-3', state === 'indexing' && 'lemma-spin')} />
             {config.label}
         </span>
     );

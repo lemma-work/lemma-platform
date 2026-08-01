@@ -68,7 +68,7 @@ export function LocalAiSetupBanner() {
         <strong>Configure an AI provider.</strong>{" "}
         Agents are unavailable until a provider validates; the rest of Lemma is ready.
       </span>
-      <Button
+      <Button variant="secondary"
         type="button"
         size="sm"
         className="shrink-0"

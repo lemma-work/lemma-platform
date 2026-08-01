@@ -3,12 +3,13 @@
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { AlertTriangle, Loader2 } from '@/components/ui/icons';
+import { AlertTriangle } from '@/components/ui/icons';
 import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 import type { Connector } from '@/lib/types';
 import { SchemaFields } from './schema-fields';
 import { getAppLabel, getCredentialSchema, type ProviderCapability, type SchemaValues } from './connector-utils';
+import { StepLoader } from '@/components/brand/loader';
 
 export interface CredentialTarget {
     connector: Connector;
@@ -81,11 +82,11 @@ export function ConnectAccountDialog({
                     />
                 </div>
                 <DialogFooter>
-                    <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
+                    <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
                         Cancel
                     </Button>
-                    <Button onClick={handleSubmit} disabled={isSubmitting}>
-                        {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    <Button variant="primary" onClick={handleSubmit} disabled={isSubmitting}>
+                        {isSubmitting ? <StepLoader size="sm" className="mr-2" /> : null}
                         {isReconnect ? 'Reconnect' : 'Connect'}
                     </Button>
                 </DialogFooter>

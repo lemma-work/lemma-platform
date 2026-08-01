@@ -30,7 +30,6 @@ import {
 import {
     AlertCircle,
     Link as LinkIcon,
-    Loader2,
     Maximize2,
     MessageSquare,
     Play,
@@ -38,6 +37,7 @@ import {
     Search,
     X,
 } from '@/components/ui/icons';
+import { StepLoader } from '@/components/brand/loader';
 
 interface AgentTestPanelProps {
     podId: string;
@@ -448,7 +448,7 @@ export function AgentTestPanel({
                     </div>
                     {hasActiveRun ? (
                         <Button
-                            variant="ghost"
+                            variant="quiet"
                             size="sm"
                             onClick={handleNewRun}
                             className="h-7 gap-1.5 px-2 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -473,7 +473,7 @@ export function AgentTestPanel({
             <div ref={historyScrollRef} className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
                 {filteredConversations.length === 0 ? (
                     <EmptyState
-                        variant="compact"
+                        variant="region"
                         icon={<MessageSquare className="h-4 w-4" />}
                         title="No runs yet"
                         description="Start the agent once and the run will appear here."
@@ -523,7 +523,7 @@ export function AgentTestPanel({
                     <div ref={historySentinelRef} aria-hidden className="h-px" />
                     {controller.isLoadingMoreConversations && (
                         <div className="flex items-center justify-center py-3 text-[var(--text-tertiary)]">
-                            <Loader2 className="h-4 w-4 animate-spin opacity-40" />
+                            <StepLoader size="sm" className="opacity-40" />
                         </div>
                     )}
                   </>
@@ -562,13 +562,11 @@ export function AgentTestPanel({
                         showConversationList={false}
                         showModelPicker={false}
                         showNewConversationButton
-                        finalOutput={parsedOutput}
-                        outputSchema={agent?.output_schema}
                         headerActions={(
                             <>
                                 {onToggleFullView || controller.openedConversationId ? (
                                     <Button
-                                        variant="ghost"
+                                        variant="quiet"
                                         size="icon"
                                         onClick={openActiveConversationPage}
                                         className="h-8 w-8 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -580,7 +578,7 @@ export function AgentTestPanel({
                                 ) : null}
                                 {onClose ? (
                                     <Button
-                                        variant="ghost"
+                                        variant="quiet"
                                         size="icon"
                                         onClick={onClose}
                                         className="h-8 w-8 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -617,7 +615,7 @@ export function AgentTestPanel({
                     <div className="flex items-center gap-2">
                         {onToggleFullView || controller.openedConversationId ? (
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="icon"
                                 onClick={openActiveConversationPage}
                                 className="h-8 w-8 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
@@ -629,7 +627,7 @@ export function AgentTestPanel({
                         ) : null}
                         {hasActiveRun ? (
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 onClick={handleNewRun}
                                 className="h-7 gap-1.5 px-2 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -642,7 +640,7 @@ export function AgentTestPanel({
                         {onClose ? (
                             <>
                                 <div className="mx-1 h-4 w-px bg-[var(--bg-muted)]" />
-                                <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
+                                <Button variant="quiet" size="icon" onClick={onClose} className="h-8 w-8 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
                                     <X className="h-4 w-4" />
                                 </Button>
                             </>
@@ -668,8 +666,6 @@ export function AgentTestPanel({
                                 showHeader={false}
                                 showModelPicker={false}
                                 showNewConversationButton={false}
-                                finalOutput={parsedOutput}
-                                outputSchema={agent?.output_schema}
                                 className="h-full min-h-0 rounded-none border-0 bg-[var(--card-bg)] shadow-none"
                             />
                         </div>
@@ -697,13 +693,13 @@ export function AgentTestPanel({
                                                         <span className="text-xs text-[var(--text-secondary)] font-medium">{app?.title || app?.name || 'Connector'}</span>
                                                     </div>
                                                     <Button
-                                                        variant="ghost"
+                                                        variant="quiet"
                                                         size="sm"
                                                         className="h-6 bg-[var(--button-secondary-bg)] text-xs hover:bg-[var(--button-secondary-bg-hover)]"
                                                         onClick={() => app?.id && handleConnect(app.id)}
                                                         disabled={isConnecting[app?.id || '']}
                                                     >
-                                                        {isConnecting[app?.id || ''] ? <Loader2 className="w-3 h-3 animate-spin" /> : <LinkIcon className="w-3 h-3 mr-1" />}
+                                                        {isConnecting[app?.id || ''] ? <StepLoader size="xs" /> : <LinkIcon className="w-3 h-3 mr-1" />}
                                                         Connect
                                                     </Button>
                                                 </div>
@@ -796,12 +792,12 @@ export function AgentTestPanel({
                                     <span className="agent-test-run-action-copy">
                                         {missingRequiredKeys.length > 0 ? 'Add the required inputs to launch.' : 'Ready when you are.'}
                                     </span>
-                                    <Button
+                                    <Button variant="primary"
                                         onClick={handleRun}
                                         disabled={isStartingRun || controller.isOpenedConversationRunning || missingRequiredKeys.length > 0}
                                         className="agent-test-run-button"
                                     >
-                                        {isStartingRun || controller.isOpenedConversationRunning ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
+                                        {isStartingRun || controller.isOpenedConversationRunning ? <StepLoader size="sm" className="mr-2" /> : <Play className="w-4 h-4 mr-2" />}
                                         Start run
                                     </Button>
                                 </div>

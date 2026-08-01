@@ -90,7 +90,7 @@ export function AgentWiringRows({
             <WiringRow
                 label="Can use"
                 action={canEdit ? (
-                    <Button type="button" variant="outline" size="sm" onClick={() => setIsAccessOpen(true)}>
+                    <Button type="button" variant="secondary" size="sm" onClick={() => setIsAccessOpen(true)}>
                         Manage
                     </Button>
                 ) : null}
@@ -123,7 +123,7 @@ export function AgentWiringRows({
                 <WiringRow
                     label="Takes"
                     action={canEdit ? (
-                        <Button type="button" variant="outline" size="sm" onClick={() => setIsContractOpen(true)}>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => setIsContractOpen(true)}>
                             Edit
                         </Button>
                     ) : null}

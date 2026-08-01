@@ -7,7 +7,6 @@ import {
     Code2,
     Flag,
     GitBranch,
-    Loader2,
     Play,
     Repeat,
     Timer,
@@ -16,6 +15,7 @@ import {
 } from '@/components/ui/icons';
 import { NodeType, WorkflowNode, WorkflowRun } from '@/lib/types';
 import { getPreviewFields, truncatePreview } from '@/lib/utils/payload-preview';
+import { StepLoader } from '@/components/brand/loader';
 
 export type StatusVariant = 'default' | 'success' | 'error' | 'warning' | 'info';
 
@@ -360,7 +360,7 @@ export function getStatusIcon(status: string) {
         case 'RUNNING':
         case 'PENDING':
         case 'EXECUTING':
-            return <Loader2 className="h-4 w-4 animate-spin" />;
+            return <StepLoader size="sm" />;
         default:
             return <AlertCircle className="h-4 w-4" />;
     }

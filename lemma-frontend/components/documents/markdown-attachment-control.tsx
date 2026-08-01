@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { FileText, Loader2 } from '@/components/ui/icons';
+import { FileText } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -16,6 +16,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAttachDocumentMarkdown, useDetachDocumentMarkdown } from '@/lib/hooks/use-datastores';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
 
 /** Preview types that are extracted into markdown and so accept a BYO override. */
 const MARKDOWN_ATTACHABLE_PREVIEW_TYPES = new Set(['pdf', 'office', 'html', 'unsupported']);
@@ -89,7 +90,7 @@ export function MarkdownAttachmentControl({
                 <TooltipTrigger asChild>
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         className={cn('h-8 w-8 rounded', isUserMarkdown && 'text-[var(--action-primary)]')}
                         onClick={() => setOpen(true)}
@@ -170,23 +171,23 @@ export function MarkdownAttachmentControl({
                     <DialogFooter className="sm:justify-between">
                         {isUserMarkdown ? (
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 onClick={handleDetach}
                                 disabled={isBusy}
                                 className="text-[var(--state-error)]"
                             >
-                                {isDetaching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                {isDetaching ? <StepLoader size="sm" className="mr-2" /> : null}
                                 Revert to extracted
                             </Button>
                         ) : (
                             <span />
                         )}
                         <div className="flex items-center gap-2">
-                            <Button variant="outline" onClick={() => setOpen(false)} disabled={isBusy}>
+                            <Button variant="secondary" onClick={() => setOpen(false)} disabled={isBusy}>
                                 Cancel
                             </Button>
-                            <Button onClick={submit} disabled={!markdownFile || isBusy}>
-                                {isAttaching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                            <Button variant="secondary" onClick={submit} disabled={!markdownFile || isBusy}>
+                                {isAttaching ? <StepLoader size="sm" className="mr-2" /> : null}
                                 {isUserMarkdown ? 'Replace markdown' : 'Attach markdown'}
                             </Button>
                         </div>

@@ -1118,9 +1118,6 @@ var LemmaUI = (() => {
       if ((metadata == null ? void 0 : metadata.is_final_answer) !== true && (metadata == null ? void 0 : metadata.isFinalAnswer) !== true) continue;
       const structured = toFinalOutputRecord((_a = metadata.structured_output) != null ? _a : metadata.structuredOutput);
       if (structured) return structured;
-      const content = typeof message.text === "string" ? message.text : typeof message.content === "string" ? message.content : "";
-      const parsed = extractJsonObject(content);
-      if (parsed) return parsed;
     }
     return null;
   }
@@ -1181,8 +1178,11 @@ var LemmaUI = (() => {
     return null;
   }
   function extractAgentFinalOutput(messages, options = {}) {
-    var _a, _b, _c, _d;
-    return (_d = (_c = (_b = (_a = finalOutputFromMetadata(messages)) != null ? _a : finalOutputFromToolInvocations(messages)) != null ? _b : finalOutputFromRawToolMessages(messages)) != null ? _c : finalOutputFromMarkedText(messages)) != null ? _d : options.parseTextFallback ? finalOutputFromJsonText(messages) : null;
+    var _a, _b, _c;
+    const declared = (_b = (_a = finalOutputFromMetadata(messages)) != null ? _a : finalOutputFromToolInvocations(messages)) != null ? _b : finalOutputFromRawToolMessages(messages);
+    if (declared) return declared;
+    if (!options.parseTextFallback) return null;
+    return (_c = finalOutputFromMarkedText(messages)) != null ? _c : finalOutputFromJsonText(messages);
   }
 
   // src/core/agent/task.ts

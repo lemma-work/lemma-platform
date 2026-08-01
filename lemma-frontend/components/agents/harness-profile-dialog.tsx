@@ -281,7 +281,7 @@ export function HarnessProfileDialog({
                 </div>
 
                 <DialogFooter>
-                    <Button type="button" variant="ghost" size="sm" onClick={onClose} disabled={pending}>
+                    <Button type="button" variant="quiet" size="sm" onClick={onClose} disabled={pending}>
                         Cancel
                     </Button>
                     <Button

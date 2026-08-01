@@ -2,9 +2,10 @@
 
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Loader2, MessageSquare, Save } from '@/components/ui/icons';
+import { MessageSquare, Save } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
+import { AgentDetailSkeleton } from '@/components/agents/agent-detail-skeleton';
 import { AgentIdentityHeader } from '@/components/agents/agent-identity-header';
 import { AgentInstructions } from '@/components/agents/agent-instructions';
 import { AgentTestPanel } from '@/components/agents/agent-test-panel';
@@ -101,10 +102,10 @@ export default function AgentDetailPage({
     }, [agentData, buildUpdatePayload, hasUnsavedChanges]);
 
     /**
-     * A callback ref, not an effect: this page renders a loading state until the
-     * agent arrives, so on mount there is no node to measure yet and a
-     * mount-only effect would attach nothing and never retry — leaving the
-     * width at zero and the split permanently side-by-side.
+     * A callback ref, not an effect, and it now attaches to the skeleton shell
+     * on mount — so the split has a real width before the agent lands, and the
+     * stacked/side-by-side decision is made once instead of being corrected a
+     * frame after the content appears.
      */
     const measureLayout = useCallback((node: HTMLDivElement | null) => {
         layoutObserverRef.current?.disconnect();
@@ -194,15 +195,13 @@ export default function AgentDetailPage({
     const canUpdateCurrentAgent = resourceAllows(localAgent, 'agent.update', canUpdateAgent);
     const openConversationId = searchParams.get('conversation');
 
-    if (isLoading || !localAgent) {
-        return (
-            <div className="flex h-full items-center justify-center">
-                <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-            </div>
-        );
-    }
-
-    const displayName = localAgent.name || agentName;
+    // This page used to return a bare centred spinner while the agent loaded —
+    // no header, no cards, no dock — and then snap the whole two-pane layout
+    // into place. Nothing about the *frame* was ever unknown: the name is in the
+    // URL, and the cards are in the same places whatever the agent turns out to
+    // be. So the shell renders from the first frame and only the fields wait.
+    const isReady = Boolean(localAgent) && !isLoading;
+    const displayName = localAgent?.name || agentName;
     const label = formatAgentName(displayName);
     const agentShareUrl = typeof window === 'undefined'
         ? undefined
@@ -220,8 +219,9 @@ export default function AgentDetailPage({
         canCreateSchedule,
     }) === 'draft';
     // A conversation id in the URL is a request to look at that run, so it opens
-    // the dock too — until the reader closes it themselves.
-    const dockOpen = isDockOpen ?? (isDraft || Boolean(openConversationId));
+    // the dock too — until the reader closes it themselves. Closed while the
+    // agent loads: the dock runs the *saved* agent, and there isn't one yet.
+    const dockOpen = isReady && (isDockOpen ?? (isDraft || Boolean(openConversationId)));
     const isStackedLayout = dockOpen && layoutWidth > 0 && layoutWidth < 1040;
 
     return (
@@ -238,24 +238,27 @@ export default function AgentDetailPage({
                 actions={(
                     <>
                         {canUpdateCurrentAgent && (hasUnsavedChanges || updateAgent.isPending) ? (
-                            <Button
+                            <Button variant="primary"
                                 type="button"
                                 size="sm"
                                 className="h-8 gap-1.5 px-3 text-xs font-medium"
                                 onClick={() => void handleSave()}
-                                disabled={updateAgent.isPending || !hasUnsavedChanges}
+                                loading={updateAgent.isPending}
+                                loadingLabel="Saving…"
+                                disabled={!hasUnsavedChanges}
                             >
-                                {updateAgent.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-                                {updateAgent.isPending ? 'Saving…' : 'Save changes'}
+                                <Save className="h-3.5 w-3.5" />
+                                Save changes
                             </Button>
                         ) : null}
                         <Button
                             type="button"
-                            variant={dockOpen ? 'secondary' : 'outline'}
+                            variant="secondary"
                             size="sm"
                             className="h-8 gap-1.5 px-2.5 text-xs font-medium"
                             onClick={() => setIsDockOpen(!dockOpen)}
                             aria-pressed={dockOpen}
+                            disabled={!isReady}
                         >
                             <MessageSquare className="h-3.5 w-3.5" />
                             Try it
@@ -278,36 +281,42 @@ export default function AgentDetailPage({
                                 {/* Who it is and how it is wired are one card: both
                                     answer "what is this thing", and neither is the
                                     work. The prompt gets its own. */}
-                                <section className="resource-card">
-                                    <AgentIdentityHeader
-                                        podId={podId}
-                                        agent={localAgent}
-                                        onUpdate={handleUpdate}
-                                        canEdit={canUpdateCurrentAgent}
-                                        shareUrl={agentShareUrl}
-                                        onShareVisibilityChange={handleShareVisibilityChange}
-                                    />
+                                {localAgent ? (
+                                    <>
+                                        <section className="resource-card">
+                                            <AgentIdentityHeader
+                                                podId={podId}
+                                                agent={localAgent}
+                                                onUpdate={handleUpdate}
+                                                canEdit={canUpdateCurrentAgent}
+                                                shareUrl={agentShareUrl}
+                                                onShareVisibilityChange={handleShareVisibilityChange}
+                                            />
 
-                                    <AgentWiringRows
-                                        podId={podId}
-                                        agent={localAgent}
-                                        onUpdate={handleUpdate}
-                                        canEdit={canUpdateCurrentAgent}
-                                        surfaces={agentSurfaces}
-                                        schedules={agentSchedules}
-                                        canUseSurfaces={canUseSurfaces}
-                                        canUseSchedules={canUseSchedules}
-                                        canCreateSchedule={canCreateSchedule}
-                                        canUpdateSchedule={canUpdateSchedule}
-                                        canDeleteSchedule={canDeleteSchedule}
-                                    />
-                                </section>
+                                            <AgentWiringRows
+                                                podId={podId}
+                                                agent={localAgent}
+                                                onUpdate={handleUpdate}
+                                                canEdit={canUpdateCurrentAgent}
+                                                surfaces={agentSurfaces}
+                                                schedules={agentSchedules}
+                                                canUseSurfaces={canUseSurfaces}
+                                                canUseSchedules={canUseSchedules}
+                                                canCreateSchedule={canCreateSchedule}
+                                                canUpdateSchedule={canUpdateSchedule}
+                                                canDeleteSchedule={canDeleteSchedule}
+                                            />
+                                        </section>
 
-                                <AgentInstructions
-                                    agent={localAgent}
-                                    onUpdate={handleUpdate}
-                                    canEdit={canUpdateCurrentAgent}
-                                />
+                                        <AgentInstructions
+                                            agent={localAgent}
+                                            onUpdate={handleUpdate}
+                                            canEdit={canUpdateCurrentAgent}
+                                        />
+                                    </>
+                                ) : (
+                                    <AgentDetailSkeleton />
+                                )}
                             </div>
                         </div>
                     )}
