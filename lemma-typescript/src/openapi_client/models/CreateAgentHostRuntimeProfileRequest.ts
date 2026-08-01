@@ -8,6 +8,7 @@ export type CreateAgentHostRuntimeProfileRequest = {
     default_model_name?: (string | null);
     description?: (string | null);
     harness_id: string;
+    host_wait_timeout_seconds?: (number | null);
     name: string;
     scope?: RuntimeProfileScope;
     source?: string;

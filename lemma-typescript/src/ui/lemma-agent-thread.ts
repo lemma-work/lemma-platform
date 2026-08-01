@@ -132,6 +132,8 @@ export class LemmaAgentThreadElement extends HTMLElementBase {
         if (kind === "TOOL_CALL" || kind === "tool_call" || kind === "TOOL_RETURN" || kind === "tool_return") {
           return `<div part="event" class="event">⚙ ${escapeHtml(String(message.tool_name || "tool"))}</div>`;
         }
+        // A settled thought is background for the answer that follows it. The
+        // live one still shows, as the activity line below.
         if (kind === "THINKING" || kind === "thinking") return "";
         const text = conversationMessageText(message);
         if (!text) return "";
@@ -143,7 +145,7 @@ export class LemmaAgentThreadElement extends HTMLElementBase {
     if (state?.isStreaming) {
       const streaming = state.streamingText
         ? `<div part="message" class="msg assistant" data-role="assistant">${escapeHtml(state.streamingText)}</div>`
-        : `<div part="activity" class="activity">Working…</div>`;
+        : `<div part="activity" class="activity">${state.streamingThinking ? "Thinking…" : "Working…"}</div>`;
       return rows + streaming;
     }
     return rows;

@@ -112,6 +112,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                                 "type": "text",
                                 "text": format!("Reply with exactly: {marker}"),
                             })],
+                            resume_session_id: None,
                             context: BTreeMap::new(),
                             mcp: Value::Null,
                             run_deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
@@ -122,6 +123,7 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
                             .join(agent.as_str())
                             .join(run_id.to_string()),
                         mcp_server: None,
+                        can_load_session: false,
                         permissions: PermissionGate::new(),
                         permission_timeout: Duration::ZERO,
                     },
@@ -163,6 +165,162 @@ async fn authenticated_harnesses_stream_real_answers_over_acp() {
     run_through_paired_agent_host(&paths, "codex").await;
 }
 
+/// Drive one turn and return `(session id, what the agent streamed back)`.
+async fn one_turn(
+    manifest: &AdapterManifest,
+    paths: &HostPaths,
+    agent: &str,
+    conversation_id: Uuid,
+    prompt: &str,
+    resume_session_id: Option<String>,
+) -> (String, String) {
+    let callbacks = Arc::new(StreamCapture::default());
+    let run_id = Uuid::new_v4();
+    let outcome = AcpDriver
+        .run(
+            AcpRunRequest {
+                adapter: manifest.resolve(agent).unwrap(),
+                run_spec: RunSpec {
+                    agent_run_id: run_id,
+                    conversation_id,
+                    harness_id: Uuid::new_v4(),
+                    profile_revision: "real-continuity-e2e".to_owned(),
+                    model_name: None,
+                    config_selections: JsonMap::new(),
+                    system_prompt: "Answer in one short sentence.".to_owned(),
+                    prompt: vec![json!({"type": "text", "text": prompt})],
+                    resume_session_id,
+                    context: BTreeMap::new(),
+                    mcp: Value::Null,
+                    run_deadline: Utc::now() + chrono::Duration::minutes(5),
+                },
+                scratch_directory: paths
+                    .root
+                    .join("real-continuity")
+                    .join(agent)
+                    // Both turns share a directory: a provider is entitled to
+                    // refuse to load a session into a different cwd, and a
+                    // Lemma conversation keeps one workspace anyway.
+                    .join(conversation_id.to_string()),
+                mcp_server: None,
+                can_load_session: true,
+                permissions: PermissionGate::new(),
+                permission_timeout: Duration::ZERO,
+            },
+            callbacks.clone(),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("{agent} ACP run failed: {error:#}"));
+    assert_eq!(
+        outcome.state,
+        RunState::Succeeded,
+        "{agent} did not succeed"
+    );
+    let answer = callbacks
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(event_type, _)| *event_type == EventType::AgentMessageChunk)
+        .filter_map(|(_, payload)| payload.get("text").and_then(Value::as_str))
+        .collect::<String>();
+    (outcome.provider_session_id, answer)
+}
+
+/// One Lemma conversation is one provider session.
+///
+/// Without this the agent meets the user again on every message: it never sees
+/// what it just said, so it re-asks answered questions and contradicts itself.
+/// The check is deliberately behavioural rather than structural — that
+/// `session/load` was sent proves nothing if the provider ignored it.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_conversation_keeps_one_provider_session_across_turns() {
+    let paths = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(paths.adapters.clone());
+
+    for agent in configured_agents() {
+        let conversation_id = Uuid::new_v4();
+        let (session_id, _) = one_turn(
+            &manifest,
+            &paths,
+            &agent,
+            conversation_id,
+            "My name is Ada. Remember it.",
+            None,
+        )
+        .await;
+
+        let started = std::time::Instant::now();
+        let (resumed_session_id, answer) = one_turn(
+            &manifest,
+            &paths,
+            &agent,
+            conversation_id,
+            "What is my name? Reply with just the name.",
+            Some(session_id.clone()),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            answer.to_lowercase().contains("ada"),
+            "{agent} lost the conversation across turns; answer={answer:?}"
+        );
+        assert_eq!(
+            resumed_session_id, session_id,
+            "{agent} answered in a different session than the one it was asked to resume"
+        );
+        // Not a benchmark — a regression alarm. Resolving the adapter used to
+        // re-hash the npm package on every run, which put ~5s of pure host
+        // overhead in front of a model that answers this in one or two.
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "{agent} took {elapsed:?} for a warm follow-up turn"
+        );
+        println!("{agent}: resumed {session_id} in {elapsed:?} -> {answer:?}");
+    }
+}
+
+/// A session the provider no longer has costs history, never the answer.
+///
+/// Providers expire sessions on their own schedule — Codex prunes rollout
+/// files, a Claude Code session can be deleted from disk — so a stored id going
+/// stale is normal operation, not an error. If a failed `session/load` failed
+/// the run, a conversation would become permanently unusable the day its
+/// provider forgot it.
+#[tokio::test]
+#[ignore = "requires authenticated local agents and spends real provider quota"]
+async fn a_session_the_provider_has_forgotten_still_answers() {
+    let paths = HostPaths::under(agent_host_data_directory());
+    let manifest = AdapterManifest::builtin()
+        .unwrap()
+        .with_cache_root(paths.adapters.clone());
+
+    for agent in configured_agents() {
+        let (session_id, answer) = one_turn(
+            &manifest,
+            &paths,
+            &agent,
+            Uuid::new_v4(),
+            "Reply with exactly: LEMMA_FALLBACK_OK",
+            Some(Uuid::new_v4().to_string()),
+        )
+        .await;
+        assert!(
+            answer.contains("LEMMA_FALLBACK_OK"),
+            "{agent} did not answer after a failed resume; answer={answer:?}"
+        );
+        assert!(
+            !session_id.is_empty(),
+            "{agent} answered without reporting a session to store"
+        );
+        println!("{agent}: fell back to a new session {session_id}");
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires authenticated Codex and spends real image-generation quota"]
 async fn codex_native_image_generation_creates_a_publishable_artifact() {
@@ -200,12 +358,14 @@ async fn codex_native_image_generation_creates_a_publishable_artifact() {
                         "the final PNG as .lemma-artifacts/native-image-e2e.png."
                     ),
                 })],
+                resume_session_id: None,
                 context: JsonMap::new(),
                 mcp: Value::Null,
                 run_deadline: Utc::now() + chrono::Duration::minutes(10),
             },
             scratch_directory: scratch.path().to_path_buf(),
             mcp_server: None,
+            can_load_session: false,
             permissions: PermissionGate::new(),
             permission_timeout: Duration::ZERO,
         },
@@ -553,6 +713,7 @@ async fn poll(
                 "type": "text",
                 "text": "Reply with exactly: LEMMA_PAIRED_AGENT_HOST_STREAM_OK",
             })],
+            resume_session_id: None,
             context: JsonMap::new(),
             mcp: json!({
                 "server_name": "lemma",

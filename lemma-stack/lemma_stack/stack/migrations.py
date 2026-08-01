@@ -15,6 +15,7 @@ DB_CONTAINER = f"{CONTAINER_PREFIX}-db"
 EXTRA_DATABASES = ("supertokens", "lemma_datastore", "agentbox")
 VECTOR_DATABASES = ("lemma", "lemma_datastore")
 DATABASE_URL = "postgresql+asyncpg://postgres:postgres@db:5432/lemma"
+AGENTBOX_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@db:5432/agentbox"
 
 
 def _psql(runtime: Runtime, database: str, sql: str) -> str:
@@ -49,20 +50,32 @@ def ensure_databases(runtime: Runtime) -> None:
 
 
 def run_migrations(runtime: Runtime, manifest: ReleaseManifest) -> None:
-    info("db: running migrations (alembic upgrade head)")
-    proc = runtime.run(
-        "run",
-        "--rm",
-        "--network",
-        NETWORK_NAME,
-        "-e",
-        f"DATABASE_URL={DATABASE_URL}",
-        manifest.image("backend").pull_ref,
-        "alembic",
-        "upgrade",
-        "head",
-        check=False,
+    migration_steps = (
+        (
+            "Lemma",
+            ("-e", f"DATABASE_URL={DATABASE_URL}"),
+            ("alembic", "upgrade", "head"),
+        ),
+        (
+            "AgentBox",
+            ("-e", f"AGENTBOX_STATE_DATABASE_URL={AGENTBOX_DATABASE_URL}"),
+            ("alembic", "-c", "/agentbox/alembic.ini", "upgrade", "head"),
+        ),
     )
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()[-2000:]
-        raise AdminError(f"database migration failed; stack left untouched.\n{detail}")
+    for label, environment, command in migration_steps:
+        info(f"db: running {label} migrations")
+        proc = runtime.run(
+            "run",
+            "--rm",
+            "--network",
+            NETWORK_NAME,
+            *environment,
+            manifest.image("backend").pull_ref,
+            *command,
+            check=False,
+        )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()[-2000:]
+            raise AdminError(
+                f"{label} database migration failed; stack left untouched.\n{detail}"
+            )

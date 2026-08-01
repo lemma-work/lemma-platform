@@ -21,6 +21,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { Logo } from '@/components/brand/logo';
+import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
@@ -757,6 +758,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             )}
 
             <div className="workspace-sidebar-places shrink-0 px-3 pb-3 pt-3">
+                <LocalSettingsButton className="mb-1" />
                 <div className="space-y-0.5">
                     {places.map((place) => (
                         <PlaceLink key={place.href} {...place} />

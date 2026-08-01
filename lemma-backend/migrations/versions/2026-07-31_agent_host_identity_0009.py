@@ -41,11 +41,6 @@ depends_on = None
 UUID = postgresql.UUID(as_uuid=True)
 JSONB = postgresql.JSONB(astext_type=sa.Text())
 
-# uq_agent_host_user_org_installation relies on NULLS NOT DISTINCT so that a
-# personal host (organization_id IS NULL) still collides with itself on
-# re-pairing. That clause is PostgreSQL 15+ only, and on older servers the
-# constraint would silently permit duplicate personal installations.
-_MINIMUM_POSTGRES_VERSION = 150000
 
 
 def _created_columns() -> list[sa.Column]:
@@ -205,30 +200,15 @@ def _restore_legacy_daemon_schema() -> None:
     )
 
 
-def _require_supported_postgres() -> None:
-    version = op.get_bind().scalar(sa.text("SHOW server_version_num"))
-    if int(version) < _MINIMUM_POSTGRES_VERSION:
-        raise RuntimeError(
-            "Agent Host requires PostgreSQL 15 or newer for NULLS NOT DISTINCT "
-            f"unique constraints; this server reports server_version_num={version}"
-        )
-
-
 def upgrade() -> None:
-    _require_supported_postgres()
-
     op.create_table(
         "agent_host_pairings",
         *_created_columns(),
         sa.Column("user_id", UUID, nullable=False),
-        sa.Column("organization_id", UUID, nullable=True),
         sa.Column("code_hash", sa.String(length=64), nullable=False),
         sa.Column("display_name", sa.String(length=255), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organizations.id"], ondelete="CASCADE"
-        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("code_hash", name="uq_agent_host_pairing_code_hash"),
     )
@@ -239,17 +219,11 @@ def upgrade() -> None:
         "agent_host_pairings",
         ["user_id", "expires_at"],
     )
-    op.create_index(
-        "ix_agent_host_pairings_organization_id",
-        "agent_host_pairings",
-        ["organization_id"],
-    )
 
     op.create_table(
         "agent_hosts",
         *_audit_columns(),
         sa.Column("user_id", UUID, nullable=False),
-        sa.Column("organization_id", UUID, nullable=True),
         sa.Column("installation_id", sa.String(length=255), nullable=False),
         sa.Column("host_secret_hash", sa.String(length=64), nullable=False),
         sa.Column("display_name", sa.String(length=255), nullable=False),
@@ -260,21 +234,16 @@ def upgrade() -> None:
         sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["organization_id"], ["organizations.id"], ondelete="CASCADE"
-        ),
         sa.PrimaryKeyConstraint("id"),
+        # One row per person per machine. A paired computer belongs to the
+        # person who paired it, so re-pairing the same installation updates it
+        # rather than creating a second row for one physical machine.
         sa.UniqueConstraint(
             "user_id",
-            "organization_id",
             "installation_id",
-            name="uq_agent_host_user_org_installation",
-            postgresql_nulls_not_distinct=True,
+            name="uq_agent_host_user_installation",
         ),
         sa.UniqueConstraint("host_secret_hash", name="uq_agent_host_secret_hash"),
-    )
-    op.create_index(
-        "ix_agent_hosts_organization_id", "agent_hosts", ["organization_id"]
     )
     # Status-only lookups drive the offline sweep across all users, so this is
     # not covered by (user_id, status) below.

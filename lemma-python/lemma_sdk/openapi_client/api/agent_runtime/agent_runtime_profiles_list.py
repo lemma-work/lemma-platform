@@ -11,18 +11,27 @@ from ...models.agent_runtime_profile_list_response import (
     AgentRuntimeProfileListResponse,
 )
 from ...models.error_response import ErrorResponse
-from ...types import Response
+from ...types import UNSET, Response, Unset
 
 
 def _get_kwargs(
     org_id: UUID,
+    *,
+    include_disabled: bool | Unset = False,
 ) -> dict[str, Any]:
+
+    params: dict[str, Any] = {}
+
+    params["include_disabled"] = include_disabled
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
     _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/organizations/{org_id}/agent-runtime/profiles".format(
             org_id=quote(str(org_id), safe=""),
         ),
+        "params": params,
     }
 
     return _kwargs
@@ -62,11 +71,13 @@ def sync_detailed(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    include_disabled: bool | Unset = False,
 ) -> Response[AgentRuntimeProfileListResponse | ErrorResponse]:
     """List Available Agent Runtime Profiles
 
     Args:
         org_id (UUID):
+        include_disabled (bool | Unset):  Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -78,6 +89,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         org_id=org_id,
+        include_disabled=include_disabled,
     )
 
     response = client.get_httpx_client().request(
@@ -91,11 +103,13 @@ def sync(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    include_disabled: bool | Unset = False,
 ) -> AgentRuntimeProfileListResponse | ErrorResponse | None:
     """List Available Agent Runtime Profiles
 
     Args:
         org_id (UUID):
+        include_disabled (bool | Unset):  Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -108,6 +122,7 @@ def sync(
     return sync_detailed(
         org_id=org_id,
         client=client,
+        include_disabled=include_disabled,
     ).parsed
 
 
@@ -115,11 +130,13 @@ async def asyncio_detailed(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    include_disabled: bool | Unset = False,
 ) -> Response[AgentRuntimeProfileListResponse | ErrorResponse]:
     """List Available Agent Runtime Profiles
 
     Args:
         org_id (UUID):
+        include_disabled (bool | Unset):  Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -131,6 +148,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         org_id=org_id,
+        include_disabled=include_disabled,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -142,11 +160,13 @@ async def asyncio(
     org_id: UUID,
     *,
     client: AuthenticatedClient | Client,
+    include_disabled: bool | Unset = False,
 ) -> AgentRuntimeProfileListResponse | ErrorResponse | None:
     """List Available Agent Runtime Profiles
 
     Args:
         org_id (UUID):
+        include_disabled (bool | Unset):  Default: False.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -160,5 +180,6 @@ async def asyncio(
         await asyncio_detailed(
             org_id=org_id,
             client=client,
+            include_disabled=include_disabled,
         )
     ).parsed

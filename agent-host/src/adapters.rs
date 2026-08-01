@@ -1,9 +1,10 @@
 //! Pinned ACP adapter manifest and local harness discovery.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
@@ -24,6 +25,19 @@ pub struct AdapterManifest {
     pub adapters: Vec<AdapterSpec>,
     #[serde(skip)]
     cache_root: Option<PathBuf>,
+    /// Adapters already resolved by this process, shared across clones.
+    ///
+    /// Resolving is expensive and was being paid on every use: it hashes the
+    /// whole npm package for the integrity check and execs the agent binary to
+    /// read its version. Measured at 21.7s for four adapters, and `handle_start`
+    /// paid a share of it on the poll loop before *every* run — which is where
+    /// most of the per-message latency came from.
+    ///
+    /// Verifying once per process is the deliberate trade: an adapter swapped
+    /// underneath a running host is no longer caught, but every restart
+    /// re-verifies, and the host restarts often.
+    #[serde(skip)]
+    resolved: Arc<Mutex<HashMap<String, ResolvedAdapter>>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -68,6 +82,9 @@ impl AdapterManifest {
     #[must_use]
     pub fn with_cache_root(mut self, cache_root: impl Into<PathBuf>) -> Self {
         self.cache_root = Some(cache_root.into());
+        // A different cache root resolves to different executables, so nothing
+        // learned under the previous one still applies.
+        self.resolved = Arc::new(Mutex::new(HashMap::new()));
         self
     }
 
@@ -117,6 +134,23 @@ impl AdapterManifest {
     }
 
     pub fn resolve(&self, key: &str) -> anyhow::Result<ResolvedAdapter> {
+        if let Some(cached) = self
+            .resolved
+            .lock()
+            .expect("adapter cache poisoned")
+            .get(key)
+        {
+            return Ok(cached.clone());
+        }
+        let resolved = self.resolve_uncached(key)?;
+        self.resolved
+            .lock()
+            .expect("adapter cache poisoned")
+            .insert(key.to_owned(), resolved.clone());
+        Ok(resolved)
+    }
+
+    fn resolve_uncached(&self, key: &str) -> anyhow::Result<ResolvedAdapter> {
         let spec = self
             .adapters
             .iter()
@@ -590,6 +624,53 @@ fn push_unique(paths: &mut Vec<PathBuf>, seen: &mut HashSet<PathBuf>, path: Path
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_adapter_is_resolved_once_and_then_served_from_cache() {
+        // Resolving hashes the whole npm package and execs the agent binary to
+        // read its version. Paying that per run put ~5s on the poll loop before
+        // every message, which was most of the latency users saw.
+        let manifest = AdapterManifest::builtin().unwrap();
+        let key = manifest.adapters[0].key.clone();
+
+        // A non-npm adapter resolves straight off PATH; if this machine has no
+        // such binary there is nothing to cache and nothing to assert.
+        let Ok(first) = manifest.resolve(&key) else {
+            return;
+        };
+
+        assert_eq!(
+            manifest.resolved.lock().unwrap().len(),
+            1,
+            "resolving did not populate the cache"
+        );
+
+        let second = manifest.resolve(&key).unwrap();
+        assert_eq!(first.command, second.command);
+        assert_eq!(first.upstream_version, second.upstream_version);
+
+        // Clones share the cache: the poll loop, the probe task and each run
+        // task all hold their own clone of the manifest.
+        let cloned = manifest.clone();
+        assert_eq!(cloned.resolved.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn changing_the_cache_root_discards_what_was_resolved_under_the_old_one() {
+        let manifest = AdapterManifest::builtin().unwrap();
+        let key = manifest.adapters[0].key.clone();
+        if manifest.resolve(&key).is_err() {
+            return;
+        }
+        assert_eq!(manifest.resolved.lock().unwrap().len(), 1);
+
+        let moved = manifest.with_cache_root("/nonexistent-adapter-cache");
+
+        assert!(
+            moved.resolved.lock().unwrap().is_empty(),
+            "a stale resolution survived a cache-root change"
+        );
+    }
 
     #[test]
     fn builtin_manifest_is_valid_and_pinned() {

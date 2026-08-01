@@ -13,3 +13,6 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# Offline OpenAPI dump (scripts/dump_openapi_spec.py) feeding the SDK generators.
+.generated/

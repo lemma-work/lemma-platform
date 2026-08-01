@@ -1,6 +1,6 @@
 {
   "informational": {
-    "rawButtonElements": 28,
+    "rawButtonElements": 29,
     "rawSwitchButtonElements": 0,
     "rawFieldElements": 2,
     "inlineEditableFieldElements": 3,
@@ -14,7 +14,7 @@
     "rawFontSizeDeclaration": 1,
     "rawRadiusDeclaration": 0,
     "rawSpacingDeclaration": 0,
-    "multiplePrimaryButtons": 21
+    "multiplePrimaryButtons": 20
   },
   "protectedAssistant": {
     "rawButtonElements": 1

@@ -8,13 +8,17 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 base64 = "0.22"
 getrandom = "0.3"
+hyper = { version = "0.14", features = ["client", "http1", "server", "stream", "tcp"] }
+if-addrs = "0.13"
 interprocess = "2.4"
 keyring = "4.1.5"
 lemma-runtime-manager = { path = "../local-runtime/manager" }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 reqwest = { version = "=0.13.4", default-features = false, features = ["blocking", "json", "native-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tokio = { version = "1", features = ["io-util", "net", "rt-multi-thread", "sync"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

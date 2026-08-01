@@ -8,7 +8,7 @@ import { Info, Settings2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { ProtectedRoute } from '@/components/auth/protected-route';
-import { resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
+import { findProfileByRuntime, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
 import { PodSettingsPanel, PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { PodBundleSettingsPanel } from '@/components/bundle/pod-bundle-settings';
@@ -45,7 +45,16 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
         ?? (pod?.config?.default_profile_id
             ? resolveDefaultAgentRuntime(runtimeCatalog, pod.config.default_profile_id)
             : null);
-    const selectedRuntime = runtimeDraft ?? storedRuntime;
+    // A stored default can name a profile that has since been archived. The
+    // picker sets allowAuto={false}, so there is no Auto row to fall back to and
+    // every agent in the pod would silently inherit a dead default. Resolve the
+    // modern path through the catalog too, and say so rather than degrade.
+    const storedRuntimeIsMissing = Boolean(
+        storedRuntime?.profile_id
+        && runtimeCatalog
+        && !findProfileByRuntime(runtimeCatalog, storedRuntime),
+    );
+    const selectedRuntime = runtimeDraft ?? (storedRuntimeIsMissing ? null : storedRuntime);
     const manageModelsHref = pod?.organization_id
         ? `/organizations/${pod.organization_id}/settings/agent-runtimes`
         : undefined;
@@ -99,6 +108,12 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
                     scopeHint="Pod default"
                     manageHref={manageModelsHref}
                 />
+                {storedRuntimeIsMissing ? (
+                    <p className="mt-2 text-sm text-[var(--state-warning)]">
+                        This pod&apos;s default model is no longer available — it was removed from
+                        the workspace. Pick another one, or restore it under Manage models.
+                    </p>
+                ) : null}
             </PodSettingsPanel>
 
             <PodJoinPolicyPanel

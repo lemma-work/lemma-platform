@@ -138,6 +138,7 @@ fn journal_run(paths: &HostPaths, target_id: Uuid, run_id: Uuid, mcp: Value) {
         config_selections: JsonMap::new(),
         system_prompt: String::new(),
         prompt: vec![json!({"type": "text", "text": "unused"})],
+        resume_session_id: None,
         context: JsonMap::new(),
         mcp,
         run_deadline: Utc::now() + chrono::Duration::minutes(5),

@@ -34,6 +34,7 @@ from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.modules.agent.domain.value_objects import AgentRunStatus
+from app.modules.agent.events.handlers import reconcile_agent_approval_now
 from app.modules.agent.infrastructure.harnesses.mock_model import (
     MOCK_SCRIPT_METADATA_KEY,
 )
@@ -218,6 +219,7 @@ async def resume_latest_scripted_run(
     user_id: UUID,
     pod_id: UUID,
     agent_name: str | None,
+    approval_id: str | None = None,
 ) -> None:
     """Drive the resume run a native-interaction submission created.
 
@@ -225,7 +227,24 @@ async def resume_latest_scripted_run(
     flat script set on the first call is still on conversation metadata and
     keeps being read (see module docstring). Named separately only for
     call-site clarity after ``handler.try_handle_interaction(...)``.
+
+    Pass ``approval_id`` when the submission was an approval button. A platform
+    webhook resolves the decision under its own deadline and hands the slow half
+    - running the approved tool and starting the resume run - to a worker job
+    (``defer_reconciliation=True`` in the ingress service). These tests drive the
+    harness in-process with no worker, so without this the decision commits, no
+    resume run is ever created, and the latest run is still the COMPLETED one.
     """
+    if approval_id is not None:
+        await reconcile_agent_approval_now(
+            {
+                "conversation_id": str(conversation_id),
+                "approval_id": approval_id,
+                "pod_id": str(pod_id),
+            },
+            uow_factory=SessionUnitOfWorkFactory(async_session_maker),
+        )
+        db_session.expire_all()
     await run_scripted_agent_run(
         db_session,
         conversation_id=conversation_id,

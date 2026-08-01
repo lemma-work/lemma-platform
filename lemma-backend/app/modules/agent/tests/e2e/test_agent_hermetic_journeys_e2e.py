@@ -14,6 +14,7 @@ from app.modules.test_support.e2e.scripted_model import (
     script_model_error,
     script_text,
     script_tool_call,
+    script_tool_result_ref,
 )
 
 pytestmark = pytest.mark.e2e
@@ -352,7 +353,7 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
     monkeypatch,
 ):
     """Provider profiles discover models and reject unsafe or unusable config."""
-    from app.modules.agent.services.runtime_profile_service import (
+    from app.modules.agent.services.runtime_provider_discovery import (
         DiscoveredModel,
         _validate_public_base_url,
     )
@@ -367,12 +368,12 @@ async def test_public_runtime_profile_anthropic_discovery_and_validation_matrix(
         return [DiscoveredModel("mock-safe-model", supports_vision=True)]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service."
+        "app.modules.agent.services.runtime_provider_discovery."
         "_discover_anthropic_compatible_models",
         discover_anthropic_models,
     )
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service."
+        "app.modules.agent.services.runtime_provider_discovery."
         "_discover_openai_compatible_models",
         discover_openai_models,
     )
@@ -644,9 +645,12 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         script_tool_call(
             "exec_command",
             {
-                "cmd": "printf 'tty-proof'",
+                # `cat` echoes whatever it is sent and stays alive until killed,
+                # so the input and kill calls below have a real process to drive
+                # and its echo proves the characters actually arrived.
+                "cmd": "printf 'tty-proof\\n' && cat",
                 "tty": True,
-                "yield_time_ms": 10,
+                "yield_time_ms": 200,
                 "comment": "Exercise the interactive command contract",
             },
             tool_call_id="shell-tty-1",
@@ -664,9 +668,9 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             "manage_process",
             {
                 "action": "input",
-                "process_id": "fake-interactive-process",
+                "process_id": script_tool_result_ref("shell-tty-1", "process_id"),
                 "chars": "status\n",
-                "yield_time_ms": 10,
+                "yield_time_ms": 500,
             },
             tool_call_id="process-input-1",
         ),
@@ -674,7 +678,7 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
             "manage_process",
             {
                 "action": "kill",
-                "process_id": "fake-interactive-process",
+                "process_id": script_tool_result_ref("shell-tty-1", "process_id"),
                 "comment": "Stop the deterministic process",
             },
             tool_call_id="process-kill-1",
@@ -809,7 +813,12 @@ async def test_scripted_todo_and_workspace_tools_stream_and_persist_real_results
         tool_returns_by_id["shell-blocking-1"]["tool_result"]
     )
     assert tool_returns_by_id["shell-failure-1"]["tool_result"]["success"] is False
-    assert tool_returns_by_id["process-input-1"]["tool_result"]["success"] is True
+    # These drive the process `shell-tty-1` actually started, by the id it
+    # actually returned. Asserting only `success` would pass against a process
+    # that ignored the input, so require the echo back from `cat`.
+    process_input = tool_returns_by_id["process-input-1"]["tool_result"]
+    assert process_input["success"] is True
+    assert "status" in str(process_input)
     assert tool_returns_by_id["process-kill-1"]["tool_result"]["success"] is True
     assert "42" in str(tool_returns_by_id["python-1"]["tool_result"])
     assert tool_returns_by_id["python-failure-1"]["tool_result"]["success"] is False
@@ -1234,16 +1243,20 @@ async def {function_name}(
         f"/pods/{pod_id}/conversations/{conversation_id}/messages"
     )
     assert messages.status_code == status.HTTP_200_OK, messages.text
-    returns = {
-        item["tool_call_id"]: item["tool_result"]
-        for item in messages.json()["items"]
-        if item["kind"] == "TOOL_RETURN"
-    }
-    assert returns["dynamic-function"] == {
-        "echo": {"value": "function input"},
-        "function": function_name,
-    }
+    tool_returns = [
+        item for item in messages.json()["items"] if item["kind"] == "TOOL_RETURN"
+    ]
+    returns = {item["tool_call_id"]: item["tool_result"] for item in tool_returns}
+    tool_names = {item["tool_call_id"]: item["tool_name"] for item in tool_returns}
+
+    # The function tool returns the function's own declared output - the tool
+    # adds no envelope of its own (callable_tool_factory returns
+    # ``run.output_data``). So the result being exactly FunctionOutput is what
+    # proves the real sandboxed function ran and its value round-tripped.
+    assert returns["dynamic-function"] == {"value": "function input"}
+    assert tool_names["dynamic-function"] == f"function_{function_name}"
     assert "delegated child input" in str(returns["dynamic-agent"])
+    assert tool_names["dynamic-agent"] == f"agent_{child_name}"
 
     children = await authenticated_client.get(
         f"/pods/{pod_id}/conversations",
@@ -1258,3 +1271,107 @@ async def {function_name}(
     )
     assert child_detail.status_code == status.HTTP_200_OK, child_detail.text
     assert child_detail.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_public_runtime_profile_edit_archive_and_restore(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    monkeypatch,
+):
+    """The full management lifecycle a workspace admin drives from the UI.
+
+    The point that needs proving end to end is the PATCH semantics: a rename
+    sends only `name`, and the stored API key must survive it. Anything that
+    made `api_key` required would silently blank the credential on every save.
+    """
+    from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+
+    async def discover_openai_models(**_kwargs):
+        return [DiscoveredModel("mock-safe-model", supports_vision=True)]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery."
+        "_discover_openai_compatible_models",
+        discover_openai_models,
+    )
+
+    org_id = fixed_test_org["id"]
+    base = f"/organizations/{org_id}/agent-runtime/profiles"
+    canary = "CANARY_EDITED_PROFILE_KEY_4d19"
+    suffix = uuid4().hex[:8]
+
+    created = await authenticated_client.post(
+        base,
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": f"Editable {suffix}",
+            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "api_key": canary,
+            "default_model_name": "mock-safe-model",
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    profile_id = created.json()["id"]
+
+    fetched = await authenticated_client.get(f"{base}/{profile_id}")
+    assert fetched.status_code == status.HTTP_200_OK, fetched.text
+    assert fetched.json()["has_credentials"] is True
+    # A provider profile has no harness behind it, so nothing to report.
+    assert fetched.json()["harness"] is None
+    assert fetched.json()["availability_status"] is None
+    assert canary not in fetched.text
+
+    renamed = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={"source": "OPENAI_COMPATIBLE", "name": f"Renamed {suffix}"},
+    )
+    assert renamed.status_code == status.HTTP_200_OK, renamed.text
+    assert renamed.json()["name"] == f"Renamed {suffix}"
+    # The key was never in the request; it must still be there.
+    assert renamed.json()["has_credentials"] is True
+    assert canary not in renamed.text
+
+    other = await authenticated_client.post(
+        base,
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": f"Occupied {suffix}",
+            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "api_key": "second-key",
+            "default_model_name": "mock-safe-model",
+        },
+    )
+    assert other.status_code == status.HTTP_201_CREATED, other.text
+
+    collision = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={"source": "OPENAI_COMPATIBLE", "name": f"Occupied {suffix}"},
+    )
+    assert collision.status_code == status.HTTP_409_CONFLICT, collision.text
+
+    archived = await authenticated_client.delete(f"{base}/{profile_id}")
+    assert archived.status_code == status.HTTP_204_NO_CONTENT, archived.text
+
+    listed = await authenticated_client.get(base)
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+    assert profile_id not in {item["id"] for item in listed.json()["items"]}
+
+    with_archived = await authenticated_client.get(
+        base, params={"include_disabled": True}
+    )
+    assert with_archived.status_code == status.HTTP_200_OK, with_archived.text
+    archived_item = next(
+        item for item in with_archived.json()["items"] if item["id"] == profile_id
+    )
+    assert archived_item["status"] == "DISABLED"
+
+    restored = await authenticated_client.post(f"{base}/{profile_id}:restore")
+    assert restored.status_code == status.HTTP_200_OK, restored.text
+    assert restored.json()["status"] == "ACTIVE"
+    # Archiving is reversible without re-entering the credential.
+    assert restored.json()["has_credentials"] is True
+
+    back = await authenticated_client.get(base)
+    assert profile_id in {item["id"] for item in back.json()["items"]}

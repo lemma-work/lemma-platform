@@ -116,7 +116,7 @@ def backend_env(
         "AGENTBOX_STATE_DATABASE_URL": (
             "postgresql+asyncpg://postgres:postgres@db:5432/agentbox"
         ),
-        "AGENTBOX_AUTO_CREATE_SCHEMA": "true",
+        "AGENTBOX_AUTO_CREATE_SCHEMA": "false",
         "AGENTBOX_DOCKER_SOCKET_PATH": container_socket,
         "AGENTBOX_DOCKER_SCOPE": f"{provider}:local",
         "AGENTBOX_DOCKER_ALLOW_MUTABLE_IMAGES": "false",

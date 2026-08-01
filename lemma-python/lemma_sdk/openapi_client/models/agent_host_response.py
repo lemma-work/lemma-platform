@@ -29,7 +29,6 @@ class AgentHostResponse:
         id (UUID):
         installation_id (str):
         last_seen_at (datetime.datetime | None):
-        organization_id (None | UUID):
         protocol_version (int | None):
         revoked_at (datetime.datetime | None):
         status (AgentHostStatus):
@@ -44,7 +43,6 @@ class AgentHostResponse:
     id: UUID
     installation_id: str
     last_seen_at: datetime.datetime | None
-    organization_id: None | UUID
     protocol_version: int | None
     revoked_at: datetime.datetime | None
     status: AgentHostStatus
@@ -70,12 +68,6 @@ class AgentHostResponse:
             last_seen_at = self.last_seen_at.isoformat()
         else:
             last_seen_at = self.last_seen_at
-
-        organization_id: None | str
-        if isinstance(self.organization_id, UUID):
-            organization_id = str(self.organization_id)
-        else:
-            organization_id = self.organization_id
 
         protocol_version: int | None
         protocol_version = self.protocol_version
@@ -103,7 +95,6 @@ class AgentHostResponse:
                 "id": id,
                 "installation_id": installation_id,
                 "last_seen_at": last_seen_at,
-                "organization_id": organization_id,
                 "protocol_version": protocol_version,
                 "revoked_at": revoked_at,
                 "status": status,
@@ -146,21 +137,6 @@ class AgentHostResponse:
 
         last_seen_at = _parse_last_seen_at(d.pop("last_seen_at"))
 
-        def _parse_organization_id(data: object) -> None | UUID:
-            if data is None:
-                return data
-            try:
-                if not isinstance(data, str):
-                    raise TypeError()
-                organization_id_type_0 = UUID(data)
-
-                return organization_id_type_0
-            except TypeError, ValueError, AttributeError, KeyError:
-                pass
-            return cast(None | UUID, data)
-
-        organization_id = _parse_organization_id(d.pop("organization_id"))
-
         def _parse_protocol_version(data: object) -> int | None:
             if data is None:
                 return data
@@ -197,7 +173,6 @@ class AgentHostResponse:
             id=id,
             installation_id=installation_id,
             last_seen_at=last_seen_at,
-            organization_id=organization_id,
             protocol_version=protocol_version,
             revoked_at=revoked_at,
             status=status,

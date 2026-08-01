@@ -72,7 +72,11 @@ lemma pod create my-team --with-starter
 
 Open the generated `my-team/` directory in Claude Code, Codex, OpenCode, Cursor, or Antigravity and ask it to build the app you want. Antigravity users should first run `lemma skills install --target agents --scope project` from inside that directory. The coding agent authors and verifies the pod through the same CLI.
 
-To let the pod dispatch runs through your local Claude Code, Codex, OpenCode, or Cursor login, pair this machine as an Agent Host and point a runtime profile at one of its harnesses:
+To let the pod dispatch runs through your local Claude Code, Codex, OpenCode, or Cursor login, pair this machine as an Agent Host and point a runtime profile at one of its harnesses.
+
+In [Lemma Desktop](docs/installation.md), open **Models** and press **Connect
+this computer**, then **Add to chat models** on the agents it finds. Headless,
+the same thing from the CLI:
 
 ```bash
 lemma agent-host connect                 # pairs using your existing CLI login
@@ -232,10 +236,11 @@ lemma runtime profiles create AGENT_HOST \
 lemma agent-host status          # paired targets, service state, queue depth
 ```
 
-Pairing installs Agent Host as a per-user background service, so it survives
-logout and reboot. With Lemma Desktop installed, Desktop supervises it and
-`lemma agent-host start|stop|restart` route through Desktop rather than
-installing a second service.
+Pairing from the CLI installs Agent Host as a per-user background service, so
+it survives logout and reboot. Lemma Desktop supervises it instead and runs it
+while the app is open, so `lemma agent-host start|stop|restart` route through
+Desktop rather than installing a second service. See
+[Agent Host in the desktop app](docs/design/agent-host-desktop.md).
 
 Any agent operates a pod directly through the CLI:
 
