@@ -1271,3 +1271,107 @@ async def {function_name}(
     )
     assert child_detail.status_code == status.HTTP_200_OK, child_detail.text
     assert child_detail.json()["status"] == "COMPLETED"
+
+
+@pytest.mark.asyncio
+async def test_public_runtime_profile_edit_archive_and_restore(
+    authenticated_client,
+    fixed_test_org,
+    e2e_settings,
+    monkeypatch,
+):
+    """The full management lifecycle a workspace admin drives from the UI.
+
+    The point that needs proving end to end is the PATCH semantics: a rename
+    sends only `name`, and the stored API key must survive it. Anything that
+    made `api_key` required would silently blank the credential on every save.
+    """
+    from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+
+    async def discover_openai_models(**_kwargs):
+        return [DiscoveredModel("mock-safe-model", supports_vision=True)]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery."
+        "_discover_openai_compatible_models",
+        discover_openai_models,
+    )
+
+    org_id = fixed_test_org["id"]
+    base = f"/organizations/{org_id}/agent-runtime/profiles"
+    canary = "CANARY_EDITED_PROFILE_KEY_4d19"
+    suffix = uuid4().hex[:8]
+
+    created = await authenticated_client.post(
+        base,
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": f"Editable {suffix}",
+            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "api_key": canary,
+            "default_model_name": "mock-safe-model",
+        },
+    )
+    assert created.status_code == status.HTTP_201_CREATED, created.text
+    profile_id = created.json()["id"]
+
+    fetched = await authenticated_client.get(f"{base}/{profile_id}")
+    assert fetched.status_code == status.HTTP_200_OK, fetched.text
+    assert fetched.json()["has_credentials"] is True
+    # A provider profile has no harness behind it, so nothing to report.
+    assert fetched.json()["harness"] is None
+    assert fetched.json()["availability_status"] is None
+    assert canary not in fetched.text
+
+    renamed = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={"source": "OPENAI_COMPATIBLE", "name": f"Renamed {suffix}"},
+    )
+    assert renamed.status_code == status.HTTP_200_OK, renamed.text
+    assert renamed.json()["name"] == f"Renamed {suffix}"
+    # The key was never in the request; it must still be there.
+    assert renamed.json()["has_credentials"] is True
+    assert canary not in renamed.text
+
+    other = await authenticated_client.post(
+        base,
+        json={
+            "source": "OPENAI_COMPATIBLE",
+            "name": f"Occupied {suffix}",
+            "base_url": f"{e2e_settings.agentbox_api_url}/v1",
+            "api_key": "second-key",
+            "default_model_name": "mock-safe-model",
+        },
+    )
+    assert other.status_code == status.HTTP_201_CREATED, other.text
+
+    collision = await authenticated_client.patch(
+        f"{base}/{profile_id}",
+        json={"source": "OPENAI_COMPATIBLE", "name": f"Occupied {suffix}"},
+    )
+    assert collision.status_code == status.HTTP_409_CONFLICT, collision.text
+
+    archived = await authenticated_client.delete(f"{base}/{profile_id}")
+    assert archived.status_code == status.HTTP_204_NO_CONTENT, archived.text
+
+    listed = await authenticated_client.get(base)
+    assert listed.status_code == status.HTTP_200_OK, listed.text
+    assert profile_id not in {item["id"] for item in listed.json()["items"]}
+
+    with_archived = await authenticated_client.get(
+        base, params={"include_disabled": True}
+    )
+    assert with_archived.status_code == status.HTTP_200_OK, with_archived.text
+    archived_item = next(
+        item for item in with_archived.json()["items"] if item["id"] == profile_id
+    )
+    assert archived_item["status"] == "DISABLED"
+
+    restored = await authenticated_client.post(f"{base}/{profile_id}:restore")
+    assert restored.status_code == status.HTTP_200_OK, restored.text
+    assert restored.json()["status"] == "ACTIVE"
+    # Archiving is reversible without re-entering the credential.
+    assert restored.json()["has_credentials"] is True
+
+    back = await authenticated_client.get(base)
+    assert profile_id in {item["id"] for item in back.json()["items"]}

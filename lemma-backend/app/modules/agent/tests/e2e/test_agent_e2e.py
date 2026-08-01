@@ -2714,6 +2714,38 @@ class TestAgentOpenApi:
             == "agent.tool.report_feedback"
         )
 
+        profile_path = paths["/organizations/{org_id}/agent-runtime/profiles/{profile_id}"]
+        assert profile_path["get"]["operationId"] == "agent.runtime.profiles.get"
+        assert profile_path["patch"]["operationId"] == "agent.runtime.profiles.update"
+        assert profile_path["delete"]["operationId"] == "agent.runtime.profiles.archive"
+        assert (
+            paths["/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore"][
+                "post"
+            ]["operationId"]
+            == "agent.runtime.profiles.restore"
+        )
+        # `archive` is a VOID_VERB, so the SDK generates a `-> None` call and the
+        # route must not promise a body it does not send.
+        assert set(profile_path["delete"]["responses"]) >= {"204"}
+        update_schema = profile_path["patch"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        assert update_schema["discriminator"]["propertyName"] == "source"
+        assert set(update_schema["discriminator"]["mapping"]) == {
+            "AGENT_HOST",
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }
+        # Every field optional: the controller reads which keys were sent to
+        # tell "leave alone" from "clear", so a required one would force a
+        # rename to resend the stored API key.
+        for member in (
+            "UpdateOpenAICompatibleRuntimeProfileRequest",
+            "UpdateAnthropicCompatibleRuntimeProfileRequest",
+            "UpdateAgentHostRuntimeProfileRequest",
+        ):
+            assert schemas[member].get("required", []) == []
+
 
 async def _wait_for_conversation_title(
     authenticated_client,

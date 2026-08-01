@@ -8,6 +8,7 @@ from app.modules.agent.domain.runtime_profiles import (
     ApiKeyRuntimeCredentials,
     OpenAICompatibleRuntimeConfig,
     RuntimeModelCatalogEntry,
+    RuntimeProfileAvailability,
     RuntimeProfileKind,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
@@ -1521,3 +1522,144 @@ async def test_the_built_in_profile_cannot_be_edited_or_archived():
             organization_id=organization_id,
             user_id=user_id,
         )
+
+
+def _harness_repository_with(*, harness, host):
+    """A host repository exposing only the two batched reads availability needs."""
+
+    class _BatchRepository(_HostRepository):
+        async def get_harnesses(self, harness_ids):
+            return {
+                key: value
+                for key, value in self.harnesses.items()
+                if key in harness_ids
+            }
+
+        async def get_many(self, host_ids):
+            return {
+                key: value for key, value in self.hosts.items() if key in host_ids
+            }
+
+    harnesses = {harness.id: harness} if harness is not None else {}
+    hosts = {host.id: host} if host is not None else {}
+    return _BatchRepository(harnesses, hosts)
+
+
+def _availability_case(
+    *,
+    organization_id,
+    harness_health="READY",
+    host_status="ONLINE",
+    host_revoked=False,
+    harness_present=True,
+    host_present=True,
+):
+    from datetime import datetime, timezone
+
+    host_id = uuid4()
+    harness_id = uuid4()
+    host = SimpleNamespace(
+        id=host_id,
+        user_id=uuid4(),
+        organization_id=organization_id,
+        status=host_status,
+        last_seen_at=datetime.now(timezone.utc),
+        revoked_at=datetime.now(timezone.utc) if host_revoked else None,
+    )
+    harness = SimpleNamespace(
+        id=harness_id,
+        host_id=host_id,
+        harness_key="opencode",
+        health=harness_health,
+        config_revision="rev-1",
+        config_options=[],
+        capabilities={},
+    )
+    profile = AgentRuntimeProfile(
+        id=f"org:{harness_id}",
+        organization_id=organization_id,
+        harness_id=harness_id,
+        scope=RuntimeProfileScope.ORGANIZATION,
+        kind=RuntimeProfileKind.HARNESS,
+        protocol=RuntimeProfileProtocol.AGENT_HOST,
+        name="Codex",
+        config={"harness_snapshot_revision": "rev-1"},
+    )
+    repository = _harness_repository_with(
+        harness=harness if harness_present else None,
+        host=host if host_present else None,
+    )
+    return profile, repository
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ({}, RuntimeProfileAvailability.READY),
+        ({"host_status": "OFFLINE"}, RuntimeProfileAvailability.OFFLINE),
+        ({"harness_present": False}, RuntimeProfileAvailability.NOT_INSTALLED),
+        ({"host_present": False}, RuntimeProfileAvailability.UNAVAILABLE),
+        ({"host_revoked": True}, RuntimeProfileAvailability.UNAVAILABLE),
+        (
+            {"harness_health": "AUTH_REQUIRED"},
+            RuntimeProfileAvailability.UNAVAILABLE,
+        ),
+    ],
+)
+async def test_listing_reports_why_a_coding_agent_cannot_take_work(case, expected):
+    """The field the Models page has always read and the backend never filled.
+
+    Without it an offline laptop's profile renders identically to a healthy one.
+    """
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile, host_repository = _availability_case(
+        organization_id=organization_id, **case
+    )
+    service = AgentRuntimeProfileService(
+        repository=_ProfileRepository([profile]), host_repository=host_repository
+    )
+
+    listed = await service.list_profiles_with_availability(
+        organization_id=organization_id, user_id=user_id
+    )
+
+    # The listing always carries the built-in profile too; assert on ours.
+    by_id = {listed_profile.id: availability for listed_profile, availability in listed}
+    assert by_id[profile.id] is expected
+
+
+async def test_a_model_provider_reports_no_availability():
+    """A base URL and a key are reachable whenever the endpoint is: Lemma has
+    nothing local to say about them, and a status badge would be a guess."""
+    organization_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id, name="Acme")
+    service = AgentRuntimeProfileService(
+        repository=_ProfileRepository([profile]),
+        host_repository=_HostRepository({}, {}),
+    )
+
+    listed = await service.list_profiles_with_availability(
+        organization_id=organization_id, user_id=uuid4()
+    )
+
+    by_id = {listed_profile.id: availability for listed_profile, availability in listed}
+    assert by_id[profile.id] is None
+
+
+async def test_availability_degrades_where_the_service_has_no_host_repository():
+    """agent_runner_service and conversation_service both build this service
+    without one. They never render availability, so it must not raise."""
+    organization_id = uuid4()
+    profile, _repository = _availability_case(organization_id=organization_id)
+    service = AgentRuntimeProfileService(repository=_ProfileRepository([profile]))
+
+    listed = await service.list_profiles_with_availability(
+        organization_id=organization_id, user_id=uuid4()
+    )
+
+    by_id = {listed_profile.id: availability for listed_profile, availability in listed}
+    assert by_id[profile.id] is None
+    # A harness profile: it would report READY/OFFLINE if a host repository
+    # were wired, so None here is the degrade path, not the provider path.
+    assert profile.harness_id is not None

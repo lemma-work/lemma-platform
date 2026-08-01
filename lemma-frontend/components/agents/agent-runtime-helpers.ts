@@ -273,6 +273,77 @@ export function runtimeAvailabilityLabel(profile: AgentRuntimeProfileResponse): 
     }
 }
 
+// A profile the workspace has retired. It keeps working for history and can be
+// restored, but it is out of the catalog and cannot be picked for new runs.
+export function isArchivedProfile(profile: { status?: string | null }): boolean {
+    return profile.status === 'DISABLED';
+}
+
+export type HarnessConfigControl = {
+    id: string;
+    /** The key the backend expects in `config_selections`. */
+    selectionKey: string;
+    label: string;
+    description: string | null;
+    /** What that computer is set to now, when it names one of the choices. */
+    currentValue: string | null;
+    choices: Array<{ value: string; label: string }>;
+};
+
+/**
+ * The harness config options this UI can safely offer a control for.
+ *
+ * Mirrors `validate_agent_host_selections` in the backend domain: a selection is
+ * keyed by the option's `id` or its `category`, `model` is rejected outright
+ * (models are chosen through `default_model_name`), and an allowed value is
+ * `item.value ?? item.id`.
+ *
+ * Options that enumerate no values are dropped rather than rendered as a text
+ * box. Agent Host keeps its own deny-list and refuses policy-bearing values like
+ * `bypassPermissions` at session setup, so a free-text field here would only let
+ * a value save cleanly and then fail on the first run.
+ */
+export function harnessConfigControls(
+    configOptions?: Array<{
+        id?: string | null;
+        name?: string | null;
+        category?: string | null;
+        description?: string | null;
+        current_value?: unknown;
+        options?: Array<Record<string, unknown>> | null;
+    }> | null,
+): HarnessConfigControl[] {
+    const controls: HarnessConfigControl[] = [];
+    for (const option of configOptions ?? []) {
+        const category = typeof option.category === 'string' ? option.category : '';
+        if (category === 'model') continue;
+        const selectionKey = (typeof option.id === 'string' && option.id) || category;
+        if (!selectionKey) continue;
+
+        const choices: Array<{ value: string; label: string }> = [];
+        for (const item of option.options ?? []) {
+            const value = item.value ?? item.id;
+            if (typeof value !== 'string' || !value) continue;
+            const label = typeof item.name === 'string' && item.name ? item.name : value;
+            choices.push({ value, label });
+        }
+        if (!choices.length) continue;
+
+        const currentValue = typeof option.current_value === 'string' ? option.current_value : null;
+        controls.push({
+            id: selectionKey,
+            selectionKey,
+            label: (typeof option.name === 'string' && option.name) || selectionKey,
+            description: typeof option.description === 'string' && option.description
+                ? option.description
+                : null,
+            currentValue: choices.some((choice) => choice.value === currentValue) ? currentValue : null,
+            choices,
+        });
+    }
+    return controls;
+}
+
 // Flatten the runtime-profile catalog into the flat, plain-language model list
 // the ModelPicker consumes. Every pickable model across every saved profile
 // (Lemma built-in, BYO providers, coding agents) becomes one row, tagged with

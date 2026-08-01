@@ -2,22 +2,25 @@
 
 import Image from 'next/image';
 import { useCallback, useState } from 'react';
-import { RuntimeProfileScope } from 'lemma-sdk';
-import type {
-    AgentRuntimeProfileListResponse,
-    AgentRuntimeProfileResponse,
-} from 'lemma-sdk';
-import { Copy, KeyRound, Plus, RefreshCw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
+import { RuntimeProfileKind, RuntimeProfileScope } from 'lemma-sdk';
+import type { AgentRuntimeProfileResponse } from 'lemma-sdk';
+import { Copy, KeyRound, Pencil, Plus, RefreshCw, RotateCcw, Sparkles, TerminalSquare, Trash2 } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
+import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
+import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import {
     useAgentHostHarnesses,
     useAgentHosts,
+    useArchiveAgentRuntime,
     useCreateAgentHostPairing,
-    useCreateAgentRuntime,
+    useManagedAgentRuntimes,
+    useRestoreAgentRuntime,
     useRevokeAgentHost,
     type AgentHost,
     type AgentHostHarness,
@@ -25,17 +28,19 @@ import {
 } from '@/lib/hooks/use-agent-runtime';
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { ThisComputerCard } from './this-computer-card';
+import { HarnessProfileDialog, type HarnessDialogTarget } from './harness-profile-dialog';
+import { ProviderProfileDialog, type ProviderDialogTarget } from './provider-profile-dialog';
 import { cn } from '@/lib/utils';
 import {
     CUSTOM_PROVIDER_OPTIONS,
     agentHostHarnessHealth,
     agentHostHarnessModelCount,
     agentHostStatusLabel,
+    isArchivedProfile,
     pairingCommands,
     harnessLogo,
-    isLocalAgentKind,
+    profileHarnessKey,
     runtimeAvailabilityLabel,
-    splitModelNames,
     type CustomProviderKind,
 } from './agent-runtime-helpers';
 
@@ -61,20 +66,30 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     { id: 'anthropic', kind: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com' },
 ];
 
-type ConnectTarget = { kind: CustomProviderKind; name: string; baseUrl: string };
-
 export function ModelsSettings({
     organizationId,
-    catalog,
     onRefresh,
-    isRefreshing = false,
 }: {
     organizationId: string;
-    catalog?: AgentRuntimeProfileListResponse;
+    /** Extra work to do on "Recheck" — the page's own catalog query, if it has one. */
     onRefresh?: () => void | Promise<void>;
-    isRefreshing?: boolean;
 }) {
-    const providers = (catalog?.items ?? []).filter((p) => !isLocalAgentKind(p.derived_harness_kind));
+    const [showArchived, setShowArchived] = useState(false);
+    // The management listing, not the catalog: it can include archived profiles,
+    // which must never reach the composer's model picker.
+    const managed = useManagedAgentRuntimes(organizationId, { includeArchived: showArchived });
+    const profiles = managed.data?.items ?? [];
+    const isRefreshing = managed.isFetching;
+
+    const providers = profiles.filter((profile) => profile.kind === RuntimeProfileKind.MODEL_PROVIDER);
+    // Exactly what the old `isLocalAgentKind` filter used to hide: a saved coding
+    // agent was represented nowhere as a profile, only as a badge on a harness row.
+    const codingAgents = profiles.filter((profile) => profile.kind === RuntimeProfileKind.HARNESS);
+
+    const refreshAll = () => {
+        void managed.refetch();
+        void onRefresh?.();
+    };
 
     return (
         <div className="flex flex-col gap-8">
@@ -84,22 +99,133 @@ export function ModelsSettings({
                     with everyone in the workspace; a paired computer runs its coding agents for the workspace without
                     its credentials ever leaving that machine.
                 </p>
-                {onRefresh ? (
-                    <Button type="button" variant="ghost" size="sm" onClick={() => void onRefresh()} disabled={isRefreshing} className="shrink-0 gap-1.5">
+                <div className="flex shrink-0 items-center gap-3">
+                    <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--text-tertiary)]">
+                        <Switch checked={showArchived} onCheckedChange={setShowArchived}>
+                            <SwitchTrack className={showArchived ? 'bg-[var(--action-primary)]' : undefined}>
+                                <SwitchThumb className={showArchived ? 'translate-x-4' : undefined} />
+                            </SwitchTrack>
+                        </Switch>
+                        Show archived
+                    </label>
+                    <Button type="button" variant="ghost" size="sm" onClick={refreshAll} disabled={isRefreshing} className="gap-1.5">
                         <RefreshCw className={cn('size-3.5', isRefreshing && 'animate-spin')} />
                         Recheck
                     </Button>
-                ) : null}
+                </div>
             </div>
 
             <ProvidersSection
                 organizationId={organizationId}
                 providers={providers}
-                onRefresh={onRefresh}
+                onRefresh={refreshAll}
             />
 
-            <AgentHostsSection organizationId={organizationId} catalog={catalog} />
+            <CodingAgentsSection
+                organizationId={organizationId}
+                profiles={codingAgents}
+                onRefresh={refreshAll}
+            />
+
+            <AgentHostsSection
+                organizationId={organizationId}
+                savedProfiles={codingAgents}
+                onRefresh={refreshAll}
+            />
         </div>
+    );
+}
+
+/**
+ * Edit / archive / restore for one saved profile. SYSTEM-scope profiles are
+ * Lemma's own built-ins — there is nothing here a workspace may change, so they
+ * get no menu at all rather than a menu of disabled items.
+ */
+function ProfileRowActions({
+    profile,
+    organizationId,
+    onEdit,
+    onRefresh,
+}: {
+    profile: AgentRuntimeProfileResponse;
+    organizationId: string;
+    onEdit: () => void;
+    onRefresh?: () => void;
+}) {
+    const [confirmArchive, setConfirmArchive] = useState(false);
+    const archive = useArchiveAgentRuntime();
+    const restore = useRestoreAgentRuntime();
+    const archived = isArchivedProfile(profile);
+
+    if (profile.scope === RuntimeProfileScope.SYSTEM) return null;
+
+    const runRestore = async () => {
+        try {
+            await restore.mutateAsync({ organizationId, profileId: profile.id });
+            toast.success(`${profile.name} restored`);
+            onRefresh?.();
+        } catch (error) {
+            toast.error(`Couldn't restore: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
+    const runArchive = async () => {
+        try {
+            await archive.mutateAsync({ organizationId, profileId: profile.id });
+            setConfirmArchive(false);
+            toast.success(`${profile.name} archived`);
+            onRefresh?.();
+        } catch (error) {
+            toast.error(`Couldn't archive: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+    };
+
+    return (
+        <>
+            <ResourceActionsMenu ariaLabel={`Actions for ${profile.name}`}>
+                <DropdownMenuItem
+                    onSelect={(event) => {
+                        event.preventDefault();
+                        onEdit();
+                    }}
+                >
+                    <Pencil className="mr-2 h-4 w-4" />
+                    Edit…
+                </DropdownMenuItem>
+                {archived ? (
+                    <DropdownMenuItem
+                        onSelect={(event) => {
+                            event.preventDefault();
+                            void runRestore();
+                        }}
+                    >
+                        <RotateCcw className="mr-2 h-4 w-4" />
+                        Restore
+                    </DropdownMenuItem>
+                ) : (
+                    <DestructiveResourceActionItem onSelect={() => setConfirmArchive(true)}>
+                        Remove
+                    </DestructiveResourceActionItem>
+                )}
+            </ResourceActionsMenu>
+
+            <DestructiveConfirmationDialog
+                open={confirmArchive}
+                onOpenChange={setConfirmArchive}
+                title={`Remove ${profile.name}?`}
+                description="It leaves the model picker straight away. Nothing is deleted — you can restore it from “Show archived”."
+                resourceName={profile.name}
+                confirmationText=""
+                consequences={[
+                    'Agents, conversations and pods pinned to it will fail to start until they are pointed somewhere else.',
+                    'Past runs keep their history and stay readable.',
+                ]}
+                confirmLabel="Remove"
+                pendingLabel="Removing..."
+                isPending={archive.isPending}
+                onConfirm={() => void runArchive()}
+            />
+        </>
     );
 }
 
@@ -129,9 +255,9 @@ function ProvidersSection({
 }: {
     organizationId: string;
     providers: AgentRuntimeProfileResponse[];
-    onRefresh?: () => void | Promise<void>;
+    onRefresh?: () => void;
 }) {
-    const [connect, setConnect] = useState<ConnectTarget | null>(null);
+    const [dialog, setDialog] = useState<ProviderDialogTarget | null>(null);
 
     return (
         <section>
@@ -158,146 +284,129 @@ function ProvidersSection({
                                     {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
                                 </div>
                             </div>
+                            {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
                             {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
                             <StatusBadge label={status.label} tone={status.tone} />
+                            <ProfileRowActions
+                                profile={profile}
+                                organizationId={organizationId}
+                                onEdit={() => setDialog({ mode: 'edit', profile })}
+                                onRefresh={onRefresh}
+                            />
                         </div>
                     );
                 })}
 
-                {connect ? (
-                    <ConnectProviderForm
-                        target={connect}
-                        organizationId={organizationId}
-                        onClose={() => setConnect(null)}
-                        onSaved={() => {
-                            setConnect(null);
-                            void onRefresh?.();
-                        }}
-                    />
-                ) : (
-                    <div className="mt-1">
-                        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-tertiary)]">Connect a provider</p>
-                        <div className="flex flex-wrap gap-2">
-                            {PROVIDER_PRESETS.map((preset) => (
-                                <button
-                                    key={preset.id}
-                                    type="button"
-                                    onClick={() => setConnect({ kind: preset.kind, name: preset.name, baseUrl: preset.baseUrl })}
-                                    className="models-settings-provider-button rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--field-border-hover)] hover:text-[var(--text-primary)]"
-                                >
-                                    {preset.name}
-                                </button>
-                            ))}
-                            {CUSTOM_PROVIDER_OPTIONS.map((option) => (
-                                <button
-                                    key={option.kind}
-                                    type="button"
-                                    onClick={() => setConnect({ kind: option.kind, name: '', baseUrl: option.defaultBaseUrl })}
-                                    className="models-settings-provider-button flex items-center gap-1.5 rounded-md border border-dashed border-[var(--border-strong)] px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--field-border-hover)] hover:text-[var(--text-primary)]"
-                                >
-                                    <Plus className="size-3.5" />
-                                    {option.kind === 'openai' ? 'Custom (OpenAI)' : 'Custom (Anthropic)'}
-                                </button>
-                            ))}
-                        </div>
+                <div className="mt-1">
+                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-[var(--text-tertiary)]">Connect a provider</p>
+                    <div className="flex flex-wrap gap-2">
+                        {PROVIDER_PRESETS.map((preset) => (
+                            <button
+                                key={preset.id}
+                                type="button"
+                                onClick={() => setDialog({ mode: 'connect', kind: preset.kind, name: preset.name, baseUrl: preset.baseUrl })}
+                                className="models-settings-provider-button rounded-md border border-[var(--border-subtle)] px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--field-border-hover)] hover:text-[var(--text-primary)]"
+                            >
+                                {preset.name}
+                            </button>
+                        ))}
+                        {CUSTOM_PROVIDER_OPTIONS.map((option) => (
+                            <button
+                                key={option.kind}
+                                type="button"
+                                onClick={() => setDialog({ mode: 'connect', kind: option.kind, name: '', baseUrl: option.defaultBaseUrl })}
+                                className="models-settings-provider-button flex items-center gap-1.5 rounded-md border border-dashed border-[var(--border-strong)] px-3 py-1.5 text-sm text-[var(--text-secondary)] transition-colors hover:border-[var(--field-border-hover)] hover:text-[var(--text-primary)]"
+                            >
+                                <Plus className="size-3.5" />
+                                {option.kind === 'openai' ? 'Custom (OpenAI)' : 'Custom (Anthropic)'}
+                            </button>
+                        ))}
                     </div>
-                )}
+                </div>
             </div>
+
+            <ProviderProfileDialog
+                target={dialog}
+                organizationId={organizationId}
+                onClose={() => setDialog(null)}
+                onSaved={onRefresh}
+            />
         </section>
     );
 }
 
-function ConnectProviderForm({
-    target,
+// Saved coding agents, which are runtime profiles like any other — they just run
+// on a paired computer instead of behind an API key. Keeping them out of
+// Providers is deliberate: a laptop and an API key do not belong in one list.
+function CodingAgentsSection({
     organizationId,
-    onClose,
-    onSaved,
+    profiles,
+    onRefresh,
 }: {
-    target: ConnectTarget;
     organizationId: string;
-    onClose: () => void;
-    onSaved: () => void;
+    profiles: AgentRuntimeProfileResponse[];
+    onRefresh?: () => void;
 }) {
-    const kind = target.kind;
-    const [name, setName] = useState(target.name);
-    const [baseUrl, setBaseUrl] = useState(target.baseUrl);
-    const [apiKey, setApiKey] = useState('');
-    const [models, setModels] = useState('');
-    const [defaultModel, setDefaultModel] = useState('');
-    const createRuntime = useCreateAgentRuntime();
-
-    const save = async () => {
-        const trimmedName = name.trim();
-        const modelNames = splitModelNames(models);
-        const defaultModelName = defaultModel.trim() || modelNames[0] || undefined;
-        if (!trimmedName) return toast.error('Name this provider');
-        if (kind === 'openai' && !baseUrl.trim()) return toast.error('Enter the provider base URL');
-        if (kind === 'anthropic' && !apiKey.trim()) return toast.error('Enter the API key');
-        try {
-            await createRuntime.mutateAsync({
-                organizationId,
-                request: kind === 'openai'
-                    ? {
-                        source: 'OPENAI_COMPATIBLE',
-                        name: trimmedName,
-                        base_url: baseUrl.trim(),
-                        api_key: apiKey.trim() || null,
-                        default_model_name: defaultModelName,
-                        model_names: modelNames,
-                    }
-                    : {
-                        source: 'ANTHROPIC_COMPATIBLE',
-                        name: trimmedName,
-                        base_url: baseUrl.trim() || null,
-                        api_key: apiKey.trim(),
-                        default_model_name: defaultModelName,
-                        model_names: modelNames,
-                    },
-            });
-            toast.success(`${trimmedName} connected`);
-            onSaved();
-        } catch (error) {
-            toast.error(`Couldn't connect: ${error instanceof Error ? error.message : 'Unknown error'}`);
-        }
-    };
+    const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
 
     return (
-        <div className="flex flex-col gap-4 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
-            <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Name">
-                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={kind === 'openai' ? 'OpenRouter' : 'Anthropic'} />
-                </Field>
-                <Field label="Base URL">
-                    <Input
-                        value={baseUrl}
-                        onChange={(e) => setBaseUrl(e.target.value)}
-                        placeholder={kind === 'openai' ? 'https://openrouter.ai/api/v1' : 'https://api.anthropic.com'}
-                    />
-                </Field>
+        <section>
+            <SectionHeader
+                icon={<TerminalSquare className="size-4" />}
+                title="Coding agents"
+                hint="Agents you've added to the model picker. Each one runs on the computer it was added from."
+            />
+            <div className="flex flex-col gap-2">
+                {profiles.length === 0 ? (
+                    <p className="text-sm text-[var(--text-tertiary)]">
+                        None yet. Add one from a paired computer below.
+                    </p>
+                ) : null}
+                {profiles.map((profile) => {
+                    const logo = harnessLogo(profileHarnessKey(profile));
+                    const modelCount = profile.model_catalog?.length ?? 0;
+                    const scope = scopeBadge(profile.scope);
+                    const availability = runtimeAvailabilityLabel(profile);
+                    return (
+                        <div key={profile.id} className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] px-4 py-3">
+                            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-[var(--surface-1)]">
+                                {logo ? (
+                                    <Image src={logo} alt="" width={18} height={18} className="size-4.5 object-contain" />
+                                ) : (
+                                    <TerminalSquare className="size-4 text-[var(--text-secondary)]" />
+                                )}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-medium text-[var(--text-primary)]">{profile.name}</div>
+                                <div className="text-xs text-[var(--text-tertiary)]">
+                                    {profile.default_model_name ?? 'Agent picks the model'}
+                                    {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
+                                </div>
+                            </div>
+                            {isArchivedProfile(profile) ? <StatusBadge label="Archived" tone="muted" /> : null}
+                            {scope ? <StatusBadge label={scope.label} tone={scope.tone} /> : null}
+                            <StatusBadge
+                                label={availability ?? 'Active'}
+                                tone={availability ? 'muted' : 'ok'}
+                            />
+                            <ProfileRowActions
+                                profile={profile}
+                                organizationId={organizationId}
+                                onEdit={() => setDialog({ mode: 'edit', profile })}
+                                onRefresh={onRefresh}
+                            />
+                        </div>
+                    );
+                })}
             </div>
-            <Field label="API key">
-                <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-..." />
-            </Field>
-            <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Models" hint="One per line">
-                    <textarea
-                        value={models}
-                        onChange={(e) => setModels(e.target.value)}
-                        placeholder="one model per line"
-                        className="form-field-control min-h-20 w-full resize-y px-3 py-2 text-sm leading-5 text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
-                    />
-                </Field>
-                <Field label="Default model" hint="Optional">
-                    <Input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} placeholder="First listed model is used by default" />
-                </Field>
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-                <Button type="button" size="sm" onClick={() => void save()} loading={createRuntime.isPending} loadingLabel="Connecting">
-                    Connect
-                </Button>
-            </div>
-        </div>
+
+            <HarnessProfileDialog
+                target={dialog}
+                organizationId={organizationId}
+                onClose={() => setDialog(null)}
+                onSaved={onRefresh}
+            />
+        </section>
     );
 }
 
@@ -306,10 +415,12 @@ function ConnectProviderForm({
 // here needs an inbound port or the user's own session on that computer.
 function AgentHostsSection({
     organizationId,
-    catalog,
+    savedProfiles,
+    onRefresh,
 }: {
     organizationId: string;
-    catalog?: AgentRuntimeProfileListResponse;
+    savedProfiles: AgentRuntimeProfileResponse[];
+    onRefresh?: () => void;
 }) {
     const hosts = useAgentHosts();
     const createPairing = useCreateAgentHostPairing();
@@ -322,10 +433,13 @@ function AgentHostsSection({
 
     // Harnesses that are already saved as runtime profiles, so a row can say
     // "already added" instead of leaving the user guessing whether picking this
-    // agent in a chat is possible yet.
-    const savedProfileNameByHarnessId = new Map<string, string>();
-    for (const profile of catalog?.items ?? []) {
-        if (profile.harness_id) savedProfileNameByHarnessId.set(profile.harness_id, profile.name);
+    // agent in a chat is possible yet. Built from the management listing rather
+    // than the catalog: an archived profile is absent from the catalog, so the
+    // row would offer "Add to chat models" again and then 409 on the unique-name
+    // index.
+    const savedProfileByHarnessId = new Map<string, AgentRuntimeProfileResponse>();
+    for (const profile of savedProfiles) {
+        if (profile.harness_id) savedProfileByHarnessId.set(profile.harness_id, profile);
     }
 
     // A revoked host stays readable through the API for audit, but it can never
@@ -367,7 +481,8 @@ function AgentHostsSection({
                         host={host}
                         organizationId={organizationId}
                         isThisComputer={host.id === thisHostId}
-                        savedProfileNameByHarnessId={savedProfileNameByHarnessId}
+                        savedProfileByHarnessId={savedProfileByHarnessId}
+                        onRefresh={onRefresh}
                     />
                 ))}
 
@@ -469,25 +584,26 @@ function AgentHostCard({
     host,
     organizationId,
     isThisComputer,
-    savedProfileNameByHarnessId,
+    savedProfileByHarnessId,
+    onRefresh,
 }: {
     host: AgentHost;
     organizationId: string;
     isThisComputer: boolean;
-    savedProfileNameByHarnessId: Map<string, string>;
+    savedProfileByHarnessId: Map<string, AgentRuntimeProfileResponse>;
+    onRefresh?: () => void;
 }) {
     const harnesses = useAgentHostHarnesses(host.id);
     const revoke = useRevokeAgentHost();
+    const [confirmDisconnect, setConfirmDisconnect] = useState(false);
     const activeRuns = host.capacity?.active_runs ?? 0;
     const maxRuns = host.capacity?.max_runs ?? null;
     const online = host.status === 'ONLINE';
 
     const disconnect = async () => {
-        if (!window.confirm(`Disconnect ${host.display_name}? Its credential is revoked immediately and new runs stop.`)) {
-            return;
-        }
         try {
             await revoke.mutateAsync(host.id);
+            setConfirmDisconnect(false);
             toast.success(`${host.display_name} disconnected`);
         } catch (error) {
             toast.error(`Couldn't disconnect: ${error instanceof Error ? error.message : 'Unknown error'}`);
@@ -526,12 +642,28 @@ function AgentHostCard({
                     type="button"
                     variant="ghost"
                     size="sm"
-                    onClick={() => void disconnect()}
+                    onClick={() => setConfirmDisconnect(true)}
                     loading={revoke.isPending}
                     aria-label={`Disconnect ${host.display_name}`}
                 >
                     <Trash2 className="size-4" />
                 </Button>
+                <DestructiveConfirmationDialog
+                    open={confirmDisconnect}
+                    onOpenChange={setConfirmDisconnect}
+                    title={`Disconnect ${host.display_name}?`}
+                    description="Its credential is revoked immediately and new runs stop."
+                    resourceName={host.display_name}
+                    confirmationText=""
+                    consequences={[
+                        'Coding agents added from this computer stop being available.',
+                        'Pair the computer again to bring them back.',
+                    ]}
+                    confirmLabel="Disconnect"
+                    pendingLabel="Disconnecting..."
+                    isPending={revoke.isPending}
+                    onConfirm={() => void disconnect()}
+                />
             </div>
             <div className="flex flex-col gap-2 border-t border-[var(--border-subtle)] p-3">
                 {harnesses.isLoading ? (
@@ -543,7 +675,8 @@ function AgentHostCard({
                         harness={harness}
                         organizationId={organizationId}
                         hostOnline={online}
-                        savedProfileName={savedProfileNameByHarnessId.get(harness.id) ?? null}
+                        savedProfile={savedProfileByHarnessId.get(harness.id) ?? null}
+                        onRefresh={onRefresh}
                     />
                 ))}
                 {!harnesses.isLoading && !(harnesses.data?.items.length ?? 0) ? (
@@ -562,14 +695,17 @@ function AgentHostHarnessRow({
     harness,
     organizationId,
     hostOnline,
-    savedProfileName,
+    savedProfile,
+    onRefresh,
 }: {
     harness: AgentHostHarness;
     organizationId: string;
     hostOnline: boolean;
-    savedProfileName: string | null;
+    savedProfile: AgentRuntimeProfileResponse | null;
+    onRefresh?: () => void;
 }) {
-    const createRuntime = useCreateAgentRuntime();
+    const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
+    const restore = useRestoreAgentRuntime();
     const health = agentHostHarnessHealth(harness.health);
     const modelCount = agentHostHarnessModelCount(harness.config_options ?? []);
     const logo = harnessLogo(harness.harness_key);
@@ -582,21 +718,16 @@ function AgentHostHarnessRow({
             : 'That computer is offline. Runs resume when Agent Host reconnects.'
         : health.detail;
 
-    // The endpoint has always accepted this; only the button was missing, which
-    // is why the page used to print a CLI incantation instead.
-    const addToModels = async () => {
+    const archived = savedProfile ? isArchivedProfile(savedProfile) : false;
+
+    const restoreSaved = async () => {
+        if (!savedProfile) return;
         try {
-            await createRuntime.mutateAsync({
-                organizationId,
-                request: {
-                    source: 'AGENT_HOST',
-                    name: harness.display_name,
-                    harness_id: harness.id,
-                },
-            });
-            toast.success(`${harness.display_name} is now pickable in chats`);
+            await restore.mutateAsync({ organizationId, profileId: savedProfile.id });
+            toast.success(`${savedProfile.name} restored`);
+            onRefresh?.();
         } catch (error) {
-            toast.error(`Couldn't add it: ${error instanceof Error ? error.message : 'Unknown error'}`);
+            toast.error(`Couldn't restore: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
     };
 
@@ -618,29 +749,55 @@ function AgentHostHarnessRow({
                         {modelCount ? ` · ${modelCount} model${modelCount === 1 ? '' : 's'}` : ''}
                     </div>
                 </div>
-                {savedProfileName ? <StatusBadge label={`Added as ${savedProfileName}`} tone="muted" /> : null}
+                {savedProfile ? (
+                    <StatusBadge
+                        label={archived ? `Archived as ${savedProfile.name}` : `Added as ${savedProfile.name}`}
+                        tone="muted"
+                    />
+                ) : null}
                 <StatusBadge label={health.label} tone={usable ? 'ok' : 'muted'} />
             </div>
             {blockedReason ? <p className="mt-2 text-xs text-[var(--text-tertiary)]">{blockedReason}</p> : null}
-            {!savedProfileName && health.ready ? (
+            {!savedProfile && health.ready ? (
                 <div className="mt-2">
                     <Button
                         type="button"
                         size="sm"
                         variant="ghost"
                         className="gap-1.5 px-2"
-                        loading={createRuntime.isPending}
-                        loadingLabel="Adding"
-                        onClick={() => void addToModels()}
+                        onClick={() => setDialog({ mode: 'create', harness })}
                     >
                         <Plus className="size-3.5" />
                         Add to chat models
                     </Button>
                 </div>
             ) : null}
+            {archived ? (
+                <div className="mt-2">
+                    <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="gap-1.5 px-2"
+                        loading={restore.isPending}
+                        loadingLabel="Restoring"
+                        onClick={() => void restoreSaved()}
+                    >
+                        <RotateCcw className="size-3.5" />
+                        Restore
+                    </Button>
+                </div>
+            ) : null}
             {harness.stale_reason ? (
                 <p className="mt-1 text-xs text-[var(--text-tertiary)]">{harness.stale_reason}</p>
             ) : null}
+
+            <HarnessProfileDialog
+                target={dialog}
+                organizationId={organizationId}
+                onClose={() => setDialog(null)}
+                onSaved={onRefresh}
+            />
         </div>
     );
 }

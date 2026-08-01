@@ -12,6 +12,7 @@ import {
     type AgentHostTarget,
     type ThisComputerStatus,
 } from '@/lib/desktop/agent-host-bridge';
+import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { useCreateAgentHostPairing } from '@/lib/hooks/use-agent-runtime';
 import { cn } from '@/lib/utils';
@@ -98,6 +99,7 @@ export function ThisComputerCard({
     const createPairing = useCreateAgentHostPairing();
     const [displayName, setDisplayName] = useState('This computer');
     const [busy, setBusy] = useState<string | null>(null);
+    const [confirmDisconnect, setConfirmDisconnect] = useState(false);
 
     const target: AgentHostTarget | undefined = status?.targets[0];
     const hostId = target?.host_id ?? null;
@@ -142,9 +144,6 @@ export function ThisComputerCard({
         );
 
     const disconnect = () => {
-        if (!window.confirm('Disconnect this computer? Its agents stop being available to this workspace.')) {
-            return;
-        }
         void run(
             'unpair',
             async () => {
@@ -152,7 +151,7 @@ export function ThisComputerCard({
                 onPaired?.();
             },
             'This computer is disconnected',
-        );
+        ).finally(() => setConfirmDisconnect(false));
     };
 
     const uptime = formatUptime(status.uptime_seconds);
@@ -235,9 +234,28 @@ export function ThisComputerCard({
                         <TerminalSquare className="size-3.5" />
                         View log
                     </Button>
-                    <Button type="button" variant="ghost" size="sm" onClick={disconnect} loading={busy === 'unpair'}>
+                    <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setConfirmDisconnect(true)}
+                        loading={busy === 'unpair'}
+                    >
                         Disconnect
                     </Button>
+                    <DestructiveConfirmationDialog
+                        open={confirmDisconnect}
+                        onOpenChange={setConfirmDisconnect}
+                        title="Disconnect this computer?"
+                        description="Its agents stop being available to this workspace."
+                        resourceName="This computer"
+                        confirmationText=""
+                        consequences={['Pair it again from this page to bring them back.']}
+                        confirmLabel="Disconnect"
+                        pendingLabel="Disconnecting..."
+                        isPending={busy === 'unpair'}
+                        onConfirm={disconnect}
+                    />
                 </div>
             ) : null}
 
