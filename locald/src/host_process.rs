@@ -2168,13 +2168,32 @@ mod tests {
             format!("postgresql://postgres:secret@{address}/lemma"),
         )]));
 
+        // The route opens only after the setup has started waiting, which is the
+        // behaviour under test. Everything here is bounded: a blocking `accept()`
+        // joined unconditionally hangs the whole test binary forever whenever the
+        // probe does not connect exactly once, which is how this burned 44
+        // minutes of a CI runner before it was cancelled rather than failing.
         let route = thread::spawn(move || {
             thread::sleep(Duration::from_millis(150));
             let listener = TcpListener::bind(address).unwrap();
-            let _ = listener.accept();
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok(_) => return true,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => return false,
+                }
+            }
+            false
         });
         manager.run_setups().unwrap();
-        route.join().unwrap();
+        assert!(
+            route.join().unwrap(),
+            "run_setups should have connected to the database route it was told to wait for"
+        );
     }
 
     #[cfg(unix)]

@@ -89,6 +89,11 @@ DEV_AGENTBOX_RUNTIME_CREDENTIAL_KEY ?= dev-agentbox-runtime-credential-key-0001
 DEV_CORS_ORIGIN_REGEX := https?://(localhost|127\.0\.0\.\d+|127\.\d+\.\d+\.\d+|127-0-0-\d+\.sslip\.io|[\w-]+\.nip\.io)(:\d+)?
 DEV_LOG_LEVEL         ?= DEBUG
 DEV_JSON_LOGS_ENABLED ?= true
+# DEV_LOG_LEVEL is DEBUG so you can read the application's own story. SQLAlchemy
+# emits a record per mapped column at import — thousands of lines before the
+# first request — which buries exactly that. Hold the chatty dependencies at
+# WARNING; set DEV_QUIET_DEPENDENCY_LOGS=0 when debugging one of them.
+DEV_QUIET_DEPENDENCY_LOGS ?= 1
 OTEL_DEBUG_GRPC_PORT  ?= 14317
 OTEL_DEBUG_LLM_GRPC_PORT ?= 15317
 OTEL_DEBUG_HEALTH_PORT ?= 14333
@@ -144,6 +149,7 @@ BACKEND_DEV_ENV := \
 	ENVIRONMENT=local \
 	DEBUG=true \
 	LOG_LEVEL=$(DEV_LOG_LEVEL) \
+	LOG_QUIET_DEPENDENCIES=$(DEV_QUIET_DEPENDENCY_LOGS) \
 	JSON_LOGS_ENABLED=$(DEV_JSON_LOGS_ENABLED) \
 	API_URL=$(BACKEND_API_URL) \
 	FRONTEND_URL=$(BACKEND_FRONTEND_URL) \
@@ -533,7 +539,8 @@ agent-host:
 	@# `lemma agent-host connect` mints a pairing code from the CLI's own login
 	@# and consumes it immediately, so pairing is this one command. It picks up
 	@# the binary just built from agent-host/target/debug.
-	@cd $(CLI_DIR) && uv run lemma agent-host connect --url $(DEV_BACKEND_URL) || { \
+	@cd $(CLI_DIR) && LEMMA_AGENT_HOST_BIN=$(AGENT_HOST_BIN) \
+		uv run lemma agent-host connect --url $(DEV_BACKEND_URL) || { \
 		echo "  ✗ Pairing failed. Run 'cd $(CLI_DIR) && uv run lemma auth login' first."; \
 		exit 1; \
 	}

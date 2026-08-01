@@ -17,6 +17,7 @@ concurrency:
 jobs:
   changes:
     name: Detect changed areas
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -90,6 +91,7 @@ jobs:
 
   agentbox:
     name: AgentBox providers, state, and runtime
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.agentbox == 'true'
     runs-on: ubuntu-latest
@@ -145,6 +147,7 @@ jobs:
 
   backend-unit:
     name: lemma-backend unit
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -198,6 +201,7 @@ jobs:
           if-no-files-found: ignore
   backend-lint:
     name: lemma-backend quality gates
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -229,6 +233,7 @@ jobs:
 
   backend-migration:
     name: lemma-backend migration upgrade/downgrade
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -262,6 +267,7 @@ jobs:
 
   python-sdk:
     name: Python SDK + CLI tests
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
@@ -296,6 +302,7 @@ jobs:
 
   typescript-sdk:
     name: TypeScript SDK checks
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
@@ -328,6 +335,7 @@ jobs:
 
   codegen-drift:
     name: Codegen drift gate
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.codegen == 'true'
     runs-on: ubuntu-latest
@@ -365,6 +373,7 @@ jobs:
 
   frontend-check:
     name: Frontend lint, design audit, test
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
@@ -392,6 +401,7 @@ jobs:
 
   frontend-build:
     name: Frontend build (SDK integration)
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
@@ -418,6 +428,7 @@ jobs:
 
   install-experience:
     name: Install experience (Linux Docker)
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
@@ -432,6 +443,7 @@ jobs:
 
   windows-cli:
     name: Windows CLI smoke test
+    timeout-minutes: 45
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: windows-latest
@@ -480,6 +492,7 @@ jobs:
 
   agent-host:
     name: Agent Host crate
+    timeout-minutes: 45
     needs: changes
     if: needs.changes.outputs.agent_host == 'true'
     runs-on: ubuntu-latest
@@ -523,6 +536,7 @@ jobs:
   # over code that never ships, while never once linting the code that does.
   locald:
     name: locald crate
+    timeout-minutes: 45
     needs: changes
     if: needs.changes.outputs.locald == 'true'
     runs-on: macos-14
@@ -557,6 +571,7 @@ jobs:
 
   desktop:
     name: macOS desktop build + codesign
+    timeout-minutes: 90
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
     runs-on: macos-14
@@ -723,6 +738,7 @@ jobs:
 
   ci:
     name: CI passed
+    timeout-minutes: 10
     if: always()
     needs:
       - changes
