@@ -55,12 +55,12 @@ export function SurfaceReachCard({ surface }: { surface: AssistantSurface }) {
                 ) : null}
 
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Button type="button" size="xs" variant="outline" onClick={() => void copy()}>
+                    <Button type="button" size="xs" variant="secondary" onClick={() => void copy()}>
                         {copied ? <Check className="mr-1.5 h-3.5 w-3.5 text-[var(--state-success)]" /> : <Copy className="mr-1.5 h-3.5 w-3.5" />}
                         {copied ? 'Copied' : deepLink ? 'Copy link' : 'Copy'}
                     </Button>
                     {deepLink ? (
-                        <Button type="button" size="xs" variant="ghost" asChild>
+                        <Button type="button" size="xs" variant="quiet" asChild>
                             <a href={deepLink} target="_blank" rel="noreferrer">
                                 Open <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
                             </a>

@@ -56,6 +56,7 @@ from app.modules.agent.infrastructure import (
     agent_host_admission,
     agent_host_event_intake,
     agent_host_recovery,
+    agent_host_session_memory,
 )
 from app.modules.agent.infrastructure.agent_host_repository_common import (
     DEFAULT_COMMAND_TTL_SECONDS,
@@ -231,6 +232,9 @@ class AgentHostDispatchRepository:
         """
         for checkpoint in checkpoints:
             try:
+                await agent_host_session_memory.remember_provider_session(
+                    self.uow, checkpoint
+                )
                 await self.apply_checkpoint(
                     host_id=host_id,
                     checkpoint=checkpoint,

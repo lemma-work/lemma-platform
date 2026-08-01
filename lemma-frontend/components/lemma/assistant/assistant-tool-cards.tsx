@@ -119,7 +119,7 @@ function StatusPill({ status }: { status: ToolStatus }) {
         status.tone === "running" && "text-[var(--action-primary)]",
       )}
     >
-      <span className={cn("size-1.5 rounded-full bg-current", status.tone === "running" && "animate-pulse")} />
+      <span className={cn("size-1.5 rounded-full bg-current", status.tone === "running" && "lemma-live-pulse")} />
       {status.label}
     </span>
   );
@@ -671,7 +671,7 @@ function TodosDetails({ args, state, result }: { args: ToolCardArgs; state: stri
                 {todo.state === "done" ? (
                   <CheckCircle2 className="size-4 text-[var(--state-success)]" />
                 ) : todo.state === "active" ? (
-                  <Circle className="size-4 animate-pulse text-[var(--action-primary)]" />
+                  <Circle className="size-4 lemma-live-pulse text-[var(--action-primary)]" />
                 ) : (
                   <Circle className="size-4 text-[var(--text-tertiary)]" />
                 )}
@@ -991,7 +991,7 @@ function SpawnSubagentDetails({ args, state, result }: { args: ToolCardArgs; sta
       {output ? (
         <OutputText text={truncateLabel(output, 1200)} />
       ) : live.running || live.loading ? (
-        <span className="animate-pulse text-xs text-[var(--text-tertiary)]">Working…</span>
+        <span className="lemma-live-pulse text-xs text-[var(--text-tertiary)]">Working…</span>
       ) : null}
       <CodeBlock label="Error" value={resultText(result, ["error"])} tone="error" />
     </ToolBlock>
@@ -1014,7 +1014,7 @@ function SubagentInteractionDetails({ args, state, result }: { args: ToolCardArg
       {output ? (
         <OutputText text={truncateLabel(output, 1200)} />
       ) : live.running || live.loading ? (
-        <span className="animate-pulse text-xs text-[var(--text-tertiary)]">Working…</span>
+        <span className="lemma-live-pulse text-xs text-[var(--text-tertiary)]">Working…</span>
       ) : null}
       <CodeBlock label="Error" value={resultText(result, ["error"])} tone="error" />
     </ToolBlock>

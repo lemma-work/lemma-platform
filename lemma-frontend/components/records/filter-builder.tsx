@@ -149,7 +149,7 @@ export function FilterBuilder({ columns, filters, onFiltersChange, onClose }: Fi
                     ))}
 
                     <Button
-                        variant="ghost"
+                        variant="quiet"
                         size="sm"
                         onClick={addFilter}
                         className="mt-2 w-full border border-dashed border-[color:var(--row-border)] text-[var(--text-secondary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-primary)]"
@@ -160,10 +160,10 @@ export function FilterBuilder({ columns, filters, onFiltersChange, onClose }: Fi
                 </div>
 
                 <div className="flex items-center justify-end gap-3 border-t border-[color:var(--border-subtle)] bg-[var(--bg-subtle)] px-6 py-5">
-                    <Button variant="ghost" onClick={onClose}>
+                    <Button variant="quiet" onClick={onClose}>
                         Cancel
                     </Button>
-                    <Button onClick={applyFilters}>Apply Filters</Button>
+                    <Button variant="primary" onClick={applyFilters}>Apply Filters</Button>
                 </div>
             </DialogContent>
         </Dialog>

@@ -322,7 +322,7 @@ export function TableBuilder({ podId, onClose, onSuccess }: TableBuilderProps) {
                                 <Button
                                     type="button"
                                     size="sm"
-                                    variant="ghost"
+                                    variant="quiet"
                                     onClick={addColumn}
                                     className="h-8 gap-1 text-xs text-[var(--action-primary)] hover:bg-[var(--surface-2)] hover:text-[var(--action-primary)]"
                                 >
@@ -511,10 +511,10 @@ export function TableBuilder({ podId, onClose, onSuccess }: TableBuilderProps) {
                     </div>
 
                     <div className="flex items-center justify-end gap-2 border-t border-[color:var(--border-subtle)] bg-[var(--bg-subtle)] px-6 py-4">
-                        <Button variant="ghost" onClick={onClose}>
+                        <Button variant="quiet" onClick={onClose}>
                             Cancel
                         </Button>
-                        <Button type="submit" disabled={createTableMutation.isPending}>
+                        <Button variant="primary" type="submit" disabled={createTableMutation.isPending}>
                             {createTableMutation.isPending ? 'Creating...' : 'Create Table'}
                         </Button>
                     </div>

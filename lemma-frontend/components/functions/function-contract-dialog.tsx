@@ -125,7 +125,7 @@ export function FunctionContractDialog({
                 </div>
 
                 <DialogFooter className="flex-row items-center border-t border-[color:var(--border-subtle)] px-5 py-3">
-                    <Button type="button" size="sm" className="ml-auto" onClick={() => onOpenChange(false)}>
+                    <Button variant="quiet" type="button" size="sm" className="ml-auto" onClick={() => onOpenChange(false)}>
                         Done
                     </Button>
                 </DialogFooter>

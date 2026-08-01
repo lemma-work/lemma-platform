@@ -59,6 +59,41 @@ describe("extractAgentFinalOutput", () => {
     expect(extractAgentFinalOutput(messages)).toBeNull();
     expect(extractAgentFinalOutput(messages, { parseTextFallback: true })).toEqual({ answer: 42 });
   });
+
+  // The backend stamps `is_final_answer` on every assistant text message, but
+  // only writes `structured_output` (or a final-result tool call) when the
+  // agent declared an output type. That payload — not the flag — is what marks
+  // a run as structured, so these two cases must not be confused.
+  it("ignores is_final_answer without structured_output", () => {
+    const messages = [
+      {
+        role: "assistant",
+        kind: "text",
+        text: 'Here is the shape:\n```json\n{"name":"x"}\n```',
+        metadata: { is_final_answer: true },
+      },
+    ];
+    expect(extractAgentFinalOutput(messages)).toBeNull();
+    expect(extractAgentFinalOutput(messages, { parseTextFallback: true })).toEqual({ name: "x" });
+  });
+
+  it("still reads a structured agent's answer out of a plain chat transcript", () => {
+    const messages = [
+      { role: "user", kind: "text", text: "triage this", created_at: "2026-07-31T00:00:00.000Z" },
+      {
+        role: "assistant",
+        kind: "text",
+        text: "Looks like spam.",
+        metadata: {
+          is_final_answer: true,
+          structured_output: { label: "spam", confidence: 0.9 },
+          tool_name: "final_result",
+        },
+        created_at: "2026-07-31T00:00:01.000Z",
+      },
+    ];
+    expect(extractAgentFinalOutput(messages)).toEqual({ label: "spam", confidence: 0.9 });
+  });
 });
 
 describe("latestAssistantText", () => {

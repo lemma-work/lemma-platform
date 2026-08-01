@@ -919,6 +919,50 @@
   text-align: left;
 }
 
+.workspace-sidebar-primary-action {
+  cursor: pointer;
+}
+
+/* One scannable line per conversation: a status dot in a fixed gutter, then the
+   title. Taller and larger than the nav rows below it because this list is the
+   sidebar's body, not its chrome. */
+.workspace-sidebar-conversation-row {
+  cursor: pointer;
+  height: 2rem;
+  /* Gutter + gap are sized so the title's left edge lands on the same x as the
+     place labels below, which sit behind a product icon. The two lists read as
+     one column, not two indents. */
+  gap: var(--space-3);
+  padding-inline: 0.625rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+.workspace-sidebar-show-more {
+  cursor: pointer;
+  transition: color var(--dur-base) var(--ease-out);
+}
+
+/* The one hard rule in the sidebar: above it is this pod's history, below it is
+   where things live. Full-strength, unlike the washed-out hairlines elsewhere in
+   the shell, because it is separating two kinds of thing rather than two
+   groups of the same thing. */
+.workspace-sidebar-places {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.workspace-sidebar-filter {
+  border: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-1) 58%, transparent);
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    background-color var(--dur-base) var(--ease-out);
+}
+
+.workspace-sidebar-filter:hover {
+  border-color: var(--border-strong);
+}
+
 .flow-execution-row-button,
 .flow-execution-trace-button,
 .flow-execution-rail-button {

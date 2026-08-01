@@ -109,6 +109,7 @@ export interface UseAssistantSessionResult {
   finalOutput: ConversationMessage | null;
   finalOutputText: string;
   streamingText: string;
+  streamingThinking: string;
   streamingTool: AssistantStreamingTool | null;
   isStreaming: boolean;
   error: Error | null;
@@ -306,6 +307,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   const [status, setStatus] = useState<string | undefined>(undefined);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [streamingText, setStreamingText] = useState("");
+  const [streamingThinking, setStreamingThinking] = useState("");
   const [streamingTool, setStreamingTool] = useState<AssistantStreamingTool | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<Error | null>(null);
@@ -314,6 +316,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   const conversationIdRef = useRef<string | null>(externalConversationId);
   const statusRef = useRef<string | undefined>(undefined);
   const streamingTextRef = useRef("");
+  const streamingThinkingRef = useRef("");
   const streamingToolTokenRef = useRef("");
   const autoResumedKeyRef = useRef<string | null>(null);
   const autoLoadInFlightKeyRef = useRef<string | null>(null);
@@ -338,7 +341,9 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       autoLoadInFlightKeyRef.current = null;
       lastAutoLoadedKeyRef.current = null;
       streamingTextRef.current = "";
+      streamingThinkingRef.current = "";
       setStreamingText("");
+      setStreamingThinking("");
       setStreamingTool(null);
       setConversation(null);
       setStatus(undefined);
@@ -389,6 +394,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
   }, []);
 
   const pendingStreamingFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingThinkingFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearStreamingText = useCallback(() => {
     if (pendingStreamingFlushRef.current) {
@@ -397,6 +403,15 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     }
     streamingTextRef.current = "";
     setStreamingText("");
+  }, []);
+
+  const clearStreamingThinking = useCallback(() => {
+    if (pendingThinkingFlushRef.current) {
+      clearTimeout(pendingThinkingFlushRef.current);
+      pendingThinkingFlushRef.current = null;
+    }
+    streamingThinkingRef.current = "";
+    setStreamingThinking("");
   }, []);
 
   const clearStreamingTool = useCallback(() => {
@@ -415,10 +430,24 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     }
   }, []);
 
+  const appendStreamingThinking = useCallback((token: string) => {
+    if (!token) return;
+    streamingThinkingRef.current += token;
+    if (!pendingThinkingFlushRef.current) {
+      pendingThinkingFlushRef.current = setTimeout(() => {
+        pendingThinkingFlushRef.current = null;
+        setStreamingThinking(streamingThinkingRef.current);
+      }, 0);
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       if (pendingStreamingFlushRef.current) {
         clearTimeout(pendingStreamingFlushRef.current);
+      }
+      if (pendingThinkingFlushRef.current) {
+        clearTimeout(pendingThinkingFlushRef.current);
       }
     };
   }, []);
@@ -507,6 +536,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
         setConversationStatus(created.status ?? undefined);
         setMessages([]);
         clearStreamingText();
+        clearStreamingThinking();
         autoResumedKeyRef.current = null;
       }
 
@@ -518,6 +548,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       throw normalized;
     }
   }, [
+    clearStreamingThinking,
     clearStreamingText,
     client,
     defaultAgentName,
@@ -620,6 +651,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     setIsStreaming(true);
     setError(null);
     clearStreamingText();
+    clearStreamingThinking();
     let sawTerminalStatus = false;
     let streamFailure: unknown = null;
 
@@ -640,6 +672,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           setConversationStatus(parsed.status ?? "FAILED");
           sawTerminalStatus = true;
           clearStreamingText();
+          clearStreamingThinking();
           clearStreamingTool();
           continue;
         }
@@ -663,6 +696,8 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
             }
           } else if (!parsed.tokenKind || parsed.tokenKind === "text") {
             appendStreamingToken(parsed.token);
+          } else if (parsed.tokenKind === "thinking") {
+            appendStreamingThinking(parsed.token);
           }
         }
         if (parsed.message) {
@@ -673,6 +708,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
             : "";
           if (role === "assistant" || role === "tool") {
             clearStreamingText();
+            clearStreamingThinking();
             clearStreamingTool();
           }
         }
@@ -681,6 +717,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
           if (!isConversationRunningStatus(parsed.status)) {
             sawTerminalStatus = true;
             clearStreamingText();
+            clearStreamingThinking();
             clearStreamingTool();
           }
         }
@@ -752,6 +789,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       }
     } finally {
       clearStreamingText();
+      clearStreamingThinking();
       clearStreamingTool();
       if (controller.signal.aborted) streamReconnectCountRef.current = 0;
       if (abortRef.current === controller) {
@@ -760,7 +798,9 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       setIsStreaming(false);
     }
   }, [
+    appendStreamingThinking,
     appendStreamingToken,
+    clearStreamingThinking,
     clearStreamingTool,
     clearStreamingText,
     client,
@@ -981,13 +1021,14 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
       });
       setConversationStatus("WAITING");
       clearStreamingText();
+      clearStreamingThinking();
     } catch (stopError) {
       const normalized = normalizeError(stopError, "Failed to stop conversation.");
       setError(normalized);
       onErrorRef.current?.(stopError);
       throw normalized;
     }
-  }, [client, conversationId, defaultScope]);
+  }, [clearStreamingText, clearStreamingThinking, client, conversationId, defaultScope, setConversationStatus]);
 
   const clearMessages = useCallback(() => {
     setMessages([]);
@@ -1075,6 +1116,7 @@ export function useAssistantSession(options: UseAssistantSessionOptions): UseAss
     finalOutput,
     finalOutputText,
     streamingText,
+    streamingThinking,
     streamingTool,
     isStreaming,
     error,

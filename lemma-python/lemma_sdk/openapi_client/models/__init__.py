@@ -75,6 +75,9 @@ _NAME_TO_MODULE = {
     'AgentRunStartResponse': 'agent_run_start_response',
     'AgentRunStatus': 'agent_run_status',
     'AgentRuntimeConfig': 'agent_runtime_config',
+    'AgentRuntimeProfileDetailResponse': 'agent_runtime_profile_detail_response',
+    'AgentRuntimeProfileDetailResponseConfig': 'agent_runtime_profile_detail_response_config',
+    'AgentRuntimeProfileDetailResponseMetadata': 'agent_runtime_profile_detail_response_metadata',
     'AgentRuntimeProfileListResponse': 'agent_runtime_profile_list_response',
     'AgentRuntimeProfileResponse': 'agent_runtime_profile_response',
     'AgentRuntimeProfileResponseConfig': 'agent_runtime_profile_response_config',
@@ -405,6 +408,7 @@ _NAME_TO_MODULE = {
     'SurfaceSetupPhase': 'surface_setup_phase',
     'SurfaceSetupResponse': 'surface_setup_response',
     'SurfaceSetupStep': 'surface_setup_step',
+    'SurfaceSystemClaim': 'surface_system_claim',
     'SurfaceTelegramConfigInput': 'surface_telegram_config_input',
     'SurfaceUpdateRequest': 'surface_update_request',
     'TableDetailResponse': 'table_detail_response',
@@ -414,15 +418,21 @@ _NAME_TO_MODULE = {
     'TelegramManagedBotSetupRequest': 'telegram_managed_bot_setup_request',
     'TelegramManagedBotSetupResponse': 'telegram_managed_bot_setup_response',
     'Update': 'update',
+    'UpdateAgentHostRuntimeProfileRequest': 'update_agent_host_runtime_profile_request',
+    'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0': 'update_agent_host_runtime_profile_request_config_selections_type_0',
     'UpdateAgentRequest': 'update_agent_request',
     'UpdateAgentRequestInputSchemaType0': 'update_agent_request_input_schema_type_0',
     'UpdateAgentRequestMetadataType0': 'update_agent_request_metadata_type_0',
     'UpdateAgentRequestOutputSchemaType0': 'update_agent_request_output_schema_type_0',
+    'UpdateAnthropicCompatibleRuntimeProfileRequest': 'update_anthropic_compatible_runtime_profile_request',
+    'UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0': 'update_anthropic_compatible_runtime_profile_request_model_settings_type_0',
     'UpdateAppRequest': 'update_app_request',
     'UpdateConversationRequest': 'update_conversation_request',
     'UpdateConversationRequestMetadataType0': 'update_conversation_request_metadata_type_0',
     'UpdateFunctionRequest': 'update_function_request',
     'UpdateMemberRoleRequest': 'update_member_role_request',
+    'UpdateOpenAICompatibleRuntimeProfileRequest': 'update_open_ai_compatible_runtime_profile_request',
+    'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0': 'update_open_ai_compatible_runtime_profile_request_model_settings_type_0',
     'UpdateRecordRequest': 'update_record_request',
     'UpdateRecordRequestData': 'update_record_request_data',
     'UpdateScheduleRequest': 'update_schedule_request',
@@ -558,6 +568,9 @@ if TYPE_CHECKING:
     from .agent_run_start_response import AgentRunStartResponse
     from .agent_run_status import AgentRunStatus
     from .agent_runtime_config import AgentRuntimeConfig
+    from .agent_runtime_profile_detail_response import AgentRuntimeProfileDetailResponse
+    from .agent_runtime_profile_detail_response_config import AgentRuntimeProfileDetailResponseConfig
+    from .agent_runtime_profile_detail_response_metadata import AgentRuntimeProfileDetailResponseMetadata
     from .agent_runtime_profile_list_response import AgentRuntimeProfileListResponse
     from .agent_runtime_profile_response import AgentRuntimeProfileResponse
     from .agent_runtime_profile_response_config import AgentRuntimeProfileResponseConfig
@@ -888,6 +901,7 @@ if TYPE_CHECKING:
     from .surface_setup_phase import SurfaceSetupPhase
     from .surface_setup_response import SurfaceSetupResponse
     from .surface_setup_step import SurfaceSetupStep
+    from .surface_system_claim import SurfaceSystemClaim
     from .surface_telegram_config_input import SurfaceTelegramConfigInput
     from .surface_update_request import SurfaceUpdateRequest
     from .table_detail_response import TableDetailResponse
@@ -897,15 +911,21 @@ if TYPE_CHECKING:
     from .telegram_managed_bot_setup_request import TelegramManagedBotSetupRequest
     from .telegram_managed_bot_setup_response import TelegramManagedBotSetupResponse
     from .update import Update
+    from .update_agent_host_runtime_profile_request import UpdateAgentHostRuntimeProfileRequest
+    from .update_agent_host_runtime_profile_request_config_selections_type_0 import UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0
     from .update_agent_request import UpdateAgentRequest
     from .update_agent_request_input_schema_type_0 import UpdateAgentRequestInputSchemaType0
     from .update_agent_request_metadata_type_0 import UpdateAgentRequestMetadataType0
     from .update_agent_request_output_schema_type_0 import UpdateAgentRequestOutputSchemaType0
+    from .update_anthropic_compatible_runtime_profile_request import UpdateAnthropicCompatibleRuntimeProfileRequest
+    from .update_anthropic_compatible_runtime_profile_request_model_settings_type_0 import UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0
     from .update_app_request import UpdateAppRequest
     from .update_conversation_request import UpdateConversationRequest
     from .update_conversation_request_metadata_type_0 import UpdateConversationRequestMetadataType0
     from .update_function_request import UpdateFunctionRequest
     from .update_member_role_request import UpdateMemberRoleRequest
+    from .update_open_ai_compatible_runtime_profile_request import UpdateOpenAICompatibleRuntimeProfileRequest
+    from .update_open_ai_compatible_runtime_profile_request_model_settings_type_0 import UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0
     from .update_record_request import UpdateRecordRequest
     from .update_record_request_data import UpdateRecordRequestData
     from .update_schedule_request import UpdateScheduleRequest
@@ -1054,6 +1074,9 @@ __all__ = [
     'AgentRunStartResponse',
     'AgentRunStatus',
     'AgentRuntimeConfig',
+    'AgentRuntimeProfileDetailResponse',
+    'AgentRuntimeProfileDetailResponseConfig',
+    'AgentRuntimeProfileDetailResponseMetadata',
     'AgentRuntimeProfileListResponse',
     'AgentRuntimeProfileResponse',
     'AgentRuntimeProfileResponseConfig',
@@ -1384,6 +1407,7 @@ __all__ = [
     'SurfaceSetupPhase',
     'SurfaceSetupResponse',
     'SurfaceSetupStep',
+    'SurfaceSystemClaim',
     'SurfaceTelegramConfigInput',
     'SurfaceUpdateRequest',
     'TableDetailResponse',
@@ -1393,15 +1417,21 @@ __all__ = [
     'TelegramManagedBotSetupRequest',
     'TelegramManagedBotSetupResponse',
     'Update',
+    'UpdateAgentHostRuntimeProfileRequest',
+    'UpdateAgentHostRuntimeProfileRequestConfigSelectionsType0',
     'UpdateAgentRequest',
     'UpdateAgentRequestInputSchemaType0',
     'UpdateAgentRequestMetadataType0',
     'UpdateAgentRequestOutputSchemaType0',
+    'UpdateAnthropicCompatibleRuntimeProfileRequest',
+    'UpdateAnthropicCompatibleRuntimeProfileRequestModelSettingsType0',
     'UpdateAppRequest',
     'UpdateConversationRequest',
     'UpdateConversationRequestMetadataType0',
     'UpdateFunctionRequest',
     'UpdateMemberRoleRequest',
+    'UpdateOpenAICompatibleRuntimeProfileRequest',
+    'UpdateOpenAICompatibleRuntimeProfileRequestModelSettingsType0',
     'UpdateRecordRequest',
     'UpdateRecordRequestData',
     'UpdateScheduleRequest',

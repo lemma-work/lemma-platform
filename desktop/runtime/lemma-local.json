@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "version": "0.6.2",
+  "released_at": "2026-07-29T11:15:00Z",
+  "min_admin_version": "0.1.0",
+  "images": {
+    "backend": {
+      "ref": "ghcr.io/lemma-work/lemma-backend:test-d5e99e0dd10c",
+      "digest": "sha256:025fdfb4e21efd24b9a2db7214aee6e8439084cf033db4d2a3391e9ce8312b2a"
+    },
+    "frontend": {
+      "ref": "ghcr.io/lemma-work/lemma-frontend:test-d5e99e0dd10c",
+      "digest": "sha256:48b99678cac01dc89bac101a356eb862452518ebcd06624b789750b9ec88b7a2"
+    },
+    "agentbox_workspace": {
+      "ref": "ghcr.io/lemma-work/lemma-agentbox-workspace:test-d5e99e0dd10c",
+      "digest": "sha256:b2122880de54867bec92a6b727aa918b4635f6adeb747e973a08bd1e7b2f3f48"
+    },
+    "agentbox_function": {
+      "ref": "ghcr.io/lemma-work/lemma-agentbox-function:test-d5e99e0dd10c",
+      "digest": "sha256:1bebb56e70cd7c008e9112ca0ec41454b852563071b9f71d90522e914f744d83"
+    }
+  },
+  "host_packs": {
+    "aarch64-apple-darwin": {
+      "url": null,
+      "sha256": "899ab6e39dcdb81f4121fb62d806be169637502ad612c7349759f24efe666aa0",
+      "size": 378275709,
+      "expanded_size": 1197488229,
+      "format": "zip",
+      "platform": "macos",
+      "architecture": "aarch64",
+      "runtime_version": "0.6.2",
+      "resource": "host-runtime.zip"
+    }
+  },
+  "guest_runtimes": {
+    "macos-aarch64": {
+      "url": null,
+      "sha256": "3ce18b0c02825b3836875a9b1e7e59d2b3d60d35eb51fb4bf83c4b2a4ea49a70",
+      "size": 222661052,
+      "expanded_size": 989226999,
+      "format": "zip",
+      "platform": "linux",
+      "architecture": "aarch64",
+      "runtime_version": "0.6.2",
+      "resource": "guest-runtime.zip"
+    }
+  }
+}

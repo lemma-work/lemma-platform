@@ -212,7 +212,7 @@ export function ImportGithubClient({
                             </div>
                         ) : null}
 
-                        <Button
+                        <Button variant="primary"
                             className="github-import-continue"
                             disabled={!canContinue}
                             onClick={continueToInstall}

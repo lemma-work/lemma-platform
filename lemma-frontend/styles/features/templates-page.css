@@ -333,7 +333,7 @@
 .templates-gallery-footer {
   display: grid;
   min-height: 5.5rem;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: var(--space-8);
   align-items: center;
   margin-top: 2rem;
@@ -492,7 +492,8 @@
     gap: var(--space-4);
   }
 
-  .templates-gallery-footer p {
+  /* The tagline goes; the copyright line stays — it wraps to its own row. */
+  .templates-gallery-footer p:not(.templates-gallery-footer-legal) {
     display: none;
   }
 }

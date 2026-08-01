@@ -12,7 +12,7 @@ import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
-import { LoadingState } from "@/components/brand/loader";
+import { WaitingScreen } from "@/components/shared/loading";
 import { useOrganization } from "@/components/dashboard/org-context";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
 import {
@@ -187,10 +187,9 @@ export function AccountOnboarding({
 
     return (
       <SetupShell>
-        <LoadingState
+        <WaitingScreen
           title="Preparing your workspace"
           description="Checking identity, workspace, invitations, and pods."
-          shape="lines"
           className="w-full max-w-xl"
         />
       </SetupShell>

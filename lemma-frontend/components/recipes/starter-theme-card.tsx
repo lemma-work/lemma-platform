@@ -14,7 +14,7 @@ import {
 import { cn } from '@/lib/utils';
 import { renderRecipeIcon } from './recipe-icon';
 
-const THEME_LOGOS: Partial<Record<StarterThemeId, { src: string; alt: string }>> = {
+export const THEME_LOGOS: Partial<Record<StarterThemeId, { src: string; alt: string }>> = {
     whatsapp: { src: '/surfaces/whatsapp.png', alt: 'WhatsApp' },
     telegram: { src: '/surfaces/telegram.png', alt: 'Telegram' },
     slack: { src: '/surfaces/slack.png', alt: 'Slack' },
@@ -53,7 +53,7 @@ export function StarterThemePicker({
                         <Button
                             key={theme.id}
                             type="button"
-                            variant="ghost"
+                            variant="quiet"
                             role="tab"
                             aria-selected={active}
                             aria-controls="starter-theme-prompts"
@@ -90,7 +90,7 @@ export function StarterThemePicker({
                         <Button
                             key={`${recipe.id}-${index}`}
                             type="button"
-                            variant="ghost"
+                            variant="quiet"
                             title={title}
                             onClick={() => onLaunch(recipe, prompt)}
                             className="starter-theme-inline-prompt"

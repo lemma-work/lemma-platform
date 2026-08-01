@@ -121,6 +121,7 @@ describe("agentActivityLabel", () => {
     status: "RUNNING",
     messages: [],
     streamingText: "",
+    streamingThinking: "",
     streamingTool: null,
     isStreaming: true,
     error: null,

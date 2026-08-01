@@ -34,6 +34,7 @@ class CreateAgentHostRuntimeProfileRequest:
         config_selections (CreateAgentHostRuntimeProfileRequestConfigSelections | Unset):
         default_model_name (None | str | Unset):
         description (None | str | Unset):
+        host_wait_timeout_seconds (int | None | Unset):
         scope (RuntimeProfileScope | Unset):
         source (Literal['AGENT_HOST'] | Unset):  Default: 'AGENT_HOST'.
     """
@@ -45,6 +46,7 @@ class CreateAgentHostRuntimeProfileRequest:
     )
     default_model_name: None | str | Unset = UNSET
     description: None | str | Unset = UNSET
+    host_wait_timeout_seconds: int | None | Unset = UNSET
     scope: RuntimeProfileScope | Unset = UNSET
     source: Literal["AGENT_HOST"] | Unset = "AGENT_HOST"
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -70,6 +72,12 @@ class CreateAgentHostRuntimeProfileRequest:
         else:
             description = self.description
 
+        host_wait_timeout_seconds: int | None | Unset
+        if isinstance(self.host_wait_timeout_seconds, Unset):
+            host_wait_timeout_seconds = UNSET
+        else:
+            host_wait_timeout_seconds = self.host_wait_timeout_seconds
+
         scope: str | Unset = UNSET
         if not isinstance(self.scope, Unset):
             scope = self.scope.value
@@ -90,6 +98,8 @@ class CreateAgentHostRuntimeProfileRequest:
             field_dict["default_model_name"] = default_model_name
         if description is not UNSET:
             field_dict["description"] = description
+        if host_wait_timeout_seconds is not UNSET:
+            field_dict["host_wait_timeout_seconds"] = host_wait_timeout_seconds
         if scope is not UNSET:
             field_dict["scope"] = scope
         if source is not UNSET:
@@ -139,6 +149,17 @@ class CreateAgentHostRuntimeProfileRequest:
 
         description = _parse_description(d.pop("description", UNSET))
 
+        def _parse_host_wait_timeout_seconds(data: object) -> int | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(int | None | Unset, data)
+
+        host_wait_timeout_seconds = _parse_host_wait_timeout_seconds(
+            d.pop("host_wait_timeout_seconds", UNSET)
+        )
+
         _scope = d.pop("scope", UNSET)
         scope: RuntimeProfileScope | Unset
         if isinstance(_scope, Unset):
@@ -156,6 +177,7 @@ class CreateAgentHostRuntimeProfileRequest:
             config_selections=config_selections,
             default_model_name=default_model_name,
             description=description,
+            host_wait_timeout_seconds=host_wait_timeout_seconds,
             scope=scope,
             source=source,
         )

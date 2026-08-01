@@ -54,6 +54,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'agent.pydantic_ai.skipping_tool_result_malformed_call.diagnostic': EventSpec('debug', frozenset({'tool_call_id'})),
     'agent.pydantic_ai.skipping_unknown_agent_message_role.diagnostic': EventSpec('debug', frozenset()),
     'agent.realtime.publishing_agent_realtime_event.diagnostic': EventSpec('debug', frozenset({'conversation_id', 'error_type'})),
+    'agent.runtime_profile.unreadable.skipped': EventSpec('warning', frozenset({'profile_id', 'organization_id', 'error'})),
     'agent.runtime_profile_service.requested_model_r_not_runtime.diagnostic': EventSpec('debug', frozenset()),
     'agent.speech.listen_failed': EventSpec('debug', frozenset()),
     'agent.speech.say_failed': EventSpec('debug', frozenset()),

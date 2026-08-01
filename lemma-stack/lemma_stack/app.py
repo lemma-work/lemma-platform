@@ -436,18 +436,34 @@ def supervise(
 
 @app.command("host-manifest", hidden=True)
 def host_manifest(
-    pack_root: Path = typer.Option(..., "--pack-root"),
+    pack_root: Optional[Path] = typer.Option(None, "--pack-root"),
     output: Optional[Path] = typer.Option(None, "--output"),
     provider: Optional[str] = typer.Option(None, "--provider"),
     manifest_path: Optional[Path] = typer.Option(None, "--release-manifest"),
+    source_root: Optional[Path] = typer.Option(
+        None,
+        "--source-root",
+        help=(
+            "Run a checkout instead of a released pack, for desktop local-mode "
+            "development. Requires a release manifest for the pinned images."
+        ),
+    ),
 ) -> None:
     """Render the private two-process manifest consumed by lemma-locald."""
+
+    if (pack_root is None) == (source_root is None):
+        raise AdminError("pass exactly one of --pack-root or --source-root")
 
     paths = LocalPaths()
     paths.ensure()
     config = store.load_or_create(paths)
-    bundled_manifest = pack_root / "release.json"
-    if manifest_path is not None or bundled_manifest.is_file():
+    # A checkout has no release.json of its own: its app code is local but the
+    # infrastructure and AgentBox images it runs against are still the pinned
+    # ones, so the release manifest comes from --release-manifest or the pin.
+    bundled_manifest = pack_root / "release.json" if pack_root is not None else None
+    if manifest_path is not None or (
+        bundled_manifest is not None and bundled_manifest.is_file()
+    ):
         release = release_manifest.load_file(manifest_path or bundled_manifest)
         release_manifest.pin(paths, release)
     else:
@@ -462,6 +478,7 @@ def host_manifest(
         config,
         release,
         provider=selected_provider,
+        source_root=source_root,
     )
     host_pack.write_manifest(destination, manifest)
     console.print(str(destination))

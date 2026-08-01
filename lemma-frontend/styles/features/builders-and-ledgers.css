@@ -448,17 +448,37 @@
   box-shadow: none;
 }
 
+/* Table switcher. Lives on the left of the table toolbar, so it adds no band of
+   its own. Scrolls sideways rather than wrapping — the strip must stay one line
+   however many tables a pod grows. */
+.data-table-strip {
+  scrollbar-width: none;
+}
+
+.data-table-strip::-webkit-scrollbar {
+  display: none;
+}
+
 .data-table-workbench {
   gap: 0;
   background: transparent;
 }
 
+/* Chrome, not a card. This used to be a bordered, filled box floating on the
+   canvas between the page header and the grid — a third surface whose only job
+   was to hold a row of buttons, and the second thing on the page that looked
+   like a header. It is now a line on the canvas with a hairline under it, so
+   the page reads: canvas chrome, then one data surface. */
 .data-table-workbench .data-table-toolbar {
-  margin: 0.75rem 0.875rem 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  background: var(--surface-1);
-  padding: var(--space-2) var(--space-2-5);
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-subtle) 72%, transparent);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 var(--space-3-5);
 }
 
 .data-table-workbench .data-table-viewport {
@@ -494,12 +514,15 @@
   min-height: 2rem;
 }
 
+/* Same surface as the grid it closes: this was `--surface-1` against the grid's
+   `--card-bg`, which made the pagination row read as a third panel stacked under
+   the table rather than the bottom of the table. */
 .data-table-workbench .data-table-footer {
   margin: 0 0.875rem 0.75rem;
   border: 1px solid var(--border-subtle);
-  border-top: 0;
+  border-top: 1px solid color-mix(in srgb, var(--border-subtle) 62%, transparent);
   border-radius: 0 0 var(--radius-md) var(--radius-md);
-  background: var(--surface-1);
+  background: var(--card-bg);
   padding: var(--space-2) var(--space-2-5);
 }
 

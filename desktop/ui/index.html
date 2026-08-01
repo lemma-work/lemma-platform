@@ -794,7 +794,7 @@
         downloadedBytes: key === "download" ? 104857600 : null,
         totalBytes: key === "download" ? 524288000 : null,
         error: false, ready: key === "ready", running: true,
-        mode: "local", url: "http://app.lemma.localhost:3711",
+        mode: "local", url: "", apiUrl: "",
       });
       listeners.log.forEach((cb) => cb(`[demo] phase: ${key}`));
       if (i < seq.length - 1) { i += 1; timer = setTimeout(step, 7000); }
@@ -1348,7 +1348,7 @@
     return Boolean(
       s &&
       s.mode === "local" &&
-      s.phaseKey === "boot" &&
+      (s.phaseKey === "boot" || s.phaseKey === "stopped") &&
       !s.error &&
       !s.running &&
       !s.ready

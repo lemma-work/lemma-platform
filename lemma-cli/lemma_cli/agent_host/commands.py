@@ -56,15 +56,21 @@ def _binary() -> str:
     if packaged.is_file():
         return str(packaged)
 
-    managed = managed_binary_path()
-    if managed.is_file():
-        return str(managed)
-
+    # A source checkout wins over a previously downloaded release. Running from
+    # the repository means this checkout is the thing under test, and the
+    # managed copy is whatever release happened to be installed once - so with
+    # the old order `make agent-host` built one binary, paired with a different
+    # and older one, then served with the fresh one. A packaged CLI has no
+    # `agent-host/target` beside it, so it still falls through to the download.
     repository = Path(__file__).resolve().parents[3]
     for profile in ("release", "debug"):
         development = repository / "agent-host" / "target" / profile / packaged_name
         if development.is_file():
             return str(development)
+
+    managed = managed_binary_path()
+    if managed.is_file():
+        return str(managed)
 
     typer.echo(
         "Agent Host is not installed; installing the version matched to this CLI...",
@@ -261,7 +267,7 @@ def _is_local_url(url: str) -> bool:
 def harnesses(ctx: typer.Context) -> None:
     """List paired hosts and the harness ids runtime profiles bind to.
 
-    Without this the id needed by `lemma runtime profiles create HARNESS
+    Without this the id needed by `lemma runtime profiles create AGENT_HOST
     --harness-id` is undiscoverable from the CLI.
     """
     from lemma_cli.cli_core.io import emit  # noqa: PLC0415

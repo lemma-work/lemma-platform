@@ -2510,7 +2510,7 @@ class TestAgentRuntimeConfigApis:
         fixed_test_user,
         monkeypatch,
     ):
-        from app.modules.agent.services.runtime_profile_service import (
+        from app.modules.agent.services.runtime_provider_discovery import (
             DiscoveredModel,
         )
 
@@ -2523,7 +2523,7 @@ class TestAgentRuntimeConfigApis:
             return []
 
         monkeypatch.setattr(
-            "app.modules.agent.services.runtime_profile_service._discover_openai_compatible_models",
+            "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
             fake_openai_discovery,
         )
 
@@ -2633,15 +2633,15 @@ class TestAgentOpenApi:
         schemas = openapi["components"]["schemas"]
 
         assert "/pods/{pod_id}/conversations" in paths
-        # Harness listing moved under the paired host when the Agent Host
-        # replaced the standalone agent-runtime surface; the flat
-        # /agent-runtime/harnesses route no longer exists.
-        assert "/me/runtime/agent-hosts/{host_id}/harnesses" in paths
-        assert "/agent-runtime/harnesses" not in paths
         assert "/organizations/{org_id}/agent-runtime/profiles" in paths
+        assert "/me/runtime/agent-hosts/{host_id}/harnesses" in paths
         assert "/agent-runtime/profiles" not in paths
         assert "/agent-runtime/default" not in paths
         assert "/agent-runtime/harnesses/{harness_kind}/models" not in paths
+        # Harnesses used to be listed per local-daemon kind. The daemon is gone
+        # (#253); a harness now belongs to a paired Agent Host and is listed
+        # under that host.
+        assert "/agent-runtime/harnesses" not in paths
         assert "/agent-runtime/config" not in paths
         assert "/pods/{pod_id}/agent-runtime/config" not in paths
         assert "/organizations/{organization_id}/agent-runtime/config" not in paths
@@ -2653,15 +2653,14 @@ class TestAgentOpenApi:
             not in paths
         )
         assert "/agent/global/conversations" not in paths
-        # Two kinds, not one per coding tool: the per-tool values retired with
-        # the local daemon, and which tool Agent Host runs is now carried by
-        # harness_id on the runtime profile.
+        # The local daemon needed one kind per coding tool. Agent Host needs
+        # one: which tool a profile runs is its harness_id, not its kind.
         assert schemas["HarnessKind"]["enum"] == ["LEMMA", "HARNESS"]
         assert "model_name" not in schemas["SendMessageRequest"]["properties"]
         assert "model_name" in schemas["AgentRuntimeConfig"]["properties"]
-        assert "default_runtime" not in schemas["AgentHostHarnessListResponse"][
-            "properties"
-        ]
+        # AgentHarnessListResponse belonged to the daemon's per-kind harness
+        # listing. A harness now hangs off the Agent Host that published it.
+        assert "AgentHarnessListResponse" not in schemas
         assert schemas["AgentHostHarnessListResponse"]["required"] == ["items"]
         assert "metadata" in schemas["SendMessageRequest"]["properties"]
         assert "instructions" in schemas["CreateConversationRequest"]["properties"]
@@ -2714,6 +2713,38 @@ class TestAgentOpenApi:
             paths["/tools/report-feedback"]["post"]["operationId"]
             == "agent.tool.report_feedback"
         )
+
+        profile_path = paths["/organizations/{org_id}/agent-runtime/profiles/{profile_id}"]
+        assert profile_path["get"]["operationId"] == "agent.runtime.profiles.get"
+        assert profile_path["patch"]["operationId"] == "agent.runtime.profiles.update"
+        assert profile_path["delete"]["operationId"] == "agent.runtime.profiles.archive"
+        assert (
+            paths["/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore"][
+                "post"
+            ]["operationId"]
+            == "agent.runtime.profiles.restore"
+        )
+        # `archive` is a VOID_VERB, so the SDK generates a `-> None` call and the
+        # route must not promise a body it does not send.
+        assert set(profile_path["delete"]["responses"]) >= {"204"}
+        update_schema = profile_path["patch"]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        assert update_schema["discriminator"]["propertyName"] == "source"
+        assert set(update_schema["discriminator"]["mapping"]) == {
+            "AGENT_HOST",
+            "OPENAI_COMPATIBLE",
+            "ANTHROPIC_COMPATIBLE",
+        }
+        # Every field optional: the controller reads which keys were sent to
+        # tell "leave alone" from "clear", so a required one would force a
+        # rename to resend the stored API key.
+        for member in (
+            "UpdateOpenAICompatibleRuntimeProfileRequest",
+            "UpdateAnthropicCompatibleRuntimeProfileRequest",
+            "UpdateAgentHostRuntimeProfileRequest",
+        ):
+            assert schemas[member].get("required", []) == []
 
 
 async def _wait_for_conversation_title(

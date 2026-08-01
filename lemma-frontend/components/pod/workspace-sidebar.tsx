@@ -1,9 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useCallback, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
     Check,
@@ -12,19 +11,20 @@ import {
     LogOut,
     PanelLeftClose,
     Plus,
+    Search,
     Share2,
     Upload,
     User,
+    X,
 } from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
 import { Logo } from '@/components/brand/logo';
-import { FileTypeIcon } from '@/components/documents/file-type-icon';
+import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
-import { SidebarEmptyState } from '@/components/shared/empty-state';
 import { ResourceIcon } from '@/components/shared/resource-icon';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -38,25 +38,27 @@ import {
     DialogTitle,
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { useApp } from '@/components/app/app-context';
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { cn } from '@/lib/utils';
-import { agentsQueryOptions, useAgents } from '@/lib/hooks/use-agents';
+import { agentsQueryOptions } from '@/lib/hooks/use-agents';
 import {
     tableQueryOptions,
     tableRecordsQueryOptions,
     tablesQueryOptions,
-    useDatastoreFiles,
-    useTables,
 } from '@/lib/hooks/use-datastores';
-import { flowsQueryOptions, useFlows } from '@/lib/hooks/use-flows';
+import { flowsQueryOptions } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
-import { mergeSidebarConversations } from '@/lib/assistant/sidebar-conversations';
+import {
+    filterSidebarConversations,
+    mergeSidebarConversations,
+    SIDEBAR_CONVERSATION_LIMIT,
+} from '@/lib/assistant/sidebar-conversations';
 import { getAppRecipeExamples } from '@/lib/recipes/recipes';
-import type { DatastoreFile } from '@/lib/types';
+import type { Conversation } from '@/lib/types';
 import { getConversationStatusView } from '@/lib/utils/conversations';
+import { Skeleton } from '@/components/shared/loading';
 
 interface WorkspaceSidebarProps {
     podId: string;
@@ -71,8 +73,6 @@ interface WorkspaceSidebarProps {
 }
 
 const DATASTORE_NAME = 'default';
-const PERSONAL_FILES_ROOT = '/me';
-const PERSONAL_FILES_LABEL = 'Personal files';
 
 type AssistantCreationKind = 'agent' | 'app' | 'workflow' | 'table';
 
@@ -170,36 +170,23 @@ function toDisplayLabel(value: string | null | undefined) {
         .join(' ');
 }
 
-function isFolder(file: DatastoreFile): boolean {
-    return file.kind === 'FOLDER';
-}
-
-function getFilePath(file: DatastoreFile): string {
-    return file.path || file.id;
-}
-
-function isPersonalRootPath(path: string | null | undefined): boolean {
-    if (!path) return false;
-    const normalized = path.startsWith('/') ? path : `/${path}`;
-    return normalized === PERSONAL_FILES_ROOT;
-}
-
-function getDocEntryLabel(file: DatastoreFile): string {
-    return isFolder(file) && isPersonalRootPath(getFilePath(file)) ? PERSONAL_FILES_LABEL : file.name;
-}
-
+/**
+ * The sidebar is the pod's activity spine: identity, one way to act, the
+ * conversation history, and a fixed set of places. Its shape never changes with
+ * the route — resource lists belong to the page that owns them, not to a second
+ * copy in the nav.
+ */
 export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: WorkspaceSidebarProps) {
     const pathname = usePathname();
     const router = useRouter();
     const queryClient = useQueryClient();
-    const searchParams = useSearchParams();
-    const searchParamsString = searchParams.toString();
     const [assistantCreationKind, setAssistantCreationKind] = useState<AssistantCreationKind | null>(null);
     const [assistantCreationPrompt, setAssistantCreationPrompt] = useState('');
     const [bundleShareOpen, setBundleShareOpen] = useState(false);
     const [bundleImportOpen, setBundleImportOpen] = useState(false);
     const [podSwitcherOpen, setPodSwitcherOpen] = useState(false);
-    const { pages = [] } = useApp();
+    const [conversationFilter, setConversationFilter] = useState('');
+    const [filterOpen, setFilterOpen] = useState(false);
     const { data: podsData, isLoading: isLoadingPods } = useAccessiblePods({
         enabled: podSwitcherOpen,
     });
@@ -213,7 +200,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canUseData = podAccess.canAccessRoute('data');
     const canUseDocs = podAccess.canAccessRoute('files');
     const canUseApps = podAccess.canAccessRoute('apps');
-    const canUseSettings = podAccess.canAccessRoute('settings');
     const canCreateAgents = podAccess.can('agent.create');
     const canCreateApps = podAccess.can('app.create');
     const canCreateWorkflows = podAccess.can('workflow.create');
@@ -221,46 +207,39 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const canUpdatePod = podAccess.can('pod.update');
     const basePath = `/pod/${podId}`;
     const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
-    const isDocsRoute = isActive(`${basePath}/files`);
-    const isAgentsRoute = isActive(`${basePath}/ai`) || isActive(`${basePath}/agents`);
-    const isWorkflowsRoute = isActive(`${basePath}/flows`);
-    const isDataRoute = isActive(`${basePath}/data`) || isActive(`${basePath}/datastores`);
-    const isAppsRoute = isActive(`${basePath}/app`);
-    const isConnectorsRoute = isActive(`${basePath}/connectors`);
-    const isKitsRoute = isActive(`${basePath}/kits`) || isActive(`${basePath}/recipes`);
     const isConversationRoute = isActive(`${basePath}/conversations`);
-    const isPodHome = pathname === basePath || pathname === `${basePath}/`;
-    const hasRouteWorktree = isDocsRoute || isAgentsRoute || isWorkflowsRoute || isDataRoute || isAppsRoute || isConnectorsRoute || isKitsRoute;
-    const { data: agentsData } = useAgents(canUseAgents && isAgentsRoute ? podId : undefined);
-    const { data: tablesData } = useTables(canUseData && isDataRoute ? podId : undefined);
-    const { data: flowsData } = useFlows(canUseWorkflows && isWorkflowsRoute ? podId : undefined);
     const {
         conversations: controllerConversations,
         openedConversationId,
-        isLoadingConversations,
     } = useAIAssistant();
-    const shouldLoadSidebarHistory = canUseConversations && !isConversationRoute;
     const {
-        data: sidebarConversationHistory,
-        isLoading: isLoadingSidebarConversationHistory,
+        data: conversationHistory,
+        isLoading: isLoadingConversationHistory,
     } = useScopedConversations(
         { podId },
-        { limit: 20, enabled: shouldLoadSidebarHistory },
+        { limit: SIDEBAR_CONVERSATION_LIMIT, enabled: canUseConversations },
     );
+    // The controller can hold conversations the capped query missed, so trim
+    // after merging — otherwise a brand new conversation could push the list
+    // past the limit it is meant to hold.
     const conversations = useMemo(
         () => mergeSidebarConversations(
-            sidebarConversationHistory?.items || [],
+            conversationHistory?.items || [],
             controllerConversations,
-        ),
-        [controllerConversations, sidebarConversationHistory?.items],
+        ).slice(0, SIDEBAR_CONVERSATION_LIMIT),
+        [controllerConversations, conversationHistory?.items],
     );
+
+    const visibleConversations = useMemo(
+        () => filterSidebarConversations(conversations, conversationFilter),
+        [conversationFilter, conversations],
+    );
+    const hasFilter = conversationFilter.trim().length > 0;
+    const hasVisibleConversations = visibleConversations.length > 0;
 
     const pods = podsData?.items || [];
     const podGroups = podsData?.groups || [];
     const showPodOrganizationLabels = podsData?.hasMultipleOrganizations;
-    const agents = agentsData?.items || [];
-    const tables = tablesData?.items || [];
-    const flows = flowsData || [];
     const initials = profile?.first_name && profile?.last_name
         ? `${profile.first_name[0]}${profile.last_name[0]}`
         : profile?.email?.[0].toUpperCase() || 'U';
@@ -270,46 +249,11 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const assistantCreationCopy = assistantCreationKind ? ASSISTANT_CREATION_COPY[assistantCreationKind] : null;
 
     const canShowCreateMenu =
-        canWriteConversations ||
         canCreateAgents ||
         canCreateApps ||
         canCreateWorkflows ||
         canCreateTables ||
         canUpdatePod;
-    const visibleConversations = canUseConversations ? conversations.slice(0, hasRouteWorktree ? 3 : 7) : [];
-    const docsFolderPath = isDocsRoute ? searchParams.get('folder') : null;
-    const docsDirectoryPath = isDocsRoute ? (docsFolderPath || '/') : '/';
-    const selectedDocPath = isDocsRoute ? searchParams.get('file') : null;
-    const { data: routeDocsFilesData, isLoading: isLoadingRouteDocsFiles } = useDatastoreFiles(
-        podId,
-        canUseDocs && isDocsRoute ? DATASTORE_NAME : undefined,
-        {
-            directory_path: docsDirectoryPath,
-            limit: 200,
-        }
-    );
-
-    const docsEntries = useMemo(() => {
-        return [...(routeDocsFilesData?.items || [])].sort((left, right) => {
-            if (isFolder(left) !== isFolder(right)) return isFolder(left) ? -1 : 1;
-            return left.name.localeCompare(right.name);
-        });
-    }, [routeDocsFilesData?.items]);
-
-    const updateQuery = (
-        updates: Record<string, string | null>,
-        options: { history?: 'push' | 'replace'; targetPath?: string } = {}
-    ) => {
-        const nextParams = new URLSearchParams(searchParamsString);
-        Object.entries(updates).forEach(([key, value]) => {
-            if (value === null || value === '') nextParams.delete(key);
-            else nextParams.set(key, value);
-        });
-        const nextQuery = nextParams.toString();
-        const nextUrl = `${options.targetPath || pathname}${nextQuery ? `?${nextQuery}` : ''}`;
-        if (options.history === 'replace') router.replace(nextUrl, { scroll: false });
-        else router.push(nextUrl, { scroll: false });
-    };
 
     const prefetchAgents = useCallback(() => {
         router.prefetch(`${basePath}/ai`);
@@ -338,7 +282,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         });
     }, [basePath, podId, queryClient, router]);
 
-    const rails = [
+    // The places are fixed and ordered the same on every route, so their
+    // positions can be learned. Settings is reachable from the topbar and the
+    // account menu, so it does not take a slot here.
+    const places = [
         {
             href: `${basePath}/app/pages`,
             label: 'Apps',
@@ -381,17 +328,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             href: `${basePath}/connectors`,
             label: 'Connectors',
             kind: 'connectors' as const,
-            active: isConnectorsRoute,
+            active: isActive(`${basePath}/connectors`),
             visible: canUseConnectors,
         },
-        {
-            href: `${basePath}/settings`,
-            label: 'Settings',
-            kind: 'settings' as const,
-            active: isActive(`${basePath}/settings`),
-            visible: canUseSettings,
-        },
-    ].filter((rail) => rail.visible);
+    ].filter((place) => place.visible);
 
     // Route to the dedicated /logout screen so the user gets immediate
     // "Signing you out…" feedback while the session is torn down.
@@ -404,11 +344,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     };
 
     const startConversation = () => {
-        if (!canWriteConversations) return;
-        router.push(`${basePath}/conversations/new`);
-    };
-
-    const startFullPageConversation = () => {
         if (!canWriteConversations) return;
         router.push(`${basePath}/conversations/new`);
     };
@@ -455,159 +390,12 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
         router.push(href);
     };
 
-    const openDocsFolder = (folderPath: string | null) => {
-        updateQuery(
-            {
-                namespace: null,
-                folder: folderPath,
-                file: null,
-            },
-            { targetPath: `${basePath}/files` }
-        );
+    // Hiding the field always drops the query too. A filter still narrowing the
+    // list with no visible input is a list that looks like it lost rows.
+    const closeFilter = () => {
+        setConversationFilter('');
+        setFilterOpen(false);
     };
-
-    const openDocFile = (filePath: string) => {
-        updateQuery({ namespace: null, file: filePath }, { targetPath: `${basePath}/files` });
-    };
-
-    const renderRouteWorktree = () => {
-        if (isDocsRoute && canUseDocs) {
-            return (
-                <RouteWorktree>
-                    <div className="space-y-0.5">
-                        {docsFolderPath ? (
-                            <button
-                                type="button"
-                                onClick={() => openDocsFolder(null)}
-                                className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring text-[var(--text-tertiary)]"
-                            >
-                                <ProductIcon kind="folders" size="xs" />
-                                Back to Files
-                            </button>
-                        ) : null}
-                        {isLoadingRouteDocsFiles ? (
-                            <div className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">Loading files</div>
-                        ) : docsEntries.length === 0 ? (
-                            <SidebarEmptyState>
-                                No files here yet.
-                            </SidebarEmptyState>
-                        ) : (
-                            docsEntries.map((entry) => {
-                                const folder = isFolder(entry);
-                                const path = getFilePath(entry);
-                                const label = getDocEntryLabel(entry);
-                                return (
-                                    <button
-                                        key={entry.id}
-                                        type="button"
-                                        title={path}
-                                        onClick={() => folder ? openDocsFolder(path) : openDocFile(path)}
-                                        data-active={selectedDocPath === path ? 'true' : undefined}
-                                        className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring"
-                                    >
-                                        {folder ? (
-                                            <ProductIcon
-                                                kind="folders"
-                                                size="xs"
-                                                state={selectedDocPath === path ? 'selected' : 'default'}
-                                            />
-                                        ) : (
-                                            <FileTypeIcon filename={label} size="sm" />
-                                        )}
-                                        <span className="min-w-0 flex-1 truncate">{label}</span>
-                                    </button>
-                                );
-                            })
-                        )}
-                    </div>
-                </RouteWorktree>
-            );
-        }
-
-        if (isAgentsRoute && canUseAgents) {
-            return (
-                <RouteWorktree>
-                    {agents.map((agent) => (
-                        <WorktreeLink
-                            key={agent.name || agent.id}
-                            href={`${basePath}/agents/${encodeURIComponent(agent.name || agent.id)}`}
-                            label={toDisplayLabel(agent.name || agent.id)}
-                            kind="agents"
-                            active={pathname.endsWith(`/agents/${encodeURIComponent(agent.name || agent.id)}`)}
-                        />
-                    ))}
-                    {agents.length === 0 ? <WorktreeEmpty label="No agents yet" /> : null}
-                </RouteWorktree>
-            );
-        }
-
-        if (isWorkflowsRoute && canUseWorkflows) {
-            return (
-                <RouteWorktree>
-                    {flows.map((flow) => (
-                        <WorktreeLink
-                            key={flow.name || flow.id}
-                            href={`${basePath}/flows/${encodeURIComponent(flow.name || flow.id)}`}
-                            label={toDisplayLabel(flow.name || flow.id)}
-                            kind="workflows"
-                            active={pathname.endsWith(`/flows/${encodeURIComponent(flow.name || flow.id)}`)}
-                        />
-                    ))}
-                    {flows.length === 0 ? <WorktreeEmpty label="No workflows yet" /> : null}
-                </RouteWorktree>
-            );
-        }
-
-        if (isDataRoute && canUseData) {
-            return (
-                <RouteWorktree>
-                    {tables.map((table) => (
-                        <WorktreeLink
-                            key={table.name}
-                            href={`${basePath}/data?tab=${encodeURIComponent(table.name)}`}
-                            label={toDisplayLabel(table.name)}
-                            kind="tables"
-                            active={searchParams.get('tab') === table.name}
-                        />
-                    ))}
-                    {tables.length === 0 ? <WorktreeEmpty label="No tables yet" /> : null}
-                </RouteWorktree>
-            );
-        }
-
-        if (isAppsRoute && canUseApps) {
-            return (
-                <RouteWorktree>
-                    {pages.map((page) => (
-                        <WorktreeLink
-                            key={page.slug}
-                            href={`${basePath}/app/view?page=${encodeURIComponent(page.slug)}`}
-                            label={toDisplayLabel(page.title || page.slug)}
-                            kind="apps"
-                            active={searchParams.get('page') === page.slug}
-                        />
-                    ))}
-                    {pages.length === 0 ? <WorktreeEmpty label="No app pages yet" /> : null}
-                </RouteWorktree>
-            );
-        }
-
-        if (isConnectorsRoute && canUseConnectors) {
-            return null;
-        }
-
-        if (isKitsRoute) {
-            return (
-                <RouteWorktree>
-                    <WorktreeEmpty label="Choose a starting point, then add it to this pod." />
-                </RouteWorktree>
-            );
-        }
-
-        return null;
-    };
-
-    const routeWorktree = renderRouteWorktree();
 
     return (
         <aside className="flex h-full w-full shrink-0 flex-col overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-secondary)]">
@@ -636,15 +424,10 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                         </span>
                                     }
                                 />
-                                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                                    <span className="whitespace-nowrap text-xs font-medium leading-none text-[var(--text-tertiary)]">
-                                        Switch pod
-                                    </span>
-                                    <span className="block truncate text-sm font-medium leading-4 text-[var(--text-primary)]">
-                                        {podName || 'Current pod'}
-                                    </span>
+                                <span className="block min-w-0 flex-1 truncate text-sm font-medium leading-5 text-[var(--text-primary)]">
+                                    {podName || 'Current pod'}
                                 </span>
-                                <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-secondary)]" />
+                                <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
                             </button>
                         </DropdownMenu.Trigger>
                         <PodSwitcherMenu
@@ -655,18 +438,23 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                             podId={podId}
                             router={router}
                             side="bottom"
+                            onShare={() => setBundleShareOpen(true)}
                         />
                     </DropdownMenu.Root>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => setBundleShareOpen(true)}
-                    className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0 self-center text-[var(--text-tertiary)] hover:text-[var(--action-primary)]"
-                    aria-label="Share pod"
-                    title="Share pod"
-                >
-                    <Share2 className="h-4 w-4" strokeWidth={1.8} />
-                </button>
+                {canUseConversations ? (
+                    <button
+                        type="button"
+                        onClick={() => (filterOpen ? closeFilter() : setFilterOpen(true))}
+                        data-active={filterOpen ? 'true' : undefined}
+                        className="lemma-shell-icon-button custom-focus-ring h-8 w-8 shrink-0 self-center text-[var(--text-tertiary)] data-[active=true]:text-[var(--text-primary)]"
+                        aria-label="Filter conversations"
+                        aria-expanded={filterOpen}
+                        title="Filter conversations"
+                    >
+                        <Search className="h-4 w-4" strokeWidth={1.8} />
+                    </button>
+                ) : null}
                 {onCollapse ? (
                     <button
                         type="button"
@@ -679,44 +467,44 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                     </button>
                 ) : null}
             </div>
-            <div className="px-3 pb-3 pt-3">
-                <Link
-                    href={basePath}
-                    data-active={isPodHome ? 'true' : undefined}
-                    aria-current={isPodHome ? 'page' : undefined}
-                    className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring mb-0.5 font-medium text-[var(--text-secondary)]"
-                >
-                    <Home className="h-3.5 w-3.5 shrink-0" weight={isPodHome ? 'fill' : 'regular'} />
-                    <span className="min-w-0 flex-1 truncate">Home</span>
-                </Link>
-                {canShowCreateMenu ? (
-                    <div className="flex items-center gap-2">
+
+            {canWriteConversations || canShowCreateMenu ? (
+                <div className="flex shrink-0 items-center gap-1 px-3 pt-3">
+                    {canWriteConversations ? (
+                        <button
+                            type="button"
+                            onClick={startConversation}
+                            className="workspace-sidebar-primary-action custom-focus-ring flex h-8 min-w-0 flex-1 items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-2.5 text-sm font-medium text-[var(--text-primary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)]"
+                        >
+                            <Plus className="h-3.5 w-3.5 shrink-0" />
+                            <span className="min-w-0 flex-1 truncate text-left">New conversation</span>
+                        </button>
+                    ) : null}
+                    {canShowCreateMenu ? (
                         <DropdownMenu.Root>
                             <DropdownMenu.Trigger asChild>
                                 <button
                                     type="button"
-                                    className="lemma-sidebar-row lemma-sidebar-row-sm lemma-sidebar-row-inline custom-focus-ring flex-1 font-medium text-[var(--text-secondary)]"
+                                    className={cn(
+                                        'workspace-sidebar-primary-action custom-focus-ring flex h-8 shrink-0 items-center justify-center rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] text-[var(--text-tertiary)] transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--surface-2)] hover:text-[var(--text-primary)] data-[state=open]:bg-[var(--surface-2)]',
+                                        canWriteConversations ? 'w-8' : 'min-w-0 flex-1 gap-2 px-2.5 text-sm',
+                                    )}
+                                    aria-label="Create something else"
+                                    title="Create something else"
                                 >
-                                    <Plus className="h-3.5 w-3.5 shrink-0" />
-                                    <span className="min-w-0 flex-1 truncate">New</span>
+                                    {canWriteConversations ? null : (
+                                        <span className="min-w-0 flex-1 truncate text-left">Create</span>
+                                    )}
+                                    <ChevronDown className="h-3.5 w-3.5 shrink-0" />
                                 </button>
                             </DropdownMenu.Trigger>
                             <DropdownMenu.Portal>
                                 <DropdownMenu.Content
-                                    align="start"
+                                    align="end"
                                     side="bottom"
-                                    sideOffset={8}
+                                    sideOffset={6}
                                     className="surface-panel z-50 w-56 p-1 shadow-[var(--shadow-lg)]"
                                 >
-                                    {canWriteConversations ? (
-                                        <DropdownMenu.Item
-                                            onSelect={startFullPageConversation}
-                                            className="lemma-menu-row px-2"
-                                        >
-                                            <ProductIcon kind="conversation" size="xs" />
-                                            New conversation
-                                        </DropdownMenu.Item>
-                                    ) : null}
                                     {canCreateAgents ? (
                                         <DropdownMenu.Item
                                             onSelect={() => openAssistantCreation('agent')}
@@ -777,9 +565,9 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                                 </DropdownMenu.Content>
                             </DropdownMenu.Portal>
                         </DropdownMenu.Root>
-                    </div>
-                ) : null}
-            </div>
+                    ) : null}
+                </div>
+            ) : null}
 
             <Dialog open={assistantCreationKind !== null} onOpenChange={(open) => {
                 if (!open) closeAssistantCreation();
@@ -840,7 +628,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         {assistantCreationCopy?.manualLabel ? (
                             <Button
                                 type="button"
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="text-[var(--text-tertiary)]"
                                 onClick={startManualCreation}
@@ -850,7 +638,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                         ) : (
                             <span aria-hidden="true" />
                         )}
-                        <Button
+                        <Button variant="primary"
                             type="button"
                             size="sm"
                             className="px-3.5"
@@ -879,57 +667,101 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 />
             ) : null}
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-3">
-                {routeWorktree}
-
-                <div className={cn('space-y-px pb-3', routeWorktree && 'mt-4 border-t border-[var(--border-subtle)] pt-3')}>
-                    {(isLoadingConversations || isLoadingSidebarConversationHistory) && visibleConversations.length === 0 ? (
-                        <div className="px-2 py-1.5 text-xs text-[var(--text-tertiary)]">Loading conversations</div>
+            {canUseConversations ? (
+                <>
+                    {filterOpen ? (
+                        <div className="shrink-0 px-3 pt-2">
+                            <div className="workspace-sidebar-filter custom-focus-ring-within flex h-7 items-center gap-1.5 rounded-md px-2">
+                                <input
+                                    type="text"
+                                    value={conversationFilter}
+                                    onChange={(event) => setConversationFilter(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Escape') closeFilter();
+                                    }}
+                                    placeholder="Filter conversations"
+                                    aria-label="Filter conversations"
+                                    className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-tertiary)]"
+                                    autoFocus
+                                />
+                                <button
+                                    type="button"
+                                    onClick={closeFilter}
+                                    className="custom-focus-ring shrink-0 rounded text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                                    aria-label="Close filter"
+                                >
+                                    <X className="h-3.5 w-3.5" />
+                                </button>
+                            </div>
+                        </div>
                     ) : null}
-                    {canWriteConversations ? (
-                        <button
-                            type="button"
-                            onClick={startConversation}
-                            className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring font-normal text-[var(--text-tertiary)]"
-                        >
-                            <span className="min-w-0 flex-1 truncate">Start a conversation</span>
-                        </button>
-                    ) : null}
-                    {visibleConversations.map((conversation) => {
-                        const statusView = getConversationStatusView(conversation.status);
-                        const showStatusLabel = statusView.isActive || statusView.isAwaiting || statusView.state === 'failed';
 
-                        return (
-                            <button
-                                key={conversation.id}
-                                type="button"
-                                onClick={() => openConversation(conversation.id)}
-                                data-active={isConversationRoute && openedConversationId === conversation.id ? 'true' : undefined}
-                                className="lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring font-normal"
-                            >
-                                <span className="min-w-0 flex-1 truncate">{conversation.title || 'Untitled conversation'}</span>
-                                {showStatusLabel ? (
-                                    <span
-                                        className={cn(
-                                            'shrink-0 text-xs',
-                                            statusView.tone === 'live' && 'text-[var(--delight)]',
-                                            statusView.tone === 'warning' && 'text-[var(--state-warning)]',
-                                            statusView.tone === 'danger' && 'text-[var(--state-error)]'
-                                        )}
+                    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-2">
+                        {isLoadingConversationHistory && !hasVisibleConversations ? (
+                            /* Rows at the row's own height, dot gutter included —
+                               a one-line caption is a different box from the list
+                               it becomes, and this rail is narrow enough that the
+                               swap reads as the whole nav resettling. */
+                            <div role="status" aria-label="Loading conversations">
+                                <div className="px-2 pb-1 text-xs leading-5 text-[var(--text-tertiary)]">
+                                    Recents
+                                </div>
+                                {CONVERSATION_ROW_SKELETON_WIDTHS.map((width, index) => (
+                                    <div
+                                        key={index}
+                                        className="lemma-sidebar-row workspace-sidebar-conversation-row"
+                                        data-skeleton="true"
                                     >
-                                        {statusView.dotLabel}
-                                    </span>
-                                ) : null}
-                            </button>
-                        );
-                    })}
-                </div>
-            </div>
+                                        <span className="flex w-3.5 shrink-0 items-center justify-center">
+                                            <Skeleton shape="circle" className="h-1.5 w-1.5" />
+                                        </span>
+                                        <Skeleton className={cn('h-3', width)} />
+                                    </div>
+                                ))}
+                            </div>
+                        ) : !hasVisibleConversations ? (
+                            <div className="px-2 py-1.5 text-sm leading-5 text-[var(--text-tertiary)]">
+                                {hasFilter
+                                    ? 'No conversations match that.'
+                                    : 'Start a conversation and it shows up here.'}
+                            </div>
+                        ) : (
+                            <>
+                                <div className="px-2 pb-1 text-xs leading-5 text-[var(--text-tertiary)]">
+                                    Recents
+                                </div>
+                                {visibleConversations.map((conversation) => (
+                                    <ConversationRow
+                                        key={conversation.id}
+                                        conversation={conversation}
+                                        active={isConversationRoute && openedConversationId === conversation.id}
+                                        onOpen={() => openConversation(conversation.id)}
+                                    />
+                                ))}
+                            </>
+                        )}
+                        {!hasFilter ? (
+                            <Link
+                                href={`${basePath}/conversations`}
+                                className="lemma-sidebar-row workspace-sidebar-conversation-row workspace-sidebar-show-more custom-focus-ring text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                            >
+                                {/* Empty dot gutter so the label starts on the
+                                    same x as the titles above it. */}
+                                <span className="w-3.5 shrink-0" aria-hidden="true" />
+                                <span className="min-w-0 flex-1 truncate">All conversations</span>
+                            </Link>
+                        ) : null}
+                    </div>
+                </>
+            ) : (
+                <div className="min-h-0 flex-1" />
+            )}
 
-            <div className="shrink-0 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_62%,transparent)] px-3 pb-3 pt-3">
+            <div className="workspace-sidebar-places shrink-0 px-3 pb-3 pt-3">
+                <LocalSettingsButton className="mb-1" />
                 <div className="space-y-0.5">
-                    {rails.map((rail) => (
-                        <RailLink key={rail.href} {...rail} />
+                    {places.map((place) => (
+                        <PlaceLink key={place.href} {...place} />
                     ))}
                 </div>
             </div>
@@ -1000,6 +832,55 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     );
 }
 
+/**
+ * One line and a dot. State is carried by a 6px mark in a fixed left gutter
+ * rather than by a second line of text — a title plus metadata per row turns a
+ * list you scan into a list you read, and the whole point of this column is
+ * that you can scan it.
+ */
+/** Conversation titles vary in length, so the placeholders do too. */
+const CONVERSATION_ROW_SKELETON_WIDTHS = ['w-3/5', 'w-5/12', 'w-2/3', 'w-1/2', 'w-7/12', 'w-1/2'];
+
+function ConversationRow({
+    conversation,
+    active,
+    onOpen,
+}: {
+    conversation: Conversation;
+    active: boolean;
+    onOpen: () => void;
+}) {
+    const statusView = getConversationStatusView(conversation.status);
+    const filled = statusView.isActive || statusView.isAwaiting || statusView.state === 'failed';
+
+    return (
+        <button
+            type="button"
+            onClick={onOpen}
+            data-active={active ? 'true' : undefined}
+            title={conversation.title || 'Untitled conversation'}
+            className="lemma-sidebar-row workspace-sidebar-conversation-row custom-focus-ring"
+        >
+            <span className="flex w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+                <span
+                    className={cn(
+                        'block h-1.5 w-1.5 rounded-full',
+                        filled ? 'bg-current' : 'border border-current opacity-45',
+                        statusView.tone === 'live' && 'text-[var(--delight)]',
+                        statusView.tone === 'warning' && 'text-[var(--state-warning)]',
+                        statusView.tone === 'danger' && 'text-[var(--state-error)]',
+                        statusView.isActive && 'lemma-live-pulse',
+                    )}
+                />
+            </span>
+            <span className="min-w-0 flex-1 truncate">
+                {conversation.title || 'Untitled conversation'}
+            </span>
+            {filled ? <span className="sr-only">{statusView.label}</span> : null}
+        </button>
+    );
+}
+
 function PodSwitcherMenu({
     pods,
     podGroups,
@@ -1008,6 +889,7 @@ function PodSwitcherMenu({
     podId,
     router,
     side,
+    onShare,
 }: {
     pods: Array<{ id: string; name: string }>;
     podGroups: AccessiblePodGroup[];
@@ -1016,6 +898,7 @@ function PodSwitcherMenu({
     podId: string;
     router: ReturnType<typeof useRouter>;
     side: 'top' | 'bottom';
+    onShare: () => void;
 }) {
     return (
         <DropdownMenu.Portal>
@@ -1025,6 +908,14 @@ function PodSwitcherMenu({
                 sideOffset={8}
                 className="surface-panel z-50 flex w-72 flex-col p-1 shadow-[var(--shadow-lg)]"
             >
+                <DropdownMenu.Item
+                    onSelect={onShare}
+                    className="lemma-menu-row shrink-0"
+                >
+                    <Share2 className="h-3.5 w-3.5" />
+                    Share this pod
+                </DropdownMenu.Item>
+                <DropdownMenu.Separator className="my-1 h-px shrink-0 bg-[var(--border-subtle)]" />
                 <div className="shrink-0 px-2 py-1.5 type-eyebrow">
                     Switch pod
                 </div>
@@ -1098,47 +989,7 @@ function PodSwitcherMenuItem({
     );
 }
 
-function RouteWorktree({
-    children,
-}: {
-    children: ReactNode;
-}) {
-    return (
-        <div>
-            <div className="space-y-2">
-                {children}
-            </div>
-        </div>
-    );
-}
-
-function WorktreeLink(props: {
-    href: string;
-    label: string;
-    kind?: ProductIconKind;
-    active?: boolean;
-}) {
-    const { href, label, kind = 'docs', active } = props;
-
-    return (
-        <Link
-            href={href}
-            data-active={active ? 'true' : undefined}
-            className="lemma-product-nav-item lemma-sidebar-row lemma-sidebar-row-sm custom-focus-ring group"
-        >
-            <ProductIcon kind={kind} size="xs" state={active ? 'selected' : 'default'} />
-            <span className="min-w-0 flex-1 truncate">{label}</span>
-        </Link>
-    );
-}
-
-function WorktreeEmpty({ label }: { label: string }) {
-    return (
-        <SidebarEmptyState>{label}</SidebarEmptyState>
-    );
-}
-
-function RailLink(props: {
+function PlaceLink(props: {
     href: string;
     label: string;
     kind: ProductIconKind;

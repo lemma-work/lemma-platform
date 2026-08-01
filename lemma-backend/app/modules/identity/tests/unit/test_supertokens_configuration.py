@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
+from supertokens_python.recipe import emailverification
 
 from app.core.cors import get_allowed_cors_origin_regex, get_allowed_cors_origins
 from app.core.config import Settings, settings
@@ -65,7 +66,25 @@ def test_email_verification_mode_follows_configuration(monkeypatch):
     assert email_verification_mode() == "REQUIRED"
 
     monkeypatch.setattr(settings, "auth_email_verification_required", False)
-    assert email_verification_mode() == "OPTIONAL"
+    assert email_verification_mode() is None
+
+
+def test_disabled_email_verification_recipe_is_not_registered(monkeypatch):
+    monkeypatch.setenv("SUPERTOKENS_ENV", "testing")
+    monkeypatch.setattr(settings, "auth_email_verification_required", False)
+    monkeypatch.setattr(
+        emailverification,
+        "init",
+        lambda **_kwargs: pytest.fail(
+            "disabled local auth must not initialise email verification"
+        ),
+    )
+
+    _reset_supertokens_testing_state()
+    try:
+        initialize_supertokens()
+    finally:
+        _reset_supertokens_testing_state()
 
 
 def test_e2e_reset_allows_repeated_supertokens_initialization(monkeypatch):

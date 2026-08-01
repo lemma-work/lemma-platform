@@ -92,7 +92,7 @@ model is still preparing.
 ## Configure an AI provider
 
 If no validated provider exists, authenticated local pages show **Configure an
-AI provider**. Open it, or use **Local Control Center → AI Providers**.
+AI provider**. Open it, or use **Local settings → AI provider**.
 
 Supported setup paths include:
 
@@ -100,6 +100,14 @@ Supported setup paths include:
 - Anthropic-compatible APIs;
 - local Ollama;
 - local LM Studio.
+
+To run models on your own machine, start Ollama or LM Studio and press
+**Use Ollama** or **Use LM Studio**. Each fills in that tool's loopback base
+URL, which **Validate & apply** then probes for its model list. Lemma talks to
+them as ordinary OpenAI-compatible providers, so the models, their memory, and
+their lifecycle stay owned by the tool you already run. Local inference then
+works without internet; connectors, web access, and other external services
+still require their own networks.
 
 Enter a base URL, default model, and API key when required, then choose
 **Validate & apply**. Lemma discovers models and verifies that the default
@@ -112,7 +120,7 @@ Non-AI features remain available.
 
 ## Configure integrations and surfaces
 
-Use **Local Control Center → Integrations** for Composio and custom Google or
+Use **Local settings → Integrations** for Composio and custom Google or
 Microsoft OAuth applications. Copy the callback URL displayed by the running
 installation; ports are deliberately dynamic.
 
@@ -120,6 +128,32 @@ Use **Agent Surfaces** for Slack, Telegram, Teams, WhatsApp, and Resend.
 Socket/long-polling modes do not require ingress. Webhook surfaces require a
 public callback configured by the operator; Lemma does not create a tunnel
 silently. Resend is optional and is unrelated to local account creation.
+
+## Share a local installation
+
+Open **Local settings → Sharing** from the workspace footer or the tray.
+
+- **This computer** keeps the existing `app.lemma.localhost` origin.
+- **Local network** binds one selected private IPv4/Wi-Fi interface and shows a
+  URL and QR code. Use it only on a network you trust; it is HTTP.
+- **Public link** uses your existing ngrok configuration. For Cloudflare, run
+  `cloudflared tunnel login` once; Lemma can then create and reuse a dedicated
+  named tunnel and DNS route automatically. Its generated tunnel credential is
+  kept in private app storage. Existing named tunnels remain available as an
+  advanced option, and Lemma never installs either CLI.
+
+Every public activation repeats this warning: **Anyone with this link can
+create an account and use this Lemma installation.** Public sharing intentionally
+keeps signup open in this release. Cloudflare Quick Tunnels are not available.
+
+The shared URL covers the workspace, auth, API, files, streamed chat/tool
+calls, and webhook callbacks. Published pod apps stay local-only because their
+current routes require wildcard subdomains. PostgreSQL, Redis, SuperTokens, the
+private runtime and model endpoints are never exposed.
+
+Closing to the tray keeps sharing active. Full Quit, a Desktop disconnect,
+network-interface loss, or tunnel exit stops sharing. LAN/Public mode never
+resumes automatically.
 
 ## Lifecycle and tray behavior
 
@@ -145,7 +179,7 @@ On first start Lemma asks the OS for two high loopback ports and persists them
 in `locald/network.json`. If an unrelated process later occupies either port,
 Lemma does not terminate it; it allocates and persists a new pair.
 
-The current URLs appear in Control Center and `lemma-stack status --json`:
+The current URLs appear in Local settings and `lemma-stack status --json`:
 
 | Surface | Shape |
 | --- | --- |
@@ -183,7 +217,7 @@ lemma-stack logs frontend
 ```
 
 Managed configuration uses the same schema, validation, rollback, and OS vault
-as Control Center:
+as Local settings:
 
 ```bash
 lemma-stack config list
@@ -206,7 +240,7 @@ lemma auth login
 
 ## Diagnostics and repair
 
-The setup error view and **Control Center → Diagnostics** expose bounded,
+The setup error view and **Local settings → Diagnostics** expose bounded,
 redacted logs for:
 
 - installer;

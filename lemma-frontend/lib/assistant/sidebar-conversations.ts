@@ -1,5 +1,11 @@
 import type { Conversation } from '@/lib/types';
 
+/**
+ * How many conversations the sidebar shows. It is a recency preview, not the
+ * archive — the full history lives on the pod's conversations page.
+ */
+export const SIDEBAR_CONVERSATION_LIMIT = 15;
+
 function conversationTime(conversation: Conversation): number {
     const value = conversation.updated_at || conversation.created_at;
     const timestamp = value ? new Date(value).getTime() : 0;
@@ -23,4 +29,20 @@ export function mergeSidebarConversations(
 
     return Array.from(conversationsById.values())
         .sort((left, right) => conversationTime(right) - conversationTime(left));
+}
+
+/**
+ * Client-side title filter over the rows the sidebar already holds. Deliberately
+ * not a server search: it narrows the preview in front of you rather than
+ * promising to reach the rest of the history, which lives on its own page.
+ */
+export function filterSidebarConversations(
+    conversations: Conversation[],
+    query: string,
+): Conversation[] {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return conversations;
+
+    return conversations.filter((conversation) =>
+        (conversation.title || 'Untitled conversation').toLowerCase().includes(needle));
 }

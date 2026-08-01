@@ -13,8 +13,9 @@ import {
 } from '@/components/ui/icons';
 import { Logo } from '@/components/brand/logo';
 import { HomeImportButton } from '@/components/bundle/home-import-button';
+import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
-import { SidebarEmptyState } from '@/components/shared/empty-state';
+import { QuietEmptyState } from '@/components/shared/empty-state';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
@@ -143,7 +144,7 @@ function SidebarContent({
                                         />
                                     ))
                                 ) : (
-                                    <SidebarEmptyState>No pods yet.</SidebarEmptyState>
+                                    <QuietEmptyState className="lemma-sidebar-empty">No pods yet.</QuietEmptyState>
                                 )}
                             </div>
                         ) : null}
@@ -152,6 +153,7 @@ function SidebarContent({
             </div>
 
             <div className="-mx-4 mt-5 border-t border-[color:var(--row-border)] px-4 pt-3">
+                <LocalSettingsButton className="mb-2" />
                 <Link
                     href="/profile"
                     onClick={onNavigate}
@@ -269,6 +271,7 @@ function CollapsedSidebarRail({
         <TooltipProvider>
             <div className="flex h-screen w-full flex-col items-center justify-between py-5">
                 <div className="flex flex-col items-center gap-2">
+                    <LocalSettingsButton variant="rail" />
                     <Tooltip>
                         <TooltipTrigger asChild>
                             <Link

@@ -269,6 +269,8 @@ async def test_request_approval_slack_native_buttons_then_resumes_on_approve(
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
@@ -363,6 +365,8 @@ async def test_request_approval_slack_native_deny_skips_wrapped_tool(
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     slack_messages = await wait_for_messages(message_store, "SLACK", min_count=2)
@@ -571,6 +575,8 @@ async def test_request_approval_teams_native_buttons_then_resumes_on_approve(
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     teams_messages = await wait_for_messages(message_store, "TEAMS", min_count=2)
@@ -689,6 +695,8 @@ async def test_request_approval_telegram_native_buttons_then_resumes_on_approve(
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     telegram_messages = message_store.get_all("TELEGRAM")
@@ -833,6 +841,8 @@ async def test_request_approval_whatsapp_native_buttons_then_resumes_on_approve(
         user_id=context.user_id,
         pod_id=context.pod_id,
         agent_name=context.agent_name,
+        # The webhook defers the slow half of the decision to a worker job.
+        approval_id=_TOOL_CALL_ID,
     )
 
     whatsapp_messages = await wait_for_messages(message_store, "WHATSAPP", min_count=2)

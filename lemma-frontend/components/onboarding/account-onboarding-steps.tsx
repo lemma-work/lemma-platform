@@ -11,7 +11,6 @@ import {
   Code2,
   Copy,
   KeyRound,
-  Loader2,
   PackageOpen,
   Pencil,
   ShieldCheck,
@@ -19,7 +18,7 @@ import {
   UsersRound,
 } from "@/components/ui/icons";
 
-import { LoadingState } from "@/components/brand/loader";
+import { WaitingScreen } from "@/components/shared/loading";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,6 +77,7 @@ import {
   type SetupStep,
   type TeamKind,
 } from "./account-onboarding-helpers";
+import { StepLoader } from "@/components/brand/loader";
 
 type ProviderPreset = {
   id: string;
@@ -162,10 +162,9 @@ export function InvitationsStep({
 
   return (
     <SetupShell>
-      <LoadingState
+      <WaitingScreen
         title="Joining your workspace"
         description="Accepting your invitation so setup can wait until later."
-        shape="lines"
         className="w-full max-w-xl"
       />
     </SetupShell>
@@ -186,7 +185,7 @@ export function BootStep({ onBegin }: { onBegin: () => void }) {
         Tell Lemma what you want done and it builds the space around it — bots,
         apps, the lot. Or just poke around. Nothing to set up first.
       </p>
-      <Button
+      <Button variant="primary"
         onClick={onBegin}
         size="lg"
         className="setup-primary-action mt-8 h-12 min-w-56 gap-3 text-sm font-medium"
@@ -311,7 +310,7 @@ export function IdentityStep({
             </p>
             {isResolvingWorkspace ? (
               <div className="setup-organization-destination mt-2.5 flex items-center gap-2.5 px-3 py-2.5">
-                <Loader2 className="h-4 w-4 animate-spin text-[var(--text-tertiary)]" />
+                <StepLoader size="sm" className="text-[var(--text-tertiary)]" />
                 <span className="text-xs text-[var(--text-secondary)]">
                   Checking organizations for your email…
                 </span>
@@ -347,7 +346,7 @@ export function IdentityStep({
             )}
           </div>
 
-          <Button
+          <Button variant="primary"
             type="submit"
             loading={isSaving}
             loadingLabel={
@@ -432,7 +431,7 @@ export function AudienceStep({
                   {option.title}
                   {selected ? <Check className="h-4 w-4" /> : null}
                   {isSaving && savingAudience === option.id ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <StepLoader size="sm" />
                   ) : null}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-[var(--text-secondary)]">
@@ -761,7 +760,7 @@ export function ConnectStep({
           subtitle="Fastest — no setup. AI runs on Lemma's built-in models."
         />
 
-        <Button
+        <Button variant="primary"
           type="button"
           onClick={handleContinue}
           loading={isSaving}
@@ -1013,7 +1012,7 @@ export function StartStep({
                   <Button
                     key={agent.id}
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     data-active={codingAgent === agent.id}
                     onClick={() => {
                       setCodingAgent(agent.id);
@@ -1046,7 +1045,7 @@ export function StartStep({
               />
             </div>
 
-            <Button
+            <Button variant="quiet"
               type="button"
               onClick={() => {
                 void navigator.clipboard.writeText(starterPrompt).then(() => {
@@ -1160,7 +1159,7 @@ export function StartStep({
                   <Button
                     key={agent.id}
                     type="button"
-                    variant="ghost"
+                    variant="quiet"
                     data-active={codingAgent === agent.id}
                     onClick={() => setCodingAgent(agent.id)}
                     className="setup-detail-choice h-11 justify-between px-3 text-sm"
@@ -1225,7 +1224,7 @@ export function StartStep({
             </div>
           ) : null}
 
-          <Button
+          <Button variant="primary"
             type="button"
             onClick={() =>
               void choosePath(selectedPath, {
@@ -1267,7 +1266,7 @@ export function StartStep({
               <Button
                 key={path.id}
                 type="button"
-                variant="ghost"
+                variant="quiet"
                 onClick={() => setSelectedPath(path.id)}
                 disabled={isCreating}
                 data-tone={path.tone}
@@ -1300,7 +1299,7 @@ export function StartStep({
               <Button
                 key={path.id}
                 type="button"
-                variant="ghost"
+                variant="quiet"
                 onClick={() => {
                   if (path.id === "coding-agents") {
                     setSelectedPath(path.id);
@@ -1313,7 +1312,7 @@ export function StartStep({
               >
                 <span className="setup-support-path-icon flex h-9 w-9 shrink-0 items-center justify-center rounded-lg">
                   {isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <StepLoader size="sm" />
                   ) : (
                     <Icon className="h-4 w-4" />
                   )}
@@ -1377,7 +1376,7 @@ export function WorkspaceStep({
         {onBack ? (
           <Button
             type="button"
-            variant="ghost"
+            variant="quiet"
             onClick={onBack}
             className="fixed left-6 top-6 z-10 h-auto gap-1.5 px-0 text-sm text-[var(--text-tertiary)] hover:bg-transparent hover:text-[var(--text-primary)]"
           >
@@ -1570,7 +1569,7 @@ export function IntentStep({
             className="inline-edit-field min-w-0 flex-1 border-0 bg-transparent p-0 text-base text-[var(--text-primary)] outline-none placeholder:text-[var(--text-soft)]"
             placeholder="Track investor follow-ups from Gmail and Slack"
           />
-          <Button
+          <Button variant="primary"
             type="button"
             size="icon"
             onClick={onContinue}
@@ -1794,7 +1793,7 @@ export function BuildPathStep({
           )}
         </div>
 
-        <Button
+        <Button variant="primary"
           type="button"
           onClick={onContinue}
           loading={isCreating}

@@ -2,15 +2,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, McpServer, NewSessionRequest, PermissionOptionKind,
-    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionConfigOption, SessionConfigOptionValue, SessionNotification,
-    SetSessionConfigOptionRequest, TextContent,
+    ContentBlock, InitializeRequest, LoadSessionRequest, McpServer, NewSessionRequest,
+    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionConfigOption,
+    SessionConfigOptionValue, SessionNotification, SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, ConnectionTo};
 use async_trait::async_trait;
@@ -26,6 +26,9 @@ pub struct AcpRunRequest {
     pub run_spec: RunSpec,
     pub scratch_directory: PathBuf,
     pub mcp_server: Option<McpServer>,
+    /// Whether this harness advertised `loadSession` at probe time. A run only
+    /// tries to resume `run_spec.resume_session_id` when it did.
+    pub can_load_session: bool,
     /// Where a native permission request parks while Lemma decides.
     pub permissions: PermissionGate,
     /// How long a parked request waits before it is denied, so a prompt
@@ -126,15 +129,26 @@ impl AgentDriver for AcpDriver {
         let permission_sequence = Arc::new(AtomicU64::new(0));
         let permission_timeout = request.permission_timeout;
         let permission_run_id = request.run_spec.agent_run_id;
+        let can_load_session = request.can_load_session;
         let run_spec = request.run_spec;
         let scratch_directory = request.scratch_directory;
         let mcp_server = request.mcp_server;
         let has_scoped_mcp_server = mcp_server.is_some();
+        let resume_session_id = session_to_resume(&run_spec, can_load_session);
+        // `session/load` replays the whole conversation back as session updates
+        // before it returns. Those are turns Lemma already has, so forwarding
+        // them would duplicate every earlier message in the transcript. Streaming
+        // opens when this run's own prompt goes out.
+        let streaming = Arc::new(AtomicBool::new(false));
+        let notification_streaming = Arc::clone(&streaming);
         let outcome = agent_client_protocol::Client
             .builder()
             .name("lemma-agent-host")
             .on_receive_notification(
                 async move |notification: SessionNotification, _context| {
+                    if !notification_streaming.load(Ordering::SeqCst) {
+                        return Ok(());
+                    }
                     if let Some((event_type, object_id, payload)) =
                         normalize_session_update(&notification.update)
                     {
@@ -214,16 +228,45 @@ impl AgentDriver for AcpDriver {
                     .send_request(InitializeRequest::new(ProtocolVersion::V1))
                     .block_task()
                     .await?;
-                let mcp_servers = mcp_server.into_iter().collect();
-                let session = connection
-                    .send_request(
-                        NewSessionRequest::new(scratch_directory).mcp_servers(mcp_servers),
-                    )
-                    .block_task()
-                    .await?;
-                let session_id = session.session_id.clone();
-                let safe_options = session
-                    .config_options
+                let mcp_servers: Vec<McpServer> = mcp_server.into_iter().collect();
+                // A Lemma conversation is one provider session: resuming is what
+                // lets the agent answer "what did I just say" instead of meeting
+                // the user again every turn.
+                let mut established = None;
+                if let Some(existing) = resume_session_id {
+                    match connection
+                        .send_request(
+                            LoadSessionRequest::new(existing.clone(), scratch_directory.clone())
+                                .mcp_servers(mcp_servers.clone()),
+                        )
+                        .block_task()
+                        .await
+                    {
+                        Ok(loaded) => {
+                            established = Some((existing.into(), loaded.config_options));
+                        }
+                        // A provider is free to forget a session — Codex prunes
+                        // its rollout files, a Claude Code session can be deleted
+                        // from disk. Losing history is survivable; losing the
+                        // answer is not, so a failed load starts fresh.
+                        Err(error) => tracing::warn!(
+                            %error,
+                            "could not resume the conversation's provider session; starting a new one"
+                        ),
+                    }
+                }
+                let (session_id, config_options) = if let Some(established) = established {
+                    established
+                } else {
+                    let session = connection
+                        .send_request(
+                            NewSessionRequest::new(scratch_directory).mcp_servers(mcp_servers),
+                        )
+                        .block_task()
+                        .await?;
+                    (session.session_id, session.config_options)
+                };
+                let safe_options = config_options
                     .unwrap_or_default()
                     .iter()
                     .filter_map(|option| convert_config_option(&adapter_key, option))
@@ -310,6 +353,8 @@ impl AgentDriver for AcpDriver {
                         agent_client_protocol::schema::v1::Error::internal_error()
                             .data(error.to_string())
                     })?;
+                // Past this point every session update belongs to this turn.
+                streaming.store(true, Ordering::SeqCst);
                 let prompt = render_prompt(&run_spec);
                 let response = connection
                     .send_request(PromptRequest::new(
@@ -336,6 +381,24 @@ impl AgentDriver for AcpDriver {
             .await?;
         Ok(outcome)
     }
+}
+
+/// The session this run should continue, or `None` to open a new one.
+///
+/// Lemma only sends a `resume_session_id` for a harness that advertised
+/// `loadSession`, but the host checks its own probe too rather than trusting a
+/// stale server-side capability record: a `session/load` an agent does not
+/// implement costs a round trip on every turn before falling back.
+fn session_to_resume(run_spec: &RunSpec, can_load_session: bool) -> Option<String> {
+    if !can_load_session {
+        return None;
+    }
+    run_spec
+        .resume_session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
 }
 
 fn build_agent(adapter: &ResolvedAdapter) -> AcpAgent {
@@ -654,9 +717,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn prompt_rendering_keeps_system_and_text() {
-        let spec = RunSpec {
+    fn spec_resuming(resume_session_id: Option<&str>) -> RunSpec {
+        RunSpec {
             agent_run_id: uuid::Uuid::new_v4(),
             conversation_id: uuid::Uuid::new_v4(),
             harness_id: uuid::Uuid::new_v4(),
@@ -665,14 +727,45 @@ mod tests {
             config_selections: JsonMap::new(),
             system_prompt: "Be exact.".into(),
             prompt: vec![serde_json::json!({"type": "text", "text": "Hello"})],
+            resume_session_id: resume_session_id.map(str::to_owned),
             context: JsonMap::new(),
             mcp: serde_json::Value::Null,
             run_deadline: chrono::Utc::now(),
-        };
+        }
+    }
+
+    #[test]
+    fn prompt_rendering_keeps_system_and_text() {
         assert_eq!(
-            render_prompt(&spec),
+            render_prompt(&spec_resuming(None)),
             "<system>\nBe exact.\n</system>\n\nHello"
         );
+    }
+
+    #[test]
+    fn a_conversation_with_a_session_resumes_it() {
+        assert_eq!(
+            session_to_resume(&spec_resuming(Some("sess-1")), true),
+            Some("sess-1".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_conversations_first_turn_opens_a_new_session() {
+        assert_eq!(session_to_resume(&spec_resuming(None), true), None);
+    }
+
+    #[test]
+    fn a_harness_that_cannot_load_never_tries_to() {
+        assert_eq!(
+            session_to_resume(&spec_resuming(Some("sess-1")), false),
+            None
+        );
+    }
+
+    #[test]
+    fn a_blank_session_id_is_not_worth_a_round_trip() {
+        assert_eq!(session_to_resume(&spec_resuming(Some("  ")), true), None);
     }
 
     #[test]

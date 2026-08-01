@@ -5,6 +5,7 @@ import Link from "next/link";
 import { GithubLogo } from "@/components/ui/icons";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Logo } from "@/components/brand/logo";
+import { copyrightNotice } from "@/lib/company";
 import type { SurfaceMode } from "./landing-data";
 import { githubUrl, surfaceModes } from "./landing-data";
 import { WorkSurfaceStrip } from "./landing-animations";
@@ -403,6 +404,7 @@ export default function LandingPage() {
 
         <p className="lp-site-footer-base">
           <span>Open source. Run it anywhere.</span>
+          <span>{copyrightNotice()}</span>
         </p>
       </footer>
     </div>

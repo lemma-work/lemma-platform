@@ -26,6 +26,7 @@ import { toast } from 'sonner';
 import { ConceptHint } from '@/components/education/concept-hint';
 import { SectionPrimer } from '@/components/education/section-primer';
 import { EmptyState, QuietEmptyState } from '@/components/shared/empty-state';
+import { AsyncRegion, ListSkeleton, ResourceCardGridSkeleton } from '@/components/shared/loading';
 import { ProductIcon } from '@/components/pod/product-icon';
 import { Button } from '@/components/ui/button';
 import { ResourceHeader, ResourceIndexShell, ResourceMetricButton } from '@/components/pod/resource-layout';
@@ -323,61 +324,15 @@ export default function FlowsIndexPage({
         );
     };
 
-    if (loadingFlows || loadingFunctions) {
-        return (
-            <ResourceIndexShell>
-                <ResourceHeader
-                    title="Workflows"
-                    meta={<ConceptHint concept="flow" />}
-                    actions={(
-                        <div className="flex items-center gap-2">
-                            {canCreateFunction ? (
-                                <Link href={`/pod/${podId}/functions/new`}>
-                                    <Button variant="outline" className="gap-2" size="sm">
-                                        <Plus className="h-4 w-4" />
-                                        New function
-                                    </Button>
-                                </Link>
-                            ) : null}
-                            {canCreateWorkflow ? (
-                                <Link href={`/pod/${podId}/flows/new`}>
-                                    <Button className="gap-2" size="sm">
-                                        <Plus className="h-4 w-4" />
-                                        New workflow
-                                    </Button>
-                                </Link>
-                            ) : null}
-                        </div>
-                    )}
-                />
-                <SectionPrimer concept="flow" className="mb-4" />
-                <div className="space-y-3" role="status" aria-label="Loading workflows">
-                    <div className="flex items-center gap-2 py-1">
-                        {[1, 2, 3, 4, 5].map((item) => (
-                            <div key={`workflow-metric-skeleton-${item}`} className="lemma-skeleton h-7 w-24 rounded-md" />
-                        ))}
-                    </div>
-                    <div className="resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 sm:grid-cols-2 xl:grid-cols-3">
-                        {[1, 2, 3].map((i) => (
-                            <div key={i} className="surface-panel h-48 space-y-4 p-4">
-                                <div className="lemma-skeleton h-5 w-5 rounded-md" />
-                                <div className="space-y-2">
-                                    <div className="lemma-skeleton h-4 w-36 rounded-md" />
-                                    <div className="lemma-skeleton h-3 w-full rounded-full" />
-                                    <div className="lemma-skeleton h-3 w-4/5 rounded-full" />
-                                </div>
-                                <div className="lemma-skeleton h-3 w-28 rounded-full" />
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </ResourceIndexShell>
-        );
-    }
-
-    const bothEmpty = flows.length === 0 && functions.length === 0;
-    const attentionCount = loadingWaits ? 0 : waitingAssignments.length;
-    const needsAttentionCount = attentionCount + failedAttentionRuns.length;
+    // One page, one settle. Four queries used to land at four moments and each
+    // one re-flowed the tab row; now the row is always present, and a count
+    // whose query is still in flight is `undefined` — printed as a dash — rather
+    // than a zero that becomes a three a beat later.
+    const isLoadingIndex = loadingFlows || loadingFunctions;
+    const bothEmpty = !isLoadingIndex && flows.length === 0 && functions.length === 0;
+    const needsAttentionCount = loadingWaits
+        ? undefined
+        : waitingAssignments.length + failedAttentionRuns.length;
 
     return (
         <ResourceIndexShell>
@@ -388,7 +343,7 @@ export default function FlowsIndexPage({
                     <div className="flex items-center gap-2">
                         {canCreateFunction ? (
                             <Link href={`/pod/${podId}/functions/new`}>
-                                <Button variant="outline" className="gap-2" size="sm">
+                                <Button variant="secondary" className="gap-2" size="sm">
                                     <Plus className="h-4 w-4" />
                                     New function
                                 </Button>
@@ -396,7 +351,7 @@ export default function FlowsIndexPage({
                         ) : null}
                         {canCreateWorkflow ? (
                             <Link href={`/pod/${podId}/flows/new`}>
-                                <Button className="gap-2" size="sm">
+                                <Button variant="secondary" className="gap-2" size="sm">
                                     <Plus className="h-4 w-4" />
                                     New workflow
                                 </Button>
@@ -408,37 +363,13 @@ export default function FlowsIndexPage({
 
             <SectionPrimer concept="flow" className="mb-4" />
 
-            {bothEmpty && (
-                <EmptyState
-                    variant="panel"
-                    icon={<ListChecks className="h-5 w-5" />}
-                    title="No workflows yet"
-                    description="Create a repeatable process with people, agents, and functions working together."
-                    action={(canCreateFunction || canCreateWorkflow) ? (
-                        <div className="flex items-center justify-center gap-3">
-                            {canCreateFunction ? (
-                                <Link href={`/pod/${podId}/functions/new`}>
-                                    <Button variant="outline" className="gap-2" size="sm"><Plus className="h-4 w-4" />Create Function</Button>
-                                </Link>
-                            ) : null}
-                            {canCreateWorkflow ? (
-                                <Link href={`/pod/${podId}/flows/new`}>
-                                    <Button className="gap-2" size="sm"><Plus className="h-4 w-4" />Create Workflow</Button>
-                                </Link>
-                            ) : null}
-                        </div>
-                    ) : null}
-                />
-            )}
-
-            {!bothEmpty && (
-                <div>
+            <div>
                     <div className="lemma-index-tabs flex-wrap">
                         <div className="flex flex-wrap items-center gap-1">
                             <ResourceMetricButton
                                 active={activeView === 'workflows'}
                                 label="Workflows"
-                                count={flows.length}
+                                count={loadingFlows ? undefined : flows.length}
                                 onClick={() => setActiveView('workflows')}
                             />
                             <ResourceMetricButton
@@ -450,25 +381,25 @@ export default function FlowsIndexPage({
                             <ResourceMetricButton
                                 active={activeView === 'running'}
                                 label="Running"
-                                count={runningRuns.length}
+                                count={loadingFlows ? undefined : runningRuns.length}
                                 onClick={() => setActiveView('running')}
                             />
                             <ResourceMetricButton
                                 active={activeView === 'recent'}
                                 label="Recent runs"
-                                count={recentCompletedRuns.length}
+                                count={loadingFlows ? undefined : recentCompletedRuns.length}
                                 onClick={() => setActiveView('recent')}
                             />
                             <ResourceMetricButton
                                 active={activeView === 'functions'}
                                 label="Functions"
-                                count={functions.length}
+                                count={loadingFunctions ? undefined : functions.length}
                                 onClick={() => setActiveView('functions')}
                             />
                         </div>
                         {activeView === 'workflows' ? (
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="h-7 gap-1.5 px-2 text-xs"
                                 onClick={() => setWorkflowSort(workflowSort === 'az' ? 'recent' : 'az')}
@@ -479,11 +410,41 @@ export default function FlowsIndexPage({
                         ) : null}
                     </div>
 
+                    <AsyncRegion
+                        isLoading={isLoadingIndex}
+                        isEmpty={bothEmpty}
+                        label="Loading workflows"
+                        skeleton={activeView === 'workflows'
+                            ? <ResourceCardGridSkeleton count={3} className="md:grid-cols-2 xl:grid-cols-3" />
+                            : <ListSkeleton rows={4} />}
+                        empty={(
+                            <EmptyState
+                                variant="region"
+                                icon={<ListChecks className="h-5 w-5" />}
+                                title="No workflows yet"
+                                description="Create a repeatable process with people, agents, and functions working together."
+                                action={(canCreateFunction || canCreateWorkflow) ? (
+                                    <div className="flex items-center justify-center gap-3">
+                                        {canCreateFunction ? (
+                                            <Link href={`/pod/${podId}/functions/new`}>
+                                                <Button variant="secondary" className="gap-2" size="sm"><Plus className="h-4 w-4" />Create Function</Button>
+                                            </Link>
+                                        ) : null}
+                                        {canCreateWorkflow ? (
+                                            <Link href={`/pod/${podId}/flows/new`}>
+                                                <Button variant="primary" className="gap-2" size="sm"><Plus className="h-4 w-4" />Create Workflow</Button>
+                                            </Link>
+                                        ) : null}
+                                    </div>
+                                ) : null}
+                            />
+                        )}
+                    >
                     <section className={cn(activeView === 'workflows' ? 'resource-index-grid resource-index-grid-md-2 resource-index-grid-xl-3 md:grid-cols-2 xl:grid-cols-3' : 'lemma-index-list')}>
                         {activeView === 'workflows' ? (
                             filteredFlows.length === 0 ? (
                                 <EmptyState
-                                    variant="compact"
+                                    variant="region"
                                     icon={<ListChecks className="h-4 w-4" />}
                                     title="No workflows yet"
                                     description="Create one when work needs more than one step."
@@ -589,8 +550,8 @@ export default function FlowsIndexPage({
                             )
                         ) : null}
                     </section>
-                </div>
-            )}
+                    </AsyncRegion>
+            </div>
             <DestructiveConfirmationDialog
                 open={Boolean(workflowPendingDelete)}
                 onOpenChange={(open) => {
@@ -681,7 +642,7 @@ function RunIndexRow({
         tone === 'failed'
             ? 'bg-[var(--state-error)]'
             : tone === 'running'
-                ? 'animate-pulse bg-[var(--state-success)]'
+                ? 'lemma-live-pulse bg-[var(--state-success)]'
                 : 'bg-[var(--state-success)]';
     const labelClass =
         tone === 'failed'

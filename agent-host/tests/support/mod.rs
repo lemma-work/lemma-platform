@@ -679,6 +679,7 @@ async fn poll(
             config_selections: JsonMap::new(),
             system_prompt: "Follow the runtime instructions exactly.".to_owned(),
             prompt: vec![json!({"type": "text", "text": state.prompt})],
+            resume_session_id: None,
             context: BTreeMap::new(),
             mcp: state.mcp.clone(),
             run_deadline: Utc::now() + chrono::Duration::minutes(3),

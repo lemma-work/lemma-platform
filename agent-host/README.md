@@ -9,8 +9,9 @@ Agent Host is intentionally a separate native process. Lemma Desktop supervises
 it through `lemma-locald`; headless installations can run it in the foreground
 or install a per-user operating-system service.
 
-The complete architecture, protocol, threat model, and rollout rationale live
-in [the external-agent runtime design](../docs/design/external-agent-runtime.md).
+How Desktop supervises, controls, and reports it - including the privilege
+boundary for the workspace page - is in
+[Agent Host in the desktop app](../docs/design/agent-host-desktop.md).
 
 ## Architecture
 
@@ -29,6 +30,35 @@ event sequence to a SQLite WAL journal. The server fences every run with a lease
 epoch and de-duplicates the append-only event stream. If the host dies after a
 prompt may have been dispatched, the run becomes `DISPATCH_UNKNOWN`; Lemma does
 not silently repeat it.
+
+### One conversation, one provider session
+
+A Lemma conversation maps to a single Codex/Claude Code/OpenCode session for its
+whole life, so the agent keeps its own history instead of meeting the user again
+on every message. Each run is a fresh process; continuity comes from the session
+id, not from a held connection.
+
+The host opens the session and journals its id with the dispatch intent.
+`pending_control` puts that id on *every* checkpoint the run reports — a run has
+one pending-checkpoint slot, so pinning it to a single checkpoint loses it to the
+next state change. Lemma stores it against the conversation and returns it as the
+next run's `resume_session_id`; the host then sends `session/load` rather than
+`session/new`.
+
+Three properties this depends on:
+
+- **A failed load starts a new session.** Providers expire sessions on their own
+  schedule, so a stale id is normal operation. Losing history is survivable;
+  losing the answer is not.
+- **Replayed history is dropped.** `session/load` streams the whole prior
+  conversation back before returning. Lemma already has those turns, so session
+  updates are suppressed until this run's own prompt is dispatched.
+- **The id is scoped to its harness.** A Codex rollout id means nothing to Claude
+  Code, so a conversation moved between harnesses starts fresh rather than
+  failing a load every turn.
+
+Profile configuration and the model are re-applied to a resumed session exactly
+as to a new one, so editing a profile still takes effect on the next turn.
 
 ## Certified integrations
 

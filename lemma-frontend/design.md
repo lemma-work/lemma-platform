@@ -318,3 +318,47 @@ cede ownership rather than delete the header.
 - Never solve duplication by deleting `ResourceHeader`. That loses the back
   target and the action anchor, and the shell then has nothing to render into
   its context bar. Hand the title to another band instead.
+
+## 8. Buttons & Action Hierarchy
+
+### Variants — pick by role, never by appearance
+
+Variants name what an action **is**, not what it looks like. Naming them after
+appearance is what let `outline` and `secondary` drift into being the same
+button under two names, and made every call site a fresh aesthetic judgement.
+
+| Variant | Role | Use for |
+| --- | --- | --- |
+| `primary` | The action this view exists to perform | Dialog confirm, form submit, empty-state create |
+| `secondary` | A real alternative, or a create action where content is the focus | Page-header "New X", retry, alternate path |
+| `quiet` | Present but not competing | Row actions, dismissals, "Done", navigate-away |
+| `destructive` | Removes or revokes | Delete, disconnect, revoke |
+| `link` | An action inside a sentence | Inline text actions |
+
+`secondary` is the component default. Nothing should read as the call to action
+without someone having said so — a default of `primary` produced 108 accidental
+CTAs against 3 deliberate ones.
+
+### One primary per view
+
+A view is whatever the user is looking at as one thing: a page, a dialog, a
+wizard step. **At most one `primary` button may be reachable in a view at once.**
+
+Mutually exclusive branches don't count against each other — a header CTA and an
+empty-state CTA never render together, and neither do two steps of a wizard.
+
+`npm run design:audit` counts these. Two primaries live in the same view is a
+finding, not a style preference: when everything is emphasised, nothing is.
+
+### A page header's create button is not primary
+
+The content is what the user came for. A solid CTA in the header competes with
+it for attention and wins, which is backwards. Header creates are `secondary`;
+the empty state — where creating really is the only thing to do — gets `primary`.
+
+### Rows don't carry buttons
+
+In a list, make the row itself the target. A button on every row is one CTA per
+record, which is the same failure as a page with six primaries. Reserve buttons
+for the one action per section, and let row-level affordances be `quiet` or a
+chevron.

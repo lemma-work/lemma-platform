@@ -18,6 +18,24 @@ const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const WSL_DISTRIBUTION: &str = "LemmaRuntime";
 #[cfg(target_os = "macos")]
 const DATA_DISK_BYTES: u64 = 24 * 1024 * 1024 * 1024;
+#[cfg(target_os = "macos")]
+const VM_PROCESS_MARKER_SCHEMA_VERSION: u64 = 1;
+
+#[cfg(target_os = "macos")]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct VmProcessMarker {
+    schema_version: u64,
+    pid: u32,
+    executable: String,
+    start_identity: String,
+}
+
+#[cfg(target_os = "macos")]
+struct ProcessIdentity {
+    executable: String,
+    start_identity: String,
+}
 
 #[derive(Clone, Debug)]
 pub struct ManagedRuntimeConfig {
@@ -50,6 +68,8 @@ pub struct ManagedRuntime {
     #[cfg(target_os = "macos")]
     host_epoch_file: PathBuf,
     #[cfg(target_os = "macos")]
+    vm_process_marker: PathBuf,
+    #[cfg(target_os = "macos")]
     vm: Mutex<Option<Child>>,
 }
 
@@ -62,6 +82,8 @@ impl ManagedRuntime {
             capability_file: run_root.join("guest.capability"),
             #[cfg(target_os = "macos")]
             host_epoch_file: run_root.join("host.epoch"),
+            #[cfg(target_os = "macos")]
+            vm_process_marker: run_root.join("vz-process.json"),
             control_socket: config.local_root.join("run/guest.sock"),
             config,
             #[cfg(target_os = "macos")]
@@ -246,6 +268,7 @@ impl ManagedRuntime {
                 let deadline = Instant::now() + Duration::from_secs(20);
                 while Instant::now() < deadline {
                     if child.try_wait()?.is_some() {
+                        remove_if_present(&self.vm_process_marker)?;
                         return Ok(());
                     }
                     thread::sleep(Duration::from_millis(100));
@@ -257,12 +280,16 @@ impl ManagedRuntime {
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while Instant::now() < deadline {
                     if child.try_wait()?.is_some() {
+                        remove_if_present(&self.vm_process_marker)?;
                         return Ok(());
                     }
                     thread::sleep(Duration::from_millis(100));
                 }
                 child.kill()?;
                 child.wait()?;
+                remove_if_present(&self.vm_process_marker)?;
+            } else {
+                self.reclaim_owned_macos_vm()?;
             }
         }
         #[cfg(windows)]
@@ -350,13 +377,15 @@ impl ManagedRuntime {
             if child.try_wait()?.is_none() {
                 return Ok(());
             }
+            remove_if_present(&self.vm_process_marker)?;
         }
+        self.reclaim_owned_macos_vm()?;
         create_private_sparse_file(&state.join("data.raw"), DATA_DISK_BYTES)?;
         let _ = fs::remove_file(&self.control_socket);
         let log_path = self.config.local_root.join("logs/vz.log");
         rotate_log(&log_path, 5 * 1024 * 1024)?;
         rotate_log(&state.join("console.log"), 5 * 1024 * 1024)?;
-        let child = Command::new(&self.config.vz_executable)
+        let mut child = Command::new(&self.config.vz_executable)
             .arg("serve")
             .arg("--runtime")
             .arg(&state)
@@ -374,8 +403,66 @@ impl ManagedRuntime {
             .stdout(Stdio::null())
             .stderr(Stdio::from(private_appending_log(&log_path)?))
             .spawn()?;
+        if let Err(error) = self.record_macos_vm(&child) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         *guard = Some(child);
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn record_macos_vm(&self, child: &Child) -> io::Result<()> {
+        let identity = process_identity(child.id())?;
+        let expected = self.config.vz_executable.canonicalize()?;
+        if Path::new(&identity.executable).canonicalize()? != expected {
+            return Err(io::Error::other(
+                "VM helper executable did not match the app-owned runtime",
+            ));
+        }
+        write_private_atomic(
+            &self.vm_process_marker,
+            &serde_json::to_vec_pretty(&VmProcessMarker {
+                schema_version: VM_PROCESS_MARKER_SCHEMA_VERSION,
+                pid: child.id(),
+                executable: identity.executable,
+                start_identity: identity.start_identity,
+            })?,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn reclaim_owned_macos_vm(&self) -> io::Result<()> {
+        let raw = match fs::read(&self.vm_process_marker) {
+            Ok(raw) if raw.len() <= 64 * 1024 => raw,
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let Ok(marker) = serde_json::from_slice::<VmProcessMarker>(&raw) else {
+            return Ok(());
+        };
+        if marker.schema_version != VM_PROCESS_MARKER_SCHEMA_VERSION {
+            return Ok(());
+        }
+        let expected = self.config.vz_executable.canonicalize()?;
+        let identity = match process_identity(marker.pid) {
+            Ok(identity) => identity,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return remove_if_present(&self.vm_process_marker);
+            }
+            Err(error) => return Err(error),
+        };
+        if identity.executable == marker.executable
+            && identity.start_identity == marker.start_identity
+            && Path::new(&identity.executable)
+                .canonicalize()
+                .is_ok_and(|actual| actual == expected)
+        {
+            terminate_verified_process(marker.pid)?;
+        }
+        remove_if_present(&self.vm_process_marker)
     }
 
     #[cfg(target_os = "macos")]
@@ -388,8 +475,9 @@ impl ManagedRuntime {
             return Ok(None);
         };
         *guard = None;
+        remove_if_present(&self.vm_process_marker)?;
         let log = fs::read(self.config.local_root.join("logs/vz.log")).unwrap_or_default();
-        let detail = first_diagnostic(&log, "VM helper exited without a diagnostic");
+        let detail = last_diagnostic(&log, "the runtime log holds no explanation");
         Ok(Some(io::Error::other(format!(
             "Lemma's private runtime exited ({status}): {detail}"
         ))))
@@ -616,6 +704,89 @@ fn validate_macos_release(source: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
+fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
+    let pid = pid.to_string();
+    let executable = Command::new("/bin/ps")
+        .args(["-p", &pid, "-o", "comm="])
+        .output()?;
+    let started = Command::new("/bin/ps")
+        .args(["-p", &pid, "-o", "lstart="])
+        .output()?;
+    if !executable.status.success() || !started.status.success() {
+        return Err(io::Error::new(io::ErrorKind::NotFound, "process not found"));
+    }
+    let executable = String::from_utf8(executable.stdout)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let executable = Path::new(executable.trim())
+        .canonicalize()?
+        .to_string_lossy()
+        .into_owned();
+    let start_identity = String::from_utf8(started.stdout)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
+        .trim()
+        .to_owned();
+    if start_identity.is_empty() {
+        return Err(io::Error::other("process start identity was empty"));
+    }
+    Ok(ProcessIdentity {
+        executable,
+        start_identity,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn terminate_verified_process(pid: u32) -> io::Result<()> {
+    let pid = i32::try_from(pid).map_err(|_| io::Error::other("invalid process id"))?;
+    // SAFETY: the caller matched the recorded executable and OS start identity.
+    let result = unsafe { libc::kill(pid, libc::SIGTERM) };
+    if result != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        return Err(error);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        // SAFETY: signal zero only checks whether this exact PID still exists.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    // SAFETY: identity was checked immediately before termination.
+    if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        // Wait for launchd to reap an orphaned helper. Starting a replacement
+        // as soon as SIGKILL is delivered can race Virtualization.framework's
+        // release of the exclusive data-disk attachment.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            thread::sleep(Duration::from_millis(500));
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "terminated VM helper was not reaped",
+    ))
+}
+
+fn remove_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn create_private_sparse_file(path: &Path, size: u64) -> io::Result<()> {
     if path.exists() {
         if path.metadata()?.len() != size {
@@ -717,12 +888,41 @@ fn rotate_log(path: &Path, max_bytes: u64) -> io::Result<()> {
     Ok(())
 }
 
+/// Lines that mean "still booting", not "went wrong".
+///
+/// The host dials the guest's control socket before guestd is listening, so a
+/// normal boot always writes several of these. They are the *first* thing in
+/// `vz.log`, which is why quoting the first line reported a healthy boot's retry
+/// as the cause of an exit that happened minutes later.
+fn is_boot_retry(line: &str) -> bool {
+    line.contains("guest connect failed")
+}
+
 fn first_diagnostic(value: &[u8], fallback: &str) -> String {
     let value = String::from_utf8_lossy(value);
     let diagnostic = value
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
+        .unwrap_or(fallback);
+    diagnostic
+        .strip_prefix("lemma-runtime: ")
+        .unwrap_or(diagnostic)
+        .to_owned()
+}
+
+/// Why the runtime most recently complained.
+///
+/// An exit is explained by what the log said last, not first. Boot retries are
+/// skipped entirely: if they are all there is, the log holds no explanation and
+/// saying so is more honest than quoting one.
+fn last_diagnostic(value: &[u8], fallback: &str) -> String {
+    let value = String::from_utf8_lossy(value);
+    let diagnostic = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !is_boot_retry(line))
+        .next_back()
         .unwrap_or(fallback);
     diagnostic
         .strip_prefix("lemma-runtime: ")
@@ -757,6 +957,31 @@ fn decode_wsl_output(value: &[u8]) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn an_exit_is_explained_by_the_last_complaint_not_the_first_boot_retry() {
+        // Every healthy boot dials the guest before guestd is listening, so
+        // these are always the first lines in the log. Quoting them made an
+        // exit minutes later read as though a connection reset had caused it.
+        let log = b"lemma-vz: guest connect failed: Connection reset by peer\n\
+                    lemma-vz: guest connect failed: Connection reset by peer\n\
+                    lemma-vz: disk image is corrupt\n" as &[u8];
+        assert_eq!(
+            last_diagnostic(log, "fallback"),
+            "lemma-vz: disk image is corrupt"
+        );
+    }
+
+    #[test]
+    fn a_log_of_only_boot_retries_explains_nothing_and_says_so() {
+        let log = b"lemma-vz: guest connect failed: Connection reset by peer\n\
+                    lemma-vz: guest connect failed: Connection reset by peer\n"
+            as &[u8];
+        assert_eq!(
+            last_diagnostic(log, "the runtime log holds no explanation"),
+            "the runtime log holds no explanation"
+        );
+    }
 
     #[test]
     fn capability_is_stable_private_and_not_in_command_arguments() {
@@ -856,6 +1081,27 @@ mod tests {
             .unwrap();
         assert!(epoch > 1_700_000_000);
         ensure_private_file(&runtime.host_epoch_file).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn reclaims_only_the_exact_recorded_vm_helper_across_daemon_replacement() {
+        let root = tempdir().unwrap();
+        let runtime = ManagedRuntime::new(ManagedRuntimeConfig {
+            local_root: root.path().join("local"),
+            artifact_root: root.path().join("artifacts"),
+            bridge_executable: root.path().join("lemma-runtime"),
+            vz_executable: PathBuf::from("/bin/sleep"),
+        })
+        .unwrap();
+        let mut child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        runtime.record_macos_vm(&child).unwrap();
+        let waiter = thread::spawn(move || child.wait().unwrap());
+
+        runtime.reclaim_owned_macos_vm().unwrap();
+
+        assert!(!waiter.join().unwrap().success());
+        assert!(!runtime.vm_process_marker.exists());
     }
 
     #[cfg(windows)]

@@ -127,7 +127,7 @@ export function SurfaceConnectStep({
                         Signing in to {definition.label} happens once for the whole organization.
                         Do that first, then come back here.
                     </p>
-                    <Button asChild className="mt-3" size="sm" variant="outline">
+                    <Button asChild className="mt-3" size="sm" variant="secondary">
                         <Link href={`/pod/${podId}/connectors`}>Open connectors</Link>
                     </Button>
                 </div>

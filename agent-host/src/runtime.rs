@@ -12,7 +12,7 @@ use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
@@ -29,6 +29,9 @@ use crate::protocol::{
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// How long a queued command waits for the first harness publish before it is
+/// rejected. Generous: probing every adapter can genuinely take this long.
+const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(60);
 const JOURNAL_CLEANUP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 const RETRY_MIN: Duration = Duration::from_millis(500);
 const RETRY_MAX: Duration = Duration::from_secs(30);
@@ -143,11 +146,33 @@ impl HostRuntime {
                             let _ = shutdown.send(true);
                             match handle.await {
                                 Ok(Ok(())) => {}
-                                Ok(Err(error)) => tracing::warn!(
-                                    %target_id,
-                                    %error,
-                                    "target worker stopped; it will be restarted if still enabled"
-                                ),
+                                Ok(Err(error)) => {
+                                    // A rejected credential never recovers by
+                                    // retrying: the workspace has revoked this
+                                    // host, or its row is gone. Restarting the
+                                    // worker just re-authenticates and fails
+                                    // again, forever, once per scan. Turn the
+                                    // target off so the loop ends and the
+                                    // machine reports itself disconnected;
+                                    // pairing again re-enables it.
+                                    if error
+                                        .downcast_ref::<ApiError>()
+                                        .is_some_and(ApiError::is_unauthorized)
+                                    {
+                                        tracing::warn!(
+                                            %target_id,
+                                            %error,
+                                            "Lemma rejected this target's credential; disabling it until it is paired again"
+                                        );
+                                        Self::disable_target(&self.paths, target_id)?;
+                                    } else {
+                                        tracing::warn!(
+                                            %target_id,
+                                            %error,
+                                            "target worker stopped; it will be restarted if still enabled"
+                                        );
+                                    }
+                                }
                                 Err(error) => tracing::warn!(
                                     %target_id,
                                     %error,
@@ -188,6 +213,26 @@ impl HostRuntime {
             if let Ok(Err(error)) = handle.await {
                 tracing::warn!(%target_id, %error, "target worker failed during shutdown");
             }
+        }
+        Ok(())
+    }
+
+    /// Persist `enabled = false` for one target.
+    ///
+    /// Re-read and re-written rather than flipped in memory: the supervisor
+    /// reloads the config on every scan, so an in-memory flag would be undone
+    /// on the next tick and the failing worker would start again.
+    fn disable_target(paths: &HostPaths, target_id: Uuid) -> anyhow::Result<()> {
+        let mut config = HostConfig::load_or_create(paths)?;
+        let mut changed = false;
+        for target in &mut config.targets {
+            if target.target_id == target_id && target.enabled {
+                target.enabled = false;
+                changed = true;
+            }
+        }
+        if changed {
+            config.save(paths)?;
         }
         Ok(())
     }
@@ -272,6 +317,10 @@ struct TargetWorker {
     max_runs: u16,
     shutdown: watch::Receiver<bool>,
     harnesses: BTreeMap<Uuid, PublishedHarness>,
+    /// What each probed adapter said it can do, keyed by harness key. Lemma is
+    /// told the same thing, but a run needs it locally and synchronously to
+    /// decide whether resuming a session is even on the table.
+    capabilities: HashMap<String, HarnessCapabilities>,
     active_runs: HashMap<Uuid, JoinHandle<anyhow::Result<()>>>,
     permissions: PermissionGate,
     /// Runs whose event batches Lemma has rejected, and how often. Kept per
@@ -283,6 +332,19 @@ struct TargetWorker {
     refused_heartbeats: HashSet<Uuid>,
     draining: bool,
     refresh_due: std::time::Instant,
+    events_ready: Arc<tokio::sync::Notify>,
+    /// Enriched harnesses from probes that ran off the poll loop's critical
+    /// path. Drained each iteration so a slow probe never delays a heartbeat.
+    probed: (
+        mpsc::UnboundedSender<ProbedHarnesses>,
+        mpsc::UnboundedReceiver<ProbedHarnesses>,
+    ),
+}
+
+/// One completed refresh: what Lemma accepted, and what the probes learned.
+struct ProbedHarnesses {
+    published: Vec<PublishedHarness>,
+    capabilities: HashMap<String, HarnessCapabilities>,
 }
 
 impl TargetWorker {
@@ -314,12 +376,15 @@ impl TargetWorker {
             max_runs,
             shutdown,
             harnesses: BTreeMap::new(),
+            capabilities: HashMap::new(),
             active_runs: HashMap::new(),
             permissions: PermissionGate::new(),
             event_rejections: HashMap::new(),
             refused_heartbeats: HashSet::new(),
             draining,
             refresh_due: std::time::Instant::now(),
+            events_ready: Arc::new(tokio::sync::Notify::new()),
+            probed: mpsc::unbounded_channel(),
         })
     }
 
@@ -332,14 +397,11 @@ impl TargetWorker {
             }
             self.reap_finished().await;
             self.apply_local_controls()?;
+            while let Ok(published) = self.probed.1.try_recv() {
+                self.store_published(published);
+            }
             if self.refresh_due <= std::time::Instant::now() {
-                if let Err(error) = self.refresh_harnesses().await {
-                    tracing::warn!(
-                        target = %self.target.name,
-                        %error,
-                        "harness refresh failed"
-                    );
-                }
+                self.refresh_harnesses();
                 self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
             }
             if let Err(error) = self.flush_events().await {
@@ -356,7 +418,20 @@ impl TargetWorker {
                 active_runs: active,
                 available_runs: if self.draining { 0 } else { available },
             };
-            match self.poll_target(capacity).await {
+            // The poll blocks for up to 25s server-side. A run finishing inside
+            // that window used to have its output sit in the journal until the
+            // poll returned — the agent answered in 8s and the conversation
+            // still waited 20+. Abandon the wait as soon as a run has something
+            // to send; the next iteration flushes it and polls again.
+            let events_ready = Arc::clone(&self.events_ready);
+            let polled = tokio::select! {
+                result = self.poll_target(capacity) => Some(result),
+                () = events_ready.notified() => None,
+            };
+            let Some(polled) = polled else {
+                continue;
+            };
+            match polled {
                 Ok(response) => {
                     retry = RETRY_MIN;
                     self.journal
@@ -366,6 +441,15 @@ impl TargetWorker {
                     }
                     if response.host_status == HostStatus::UpgradeRequired {
                         anyhow::bail!("target requires a newer Agent Host protocol");
+                    }
+                    if !response.commands.is_empty() {
+                        // Harnesses now publish off the poll path, so the very
+                        // first commands can arrive before that publish lands.
+                        // Rejecting them as HARNESS_NOT_FOUND is permanent and
+                        // wrong: the machine has the agent, it just has not said
+                        // so yet. Wait for the publish instead — bounded, and
+                        // only when there is work that needs it.
+                        self.await_first_harnesses().await;
                     }
                     for command in response.commands {
                         if let Err(error) = self.handle_command(&command) {
@@ -421,6 +505,28 @@ impl TargetWorker {
         Ok(())
     }
 
+    /// Block until the first harness publish lands, at most once and bounded.
+    ///
+    /// Only ever called when a command is in hand: the heartbeat must never
+    /// wait on discovery, which is the whole reason publishing moved off the
+    /// poll path.
+    async fn await_first_harnesses(&mut self) {
+        if !self.harnesses.is_empty() {
+            return;
+        }
+        let deadline = tokio::time::Instant::now() + FIRST_HARNESS_WAIT;
+        while self.harnesses.is_empty() {
+            match tokio::time::timeout_at(deadline, self.probed.1.recv()).await {
+                Ok(Some(published)) => self.store_published(published),
+                Ok(None) => return,
+                Err(_) => {
+                    tracing::warn!("no harnesses published yet; the command will be rejected");
+                    return;
+                }
+            }
+        }
+    }
+
     fn handle_command(&mut self, command: &Command) -> anyhow::Result<()> {
         anyhow::ensure!(command.expires_at >= Utc::now(), "command is expired");
         match command.kind {
@@ -461,6 +567,10 @@ impl TargetWorker {
         // fallback, so waiting on the semaphore after that point can duplicate
         // provider work.
         let adapter = self.manifest.resolve(&published.harness_key)?;
+        let can_load_session = self
+            .capabilities
+            .get(&published.harness_key)
+            .is_some_and(|capabilities| capabilities.load_session);
         let permit = Arc::clone(&self.global_capacity)
             .try_acquire_owned()
             .map_err(|_| anyhow::anyhow!("Agent Host capacity changed; command will be retried"))?;
@@ -474,17 +584,24 @@ impl TargetWorker {
         if outcome == AcceptOutcome::Duplicate {
             return Ok(());
         }
-        self.spawn_run(spec, adapter, permit);
+        self.spawn_run(spec, adapter, can_load_session, permit);
         Ok(())
     }
 
-    fn spawn_run(&mut self, spec: RunSpec, adapter: ResolvedAdapter, permit: OwnedSemaphorePermit) {
+    fn spawn_run(
+        &mut self,
+        spec: RunSpec,
+        adapter: ResolvedAdapter,
+        can_load_session: bool,
+        permit: OwnedSemaphorePermit,
+    ) {
         let target_id = self.target.target_id;
         let journal = self.journal.clone();
         let driver = Arc::clone(&self.driver);
         let mcp_bridge_executable = self.mcp_bridge_executable.clone();
         let paths = self.paths.clone();
         let permissions = self.permissions.clone();
+        let events_ready = Arc::clone(&self.events_ready);
         let run_id = spec.agent_run_id;
         let handle = tokio::spawn(async move {
             let _permit = permit;
@@ -499,6 +616,11 @@ impl TargetWorker {
                 RunState::Accepted,
                 &JsonMap::new(),
             )?;
+            // `poll_target` snapshots the control batch when it builds the
+            // request, so a checkpoint written a moment later waits out the
+            // whole 25s long poll. Measured at 10-24s between a command being
+            // delivered and the host reporting it accepted.
+            events_ready.notify_one();
             if !spec.mcp.is_object() {
                 terminal_failure(
                     &journal,
@@ -532,6 +654,7 @@ impl TargetWorker {
                 lease_epoch,
                 provider_seen: AtomicBool::new(false),
                 stream_segments: std::sync::Mutex::new(StreamSegments::default()),
+                events_ready: Arc::clone(&events_ready),
             });
             let remaining = (spec.run_deadline - Utc::now())
                 .to_std()
@@ -541,6 +664,7 @@ impl TargetWorker {
                 run_spec: spec,
                 scratch_directory: scratch.clone(),
                 mcp_server: Some(mcp_server),
+                can_load_session,
                 permissions: permissions.clone(),
                 permission_timeout: PERMISSION_DECISION_TIMEOUT,
             };
@@ -606,6 +730,10 @@ impl TargetWorker {
                     )?;
                 }
             }
+            // However this run ended - success, failure, deadline - its
+            // terminal checkpoint is upstream-bound and must not wait for the
+            // current long poll either.
+            events_ready.notify_one();
             Ok(())
         });
         self.active_runs.insert(run_id, handle);
@@ -691,40 +819,104 @@ impl TargetWorker {
         Ok(())
     }
 
-    async fn refresh_harnesses(&mut self) -> anyhow::Result<()> {
-        let mut snapshots = self.manifest.discover();
-        for snapshot in &mut snapshots {
-            if snapshot.health != HarnessHealth::Ready {
-                continue;
+    /// Publish what this machine can run, cheaply first and fully second.
+    ///
+    /// This is the first thing the worker loop does, and until it returns the
+    /// host has not polled once - so it has no heartbeat, the workspace reports
+    /// it OFFLINE, and creating a profile against it is refused. Probing is
+    /// what makes that slow: every probe spawns the agent, runs an ACP
+    /// `initialize` and `session/new`, and waits up to 20s. Serially, over four
+    /// adapters with one that times out, a cold start took 47s to first
+    /// heartbeat, measured.
+    ///
+    /// So the cheap half - which adapters exist and resolve - is published on
+    /// its own first, and the probes then run concurrently rather than one
+    /// after another. The machine appears with its agents almost immediately;
+    /// their config options arrive a moment later.
+    fn refresh_harnesses(&mut self) {
+        let client = self.client.clone();
+        let sender = self.probed.0.clone();
+        // Everything the spawned work needs, taken before the task is built:
+        // it outlives this borrow of `self`.
+        let manifest = self.manifest.clone();
+        let driver = Arc::clone(&self.driver);
+        let probe_root = self.paths.root.join("probe");
+        let discover_manifest = manifest.clone();
+        let build_probes = move |discovered: Vec<HarnessSnapshot>| {
+            discovered.into_iter().map(move |mut snapshot| {
+                let manifest = manifest.clone();
+                let driver = Arc::clone(&driver);
+                let scratch = probe_root.join(&snapshot.harness_key);
+                async move {
+                    if snapshot.health != HarnessHealth::Ready {
+                        return snapshot;
+                    }
+                    let Ok(adapter) = manifest.resolve(&snapshot.harness_key) else {
+                        return snapshot;
+                    };
+                    match tokio::time::timeout(
+                        Duration::from_secs(20),
+                        driver.probe(adapter, scratch),
+                    )
+                    .await
+                    {
+                        Ok(Ok(probe)) => {
+                            snapshot.config_options = probe.config_options;
+                            snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
+                            snapshot.config_revision = snapshot_revision(&snapshot);
+                        }
+                        Ok(Err(error)) => {
+                            snapshot.health = HarnessHealth::ProbeFailed;
+                            snapshot.stale_reason = Some(redact_error(&error.to_string()));
+                        }
+                        Err(_) => {
+                            snapshot.health = HarnessHealth::ProbeFailed;
+                            snapshot.stale_reason = Some("ACP probe timed out".to_owned());
+                        }
+                    }
+                    snapshot
+                }
+            })
+        };
+        // Spawned, never awaited. Discovery runs each adapter's binary just to
+        // read its version, and probing then opens a whole ACP session per
+        // adapter. Doing either before the first poll left the host with no
+        // heartbeat for 47 seconds, so the workspace called a working machine
+        // OFFLINE and refused to bind a profile to it.
+        //
+        // Published exactly once, after probing. An earlier revision published
+        // the unprobed snapshots first so the agents would appear sooner — but
+        // an unprobed snapshot has no `config_options`, and publishing it
+        // *replaced* the probed ones. Every saved `config_selections` key then
+        // failed validation as "unknown configuration selection". Getting the
+        // machine online is what the poll does; the harnesses can wait for
+        // their probe.
+        tokio::spawn(async move {
+            let discovered = discover_manifest.discover();
+            let enriched = futures_util::future::join_all(build_probes(discovered)).await;
+            let capabilities = enriched
+                .iter()
+                .map(|snapshot| (snapshot.harness_key.clone(), snapshot.capabilities.clone()))
+                .collect();
+            match client.publish_harnesses(enriched).await {
+                Ok(published) => {
+                    let _ = sender.send(ProbedHarnesses {
+                        published,
+                        capabilities,
+                    });
+                }
+                Err(error) => tracing::warn!(%error, "publishing probed harnesses failed"),
             }
-            let Ok(adapter) = self.manifest.resolve(&snapshot.harness_key) else {
-                continue;
-            };
-            let scratch = self.paths.root.join("probe").join(&snapshot.harness_key);
-            match tokio::time::timeout(Duration::from_secs(20), self.driver.probe(adapter, scratch))
-                .await
-            {
-                Ok(Ok(probe)) => {
-                    snapshot.config_options = probe.config_options;
-                    snapshot.capabilities = capabilities_from_acp(&probe.capabilities);
-                    snapshot.config_revision = snapshot_revision(snapshot);
-                }
-                Ok(Err(error)) => {
-                    snapshot.health = HarnessHealth::ProbeFailed;
-                    snapshot.stale_reason = Some(redact_error(&error.to_string()));
-                }
-                Err(_) => {
-                    snapshot.health = HarnessHealth::ProbeFailed;
-                    snapshot.stale_reason = Some("ACP probe timed out".to_owned());
-                }
-            }
-        }
-        let published = self.client.publish_harnesses(snapshots).await?;
-        self.harnesses = published
+        });
+    }
+
+    fn store_published(&mut self, probed: ProbedHarnesses) {
+        self.harnesses = probed
+            .published
             .into_iter()
             .map(|harness| (harness.id, harness))
             .collect();
-        Ok(())
+        self.capabilities = probed.capabilities;
     }
 
     /// The control updates due for delivery, minus the ones Lemma refuses.
@@ -1105,6 +1297,11 @@ struct JournalCallbacks {
     lease_epoch: u32,
     provider_seen: AtomicBool,
     stream_segments: std::sync::Mutex<StreamSegments>,
+    /// Raised whenever this run journals an event, so the poll loop stops
+    /// waiting and flushes. Without it a run's output sits in the journal until
+    /// the current 25s long poll returns — the agent answered in eight seconds
+    /// and the conversation still waited twenty.
+    events_ready: Arc<tokio::sync::Notify>,
 }
 
 /// Accumulated per-kind streamed text awaiting a full-text upsert.
@@ -1151,6 +1348,7 @@ impl JournalCallbacks {
             None,
             payload,
         )?;
+        self.events_ready.notify_one();
         Ok(())
     }
 
@@ -1168,6 +1366,12 @@ impl AcpCallbacks for JournalCallbacks {
             self.lease_epoch,
             provider_session_id,
         )?;
+        // `mark_dispatch_intent` just made the session id durable, and
+        // `pending_control` puts it on every checkpoint this run reports. Waking
+        // the poll here gets it upstream on the first one rather than a whole
+        // long poll later, so Lemma has the conversation's session before the
+        // user's next message arrives.
+        self.events_ready.notify_one();
         Ok(())
     }
 
@@ -1214,6 +1418,7 @@ impl AcpCallbacks for JournalCallbacks {
                     object_id,
                     payload,
                 )?;
+                self.events_ready.notify_one();
             }
             _ => {
                 self.flush_stream_segments()?;
@@ -1225,6 +1430,7 @@ impl AcpCallbacks for JournalCallbacks {
                     object_id,
                     payload,
                 )?;
+                self.events_ready.notify_one();
             }
         }
         Ok(())
@@ -1567,7 +1773,6 @@ mod target_worker_tests {
                 base_url: url::Url::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
                 host_id: Uuid::new_v4(),
                 user_id: Uuid::new_v4(),
-                organization_id: None,
                 host_secret: "test-secret".into(),
                 enabled: true,
                 allow_insecure_http: true,
@@ -1611,6 +1816,7 @@ mod target_worker_tests {
                 config_selections: JsonMap::new(),
                 system_prompt: String::new(),
                 prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+                resume_session_id: None,
                 context: JsonMap::new(),
                 mcp: serde_json::json!({}),
                 run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -2043,6 +2249,7 @@ mod stream_upsert_tests {
             config_selections: JsonMap::new(),
             system_prompt: String::new(),
             prompt: vec![serde_json::json!({"type": "text", "text": "hi"})],
+            resume_session_id: None,
             context: JsonMap::new(),
             mcp: Value::Null,
             run_deadline: Utc::now() + chrono::Duration::minutes(5),
@@ -2066,6 +2273,7 @@ mod stream_upsert_tests {
             lease_epoch: 1,
             provider_seen: AtomicBool::new(true),
             stream_segments: std::sync::Mutex::new(StreamSegments::default()),
+            events_ready: Arc::new(tokio::sync::Notify::new()),
         };
         (directory, callbacks, run_id)
     }

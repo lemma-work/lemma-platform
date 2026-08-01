@@ -477,6 +477,48 @@ export function isInlineToolStatusAlreadyVisible({
   return false;
 }
 
+/** Which element gets to say "Thinking" for the current run.
+ *
+ * Three places can render that word - the run-status placeholder near the
+ * composer, a reasoning card's summary, and a tool rollup's collapsed header -
+ * and any two of them on screen at once read as the assistant thinking twice.
+ * They are ranked rather than individually suppressed so exactly one wins:
+ *
+ * - `reasoning` whenever a thought is streaming. It owns the label because it
+ *   is the one the user can click to watch the tokens arrive.
+ * - `tool-rollup` when the run is working through tools. Its header already
+ *   summarizes the activity and collapses the thought behind it.
+ * - `run-status` only when the run has produced nothing to attach a label to.
+ */
+export type ThinkingOwner = "reasoning" | "tool-rollup" | "run-status";
+
+export function resolveThinkingOwner({
+  rows,
+  latestUser,
+  hasRunStatus,
+}: {
+  rows: DisplayMessageRow[];
+  latestUser: number;
+  hasRunStatus: boolean;
+}): ThinkingOwner | null {
+  const currentRows = rows.filter((row) => (
+    row.message.role === "assistant" && rowIsAfterIndex(row, latestUser)
+  ));
+
+  const hasStreamingReasoning = currentRows.some((row) => row.message.parts?.some((part) => (
+    part.type === "reasoning" && part.state === "streaming"
+  )));
+  if (hasStreamingReasoning) return "reasoning";
+
+  const hasToolActivity = currentRows.some((row) => (
+    (row.message.toolInvocations?.length || 0) > 0
+    || row.message.parts?.some((part) => part.type === "tool")
+  ));
+  if (hasToolActivity) return "tool-rollup";
+
+  return hasRunStatus ? "run-status" : null;
+}
+
 export function getActiveToolBanner(messages: AssistantRenderableMessage[]): ActiveToolBanner | null {
   const displayMessages = prepareMessagesForDisplay(messages).map((entry) => entry.message);
 

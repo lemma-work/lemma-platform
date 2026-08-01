@@ -17,6 +17,7 @@ concurrency:
 jobs:
   changes:
     name: Detect changed areas
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -25,6 +26,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       codegen: ${{ steps.filter.outputs.codegen }}
       desktop: ${{ steps.filter.outputs.desktop }}
+      locald: ${{ steps.filter.outputs.locald }}
       agentbox: ${{ steps.filter.outputs.agentbox }}
       agent_host: ${{ steps.filter.outputs.agent_host }}
     steps:
@@ -73,6 +75,10 @@ jobs:
               - 'agent-host/**'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release-agent-host.yml'
+            locald:
+              - 'locald/**'
+              - 'local-runtime/manager/**'
+              - '.github/workflows/ci.yml'
             agentbox:
               - 'agentbox/**'
               - 'agentbox-client/**'
@@ -85,6 +91,7 @@ jobs:
 
   agentbox:
     name: AgentBox providers, state, and runtime
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.agentbox == 'true'
     runs-on: ubuntu-latest
@@ -140,6 +147,7 @@ jobs:
 
   backend-unit:
     name: lemma-backend unit
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -193,6 +201,7 @@ jobs:
           if-no-files-found: ignore
   backend-lint:
     name: lemma-backend quality gates
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -214,9 +223,17 @@ jobs:
         run: make typecheck-critical
       - name: Architecture, complexity, and broad-catch ratchet
         run: make architecture
+      # The codegen-drift gate only proves the SDKs match the committed spec.
+      # Nothing proved the committed spec matches the routes this app defines,
+      # so a new endpoint could ship with both SDKs silently lacking it. This
+      # compares the two, and belongs here rather than in codegen-drift because
+      # it needs the backend's dependencies to import the app.
+      - name: OpenAPI spec matches the routes the app defines
+        run: uv run python scripts/dump_openapi_spec.py --check
 
   backend-migration:
     name: lemma-backend migration upgrade/downgrade
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
@@ -250,6 +267,7 @@ jobs:
 
   python-sdk:
     name: Python SDK + CLI tests
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
@@ -284,6 +302,7 @@ jobs:
 
   typescript-sdk:
     name: TypeScript SDK checks
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
@@ -316,6 +335,7 @@ jobs:
 
   codegen-drift:
     name: Codegen drift gate
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.codegen == 'true'
     runs-on: ubuntu-latest
@@ -353,6 +373,7 @@ jobs:
 
   frontend-check:
     name: Frontend lint, design audit, test
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
@@ -380,6 +401,7 @@ jobs:
 
   frontend-build:
     name: Frontend build (SDK integration)
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.frontend == 'true' || needs.changes.outputs.typescript == 'true'
     runs-on: ubuntu-latest
@@ -406,6 +428,7 @@ jobs:
 
   install-experience:
     name: Install experience (Linux Docker)
+    timeout-minutes: 30
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: ubuntu-latest
@@ -420,6 +443,7 @@ jobs:
 
   windows-cli:
     name: Windows CLI smoke test
+    timeout-minutes: 45
     needs: changes
     if: needs.changes.outputs.python_sdk == 'true'
     runs-on: windows-latest
@@ -468,6 +492,7 @@ jobs:
 
   agent-host:
     name: Agent Host crate
+    timeout-minutes: 45
     needs: changes
     if: needs.changes.outputs.agent_host == 'true'
     runs-on: ubuntu-latest
@@ -505,8 +530,48 @@ jobs:
         working-directory: agent-host
         run: cargo test --locked
 
+  # macOS, not Linux, because that is a platform locald ships on. Most of
+  # managed_runtime.rs is behind macOS/Windows cfgs, so a Linux build compiles
+  # it down to an unused parameter and a pile of dead helpers - failing the lint
+  # over code that never ships, while never once linting the code that does.
+  locald:
+    name: locald crate
+    timeout-minutes: 45
+    needs: changes
+    if: needs.changes.outputs.locald == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            locald/target
+          key: locald-cargo-${{ runner.os }}-${{ hashFiles('locald/Cargo.lock') }}
+          restore-keys: locald-cargo-${{ runner.os }}-
+
+      - name: Check formatting
+        working-directory: locald
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: locald
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: locald
+        run: cargo test --locked
+
   desktop:
     name: macOS desktop build + codesign
+    timeout-minutes: 90
     needs: changes
     if: needs.changes.outputs.desktop == 'true'
     runs-on: macos-14
@@ -568,7 +633,13 @@ jobs:
         working-directory: desktop
         run: cargo test --locked
 
-      - name: Stage CI online runtime manifest
+      # Placeholder on purpose: this job proves the app builds and codesigns,
+      # it does not produce an installer. The URLs are unresolvable and the
+      # digests are zero, and `artifact_source` says so out loud so the app can
+      # refuse with a useful message instead of a connection error. The
+      # installable PR DMG comes from release-local-images.yml with
+      # publish: false -- see desktop/README.md.
+      - name: Stage CI build-check runtime manifest
         shell: bash
         run: |
           set -euo pipefail
@@ -579,6 +650,7 @@ jobs:
             '{
               schema_version: 1,
               version: $version,
+              artifact_source: "ci-build-check",
               host_packs: {
                 "aarch64-apple-darwin": {
                   url: "https://downloads.example.invalid/lemma-host-pack.zip",
@@ -659,10 +731,10 @@ jobs:
             grep -F "Signature=adhoc" <<< "${signature_info}"
           fi
 
-      - name: Upload macOS DMG
+      - name: Upload macOS build-check DMG
         uses: actions/upload-artifact@v4
         with:
-          name: lemma-desktop-macos-${{ github.sha }}
+          name: lemma-desktop-macos-buildcheck-${{ github.sha }}
           path: desktop/target/release/bundle/dmg/Lemma_*_aarch64.dmg
           if-no-files-found: error
           retention-days: 7
@@ -673,6 +745,7 @@ jobs:
 
   ci:
     name: CI passed
+    timeout-minutes: 10
     if: always()
     needs:
       - changes
@@ -689,6 +762,7 @@ jobs:
       - desktop
       - agentbox
       - agent-host
+      - locald
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required suite failed

@@ -277,7 +277,7 @@ export function ConnectorsSelector({
                     </div>
                     <DialogFooter>
                         <Button
-                            variant="outline"
+                            variant="secondary"
                             onClick={() => {
                                 setConfiguringAppId(null);
                                 setSelectedAccountId('');
@@ -285,7 +285,7 @@ export function ConnectorsSelector({
                         >
                             Cancel
                         </Button>
-                        <Button onClick={handleConfigureAdmin} disabled={!selectedAccountId || configuringAppAccounts.length === 0}>
+                        <Button variant="primary" onClick={handleConfigureAdmin} disabled={!selectedAccountId || configuringAppAccounts.length === 0}>
                             Save
                         </Button>
                     </DialogFooter>

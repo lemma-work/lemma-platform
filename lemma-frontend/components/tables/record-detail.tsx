@@ -109,7 +109,7 @@ export function RecordDetail({
                     <div className="ml-3 flex items-center gap-0.5">
                         {onPrevious ? (
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="icon"
                                 onClick={onPrevious}
                                 className="h-8 w-8 rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-secondary)]"
@@ -119,7 +119,7 @@ export function RecordDetail({
                         ) : null}
                         {onNext ? (
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="icon"
                                 onClick={onNext}
                                 className="h-8 w-8 rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--bg-subtle)] hover:text-[var(--text-secondary)]"
@@ -253,7 +253,7 @@ export function RecordDetail({
 
                 <div className="flex items-center justify-between border-t border-[color:var(--border-subtle)] bg-[var(--bg-subtle)] px-5 py-4">
                     {canWrite ? <Button
-                        variant="ghost"
+                        variant="quiet"
                         size="sm"
                         className="hover-state-error gap-1.5 text-[var(--state-error)] hover:text-[var(--state-error)]"
                         onClick={() => setShowDeleteDialog(true)}
@@ -263,10 +263,10 @@ export function RecordDetail({
                     </Button> : <span />}
 
                     <div className="flex items-center gap-2">
-                        <Button variant="ghost" onClick={onClose}>
+                        <Button variant="quiet" onClick={onClose}>
                             Cancel
                         </Button>
-                        {canWrite ? <Button onClick={handleSave} disabled={!hasChanges}>
+                        {canWrite ? <Button variant="primary" onClick={handleSave} disabled={!hasChanges}>
                             {hasChanges ? 'Save Changes' : 'Saved'}
                         </Button> : null}
                     </div>

@@ -64,8 +64,9 @@ def sync_detailed(
     """List Available Surfaces
 
      The connectable-surface catalog: every surface platform with its connector,
-    supported credential modes, and the schema to connect an account. Platform-
-    level (no surface need exist); the pod scopes authorization only.
+    supported credential modes, the schema to connect an account, and whether this
+    pod's org can still claim the platform's Lemma-managed bot/number. Otherwise
+    platform-level — no surface need exist.
 
     Args:
         pod_id (UUID):
@@ -97,8 +98,9 @@ def sync(
     """List Available Surfaces
 
      The connectable-surface catalog: every surface platform with its connector,
-    supported credential modes, and the schema to connect an account. Platform-
-    level (no surface need exist); the pod scopes authorization only.
+    supported credential modes, the schema to connect an account, and whether this
+    pod's org can still claim the platform's Lemma-managed bot/number. Otherwise
+    platform-level — no surface need exist.
 
     Args:
         pod_id (UUID):
@@ -125,8 +127,9 @@ async def asyncio_detailed(
     """List Available Surfaces
 
      The connectable-surface catalog: every surface platform with its connector,
-    supported credential modes, and the schema to connect an account. Platform-
-    level (no surface need exist); the pod scopes authorization only.
+    supported credential modes, the schema to connect an account, and whether this
+    pod's org can still claim the platform's Lemma-managed bot/number. Otherwise
+    platform-level — no surface need exist.
 
     Args:
         pod_id (UUID):
@@ -156,8 +159,9 @@ async def asyncio(
     """List Available Surfaces
 
      The connectable-surface catalog: every surface platform with its connector,
-    supported credential modes, and the schema to connect an account. Platform-
-    level (no surface need exist); the pod scopes authorization only.
+    supported credential modes, the schema to connect an account, and whether this
+    pod's org can still claim the platform's Lemma-managed bot/number. Otherwise
+    platform-level — no surface need exist.
 
     Args:
         pod_id (UUID):

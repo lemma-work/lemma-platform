@@ -168,6 +168,36 @@ export function canCompleteAuthenticatedNavigation({
   );
 }
 
+export function hasBlockingInvalidClaims({
+  claimIds,
+  emailVerificationRequired,
+  emailVerificationClaimId,
+}: {
+  claimIds: string[];
+  emailVerificationRequired: boolean;
+  emailVerificationClaimId: string;
+}): boolean {
+  return claimIds.some(
+    (claimId) =>
+      emailVerificationRequired || claimId !== emailVerificationClaimId,
+  );
+}
+
+export function shouldShowEmailVerification({
+  emailVerificationRequired,
+  isVerificationRoute,
+  hasVerificationClaim,
+}: {
+  emailVerificationRequired: boolean;
+  isVerificationRoute: boolean;
+  hasVerificationClaim: boolean;
+}): boolean {
+  return (
+    emailVerificationRequired &&
+    (isVerificationRoute || hasVerificationClaim)
+  );
+}
+
 export async function refreshVerifiedSession(
   refreshSession: () => Promise<boolean>,
 ): Promise<boolean> {

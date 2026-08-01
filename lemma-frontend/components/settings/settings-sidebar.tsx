@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { Building2, Home, Plus, User } from '@/components/ui/icons';
 
 import { Logo } from '@/components/brand/logo';
+import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
 import { useOrganization } from '@/components/dashboard/org-context';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -100,16 +101,19 @@ function SettingsSidebarContent({ onNavigate }: { onNavigate: () => void }) {
                 </div>
             </div>
 
-            <div className="flex shrink-0 items-center gap-2 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] px-2.5 py-2">
-                <Avatar className="h-7 w-7 shrink-0 border border-[var(--border-subtle)]">
-                    <AvatarFallback className="bg-[var(--surface-2)] text-xs text-[var(--text-secondary)]">
-                        {initials}
-                    </AvatarFallback>
-                </Avatar>
-                <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]" title={displayName}>
-                    {displayName}
-                </span>
-                <ThemeToggle variant="icon" className="lemma-shell-icon-button h-8 w-8 shrink-0" />
+            <div className="shrink-0 border-t border-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)] px-2.5 py-2">
+                <LocalSettingsButton className="mb-1" />
+                <div className="flex items-center gap-2">
+                    <Avatar className="h-7 w-7 shrink-0 border border-[var(--border-subtle)]">
+                        <AvatarFallback className="bg-[var(--surface-2)] text-xs text-[var(--text-secondary)]">
+                            {initials}
+                        </AvatarFallback>
+                    </Avatar>
+                    <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]" title={displayName}>
+                        {displayName}
+                    </span>
+                    <ThemeToggle variant="icon" className="lemma-shell-icon-button h-8 w-8 shrink-0" />
+                </div>
             </div>
         </div>
     );

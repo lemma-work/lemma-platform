@@ -766,7 +766,7 @@ export function AgentAccessDialog({
                             ? 'Nothing granted yet.'
                             : `${grantedTotal} ${grantedTotal === 1 ? 'grant' : 'grants'} on the keyring.`}
                     </p>
-                    <Button type="button" size="sm" onClick={() => onOpenChange(false)}>
+                    <Button variant="quiet" type="button" size="sm" onClick={() => onOpenChange(false)}>
                         Done
                     </Button>
                 </DialogFooter>

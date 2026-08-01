@@ -860,11 +860,16 @@
       },
       "AgentHostHarnessCapabilities": {
         "additionalProperties": true,
-        "description": "Harness capabilities the server actually branches on.\n\nOnly ``images`` changes server behaviour today (it adds the vision\ncapability to the runtime picker). Anything else a host reports is kept\nverbatim by ``extra: allow`` rather than typed here, so the wire format\nstays open without inventing fields no code reads.",
+        "description": "Harness capabilities the server actually branches on.\n\n``images`` adds the vision capability to the runtime picker;\n``load_session`` is what lets a conversation keep one provider session\nacross turns, so it decides whether a run is dispatched with a\n``resume_session_id``. Anything else a host reports is kept verbatim by\n``extra: allow`` rather than typed here, so the wire format stays open\nwithout inventing fields no code reads.",
         "properties": {
           "images": {
             "default": false,
             "title": "Images",
+            "type": "boolean"
+          },
+          "load_session": {
+            "default": false,
+            "title": "Load Session",
             "type": "boolean"
           }
         },
@@ -1153,18 +1158,6 @@
             "title": "Host Secret",
             "type": "string"
           },
-          "organization_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Organization Id"
-          },
           "user_id": {
             "format": "uuid",
             "title": "User Id",
@@ -1174,7 +1167,6 @@
         "required": [
           "host_id",
           "user_id",
-          "organization_id",
           "host_secret"
         ],
         "title": "AgentHostPairingCompleted",
@@ -1187,18 +1179,6 @@
             "minLength": 1,
             "title": "Display Name",
             "type": "string"
-          },
-          "organization_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Organization Id"
           }
         },
         "required": [
@@ -1357,18 +1337,6 @@
             ],
             "title": "Last Seen At"
           },
-          "organization_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Organization Id"
-          },
           "protocol_version": {
             "anyOf": [
               {
@@ -1409,7 +1377,6 @@
         "required": [
           "id",
           "user_id",
-          "organization_id",
           "installation_id",
           "display_name",
           "status",
@@ -1833,6 +1800,156 @@
           "profile_id"
         ],
         "title": "AgentRuntimeConfig",
+        "type": "object"
+      },
+      "AgentRuntimeProfileDetailResponse": {
+        "description": "One profile plus the live harness it is bound to.\n\nAn editor has to render the harness's *current* config options, not the ones\nthe profile was saved against - those are what the edit will be validated\nand re-pinned to.",
+        "properties": {
+          "availability_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Availability Status"
+          },
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "derived_harness_kind": {
+            "$ref": "#/components/schemas/HarnessKind"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "harness": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentHostHarnessResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Harness Id"
+          },
+          "has_credentials": {
+            "default": false,
+            "title": "Has Credentials",
+            "type": "boolean"
+          },
+          "host_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentHostStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/RuntimeProfileKind"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "model_catalog": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeModelCatalogEntry"
+            },
+            "title": "Model Catalog",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "organization_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Id"
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/RuntimeProfileProtocol"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/RuntimeProfileScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RuntimeProfileStatus"
+          },
+          "user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Id"
+          }
+        },
+        "required": [
+          "id",
+          "scope",
+          "kind",
+          "protocol",
+          "name",
+          "status",
+          "derived_harness_kind"
+        ],
+        "title": "AgentRuntimeProfileDetailResponse",
         "type": "object"
       },
       "AgentRuntimeProfileListResponse": {
@@ -2920,6 +3037,11 @@
             ],
             "title": "Icon"
           },
+          "managed_setup_available": {
+            "default": false,
+            "title": "Managed Setup Available",
+            "type": "boolean"
+          },
           "platform": {
             "$ref": "#/components/schemas/SurfacePlatform"
           },
@@ -2933,6 +3055,16 @@
             },
             "title": "Supported Credential Modes",
             "type": "array"
+          },
+          "system_claim": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SurfaceSystemClaim"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "title": {
             "anyOf": [
@@ -3968,6 +4100,18 @@
             "format": "uuid",
             "title": "Harness Id",
             "type": "string"
+          },
+          "host_wait_timeout_seconds": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Wait Timeout Seconds"
           },
           "name": {
             "maxLength": 255,
@@ -12253,6 +12397,43 @@
         "title": "SurfaceSetupStep",
         "type": "object"
       },
+      "SurfaceSystemClaim": {
+        "description": "Whether this org can still put the platform's Lemma-managed bot/number\nbehind a surface.\n\nThe shared identity is claimable exactly once per organization, so the setup\nUI can render the option as unavailable *before* the user commits instead of\ndiscovering it as a failed save. ``claimed_by_pod_id`` is the pod holding the\nclaim \u2014 always a pod in the caller's own org, so linking to it leaks nothing\nthey can't already see.",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "claimed_by_pod_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed By Pod Id"
+          },
+          "claimed_by_surface_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Claimed By Surface Name"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "SurfaceSystemClaim",
+        "type": "object"
+      },
       "SurfaceTelegramConfigInput": {
         "additionalProperties": false,
         "description": "Selects the pod app exposed as this bot's Telegram Mini App.",
@@ -12645,6 +12826,78 @@
         "title": "TelegramManagedBotSetupResponse",
         "type": "object"
       },
+      "UpdateAgentHostRuntimeProfileRequest": {
+        "properties": {
+          "config_selections": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config Selections"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "host_wait_timeout_seconds": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Wait Timeout Seconds"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "source": {
+            "const": "AGENT_HOST",
+            "default": "AGENT_HOST",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "UpdateAgentHostRuntimeProfileRequest",
+        "type": "object"
+      },
       "UpdateAgentRequest": {
         "properties": {
           "agent_runtime": {
@@ -12753,6 +13006,111 @@
           }
         },
         "title": "UpdateAgentRequest",
+        "type": "object"
+      },
+      "UpdateAnthropicCompatibleRuntimeProfileRequest": {
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Names"
+          },
+          "model_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Settings"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "refresh_models": {
+            "default": false,
+            "title": "Refresh Models",
+            "type": "boolean"
+          },
+          "source": {
+            "const": "ANTHROPIC_COMPATIBLE",
+            "default": "ANTHROPIC_COMPATIBLE",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "UpdateAnthropicCompatibleRuntimeProfileRequest",
         "type": "object"
       },
       "UpdateAppRequest": {
@@ -12927,6 +13285,111 @@
           "role"
         ],
         "title": "UpdateMemberRoleRequest",
+        "type": "object"
+      },
+      "UpdateOpenAICompatibleRuntimeProfileRequest": {
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "base_url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Url"
+          },
+          "default_model_name": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "model_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Names"
+          },
+          "model_settings": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Settings"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "refresh_models": {
+            "default": false,
+            "title": "Refresh Models",
+            "type": "boolean"
+          },
+          "source": {
+            "const": "OPENAI_COMPATIBLE",
+            "default": "OPENAI_COMPATIBLE",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "UpdateOpenAICompatibleRuntimeProfileRequest",
         "type": "object"
       },
       "UpdateRecordRequest": {
@@ -15871,7 +16334,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.0"
+    "version": "0.7.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16528,7 +16991,7 @@
     },
     "/me/runtime/agent-host-pairings": {
       "post": {
-        "description": "Mint a short-lived pairing code for a machine this user controls.",
+        "description": "Mint a short-lived pairing code for a machine this user controls.\n\nA paired computer is the user's, not a workspace's: nothing here needs an\norganization. Sharing it happens later, by giving a runtime profile\nORGANIZATION scope.",
         "operationId": "agent.host.pairing.create",
         "requestBody": {
           "content": {
@@ -17296,6 +17759,16 @@
               "title": "Org Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "include_disabled",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Disabled",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -17410,6 +17883,269 @@
           "resource": "agent.runtime.profiles",
           "result": "entity",
           "verb": "create"
+        }
+      }
+    },
+    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}": {
+      "delete": {
+        "operationId": "agent.runtime.profiles.archive",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Agent Runtime Profile",
+        "tags": [
+          "agent_runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.runtime.profiles",
+          "result": "void",
+          "verb": "archive"
+        }
+      },
+      "get": {
+        "operationId": "agent.runtime.profiles.get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRuntimeProfileDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Runtime Profile",
+        "tags": [
+          "agent_runtime"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "agent.runtime.profiles",
+          "result": "entity",
+          "verb": "get"
+        }
+      },
+      "patch": {
+        "operationId": "agent.runtime.profiles.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "AGENT_HOST": "#/components/schemas/UpdateAgentHostRuntimeProfileRequest",
+                    "ANTHROPIC_COMPATIBLE": "#/components/schemas/UpdateAnthropicCompatibleRuntimeProfileRequest",
+                    "OPENAI_COMPATIBLE": "#/components/schemas/UpdateOpenAICompatibleRuntimeProfileRequest"
+                  },
+                  "propertyName": "source"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/UpdateAgentHostRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpdateOpenAICompatibleRuntimeProfileRequest"
+                  },
+                  {
+                    "$ref": "#/components/schemas/UpdateAnthropicCompatibleRuntimeProfileRequest"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRuntimeProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Agent Runtime Profile",
+        "tags": [
+          "agent_runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.runtime.profiles",
+          "result": "entity",
+          "verb": "update"
+        }
+      }
+    },
+    "/organizations/{org_id}/agent-runtime/profiles/{profile_id}:restore": {
+      "post": {
+        "operationId": "agent.runtime.profiles.restore",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "org_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Org Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRuntimeProfileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Agent Runtime Profile",
+        "tags": [
+          "agent_runtime"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "agent.runtime.profiles"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "agent.runtime.profiles",
+          "result": "entity",
+          "verb": "restore"
         }
       }
     },
@@ -20443,7 +21179,7 @@
     },
     "/pods/{pod_id}/available-surfaces": {
       "get": {
-        "description": "The connectable-surface catalog: every surface platform with its connector,\nsupported credential modes, and the schema to connect an account. Platform-\nlevel (no surface need exist); the pod scopes authorization only.",
+        "description": "The connectable-surface catalog: every surface platform with its connector,\nsupported credential modes, the schema to connect an account, and whether this\npod's org can still claim the platform's Lemma-managed bot/number. Otherwise\nplatform-level \u2014 no surface need exist.",
         "operationId": "agent.surface.available",
         "parameters": [
           {

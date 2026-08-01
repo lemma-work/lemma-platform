@@ -1,6 +1,6 @@
 'use client';
 
-import { CheckCircle2, Info, Loader2 } from '@/components/ui/icons';
+import { CheckCircle2, Info } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { SurfaceReachCard } from '@/components/surfaces/surface-reach-card';
@@ -10,6 +10,7 @@ import type { SurfacePlatformDefinition } from '@/lib/surfaces/registry';
 import type { AssistantSurface } from '@/lib/types';
 import type { SurfacePlatform } from 'lemma-sdk';
 import { cn } from '@/lib/utils';
+import { StepLoader } from '@/components/brand/loader';
 
 /**
  * The proof state: the surface exists, here is how a human reaches it.
@@ -93,7 +94,7 @@ function ReachableElsewhereNotice({ surface }: { surface: AssistantSurface }) {
                             <span className="min-w-0 flex-1 truncate text-sm text-[var(--text-primary)]">
                                 {podNames.get(candidate.pod_id) || candidate.name}
                             </span>
-                            {isPending && checked ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                            {isPending && checked ? <StepLoader size="xs" /> : null}
                         </button>
                     );
                 })}

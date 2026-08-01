@@ -1,372 +1,250 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Lemma Control Center</title>
-<style>
-  :root {
-    color-scheme: light;
-    --bg: #f4f2ec;
-    --panel: #fffdf8;
-    --ink: #211d17;
-    --muted: #746d62;
-    --line: #ded9cf;
-    --gold: #b8791d;
-    --gold-soft: #f5e8cc;
-    --green: #247358;
-    --green-soft: #e1f0e9;
-    --red: #a43f33;
-    --red-soft: #f6e5e1;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  }
-  * { box-sizing: border-box; }
-  html, body { height: 100%; }
-  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans); }
-  button, input, select { font: inherit; }
-  button { cursor: pointer; }
-  .shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); height: 100%; }
-  aside {
-    display: flex; flex-direction: column; min-width: 0; padding: 22px 14px 18px;
-    background: #24211c; color: #f9f4e9; border-right: 1px solid #171511;
-  }
-  .brand { display: flex; align-items: center; gap: 10px; padding: 0 10px 24px; font-size: 17px; }
-  .mark { display: flex; align-items: end; gap: 3px; height: 23px; }
-  .mark i { display: block; width: 4px; border-radius: 2px; background: #d89b3d; }
-  .mark i:nth-child(1) { height: 9px; } .mark i:nth-child(2) { height: 15px; } .mark i:nth-child(3) { height: 22px; }
-  .brand small { color: #aaa398; font-size: 11px; display: block; }
-  nav { display: grid; gap: 3px; }
-  nav button {
-    all: unset; padding: 9px 10px; border-radius: 7px; color: #bdb6aa; cursor: pointer;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  nav button:hover { background: #312d27; color: white; }
-  nav button.active { background: #3a342b; color: white; }
-  nav .dot { width: 7px; height: 7px; border-radius: 50%; background: #6d675f; }
-  nav .dot.warn { background: #d89b3d; } nav .dot.ok { background: #65b792; }
-  .aside-foot { margin-top: auto; padding: 15px 10px 0; color: #8f887d; font-size: 11px; }
-  main { overflow: auto; padding: 32px clamp(28px, 5vw, 62px) 60px; }
-  .topbar { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; margin-bottom: 28px; }
-  h1 { margin: 0 0 6px; font-size: 29px; font-weight: 630; letter-spacing: -0.035em; }
-  .subtitle { margin: 0; color: var(--muted); max-width: 660px; }
-  .state-pill { white-space: nowrap; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 7px 11px; font-size: 12px; }
-  .state-pill.ok { color: var(--green); border-color: #a9cbbc; background: var(--green-soft); }
-  .state-pill.warn { color: #815612; border-color: #dbc28e; background: var(--gold-soft); }
-  section.page { display: none; } section.page.active { display: block; }
-  .grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; }
-  .card { grid-column: span 6; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; box-shadow: 0 1px 1px rgba(36, 31, 23, .03); }
-  .card.full { grid-column: 1 / -1; } .card.third { grid-column: span 4; }
-  .card h2 { margin: 0 0 5px; font-size: 16px; } .card > p { color: var(--muted); margin: 0 0 18px; }
-  .metric { font-size: 26px; letter-spacing: -.03em; margin: 4px 0; }
-  .eyebrow { color: var(--muted); text-transform: uppercase; letter-spacing: .09em; font: 10px/1.2 var(--mono); }
-  .row { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
-  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
-  .btn { border: 1px solid #cfc8bc; background: white; color: var(--ink); border-radius: 7px; padding: 8px 12px; }
-  .btn:hover { border-color: #a69c8d; } .btn.primary { background: var(--ink); color: white; border-color: var(--ink); }
-  .btn.danger { color: var(--red); } .btn:disabled { opacity: .5; cursor: default; }
-  .form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 18px; }
-  .field { min-width: 0; } .field.full { grid-column: 1 / -1; }
-  label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; }
-  .hint { display: block; color: var(--muted); font-size: 11px; margin-top: 5px; }
-  input, select {
-    width: 100%; border: 1px solid #cfc9bd; background: white; color: var(--ink); border-radius: 7px;
-    padding: 9px 10px; outline: none;
-  }
-  input:focus, select:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(184, 121, 29, .12); }
-  input[type="checkbox"] { width: auto; accent-color: var(--gold); }
-  .check { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
-  .secret-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
-  .secret-clear { border: 1px solid #d8d1c6; background: transparent; border-radius: 7px; color: var(--muted); padding: 0 9px; }
-  .secret-clear.armed { color: var(--red); background: var(--red-soft); }
-  .savebar { position: sticky; bottom: 14px; display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 22px; padding: 12px 14px; background: rgba(255,253,248,.94); border: 1px solid var(--line); border-radius: 10px; backdrop-filter: blur(15px); }
-  .save-status { color: var(--muted); font-size: 12px; }
-  .service { display: grid; grid-template-columns: 1fr auto; gap: 6px 18px; padding: 13px 0; border-top: 1px solid var(--line); }
-  .service:first-child { border-top: 0; } .service small { color: var(--muted); }
-  .status { font: 11px var(--mono); text-transform: uppercase; color: var(--muted); }
-  .status.ok { color: var(--green); } .status.bad { color: var(--red); }
-  .notice { border: 1px solid #dbc28e; background: var(--gold-soft); padding: 12px 14px; border-radius: 8px; color: #6e4b17; margin-bottom: 16px; }
-  .code { font: 12px/1.5 var(--mono); color: #4c473f; overflow-wrap: anywhere; }
-  .toast { position: fixed; right: 24px; bottom: 24px; max-width: 420px; padding: 11px 14px; color: white; background: #29251f; border-radius: 8px; box-shadow: 0 10px 35px rgba(0,0,0,.25); }
-  .toast.error { background: #8d382f; }
-  [hidden] { display: none !important; }
-  @media (max-width: 950px) { .card, .card.third { grid-column: 1 / -1; } .form { grid-template-columns: 1fr; } .field { grid-column: 1 !important; } }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Lemma · Local settings</title>
+  <link rel="stylesheet" href="control.css" />
+  <script type="module" src="control.js"></script>
 </head>
 <body>
-<div class="shell">
-  <aside>
-    <div class="brand"><span class="mark"><i></i><i></i><i></i></span><span>Lemma<small>Local Control Center</small></span></div>
-    <nav id="nav">
-      <button data-page="overview" class="active">Overview <span class="dot" id="dot-overview"></span></button>
-      <button data-page="ai">AI Providers <span class="dot" id="dot-ai"></span></button>
-      <button data-page="integrations">Integrations <span class="dot" id="dot-integrations"></span></button>
-      <button data-page="surfaces">Agent Surfaces <span class="dot" id="dot-surfaces"></span></button>
-      <button data-page="services">Services <span class="dot" id="dot-services"></span></button>
-      <button data-page="updates">Updates <span class="dot" id="dot-updates"></span></button>
-      <button data-page="diagnostics">Diagnostics <span class="dot"></span></button>
-    </nav>
-    <div class="aside-foot"><span id="release">Release —</span><br />Secrets: operating-system vault</div>
-  </aside>
-  <main>
-    <div class="topbar"><div><h1 id="page-title">Your local Lemma</h1><p class="subtitle" id="page-subtitle">Readiness, configuration, and the services running only on this computer.</p></div><div class="state-pill" id="state-pill">Connecting…</div></div>
-
-    <section class="page active" data-page="overview">
-      <div class="notice" id="ai-notice">Choose an AI provider before running an agent. Everything else can keep working locally.</div>
-      <div class="grid">
-        <article class="card third"><div class="eyebrow">Application</div><div class="metric" id="metric-app">Checking</div><p>One backend and one frontend process.</p></article>
-        <article class="card third"><div class="eyebrow">AI readiness</div><div class="metric" id="metric-ai">Needs setup</div><p>The system model used by local agents.</p></article>
-        <article class="card third"><div class="eyebrow">Private runtime</div><div class="metric" id="metric-runtime">Checking</div><p>Database, cache, auth, and isolated workspaces.</p></article>
-        <article class="card full"><h2>Daily controls</h2><p>Closing Lemma keeps services ready. These controls change the local desired state explicitly.</p><div class="actions"><button class="btn primary" data-action="open">Open Lemma</button><button class="btn" data-action="start">Start</button><button class="btn" data-action="restart">Restart application</button><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger" data-action="stop-all">Stop everything</button></div></article>
-        <article class="card"><h2>What is configured</h2><div id="overview-config"></div></article>
-        <article class="card"><h2>Recent health</h2><div id="overview-services"></div></article>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Local settings navigation">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>Local settings</strong><small>This Lemma installation</small></span>
       </div>
-    </section>
 
-    <section class="page" data-page="ai">
-      <div class="grid"><article class="card full"><h2>System AI profile</h2><p>This is the default model profile used by agents. Loopback Ollama and LM Studio endpoints can run without an API key.</p>
-        <div class="form">
-          <div class="field"><label for="ai-protocol">Provider protocol</label><select id="ai-protocol"><option value="unconfigured">Not configured</option><option value="openai_compat">OpenAI compatible</option><option value="anthropic_compat">Anthropic compatible</option></select></div>
-          <div class="field"><label for="ai-base">Base URL</label><input id="ai-base" placeholder="https://api.openai.com/v1" /></div>
-          <div class="field"><label for="ai-model">Default model</label><input id="ai-model" placeholder="gpt-4o" /></div>
-          <div class="field"><label for="ai-models">Available models</label><input id="ai-models" placeholder="gpt-4o, gpt-4o-mini" /><span class="hint">Comma-separated; the default must be included.</span></div>
-          <div class="field"><label for="ai-vision">Vision-capable models</label><input id="ai-vision" placeholder="gpt-4o" /><span class="hint">Optional subset of available models.</span></div>
-          <div class="field"><label for="ai-key">API key</label><div class="secret-wrap"><input id="ai-key" type="password" autocomplete="new-password" placeholder="Not configured" data-secret="ai.api_key" /><button class="secret-clear" type="button">Remove</button></div><span class="hint">Stored in Keychain or Credential Manager, never in this page or config file.</span></div>
-          <div class="field full"><label class="check"><input type="checkbox" id="ai-private-network" /> Trust this private-network endpoint</label><span class="hint">Required only for a LAN model server. Loopback endpoints are trusted automatically; Lemma never scans your network.</span></div>
+      <nav id="nav">
+        <button class="nav-item active" data-page="overview"><span>Overview</span><i class="health-dot" id="dot-overview"></i></button>
+        <div class="nav-group">Intelligence</div>
+        <button class="nav-item" data-page="ai"><span>AI provider</span><i class="health-dot" id="dot-ai"></i></button>
+        <div class="nav-group">Connectivity</div>
+        <button class="nav-item" data-page="sharing"><span>Sharing</span><i class="health-dot" id="dot-sharing"></i></button>
+        <button class="nav-item" data-page="integrations"><span>Integrations</span><i class="health-dot" id="dot-integrations"></i></button>
+        <button class="nav-item" data-page="channels"><span>Channels</span><i class="health-dot" id="dot-channels"></i></button>
+        <div class="nav-group">System</div>
+        <button class="nav-item" data-page="runtime"><span>Runtime</span><i class="health-dot" id="dot-runtime"></i></button>
+        <button class="nav-item" data-page="updates"><span>Updates</span><i class="health-dot" id="dot-updates"></i></button>
+        <button class="nav-item" data-page="diagnostics"><span>Diagnostics</span><i class="health-dot"></i></button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <button class="back-button" id="back-to-lemma" type="button"><span aria-hidden="true">←</span> Back to Lemma</button>
+        <div><span id="release">Release —</span><br />Secrets stay in the operating-system vault</div>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="page-header">
+        <div>
+          <div class="context-label">Local desktop</div>
+          <h1 id="page-title">Overview</h1>
+          <p id="page-subtitle">Health, attention, and exposure at a glance.</p>
         </div>
-        <div class="actions"><button class="btn" id="detect-ollama">Use Ollama</button><button class="btn" id="detect-lmstudio">Use LM Studio</button><span class="hint" id="ai-validation">Not validated</span></div>
-      </article></div>
-      <div class="savebar"><span class="save-status">Lemma securely discovers models and verifies TLS/authentication before applying.</span><button class="btn primary" data-save>Validate &amp; apply</button></div>
-    </section>
+        <div class="state-pill" id="state-pill">Connecting…</div>
+      </header>
 
-    <section class="page" data-page="integrations">
-      <div class="grid">
-        <article class="card full"><h2>Connector platform</h2><p>Composio enables its connector catalog. Native OAuth applications below remain separate from login providers.</p><label class="check"><input type="checkbox" id="composio-enabled" /> Enable Composio connectors</label><div class="form"><div class="field"><label for="composio-key">Composio API key</label><div class="secret-wrap"><input id="composio-key" type="password" data-secret="integrations.composio_api_key" /><button class="secret-clear" type="button">Remove</button></div></div><div class="field"><label for="composio-webhook">Webhook secret</label><div class="secret-wrap"><input id="composio-webhook" type="password" data-secret="integrations.composio_webhook_secret" /><button class="secret-clear" type="button">Remove</button></div></div></div></article>
-        <article class="card"><h2>Google connector OAuth app</h2><p>For Gmail, Calendar, and Drive connections—not local login.</p><div class="field"><label for="google-id">Client ID</label><input id="google-id" /></div><div class="field"><label for="google-secret">Client secret</label><div class="secret-wrap"><input id="google-secret" type="password" data-secret="integrations.google_client_secret" /><button class="secret-clear" type="button">Remove</button></div></div><span class="hint">Redirect URI: <span class="code" id="connector-callback">Available after the local runtime starts</span></span></article>
-        <article class="card"><h2>Microsoft connector OAuth app</h2><p>For Microsoft app connections—not Teams bot credentials.</p><div class="field"><label for="microsoft-id">Client ID</label><input id="microsoft-id" /></div><div class="field"><label for="microsoft-secret">Client secret</label><div class="secret-wrap"><input id="microsoft-secret" type="password" data-secret="integrations.microsoft_client_secret" /><button class="secret-clear" type="button">Remove</button></div></div><span class="hint">Use the same local connector callback path shown for Google.</span></article>
-      </div>
-      <div class="savebar"><span class="save-status">Optional. Existing local work is unaffected.</span><button class="btn primary" data-save>Save integrations</button></div>
-    </section>
+      <section class="page active" data-page="overview">
+        <div class="attention-banner" id="attention-banner" hidden>
+          <span class="attention-icon">!</span>
+          <div><strong id="attention-title">Attention needed</strong><p id="attention-copy"></p></div>
+          <button class="btn compact" id="attention-action">Review</button>
+        </div>
+        <div class="metric-grid">
+          <article class="metric-card">
+            <span class="metric-label">Lemma health</span>
+            <strong id="metric-app">Checking</strong>
+            <p id="metric-app-detail">Backend, frontend, and private dependencies.</p>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Intelligence</span>
+            <strong id="metric-ai">Checking</strong>
+            <p id="metric-ai-detail">The default model available to agents.</p>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Exposure</span>
+            <strong id="metric-exposure">This computer</strong>
+            <p id="metric-exposure-detail">Not reachable from another device.</p>
+          </article>
+        </div>
+        <div class="two-column">
+          <article class="panel">
+            <div class="panel-heading"><div><h2>What needs attention</h2><p>Only decisions that block or weaken local use.</p></div></div>
+            <div id="overview-attention"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><h2>What is exposed</h2><p>The current canonical address and its reach.</p></div></div>
+            <div id="overview-exposure"></div>
+          </article>
+          <article class="panel span-two">
+            <div class="panel-heading"><div><h2>Recent health</h2><p>The friendly view; process details live under Runtime.</p></div></div>
+            <div id="overview-services"></div>
+          </article>
+        </div>
+      </section>
 
-    <section class="page" data-page="surfaces">
-      <div class="grid">
-        <article class="card"><h2>Slack · Socket Mode</h2><p>No public ingress required.</p><label class="check"><input type="checkbox" id="slack-enabled" /> Enable Socket Mode receiver</label><div class="field"><label for="slack-app-token">App token</label><div class="secret-wrap"><input id="slack-app-token" type="password" data-secret="surfaces.slack_app_token" /><button class="secret-clear" type="button">Remove</button></div></div><div class="field"><label for="slack-bot-token">Bot token</label><div class="secret-wrap"><input id="slack-bot-token" type="password" data-secret="surfaces.slack_bot_token" /><button class="secret-clear" type="button">Remove</button></div></div><div class="field"><label for="slack-signing-secret">Signing secret</label><div class="secret-wrap"><input id="slack-signing-secret" type="password" data-secret="surfaces.slack_signing_secret" /><button class="secret-clear" type="button">Remove</button></div></div></article>
-        <article class="card"><h2>Telegram · Long polling</h2><p>No public ingress required.</p><label class="check"><input type="checkbox" id="telegram-enabled" /> Enable polling receiver</label><div class="field"><label for="telegram-bot-token">Bot token</label><div class="secret-wrap"><input id="telegram-bot-token" type="password" data-secret="surfaces.telegram_bot_token" /><button class="secret-clear" type="button">Remove</button></div></div><div class="field"><label for="telegram-webhook-secret">Webhook secret (webhook mode only)</label><div class="secret-wrap"><input id="telegram-webhook-secret" type="password" data-secret="surfaces.telegram_webhook_secret" /><button class="secret-clear" type="button">Remove</button></div></div></article>
-        <article class="card"><h2>Microsoft Teams</h2><p>Usually requires public Bot Framework callbacks.</p><div class="field"><label for="teams-id">Bot app ID</label><input id="teams-id" /></div><div class="field"><label for="teams-tenant">Tenant ID</label><input id="teams-tenant" /></div><div class="field"><label for="teams-password">App password</label><div class="secret-wrap"><input id="teams-password" type="password" data-secret="surfaces.teams_app_password" /><button class="secret-clear" type="button">Remove</button></div></div></article>
-        <article class="card"><h2>WhatsApp Business</h2><p>Requires a public Meta webhook; Lemma never enables a tunnel silently.</p><div class="field"><label for="wa-phone">Phone number ID</label><input id="wa-phone" /></div><div class="field"><label for="wa-waba">Business account ID</label><input id="wa-waba" /></div><div class="field"><label for="wa-access-token">Access token</label><div class="secret-wrap"><input id="wa-access-token" type="password" data-secret="surfaces.whatsapp_access_token" /><button class="secret-clear" type="button">Remove</button></div></div><div class="field"><label for="wa-verify-token">Verify token</label><div class="secret-wrap"><input id="wa-verify-token" type="password" data-secret="surfaces.whatsapp_verify_token" /><button class="secret-clear" type="button">Remove</button></div></div><div class="field"><label for="wa-app-secret">App secret</label><div class="secret-wrap"><input id="wa-app-secret" type="password" data-secret="surfaces.whatsapp_app_secret" /><button class="secret-clear" type="button">Remove</button></div></div></article>
-        <article class="card full"><h2>Email · Resend</h2><div class="form"><div class="field"><label for="resend-domain">Inbound domain</label><input id="resend-domain" placeholder="mail.example.com" /></div><div class="field"><label for="resend-api-key">API key</label><div class="secret-wrap"><input id="resend-api-key" type="password" data-secret="surfaces.resend_api_key" /><button class="secret-clear" type="button">Remove</button></div></div><div class="field"><label for="resend-signing-secret">Inbound signing secret</label><div class="secret-wrap"><input id="resend-signing-secret" type="password" data-secret="surfaces.resend_signing_secret" /><button class="secret-clear" type="button">Remove</button></div></div></div></article>
-      </div>
-      <div class="savebar"><span class="save-status">Webhook surfaces remain unavailable until you configure public ingress.</span><button class="btn primary" data-save>Save surfaces</button></div>
-    </section>
+      <section class="page config-page" data-page="ai">
+        <article class="panel">
+          <div class="panel-heading"><div><h2>System AI profile</h2><p>The default provider used by local agents. Credentials are stored outside this page.</p></div><span class="status" id="ai-validation">Not validated</span></div>
+          <div class="form-grid">
+            <div class="field"><label for="ai-protocol">Provider protocol</label><select id="ai-protocol"><option value="unconfigured">Not configured</option><option value="openai_compat">OpenAI compatible</option><option value="anthropic_compat">Anthropic compatible</option></select></div>
+            <div class="field"><label for="ai-base">Base URL</label><input id="ai-base" placeholder="https://api.openai.com/v1" /></div>
+            <div class="field"><label for="ai-model">Default model</label><input id="ai-model" placeholder="gpt-4o" /></div>
+            <div class="field"><label for="ai-models">Available models</label><input id="ai-models" placeholder="gpt-4o, gpt-4o-mini" /><span class="hint">Comma-separated; include the default.</span></div>
+            <div class="field"><label for="ai-vision">Vision-capable models</label><input id="ai-vision" placeholder="gpt-4o" /></div>
+            <div class="field"><label for="ai-key">API key</label><div class="secret-wrap"><input id="ai-key" type="password" autocomplete="new-password" data-secret="ai.api_key" /><button class="secret-clear" type="button">Remove</button></div></div>
+            <div class="field span-two"><label class="check"><input type="checkbox" id="ai-private-network" /> Trust this private-network endpoint</label><span class="hint">Loopback endpoints are trusted automatically; Lemma never scans your network.</span></div>
+          </div>
+          <div class="button-row"><button class="btn" id="detect-ollama">Use Ollama</button><button class="btn" id="detect-lmstudio">Use LM Studio</button></div>
+        </article>
+        <div class="savebar"><span>Unsaved AI provider changes</span><button class="btn primary" data-save>Validate &amp; apply</button></div>
+      </section>
 
-    <section class="page" data-page="services"><div class="grid">
-      <article class="card full"><h2>Capability health</h2><p>The application topology stays one backend plus one frontend; database/cache/auth are private background dependencies.</p><div id="service-list"></div><div class="actions"><button class="btn" data-action="restart">Restart application</button><button class="btn danger" data-action="stop-all">Stop everything</button></div></article>
-      <article class="card full"><h2>External coding agents</h2><p>Agent Host connects Codex, Claude Code, and OpenCode to Local Lemma or Lemma Cloud. It stays supervised when this window is closed.</p><div id="agent-host-status"></div><div class="actions"><button class="btn" data-action="agent-host-start">Start Agent Host</button><button class="btn" data-action="agent-host-restart">Restart Agent Host</button><button class="btn danger" data-action="agent-host-stop">Stop Agent Host</button></div></article>
-    </div></section>
+      <section class="page" data-page="sharing">
+        <article class="panel">
+          <div class="panel-heading">
+            <div><h2>Where Lemma is reachable</h2><p>Choose one mode. Local services and model endpoints remain private in every mode.</p></div>
+            <span class="status" id="sharing-phase">checking</span>
+          </div>
+          <div class="mode-grid" role="radiogroup" aria-label="Sharing mode">
+            <button class="mode-card active" data-sharing-mode="this_computer" role="radio" aria-checked="true">
+              <span class="mode-icon">⌂</span><strong>This computer</strong><small>Only this Mac can open Lemma.</small>
+            </button>
+            <button class="mode-card" data-sharing-mode="local_network" role="radio" aria-checked="false">
+              <span class="mode-icon">⌁</span><strong>Local network</strong><small>Phones and laptops on trusted Wi-Fi.</small>
+            </button>
+            <button class="mode-card" data-sharing-mode="public" role="radio" aria-checked="false">
+              <span class="mode-icon">↗</span><strong>Public link</strong><small>Share through your ngrok or Cloudflare account.</small>
+            </button>
+          </div>
+        </article>
 
-    <section class="page" data-page="updates"><div class="grid">
-      <article class="card third"><div class="eyebrow">Desktop</div><div class="metric" id="runtime-desktop-release">—</div><p>The signed native application release.</p></article>
-      <article class="card third"><div class="eyebrow">Active runtime</div><div class="metric" id="runtime-active-release">—</div><p id="runtime-source">Checking immutable host and guest packs.</p></article>
-      <article class="card third"><div class="eyebrow">Previous runtime</div><div class="metric" id="runtime-previous-release">None</div><p>Retained for controlled recovery when the release contract permits it.</p></article>
-      <article class="card full"><h2>Signed release lifecycle</h2><p>Installing a newer signed Lemma app stages its exact matching runtime on the next local launch. The old verified pack is retained, but schema-1 releases do not claim database-safe downgrade compatibility.</p><div class="notice" id="rollback-notice">Rollback is intentionally unavailable until a release declares its data rollback boundary. Lemma will not risk opening migrated data with an older backend.</div><div class="actions"><button class="btn" id="repair-runtime" data-action="repair-runtime">Verify &amp; repair current runtime</button></div></article>
-    </div></section>
+        <article class="panel" id="sharing-current">
+          <div class="panel-heading"><div><h2>Current exposure</h2><p id="sharing-current-copy">Only this computer can reach Lemma.</p></div><span class="exposure-badge" id="sharing-current-mode">Private</span></div>
+          <div class="url-row">
+            <code id="sharing-url">—</code>
+            <button class="btn compact" data-copy-target="sharing-url">Copy</button>
+          </div>
+          <div id="sharing-warnings"></div>
+          <div class="button-row"><button class="btn danger" id="sharing-disable" hidden>Return to This computer</button></div>
+        </article>
 
-    <section class="page" data-page="diagnostics"><div class="grid"><article class="card"><h2>Local paths</h2><p class="code" id="diag-paths">Loading…</p><div class="actions"><button class="btn" data-action="logs">Open logs folder</button><button class="btn" data-action="devtools">Open developer tools</button></div></article><article class="card"><h2>Network contract</h2><p id="network-contract">Available after the local runtime starts.</p></article><article class="card full"><h2>Repair controls</h2><p>Restart preserves all databases, files, and sandbox workspaces. Runtime repair replaces only signed application/runtime files and restores the verified prior copy if repair fails.</p><div class="actions"><button class="btn" data-action="start">Reconcile desired state</button><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button><button class="btn danger" data-action="stop-all">Stop private runtime</button></div></article></div></section>
-  </main>
-</div>
-<div class="toast" id="toast" hidden></div>
-<script>
-(() => {
-  const tauri = window.__TAURI__;
-  const invoke = (command, args = {}) => tauri.core.invoke(command, args);
-  const listen = (event, handler) => tauri.event.listen(event, ({ payload }) => handler(payload));
-  const titles = {
-    overview: ["Your local Lemma", "Readiness, configuration, and services running only on this computer."],
-    ai: ["AI Providers", "Choose and validate the system model profile used by local agents."],
-    integrations: ["Integrations", "Configure connector credentials without mixing them with login or agent-surface apps."],
-    surfaces: ["Agent Surfaces", "Make agents reachable through the channels you explicitly enable."],
-    services: ["Services", "Capability health with the technical process view available when you need it."],
-    updates: ["Updates", "Exact release matching, immutable packs, and data-safe recovery boundaries."],
-    diagnostics: ["Diagnostics", "Local paths, network contracts, logs, and non-destructive repair controls."],
-  };
-  let snapshot = null;
-  let state = null;
-  let runtimeInfo = null;
-  let request = 0;
-  const nextId = (prefix) => `control-${prefix}-${Date.now()}-${++request}`;
-  const $ = (id) => document.getElementById(id);
-  const csv = (value) => value.split(",").map((v) => v.trim()).filter(Boolean);
+        <article class="panel sharing-config" id="lan-config" hidden>
+          <div class="panel-heading"><div><h2>Local network</h2><p>The gateway binds only to the private IPv4 interface you select.</p></div></div>
+          <div class="form-grid">
+            <div class="field"><label for="sharing-interface">Network interface</label><select id="sharing-interface"><option value="">Choose an interface</option></select></div>
+            <div class="field"><label>Security</label><div class="inline-note">HTTP on trusted Wi-Fi · no certificate installation</div></div>
+          </div>
+          <div class="warning-box">Anyone on this Wi-Fi who has the address can reach the signup screen. Use this only on a private network you trust.</div>
+          <div class="button-row"><button class="btn primary" id="sharing-enable-lan">Enable on local network</button></div>
+          <div class="qr-card" id="sharing-qr" hidden><div id="sharing-qr-image"></div><div><strong>Scan from another device</strong><p>Both devices must remain on the selected Wi-Fi network.</p></div></div>
+        </article>
 
-  function toast(message, error = false) {
-    const el = $("toast"); el.textContent = message; el.className = `toast${error ? " error" : ""}`; el.hidden = false;
-    clearTimeout(toast.timer); toast.timer = setTimeout(() => { el.hidden = true; }, 5000);
-  }
-  function setPage(page) {
-    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.page === page));
-    document.querySelectorAll(".page").forEach((p) => p.classList.toggle("active", p.dataset.page === page));
-    $("page-title").textContent = titles[page][0]; $("page-subtitle").textContent = titles[page][1];
-  }
-  document.querySelectorAll("nav button").forEach((button) => button.addEventListener("click", () => setPage(button.dataset.page)));
-  listen("lemma:control-page", (page) => {
-    if (typeof page === "string" && titles[page]) setPage(page);
-  });
-  if (titles[window.__LEMMA_CONTROL_PAGE__]) {
-    setPage(window.__LEMMA_CONTROL_PAGE__);
-  }
+        <article class="panel sharing-config" id="public-config" hidden>
+          <div class="panel-heading"><div><h2>Public link</h2><p>Lemma never installs or logs into a tunnel CLI. Cloudflare automatic setup stores only its generated tunnel credential in private app storage.</p></div></div>
+          <div class="provider-tabs">
+            <button class="provider-tab active" data-provider="ngrok">ngrok</button>
+            <button class="provider-tab" data-provider="cloudflare">Cloudflare named tunnel</button>
+          </div>
+          <div id="provider-readiness"></div>
+          <div id="cloudflare-fields" class="form-grid" hidden>
+            <div class="field"><label for="cloudflare-setup">Tunnel setup</label><select id="cloudflare-setup"><option value="automatic">Automatic setup · recommended</option><option value="existing">Use an existing named tunnel</option></select></div>
+            <div class="field"><label for="cloudflare-hostname">Public hostname</label><input id="cloudflare-hostname" placeholder="lemma.example.com" /></div>
+            <div class="field span-two" id="cloudflare-existing-field" hidden><label for="cloudflare-tunnel">Existing named tunnel</label><select id="cloudflare-tunnel"><option value="">Choose a tunnel</option></select></div>
+            <div class="inline-note span-two" id="cloudflare-managed-summary">After one-time login, Lemma will create a dedicated named tunnel and DNS route, then reuse them without auto-starting.</div>
+          </div>
+          <div class="danger-warning"><strong>Open signup is enabled.</strong><p>Every activation asks you to confirm that anyone with this link can create an account and use this Lemma installation.</p></div>
+          <div class="limitation-note">Published pod apps stay local-only in this release because their routing needs wildcard subdomains. The main workspace, auth, API, files, chat, tools, webhooks, and streaming are shared.</div>
+          <div class="button-row"><button class="btn primary" id="sharing-enable-public">Create public link</button></div>
+        </article>
+      </section>
 
-  function secretInputs() { return [...document.querySelectorAll("input[data-secret]")]; }
-  function labelSecretButton(button, input) {
-    const label = input.labels?.[0]?.textContent?.trim() || "credential";
-    button.setAttribute("aria-label", `${button.textContent} ${label}`);
-  }
-  document.querySelectorAll(".secret-clear").forEach((button) => button.addEventListener("click", () => {
-    const input = button.parentElement.querySelector("input[data-secret]");
-    input.value = ""; input.dataset.clear = input.dataset.clear === "true" ? "false" : "true";
-    button.classList.toggle("armed", input.dataset.clear === "true");
-    button.textContent = input.dataset.clear === "true" ? "Keep" : "Remove";
-    labelSecretButton(button, input);
-  }));
-  document.querySelectorAll(".secret-clear").forEach((button) => labelSecretButton(button, button.parentElement.querySelector("input[data-secret]")));
+      <section class="page config-page" data-page="integrations">
+        <article class="panel">
+          <div class="panel-heading"><div><h2>Connected services</h2><p>Open only the provider you want to configure.</p></div></div>
+          <details class="config-drawer">
+            <summary><span><strong>Composio</strong><small>Connector catalog and webhooks</small></span><span class="status">Optional</span></summary>
+            <div class="drawer-body">
+              <label class="check"><input type="checkbox" id="composio-enabled" /> Enable Composio connectors</label>
+              <div class="form-grid"><div class="field"><label for="composio-key">API key</label><div class="secret-wrap"><input id="composio-key" type="password" data-secret="integrations.composio_api_key" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="composio-webhook">Webhook secret</label><div class="secret-wrap"><input id="composio-webhook" type="password" data-secret="integrations.composio_webhook_secret" /><button class="secret-clear">Remove</button></div></div></div>
+            </div>
+          </details>
+          <details class="config-drawer">
+            <summary><span><strong>Google</strong><small>Gmail, Calendar, and Drive OAuth app</small></span><span class="status">Optional</span></summary>
+            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="google-id">Client ID</label><input id="google-id" /></div><div class="field"><label for="google-secret">Client secret</label><div class="secret-wrap"><input id="google-secret" type="password" data-secret="integrations.google_client_secret" /><button class="secret-clear">Remove</button></div></div></div><p class="hint">Callback: <code id="connector-callback">Available after startup</code></p></div>
+          </details>
+          <details class="config-drawer">
+            <summary><span><strong>Microsoft</strong><small>Microsoft connector OAuth app</small></span><span class="status">Optional</span></summary>
+            <div class="drawer-body"><div class="form-grid"><div class="field"><label for="microsoft-id">Client ID</label><input id="microsoft-id" /></div><div class="field"><label for="microsoft-secret">Client secret</label><div class="secret-wrap"><input id="microsoft-secret" type="password" data-secret="integrations.microsoft_client_secret" /><button class="secret-clear">Remove</button></div></div></div></div>
+          </details>
+        </article>
+        <div class="savebar"><span>Unsaved integration changes</span><button class="btn primary" data-save>Save integrations</button></div>
+      </section>
 
-  function fill() {
-    if (!snapshot) return;
-    const config = snapshot.operator.config;
-    const presence = snapshot.operator.secrets || {};
-    $("ai-protocol").value = config.ai.protocol; $("ai-base").value = config.ai.base_url;
-    $("ai-model").value = config.ai.default_model; $("ai-models").value = config.ai.models.join(", ");
-    $("ai-vision").value = config.ai.vision_models.join(", ");
-    $("ai-private-network").checked = Boolean(config.ai.allow_private_network);
-    $("ai-validation").textContent = config.ai.last_validated_at_unix_ms ? `Validated ${new Date(config.ai.last_validated_at_unix_ms).toLocaleString()}` : "Not validated";
-    $("composio-enabled").checked = config.integrations.composio_enabled;
-    $("google-id").value = config.integrations.google_client_id; $("microsoft-id").value = config.integrations.microsoft_client_id;
-    $("slack-enabled").checked = config.surfaces.slack_socket_mode; $("telegram-enabled").checked = config.surfaces.telegram_polling;
-    $("teams-id").value = config.surfaces.teams_app_id; $("teams-tenant").value = config.surfaces.teams_tenant_id;
-    $("wa-phone").value = config.surfaces.whatsapp_phone_number_id; $("wa-waba").value = config.surfaces.whatsapp_waba_id;
-    $("resend-domain").value = config.surfaces.resend_inbound_domain;
-    secretInputs().forEach((input) => {
-      input.value = ""; input.dataset.clear = "false";
-      input.placeholder = presence[input.dataset.secret] ? "Configured — enter to replace" : "Not configured";
-      const button = input.parentElement.querySelector(".secret-clear");
-      if (button) { button.classList.remove("armed"); button.textContent = "Remove"; button.disabled = !presence[input.dataset.secret]; labelSecretButton(button, input); }
-    });
-  }
+      <section class="page config-page" data-page="channels">
+        <article class="panel">
+          <div class="panel-heading"><div><h2>Agent channels</h2><p>Enable only the receivers you use. Socket and polling channels do not need a public link.</p></div></div>
+          <details class="config-drawer"><summary><span><strong>Slack</strong><small>Socket Mode · no public ingress</small></span><span class="status">Optional</span></summary><div class="drawer-body"><label class="check"><input type="checkbox" id="slack-enabled" /> Enable Socket Mode</label><div class="form-grid"><div class="field"><label for="slack-app-token">App token</label><div class="secret-wrap"><input id="slack-app-token" type="password" data-secret="surfaces.slack_app_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-bot-token">Bot token</label><div class="secret-wrap"><input id="slack-bot-token" type="password" data-secret="surfaces.slack_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="slack-signing-secret">Signing secret</label><div class="secret-wrap"><input id="slack-signing-secret" type="password" data-secret="surfaces.slack_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>Telegram</strong><small>Long polling · no public ingress</small></span><span class="status">Optional</span></summary><div class="drawer-body"><label class="check"><input type="checkbox" id="telegram-enabled" /> Enable polling receiver</label><div class="form-grid"><div class="field"><label for="telegram-bot-token">Bot token</label><div class="secret-wrap"><input id="telegram-bot-token" type="password" data-secret="surfaces.telegram_bot_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="telegram-webhook-secret">Webhook secret</label><div class="secret-wrap"><input id="telegram-webhook-secret" type="password" data-secret="surfaces.telegram_webhook_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>Microsoft Teams</strong><small>Bot Framework callbacks</small></span><span class="status">Public link</span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="teams-id">Bot app ID</label><input id="teams-id" /></div><div class="field"><label for="teams-tenant">Tenant ID</label><input id="teams-tenant" /></div><div class="field"><label for="teams-password">App password</label><div class="secret-wrap"><input id="teams-password" type="password" data-secret="surfaces.teams_app_password" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>WhatsApp Business</strong><small>Meta webhook</small></span><span class="status">Public link</span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="wa-phone">Phone number ID</label><input id="wa-phone" /></div><div class="field"><label for="wa-waba">Business account ID</label><input id="wa-waba" /></div><div class="field"><label for="wa-access-token">Access token</label><div class="secret-wrap"><input id="wa-access-token" type="password" data-secret="surfaces.whatsapp_access_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-verify-token">Verify token</label><div class="secret-wrap"><input id="wa-verify-token" type="password" data-secret="surfaces.whatsapp_verify_token" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="wa-app-secret">App secret</label><div class="secret-wrap"><input id="wa-app-secret" type="password" data-secret="surfaces.whatsapp_app_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+          <details class="config-drawer"><summary><span><strong>Email · Resend</strong><small>Inbound email webhook</small></span><span class="status">Public link</span></summary><div class="drawer-body"><div class="form-grid"><div class="field"><label for="resend-domain">Inbound domain</label><input id="resend-domain" /></div><div class="field"><label for="resend-api-key">API key</label><div class="secret-wrap"><input id="resend-api-key" type="password" data-secret="surfaces.resend_api_key" /><button class="secret-clear">Remove</button></div></div><div class="field"><label for="resend-signing-secret">Signing secret</label><div class="secret-wrap"><input id="resend-signing-secret" type="password" data-secret="surfaces.resend_signing_secret" /><button class="secret-clear">Remove</button></div></div></div></div></details>
+        </article>
+        <div class="savebar"><span>Unsaved channel changes</span><button class="btn primary" data-save>Save channels</button></div>
+      </section>
 
-  function render() {
-    if (!snapshot) return;
-    const readiness = snapshot.operator.readiness;
-    const services = snapshot.services || [];
-    const appReady = services.length > 0 && services.every((service) => service.running);
-    const runtimeReady = Boolean(snapshot.managed_runtime);
-    $("release").textContent = `Release ${snapshot.release || "development"}`;
-    $("metric-app").textContent = appReady ? "Healthy" : state?.running ? "Starting" : "Stopped";
-    $("metric-ai").textContent = readiness.ai === "ready" ? "Ready" : "Needs setup";
-    $("metric-runtime").textContent = runtimeReady ? "Healthy" : state?.running ? "Starting" : "Stopped";
-    $("ai-notice").hidden = readiness.ai === "ready";
-    const pill = $("state-pill");
-    pill.textContent = readiness.overall === "ready" && appReady ? "Ready" : readiness.ai !== "ready" ? "Needs AI setup" : state?.status || "Checking";
-    pill.className = `state-pill ${readiness.overall === "ready" && appReady ? "ok" : "warn"}`;
-    $("dot-ai").className = `dot ${readiness.ai === "ready" ? "ok" : "warn"}`;
-    $("dot-overview").className = `dot ${appReady ? "ok" : "warn"}`;
-    $("dot-integrations").className = `dot ${readiness.integrations === "configured" ? "ok" : ""}`;
-    $("dot-surfaces").className = `dot ${readiness.surfaces === "configured" ? "ok" : ""}`;
-    $("dot-services").className = `dot ${appReady ? "ok" : "warn"}`;
-    $("overview-config").innerHTML = `<div class="service"><span>AI profile<small>${escapeHtml(snapshot.operator.config.ai.protocol)}</small></span><span class="status ${readiness.ai === "ready" ? "ok" : "bad"}">${readiness.ai === "ready" ? "ready" : "required"}</span></div><div class="service"><span>Integrations<small>Optional connector credentials</small></span><span class="status">${readiness.integrations}</span></div><div class="service"><span>Agent surfaces<small>Optional channel receivers</small></span><span class="status">${readiness.surfaces}</span></div>`;
-    const processHtml = services.map((service) => `<div class="service"><span>${escapeHtml(service.id)}<small>${service.pid ? `PID ${service.pid}` : service.last_exit || "Not running"}</small></span><span class="status ${service.running ? "ok" : service.circuit_open ? "bad" : ""}">${service.running ? "healthy" : service.circuit_open ? "failed" : "stopped"}</span></div>`).join("");
-    const embeddings = snapshot.capabilities?.capabilities?.embeddings;
-    const capabilityHtml = embeddings ? `<div class="service"><span>Semantic search<small>${escapeHtml(embeddings.detail || "Optional local embeddings")}</small></span><span class="status ${embeddings.status === "ready" ? "ok" : embeddings.status === "degraded" ? "bad" : ""}">${escapeHtml(embeddings.status)}</span></div>` : "";
-    const serviceHtml = processHtml || capabilityHtml ? processHtml + capabilityHtml : `<p class="subtitle">No application processes are running.</p>`;
-    $("service-list").innerHTML = serviceHtml; $("overview-services").innerHTML = serviceHtml;
-    const agentHost = snapshot.agent_host || {};
-    const agentHostDetail = agentHost.available
-      ? agentHost.running
-        ? `PID ${agentHost.pid || "—"} · ${agentHost.uptime_seconds || 0}s uptime`
-        : agentHost.last_error || "Ready to start"
-      : "Agent Host sidecar is not installed";
-    $("agent-host-status").innerHTML = `<div class="service"><span>Lemma Agent Host<small>${escapeHtml(agentHostDetail)}</small></span><span class="status ${agentHost.running ? "ok" : agentHost.available ? "" : "bad"}">${agentHost.running ? "online" : agentHost.available ? "stopped" : "unavailable"}</span></div>`;
-    $("diag-paths").textContent = snapshot.paths ? `Control: ${snapshot.paths.locald}\nLogs: ${snapshot.paths.logs}` : "Paths unavailable";
-    const workspaceUrl = snapshot.state?.url || state?.url;
-    const apiUrl = snapshot.state?.api_url || state?.api_url;
-    if (workspaceUrl && apiUrl) {
-      let builtApps = "Unavailable";
-      try {
-        const api = new URL(apiUrl);
-        builtApps = `${api.protocol}//<slug>.apps.lemma.localhost:${api.port}`;
-      } catch (_) {}
-      $("network-contract").innerHTML = `Main UI: <span class="code">${escapeHtml(workspaceUrl)}</span><br />API: <span class="code">${escapeHtml(apiUrl)}</span><br />Built apps: <span class="code">${escapeHtml(builtApps)}</span>`;
-      $("connector-callback").textContent = `${apiUrl.replace(/\/$/, "")}/api/v1/connectors/oauth/callback`;
-    }
-  }
-  function renderRuntime() {
-    if (!runtimeInfo) return;
-    $("runtime-desktop-release").textContent = runtimeInfo.desktopRelease;
-    $("runtime-active-release").textContent = runtimeInfo.activeRelease || "Not installed";
-    $("runtime-previous-release").textContent = runtimeInfo.previousRelease || "None";
-    $("runtime-source").textContent = runtimeInfo.source === "bundled" ? "Verified inside this signed app." : "Verified immutable download.";
-    document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.disabled = !runtimeInfo.repairAvailable; });
-    $("dot-updates").className = `dot ${runtimeInfo.activeRelease === runtimeInfo.desktopRelease ? "ok" : "warn"}`;
-    $("rollback-notice").hidden = runtimeInfo.rollbackAvailable;
-  }
-  async function loadRuntimeInfo() {
-    try { runtimeInfo = await invoke("runtime_info"); renderRuntime(); }
-    catch (error) { toast(String(error), true); }
-  }
-  function escapeHtml(value) { const node = document.createElement("span"); node.textContent = String(value || ""); return node.innerHTML; }
+      <section class="page" data-page="runtime">
+        <article class="panel">
+          <div class="panel-heading"><div><h2>Application runtime</h2><p>One backend, one frontend, and private dependencies.</p></div></div>
+          <div id="service-list"></div>
+          <div class="button-row"><button class="btn" data-action="start">Reconcile</button><button class="btn" data-action="restart">Restart application</button></div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading"><div><h2>External coding agents</h2><p>Agent Host runs Claude Code, Codex, and OpenCode on this computer for your workspace. Connect it, choose which agents to use, and watch its runs from Lemma.</p></div></div>
+          <div id="agent-host-status"></div>
+          <div class="button-row"><button class="btn primary" data-action="agent-host-open">Open in Lemma</button><button class="btn" data-action="agent-host-restart">Restart</button><button class="btn" data-action="agent-host-log">Open log</button></div>
+        </article>
+        <article class="panel danger-zone">
+          <div class="panel-heading"><div><h2>Danger section</h2><p>These actions interrupt local work. They do not delete workspace data.</p></div></div>
+          <div class="button-row"><button class="btn danger" data-action="stop">Stop application</button><button class="btn danger solid" data-action="stop-all">Stop application and private runtime</button></div>
+        </article>
+      </section>
 
-  function collect() {
-    const config = structuredClone(snapshot.operator.config);
-    config.ai = { protocol: $("ai-protocol").value, base_url: $("ai-base").value.trim(), default_model: $("ai-model").value.trim(), models: csv($("ai-models").value), vision_models: csv($("ai-vision").value), allow_private_network: $("ai-private-network").checked, last_validated_at_unix_ms: config.ai.last_validated_at_unix_ms || null };
-    config.integrations = { composio_enabled: $("composio-enabled").checked, google_client_id: $("google-id").value.trim(), microsoft_client_id: $("microsoft-id").value.trim() };
-    config.surfaces = { slack_socket_mode: $("slack-enabled").checked, telegram_polling: $("telegram-enabled").checked, teams_app_id: $("teams-id").value.trim(), teams_tenant_id: $("teams-tenant").value.trim(), whatsapp_phone_number_id: $("wa-phone").value.trim(), whatsapp_waba_id: $("wa-waba").value.trim(), resend_inbound_domain: $("resend-domain").value.trim() };
-    const secrets = {};
-    secretInputs().forEach((input) => { if (input.dataset.clear === "true") secrets[input.dataset.secret] = null; else if (input.value) secrets[input.dataset.secret] = input.value; });
-    return { config, secrets };
-  }
-  async function save(button) {
-    if (!snapshot || button.disabled) return; button.disabled = true; button.textContent = "Saving…";
-    try { await invoke("apply_operator_config", { id: nextId("apply"), payload: collect() }); }
-    catch (error) { button.disabled = false; button.textContent = "Try again"; toast(String(error), true); }
-  }
-  document.querySelectorAll("[data-save]").forEach((button) => button.addEventListener("click", () => save(button)));
-  document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", async () => {
-    try {
-      const action = button.dataset.action;
-      if (action === "open") await invoke("open_app");
-      if (action === "start") await invoke("start");
-      if (action === "restart") await invoke("restart");
-      if (action === "stop") await invoke("stop", { includeInfra: false });
-      if (action === "stop-all") await invoke("stop", { includeInfra: true });
-      if (action === "logs") await invoke("open_logs");
-      if (action === "devtools") await invoke("open_developer_tools");
-      if (action === "agent-host-start") await invoke("agent_host_action", { action: "start" });
-      if (action === "agent-host-restart") await invoke("agent_host_action", { action: "restart" });
-      if (action === "agent-host-stop") await invoke("agent_host_action", { action: "stop" });
-      if (action === "repair-runtime") {
-        if (!window.confirm("Stop Lemma briefly and replace only the current signed runtime files? Workspace data and configuration are preserved.")) return;
-        document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.disabled = true; item.textContent = "Repairing…"; });
-        await invoke("repair_runtime");
-        document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.textContent = "Verify & repair runtime"; });
-        await loadRuntimeInfo();
-        toast("Runtime files were verified and repaired. Lemma is starting.");
-      }
-    } catch (error) {
-      document.querySelectorAll('[data-action="repair-runtime"]').forEach((item) => { item.disabled = !runtimeInfo?.repairAvailable; item.textContent = "Verify & repair runtime"; });
-      toast(String(error), true);
-    }
-  }));
-  $("detect-ollama").addEventListener("click", () => { $("ai-protocol").value = "openai_compat"; $("ai-base").value = "http://127.0.0.1:11434/v1"; $("ai-key").value = ""; $("ai-private-network").checked = false; toast("Ollama selected. Validate & apply will discover installed models."); });
-  $("detect-lmstudio").addEventListener("click", () => { $("ai-protocol").value = "openai_compat"; $("ai-base").value = "http://127.0.0.1:1234/v1"; $("ai-key").value = ""; $("ai-private-network").checked = false; toast("LM Studio selected. Start its server, then Validate & apply."); });
+      <section class="page" data-page="updates">
+        <div class="metric-grid">
+          <article class="metric-card"><span class="metric-label">Desktop</span><strong id="runtime-desktop-release">—</strong><p>Signed native application.</p></article>
+          <article class="metric-card"><span class="metric-label">Active runtime</span><strong id="runtime-active-release">—</strong><p id="runtime-source">Checking verified packs.</p></article>
+          <article class="metric-card"><span class="metric-label">Previous runtime</span><strong id="runtime-previous-release">None</strong><p>Retained only for controlled recovery.</p></article>
+        </div>
+        <article class="panel"><div class="panel-heading"><div><h2>Signed release lifecycle</h2><p>Every Desktop release uses its exact verified local runtime.</p></div></div><div class="warning-box" id="rollback-notice">Rollback stays unavailable until a release declares its data rollback boundary.</div><div class="button-row"><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
+      </section>
 
-  listen("lemma:locald-event", (event) => {
-    if (event.event === "control.snapshot") { snapshot = event; state = event.state; fill(); render(); }
-    if (event.event === "config.applied") { snapshot.operator = event.operator; fill(); render(); document.querySelectorAll("[data-save]").forEach((b) => { b.disabled = false; b.textContent = b.closest("[data-page=ai]") ? "Validate & apply" : b.closest("[data-page=integrations]") ? "Save integrations" : "Save surfaces"; }); toast("Configuration saved. Provider and backend health checks passed."); requestSnapshot(); }
-    if (event.event === "error") { document.querySelectorAll("[data-save]").forEach((b) => { b.disabled = false; b.textContent = "Try again"; }); toast(event.message || "Local operation failed", true); }
-    if (["status", "state", "ready", "phase", "done", "agent-host.status"].includes(event.event)) { requestSnapshot(); if (event.event === "ready") loadRuntimeInfo(); }
-  });
-  let snapshotTimer = null;
-  function requestSnapshot() { clearTimeout(snapshotTimer); snapshotTimer = setTimeout(() => invoke("control_snapshot", { id: nextId("snapshot") }).catch((error) => toast(String(error), true)), 100); }
-  requestSnapshot();
-  loadRuntimeInfo();
-})();
-</script>
+      <section class="page" data-page="diagnostics">
+        <div class="two-column">
+          <article class="panel"><div class="panel-heading"><div><h2>Local paths</h2><p>Private app state and bounded logs.</p></div></div><pre id="diag-paths">Loading…</pre><div class="button-row"><button class="btn" data-action="logs">Open logs folder</button><button class="btn" data-action="devtools">Developer tools</button></div></article>
+          <article class="panel"><div class="panel-heading"><div><h2>Network contract</h2><p>Canonical workspace and API origins.</p></div></div><div id="network-contract">Available after startup.</div></article>
+          <article class="panel span-two"><div class="panel-heading"><div><h2>Non-destructive repair</h2><p>Replaces signed application/runtime files only. Databases, files, and workspaces are preserved.</p></div></div><div class="button-row"><button class="btn" data-action="restart">Restart application</button><button class="btn" data-action="repair-runtime">Verify &amp; repair runtime</button></div></article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog class="confirm-dialog" id="public-confirm-dialog" aria-labelledby="public-confirm-title">
+    <div class="confirm-icon" aria-hidden="true">!</div>
+    <h2 id="public-confirm-title">Create a public link?</h2>
+    <p>Anyone with this link can create an account and use this Lemma installation.</p>
+    <div class="danger-warning">
+      <strong>Open signup is enabled.</strong>
+      <p>The workspace, auth, API, files, chat, tools, streaming, and webhook callbacks will be reachable from the internet.</p>
+    </div>
+    <div class="button-row confirm-actions">
+      <button class="btn" id="public-confirm-cancel">Cancel</button>
+      <button class="btn danger solid" id="public-confirm-activate">I understand · create link</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
 </body>
 </html>

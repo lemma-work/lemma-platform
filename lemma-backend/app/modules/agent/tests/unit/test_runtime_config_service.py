@@ -5,10 +5,15 @@ from types import SimpleNamespace
 from app.modules.agent.defaults import default_agent_runtime_profile_id
 from app.modules.agent.domain.runtime_profiles import (
     AgentRuntimeProfile,
+    ApiKeyRuntimeCredentials,
+    OpenAICompatibleRuntimeConfig,
     RuntimeModelCatalogEntry,
+    RuntimeProfileAvailability,
     RuntimeProfileKind,
     RuntimeProfileProtocol,
     RuntimeProfileScope,
+    RuntimeProfileStatus,
+    reveal_credentials,
 )
 from app.modules.agent.domain.value_objects import (
     AgentRuntimeConfig,
@@ -22,8 +27,11 @@ from app.modules.agent.agent_runtime_defaults import (
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
     AgentRuntimeProfileService,
-    DiscoveredModel,
     _selected_model,
+)
+from app.modules.agent.services.runtime_provider_discovery import DiscoveredModel
+from app.modules.agent.services.runtime_profile_editor import (
+    AgentRuntimeProfileEditor,
 )
 from app.modules.agent.infrastructure.harnesses.pydantic_ai import (
     _runtime_profile_model,
@@ -105,6 +113,7 @@ class _ProfileRepository:
             profile
             for profile in self.profiles
             if profile.organization_id == organization_id
+            and (include_disabled or profile.status is RuntimeProfileStatus.ACTIVE)
             and (
                 profile.scope is RuntimeProfileScope.ORGANIZATION
                 or (
@@ -114,18 +123,41 @@ class _ProfileRepository:
             )
         ]
 
-    async def get_visible_by_id(self, *, profile_id, organization_id, user_id):
+    async def get_visible_by_id(
+        self, *, profile_id, organization_id, user_id, include_disabled=False
+    ):
         for profile in await self.get_visible(
             organization_id=organization_id,
             user_id=user_id,
+            include_disabled=include_disabled,
         ):
             if profile.id == profile_id:
+                if not include_disabled and profile.status is not (
+                    RuntimeProfileStatus.ACTIVE
+                ):
+                    return None
                 return profile
         return None
 
     async def create(self, profile):
         self.profiles.append(profile)
         return profile
+
+    async def update(self, profile):
+        for index, existing in enumerate(self.profiles):
+            if existing.id == profile.id:
+                self.profiles[index] = profile
+                return profile
+        raise RuntimeError(f"Runtime profile {profile.id!r} no longer exists")
+
+    async def set_status(self, *, profile_id, organization_id, user_id, status):
+        del organization_id, user_id
+        for index, existing in enumerate(self.profiles):
+            if existing.id == profile_id:
+                updated = existing.with_changes(status=status)
+                self.profiles[index] = updated
+                return updated
+        return None
 
 
 class _HostRepository:
@@ -144,6 +176,10 @@ class _HostRepository:
         if host is None or host.user_id != user_id:
             return None
         return host
+
+    async def get(self, host_id, *, for_update=False):
+        del for_update
+        return self.hosts.get(host_id)
 
 
 def _ready_agent_host(
@@ -858,7 +894,7 @@ async def test_create_openai_compatible_profile_discovers_provider_models(monkey
         ]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service._discover_openai_compatible_models",
+        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
         fake_discover,
     )
     org_id = uuid4()
@@ -924,7 +960,7 @@ async def test_create_openai_compatible_profile_uses_supplied_models_when_discov
         return []
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service._discover_openai_compatible_models",
+        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
         fake_discover,
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
@@ -949,7 +985,7 @@ async def test_create_provider_profile_requires_discovery_or_model_names(monkeyp
         return []
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service._discover_openai_compatible_models",
+        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
         fake_discover,
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
@@ -995,7 +1031,7 @@ async def test_create_anthropic_compatible_profile_discovers_provider_models(
         return [DiscoveredModel("claude-sonnet-4-5-20250929")]
 
     monkeypatch.setattr(
-        "app.modules.agent.services.runtime_profile_service._discover_anthropic_compatible_models",
+        "app.modules.agent.services.runtime_provider_discovery._discover_anthropic_compatible_models",
         fake_discover,
     )
     service = AgentRuntimeProfileService(_ProfileRepository([]))
@@ -1137,3 +1173,625 @@ def test_selected_model_empty_catalog_returns_none():
     profile.model_catalog = []
     profile.default_model_name = None
     assert _selected_model(profile, None) is None
+
+
+# --- editing profiles -------------------------------------------------------
+
+
+def _provider_profile(*, organization_id, name="Vendor", api_key="sk-original"):
+    return AgentRuntimeProfile(
+        id=str(uuid4()),
+        organization_id=organization_id,
+        scope=RuntimeProfileScope.ORGANIZATION,
+        kind=RuntimeProfileKind.MODEL_PROVIDER,
+        protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+        name=name,
+        default_model_name="model-a",
+        model_catalog=[
+            RuntimeModelCatalogEntry(name="model-a", provider_model_name="model-a"),
+            RuntimeModelCatalogEntry(name="model-b", provider_model_name="model-b"),
+        ],
+        config=OpenAICompatibleRuntimeConfig(base_url="https://api.vendor.test/v1"),
+        credentials=ApiKeyRuntimeCredentials(api_key=api_key),
+    )
+
+
+def _no_discovery(monkeypatch):
+    """Fail loudly if an edit reaches the provider it had no reason to call."""
+
+    async def _explode(**_kwargs):
+        raise AssertionError("model discovery must not run for this edit")
+
+    for target in (
+        "_discover_openai_compatible_models",
+        "_discover_anthropic_compatible_models",
+    ):
+        monkeypatch.setattr(
+            f"app.modules.agent.services.runtime_provider_discovery.{target}",
+            _explode,
+        )
+
+
+async def test_renaming_a_provider_keeps_its_stored_key_and_skips_discovery(monkeypatch):
+    # The credential never leaves the server, so a rename that quietly replaced
+    # it with the SecretStr mask would only surface as auth failures later.
+    _no_discovery(monkeypatch)
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id)
+    repository = _ProfileRepository([profile])
+    service = AgentRuntimeProfileService(repository=repository)
+
+    updated = await AgentRuntimeProfileEditor(service).update_openai_compatible_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        name="Renamed",
+    )
+
+    assert updated.name == "Renamed"
+    assert reveal_credentials(updated.credentials) == {"api_key": "sk-original"}
+    assert updated.default_model_name == "model-a"
+
+
+async def test_provider_api_key_absent_keeps_null_clears_and_a_string_rotates(
+    monkeypatch,
+):
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id)
+    repository = _ProfileRepository([profile])
+    service = AgentRuntimeProfileService(repository=repository)
+
+    async def _discovered(**_kwargs):
+        return [DiscoveredModel(name="model-a"), DiscoveredModel(name="model-b")]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        _discovered,
+    )
+
+    rotated = await AgentRuntimeProfileEditor(service).update_openai_compatible_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        api_key="sk-rotated",
+    )
+    assert reveal_credentials(rotated.credentials) == {"api_key": "sk-rotated"}
+
+    cleared = await AgentRuntimeProfileEditor(service).update_openai_compatible_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        api_key=None,
+    )
+    assert cleared.credentials is None
+
+
+async def test_changing_the_base_url_is_ssrf_checked_even_without_rediscovery(
+    monkeypatch,
+):
+    # The SSRF guard used to run only inside discovery, so an edit that changed
+    # the URL without re-discovering would never reach it.
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id)
+    repository = _ProfileRepository([profile])
+    service = AgentRuntimeProfileService(repository=repository)
+
+    validated: list[str] = []
+
+    async def _validate(url):
+        validated.append(url)
+        raise ValueError("blocked")
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery._validate_public_base_url",
+        _validate,
+    )
+
+    with pytest.raises(ValueError):
+        await AgentRuntimeProfileEditor(service).update_openai_compatible_profile(
+            profile_id=profile.id,
+            organization_id=organization_id,
+            user_id=user_id,
+            base_url="http://169.254.169.254/",
+        )
+    assert validated == ["http://169.254.169.254/"]
+
+
+async def test_a_provider_outage_does_not_blank_a_working_catalog(monkeypatch):
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id)
+    repository = _ProfileRepository([profile])
+    service = AgentRuntimeProfileService(repository=repository)
+
+    async def _nothing(**_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        _nothing,
+    )
+
+    updated = await AgentRuntimeProfileEditor(service).update_openai_compatible_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        refresh_models=True,
+    )
+
+    assert [entry.name for entry in updated.model_catalog] == ["model-a", "model-b"]
+    assert updated.default_model_name == "model-a"
+
+
+async def test_a_pinned_model_the_provider_dropped_falls_back_instead_of_failing(
+    monkeypatch,
+):
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id)
+    repository = _ProfileRepository([profile])
+    service = AgentRuntimeProfileService(repository=repository)
+
+    async def _discovered(**_kwargs):
+        return [DiscoveredModel(name="model-c")]
+
+    monkeypatch.setattr(
+        "app.modules.agent.services.runtime_provider_discovery._discover_openai_compatible_models",
+        _discovered,
+    )
+
+    updated = await AgentRuntimeProfileEditor(service).update_openai_compatible_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        refresh_models=True,
+    )
+
+    # The user did not touch the model, so a deprecation upstream must not 400
+    # an unrelated edit.
+    assert updated.default_model_name == "model-c"
+
+
+async def _harness_profile(*, organization_id, user_id, config_options):
+    host_repository, harness_id = _ready_agent_host(
+        user_id=user_id,
+        organization_id=organization_id,
+        config_options=config_options,
+    )
+    repository = _ProfileRepository([])
+    service = AgentRuntimeProfileService(
+        repository=repository, host_repository=host_repository
+    )
+    profile = await service.create_agent_host_profile(
+        organization_id=organization_id,
+        user_id=user_id,
+        harness_id=harness_id,
+        name="Codex",
+    )
+    return service, repository, host_repository, harness_id, profile
+
+
+async def test_a_harness_config_edit_repins_the_snapshot_revision():
+    # Without the re-pin, the very next dispatch rejects the run as "harness
+    # configuration changed after profile validation".
+    organization_id = uuid4()
+    user_id = uuid4()
+    options = [
+        {
+            "id": "approval",
+            "category": "approval",
+            "name": "Approval",
+            "options": [{"value": "always"}, {"value": "never"}],
+        }
+    ]
+    service, _repo, host_repository, harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=user_id, config_options=options
+    )
+    assert profile.config.harness_snapshot_revision == "rev-1"
+
+    host_repository.harnesses[harness_id].config_revision = "rev-2"
+    updated = await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        config_selections={"approval": "always"},
+    )
+
+    assert updated.config.harness_snapshot_revision == "rev-2"
+    assert updated.config.config_selections == {"approval": "always"}
+
+
+async def test_renaming_a_harness_profile_does_not_need_the_computer_awake():
+    organization_id = uuid4()
+    user_id = uuid4()
+    service, _repo, host_repository, harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=user_id, config_options=[]
+    )
+
+    # The laptop goes to sleep: the host is no longer ONLINE.
+    host = next(iter(host_repository.hosts.values()))
+    host.status = "OFFLINE"
+
+    updated = await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        name="Codex on the laptop",
+    )
+    assert updated.name == "Codex on the laptop"
+
+
+async def test_a_harness_config_edit_rejects_an_unknown_selection():
+    organization_id = uuid4()
+    user_id = uuid4()
+    service, _repo, _hosts, _harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=user_id, config_options=[]
+    )
+
+    with pytest.raises(ValueError):
+        await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+            profile_id=profile.id,
+            organization_id=organization_id,
+            user_id=user_id,
+            config_selections={"nonexistent": "value"},
+        )
+
+
+async def test_an_org_admin_can_edit_a_shared_harness_profile_they_do_not_own():
+    # Dispatch imposes no ownership check, so requiring it only here would make
+    # a colleague's shared profile permanently unfixable by an admin.
+    organization_id = uuid4()
+    owner_id = uuid4()
+    admin_id = uuid4()
+    options = [
+        {
+            "id": "approval",
+            "category": "approval",
+            "name": "Approval",
+            "options": [{"value": "always"}],
+        }
+    ]
+    service, _repo, _hosts, _harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=owner_id, config_options=options
+    )
+
+    updated = await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=admin_id,
+        config_selections={"approval": "always"},
+    )
+    assert updated.config.config_selections == {"approval": "always"}
+
+
+async def test_archiving_hides_a_profile_and_restoring_brings_it_back():
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id)
+    repository = _ProfileRepository([profile])
+    service = AgentRuntimeProfileService(repository=repository)
+
+    archived = await AgentRuntimeProfileEditor(service).archive_profile(
+        profile_id=profile.id, organization_id=organization_id, user_id=user_id
+    )
+    assert archived.status is RuntimeProfileStatus.DISABLED
+    listed = await service.list_profiles(
+        organization_id=organization_id, user_id=user_id
+    )
+    assert profile.id not in {item.id for item in listed}
+
+    restored = await AgentRuntimeProfileEditor(service).restore_profile(
+        profile_id=profile.id, organization_id=organization_id, user_id=user_id
+    )
+    assert restored.status is RuntimeProfileStatus.ACTIVE
+
+
+async def test_resolving_an_archived_profile_says_so_instead_of_erroring_opaquely():
+    from app.core.domain.errors import DomainError
+
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id, name="Retired")
+    repository = _ProfileRepository([profile])
+    service = AgentRuntimeProfileService(repository=repository)
+    await AgentRuntimeProfileEditor(service).archive_profile(
+        profile_id=profile.id, organization_id=organization_id, user_id=user_id
+    )
+
+    with pytest.raises(DomainError) as excinfo:
+        await service.resolve(
+            runtime=AgentRuntimeConfig(profile_id=profile.id, model_name="model-a"),
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+    assert excinfo.value.code == "runtime_profile_archived"
+    assert "Retired" in str(excinfo.value)
+
+
+async def test_the_built_in_profile_cannot_be_edited_or_archived():
+    organization_id = uuid4()
+    user_id = uuid4()
+    service = AgentRuntimeProfileService(repository=_ProfileRepository([]))
+
+    with pytest.raises(ValueError):
+        await AgentRuntimeProfileEditor(service).archive_profile(
+            profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
+            organization_id=organization_id,
+            user_id=user_id,
+        )
+
+
+def _harness_repository_with(*, harness, host):
+    """A host repository exposing only the two batched reads availability needs."""
+
+    class _BatchRepository(_HostRepository):
+        async def get_harnesses(self, harness_ids):
+            return {
+                key: value
+                for key, value in self.harnesses.items()
+                if key in harness_ids
+            }
+
+        async def get_many(self, host_ids):
+            return {
+                key: value for key, value in self.hosts.items() if key in host_ids
+            }
+
+    harnesses = {harness.id: harness} if harness is not None else {}
+    hosts = {host.id: host} if host is not None else {}
+    return _BatchRepository(harnesses, hosts)
+
+
+def _availability_case(
+    *,
+    organization_id,
+    harness_health="READY",
+    host_status="ONLINE",
+    host_revoked=False,
+    harness_present=True,
+    host_present=True,
+):
+    from datetime import datetime, timezone
+
+    host_id = uuid4()
+    harness_id = uuid4()
+    host = SimpleNamespace(
+        id=host_id,
+        user_id=uuid4(),
+        organization_id=organization_id,
+        status=host_status,
+        last_seen_at=datetime.now(timezone.utc),
+        revoked_at=datetime.now(timezone.utc) if host_revoked else None,
+    )
+    harness = SimpleNamespace(
+        id=harness_id,
+        host_id=host_id,
+        harness_key="opencode",
+        health=harness_health,
+        config_revision="rev-1",
+        config_options=[],
+        capabilities={},
+    )
+    profile = AgentRuntimeProfile(
+        id=f"org:{harness_id}",
+        organization_id=organization_id,
+        harness_id=harness_id,
+        scope=RuntimeProfileScope.ORGANIZATION,
+        kind=RuntimeProfileKind.HARNESS,
+        protocol=RuntimeProfileProtocol.AGENT_HOST,
+        name="Codex",
+        config={"harness_snapshot_revision": "rev-1"},
+    )
+    repository = _harness_repository_with(
+        harness=harness if harness_present else None,
+        host=host if host_present else None,
+    )
+    return profile, repository
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ({}, RuntimeProfileAvailability.READY),
+        ({"host_status": "OFFLINE"}, RuntimeProfileAvailability.OFFLINE),
+        ({"harness_present": False}, RuntimeProfileAvailability.NOT_INSTALLED),
+        ({"host_present": False}, RuntimeProfileAvailability.UNAVAILABLE),
+        ({"host_revoked": True}, RuntimeProfileAvailability.UNAVAILABLE),
+        (
+            {"harness_health": "AUTH_REQUIRED"},
+            RuntimeProfileAvailability.UNAVAILABLE,
+        ),
+    ],
+)
+async def test_listing_reports_why_a_coding_agent_cannot_take_work(case, expected):
+    """The field the Models page has always read and the backend never filled.
+
+    Without it an offline laptop's profile renders identically to a healthy one.
+    """
+    organization_id = uuid4()
+    user_id = uuid4()
+    profile, host_repository = _availability_case(
+        organization_id=organization_id, **case
+    )
+    service = AgentRuntimeProfileService(
+        repository=_ProfileRepository([profile]), host_repository=host_repository
+    )
+
+    listed = await service.list_profiles_with_availability(
+        organization_id=organization_id, user_id=user_id
+    )
+
+    # The listing always carries the built-in profile too; assert on ours.
+    by_id = {listed_profile.id: availability for listed_profile, availability in listed}
+    assert by_id[profile.id] is expected
+
+
+async def test_a_model_provider_reports_no_availability():
+    """A base URL and a key are reachable whenever the endpoint is: Lemma has
+    nothing local to say about them, and a status badge would be a guess."""
+    organization_id = uuid4()
+    profile = _provider_profile(organization_id=organization_id, name="Acme")
+    service = AgentRuntimeProfileService(
+        repository=_ProfileRepository([profile]),
+        host_repository=_HostRepository({}, {}),
+    )
+
+    listed = await service.list_profiles_with_availability(
+        organization_id=organization_id, user_id=uuid4()
+    )
+
+    by_id = {listed_profile.id: availability for listed_profile, availability in listed}
+    assert by_id[profile.id] is None
+
+
+async def test_availability_degrades_where_the_service_has_no_host_repository():
+    """agent_runner_service and conversation_service both build this service
+    without one. They never render availability, so it must not raise."""
+    organization_id = uuid4()
+    profile, _repository = _availability_case(organization_id=organization_id)
+    service = AgentRuntimeProfileService(repository=_ProfileRepository([profile]))
+
+    listed = await service.list_profiles_with_availability(
+        organization_id=organization_id, user_id=uuid4()
+    )
+
+    by_id = {listed_profile.id: availability for listed_profile, availability in listed}
+    assert by_id[profile.id] is None
+    # A harness profile: it would report READY/OFFLINE if a host repository
+    # were wired, so None here is the degrade path, not the provider path.
+    assert profile.harness_id is not None
+
+
+async def test_a_rename_works_while_the_paired_computer_is_asleep():
+    """The reason update_agent_host_profile gates on `touches_configuration`.
+
+    A laptop is offline most of the day. Renaming the coding agent it hosts, or
+    fixing its description, must not depend on that machine being awake — which
+    is also why the edit dialog sends only the fields the user actually changed.
+    """
+    organization_id = uuid4()
+    user_id = uuid4()
+    service, _repo, host_repository, _harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=user_id, config_options=[]
+    )
+    host = next(iter(host_repository.hosts.values()))
+    host.status = "OFFLINE"
+    host.last_seen_at = None
+
+    renamed = await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+        profile_id=profile.id,
+        organization_id=organization_id,
+        user_id=user_id,
+        name="Codex (main)",
+        description="Repo work",
+    )
+
+    assert renamed.name == "Codex (main)"
+    assert renamed.description == "Repo work"
+    # Untouched, because nothing re-validated against the sleeping harness.
+    assert renamed.config.harness_snapshot_revision == "rev-1"
+
+
+async def test_a_config_edit_still_needs_the_computer_awake():
+    """The other half of the same rule: a selection has to be validated against
+    the live harness, so it cannot be saved blind."""
+    organization_id = uuid4()
+    user_id = uuid4()
+    options = [
+        {
+            "id": "approval",
+            "category": "approval",
+            "name": "Approval",
+            "options": [{"value": "always"}, {"value": "never"}],
+        }
+    ]
+    service, _repo, host_repository, _harness_id, profile = await _harness_profile(
+        organization_id=organization_id, user_id=user_id, config_options=options
+    )
+    host = next(iter(host_repository.hosts.values()))
+    host.status = "OFFLINE"
+    host.last_seen_at = None
+
+    with pytest.raises(ValueError):
+        await AgentRuntimeProfileEditor(service).update_agent_host_profile(
+            profile_id=profile.id,
+            organization_id=organization_id,
+            user_id=user_id,
+            config_selections={"approval": "always"},
+        )
+
+async def test_one_unreadable_row_does_not_blank_the_whole_listing():
+    """Drives the real repository, not a stand-in.
+
+    The protocol allowlist in `get_visible` already excludes retired daemon
+    profiles, so a row that reaches validation has a protocol this build knows
+    and a body it could not parse - a partial write, a hand-edited row, or a
+    field a later release tightened. Mapping them in a comprehension took out
+    the Models page for the whole organization on one bad row.
+    """
+    from app.modules.agent.infrastructure.repositories import (
+        AgentRuntimeProfileRepository,
+    )
+
+    organization_id = uuid4()
+
+    class _Row:
+        """Enough of AgentRuntimeProfileModel for _to_entity to run."""
+
+        def __init__(self, *, identifier, entity):
+            self.id = identifier
+            self.credentials = None
+            self._entity = entity
+
+        def to_entity(self):
+            return self._entity
+
+    readable = _provider_profile(organization_id=organization_id, name="Working")
+
+    class _Broken:
+        id = "broken"
+
+        def to_entity(self):
+            # A row whose stored shape no longer satisfies the domain model.
+            return AgentRuntimeProfile.model_construct(
+                id="broken",
+                organization_id=organization_id,
+                scope=RuntimeProfileScope.ORGANIZATION,
+                kind=RuntimeProfileKind.MODEL_PROVIDER,
+                protocol=RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+                name="Broken",
+                default_model_name=None,  # MODEL_PROVIDER requires one
+                model_catalog=[],
+                config={},
+                status=RuntimeProfileStatus.ACTIVE,
+                metadata={},
+            )
+
+        credentials = None
+
+    rows = [_Row(identifier=readable.id, entity=readable), _Broken()]
+
+    class _Result:
+        def scalars(self):
+            return iter(rows)
+
+    class _Session:
+        async def execute(self, _stmt):
+            return _Result()
+
+    class _Encryption:
+        def decrypt_json(self, _value):
+            return None
+
+    repository = AgentRuntimeProfileRepository.__new__(AgentRuntimeProfileRepository)
+    repository.session = _Session()
+    repository.encryption = _Encryption()
+
+    listed = await repository.get_visible(
+        organization_id=organization_id, user_id=uuid4()
+    )
+
+    assert [profile.id for profile in listed] == [readable.id]

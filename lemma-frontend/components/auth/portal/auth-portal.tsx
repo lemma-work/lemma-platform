@@ -35,6 +35,8 @@ import {
 } from "@/components/auth/portal/auth/redirects";
 import {
   canCompleteAuthenticatedNavigation,
+  hasBlockingInvalidClaims,
+  shouldShowEmailVerification,
   shouldFetchCurrentUser,
 } from "@/components/auth/portal/auth/verification-controller";
 import {
@@ -104,7 +106,9 @@ type AuthMode = "signin" | "signup";
 
 const preBuiltUiList = [
   EmailPasswordPreBuiltUI,
-  EmailVerificationPreBuiltUI,
+  ...(authConfig.emailVerificationRequired
+    ? [EmailVerificationPreBuiltUI]
+    : []),
   ThirdPartyPreBuiltUI,
 ] as const;
 
@@ -281,12 +285,21 @@ function AuthLanding() {
     .toLowerCase()
     .endsWith("/reset-password");
   const invalidClaims = session.loading ? [] : session.invalidClaims;
-  const hasInvalidClaims = invalidClaims.length > 0;
+  const hasInvalidClaims = hasBlockingInvalidClaims({
+    claimIds: invalidClaims.map((claim) => claim.id),
+    emailVerificationRequired: authConfig.emailVerificationRequired,
+    emailVerificationClaimId: EmailVerificationClaim.id,
+  });
   const needsEmailVerification = invalidClaims.some(
     (claim) => claim.id === EmailVerificationClaim.id,
   );
   const isVerificationExperience =
-    !isPasswordResetRoute && (isEmailVerificationRoute || needsEmailVerification);
+    !isPasswordResetRoute &&
+    shouldShowEmailVerification({
+      emailVerificationRequired: authConfig.emailVerificationRequired,
+      isVerificationRoute: isEmailVerificationRoute,
+      hasVerificationClaim: needsEmailVerification,
+    });
   const canNavigateAsAuthenticated = canCompleteAuthenticatedNavigation({
     sessionLoading: session.loading,
     doesSessionExist,

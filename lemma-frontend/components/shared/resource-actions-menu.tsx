@@ -31,7 +31,7 @@ export function ResourceActionsMenu({
         <DropdownMenu>
             <DropdownMenuTrigger asChild>
                 <Button
-                    variant="ghost"
+                    variant="quiet"
                     size="icon"
                     className={cn('h-8 w-8 shrink-0 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]', triggerClassName)}
                     aria-label={ariaLabel}

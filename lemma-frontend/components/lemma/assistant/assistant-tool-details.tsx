@@ -33,7 +33,7 @@ import {
   toolCallPrimaryLabel,
 } from "./assistant-format";
 import { DetailsWithCopy, contextualToolDetails } from "./assistant-tool-cards";
-import { ReasoningPartCard } from "./assistant-parts";
+import { ReasoningPartCard, ThinkingIndicator } from "./assistant-parts";
 import { SubagentActivityRollup } from "./assistant-subagent-activity";
 import { isSubagentLifecycleToolName } from "@/lib/assistant/subagent-activity";
 import {
@@ -225,7 +225,7 @@ export function ToolDetailsPanel({
 	        {canOpenDisplayResource ? (
 	            <Button
 	              type="button"
-	              variant="outline"
+	              variant="secondary"
 	              size="sm"
 	              onClick={() => onNavigateResource?.("display_resource", displayResource.toolCallId, {
 	                request: displayResource.request,
@@ -515,8 +515,14 @@ export function ToolActivityRollup({
     : totalThoughtDurationMs > 0
       ? `Thought for ${formatDurationCompact(totalThoughtDurationMs)}`
       : "Completed";
+  // Only claim "Thinking" for a thought this rollup actually holds. When the
+  // thought renders as a sibling card instead - a message with text keeps its
+  // reasoning unfolded - that card is already showing the word, and a header
+  // repeating it reads as the assistant thinking twice.
   const summary = isWorking
-    ? (activitySummary ? `Working · ${activitySummary}` : "Thinking")
+    ? (activitySummary
+      ? `Working · ${activitySummary}`
+      : reasoningParts.length > 0 ? "Thinking" : "Working")
     : `${completionSummary}${failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
   const collapsedSummary = `${collapsedLabel || summary}${isWorking && failedCount > 0 ? ` · ${failedCount} failed` : ""}`;
 
@@ -622,7 +628,11 @@ export function ToolActivityRollup({
           aria-expanded={isTraceExpanded}
           aria-label={isTraceExpanded ? "Hide tool activity details" : "Show tool activity details"}
         >
-          <span className="truncate text-sm">{collapsedSummary}</span>
+          {isWorking ? (
+            <ThinkingIndicator label={collapsedSummary} shimmer />
+          ) : (
+            <span className="truncate text-sm">{collapsedSummary}</span>
+          )}
         </button>
       ) : null}
 
@@ -644,6 +654,7 @@ export function ToolActivityRollup({
                   text={part.text}
                   isStreaming={part.state === "streaming"}
                   durationMs={part.durationMs}
+                  showSummary={!shouldShowHeader}
                 />
               );
             }

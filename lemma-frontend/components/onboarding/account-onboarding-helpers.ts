@@ -112,7 +112,7 @@ export function startPathLaunchConfig(
         secondaryBrief
           ? `People should be able to steer the agent through: ${secondaryBrief}`
           : "Give people a clear place to inspect state, steer the work, and revisit outputs without reading a terminal transcript.",
-        "Keep the local coding agent as the executor. Build the durable state, app surfaces, run history, and artifacts around it in Lemma, using the daemon and MCP boundary where supported.",
+        "Keep the local coding agent as the executor. Build the durable state, app surfaces, run history, and artifacts around it in Lemma, using the Agent Host and MCP boundary where supported.",
         `Then guide me through connecting ${agentName}. Do not claim the local agent is connected until its runtime is available, authorized, and tested.`,
       ].join("\n\n"),
     };

@@ -7,7 +7,8 @@ import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { AIAssistantProvider, useAIAssistant } from "@/components/ai/ai-assistant-context";
 import { HelpMenu } from "@/components/education/help-menu";
-import { InlineLoader, PageLoader } from "@/components/brand/loader";
+import { InlineLoader } from "@/components/brand/loader";
+import { PodShellSkeleton } from "@/components/pod/pod-shell-skeleton";
 import { AppProvider, useApp } from "@/components/app/app-context";
 import { AppFrameHost } from "@/components/app/app-frame-host";
 import { PodWorkspaceTabs } from "@/components/pod/pod-workspace-tabs";
@@ -15,6 +16,7 @@ import { usePodWorkspaceTabs } from "@/components/pod/use-pod-workspace-tabs";
 import { useOrganization } from "@/components/dashboard/org-context";
 import { PodTopbarProvider, type PodTopbarState } from "@/components/pod/pod-topbar-context";
 import { MobileSidebarDrawer } from "@/components/pod/mobile-sidebar-drawer";
+import { LocalSettingsButton } from "@/components/desktop/local-settings-button";
 import { PodLayoutProvider, usePodLayout } from "@/components/pod/pod-layout-context";
 import { WorkspaceSidebar } from "@/components/pod/workspace-sidebar";
 import { Button } from "@/components/ui/button";
@@ -368,8 +370,11 @@ function PodShell({
     // longer scatters duplicate nav toggles across the topbar and the assistant.
     const showWorkspaceSidebar = navPresentation === "expanded";
     const showCollapsedRail = navPresentation === "rail";
+    // 280px, not 240: the nav's body is the conversation list, and a two-line
+    // conversation row needs the width to stay scannable instead of truncating
+    // every title to a stub.
     const sidebarSlotClassName = showWorkspaceSidebar
-        ? "pod-sidebar-slot hidden h-full w-60 shrink-0 overflow-hidden md:block"
+        ? "pod-sidebar-slot hidden h-full w-[17.5rem] shrink-0 overflow-hidden md:block"
         : "pod-sidebar-slot hidden h-full w-10 shrink-0 overflow-hidden md:block";
     // On compact viewports the nav is an off-canvas drawer, reached by a single
     // hamburger in the topbar (resource/presented routes render the shell topbar).
@@ -518,11 +523,14 @@ function PodShell({
         router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, { scroll: false });
     }, [closeAssistant, pathname, router, searchParams]);
 
-    if (podAccess.isLoading) {
-        return <PageLoader />;
-    }
+    // The access check decides what goes in the page pane, not whether there is
+    // a shell around it. So it no longer returns early — the sidebar, tab bar,
+    // and context bar render exactly as they will a moment later, and only the
+    // pane waits. `isResolvingAccess` also holds off the denial branch below:
+    // "no access" is an answer, and we do not have one yet.
+    const isResolvingAccess = podAccess.isLoading;
 
-    if (!canUseCurrentRoute) {
+    if (!isResolvingAccess && !canUseCurrentRoute) {
         return (
             <div className="flex h-screen overflow-hidden bg-[var(--pod-shell-bg)] text-[var(--text-primary)]">
                 <div className={sidebarSlotClassName}>
@@ -538,7 +546,7 @@ function PodShell({
                         <p className="text-sm text-[var(--text-secondary)]">
                             This pod is available to you, but this section is outside your current permissions.
                         </p>
-                        <Button asChild className="mt-5">
+                        <Button variant="quiet" asChild className="mt-5">
                             <Link href={`/pod/${pod.id}`}>Back to pod home</Link>
                         </Button>
                     </div>
@@ -617,6 +625,9 @@ function PodShell({
                             >
                                 <PanelLeftOpen className="h-4 w-4" strokeWidth={1.8} />
                             </button>
+                        </div>
+                        <div className="mt-auto flex justify-center pb-3">
+                            <LocalSettingsButton variant="rail" />
                         </div>
                     </div>
                 ) : null}
@@ -767,6 +778,16 @@ function PodShell({
                                 isConversationRoute && "pod-conversation-workspace-surface",
                             )}
                         >
+                            {/* `children` renders while access resolves, not a
+                                skeleton of the shell's choosing. The shell does
+                                not know whether this route settles into a grid, a
+                                list, or a transcript — the route's own
+                                `loading.tsx` does, and swapping it out for a
+                                generic index skeleton is how a conversation URL
+                                came to show a card grid first. Nothing leaks: the
+                                page's queries run through the same access hooks,
+                                and the denial branch above still takes over the
+                                moment the answer arrives. */}
                             {isPresentedInteractionRoute && isPresentedClosing ? (
                                 <main className="flex min-h-full items-center justify-center bg-[var(--pod-main-bg)] p-8">
                                     <InlineLoader size="sm" label="Opening conversation" />
@@ -1028,8 +1049,13 @@ export default function PodLayout({
         router.replace(`${pathname}${nextQuery ? `?${nextQuery}` : ""}`, { scroll: false });
     }, [cameFromRoot, pathname, pod, router, searchParamsString]);
 
+    // The pod itself is not loaded yet, so there is nothing to put in the frame
+    // — but the frame's geometry is known regardless, and drawing it now means
+    // the real shell arrives into the same box instead of replacing a blank
+    // screen. `PageLoader` is kept for cold boot at the root, where there is no
+    // known frame to draw.
     if (isLoading || podAccessState === "checking") {
-        return <PageLoader />;
+        return <PodShellSkeleton />;
     }
 
     if (!pod && podAccessState === "denied") {
@@ -1054,7 +1080,7 @@ export default function PodLayout({
                     </p>
 
                     <div className="mt-5 flex flex-wrap items-center gap-3">
-                        <Button
+                        <Button variant="primary"
                             type="button"
                             onClick={() => {
                                 void handleRequestInvite();

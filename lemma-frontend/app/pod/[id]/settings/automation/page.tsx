@@ -2,7 +2,7 @@
 
 import { use, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, CalendarClock, Loader2, Pause, Play } from '@/components/ui/icons';
+import { ArrowRight, CalendarClock, Pause, Play } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
@@ -24,6 +24,7 @@ import {
 } from '@/lib/utils/schedules';
 import { ScheduleType, type Schedule } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { ListSkeleton } from '@/components/shared/loading';
 
 /**
  * Every trigger in the pod, in one place.
@@ -121,12 +122,10 @@ export default function PodAutomationSettingsPage({
                 </div>
 
                 {isLoading ? (
-                    <div className="flex items-center justify-center py-12">
-                        <Loader2 className="h-5 w-5 animate-spin text-[var(--text-tertiary)]" />
-                    </div>
+                    <ListSkeleton rows={5} />
                 ) : filtered.length === 0 ? (
                     <EmptyState
-                        variant="compact"
+                        variant="region"
                         icon={<CalendarClock className="h-4 w-4" />}
                         title={filter === 'paused' ? 'Nothing paused' : filter === 'active' ? 'Nothing running on its own' : 'No triggers yet'}
                         description="Open an agent or workflow and use “Runs when” to give it a rhythm, an app event, or a data change to wake up on."

@@ -19,7 +19,7 @@ export function ListView({ records, table, onRecordClick, selectedRecords, onSel
     if (records.length === 0) {
         return (
             <EmptyState
-                variant="compact"
+                variant="region"
                 title="No records yet"
                 description="Create a record when there is real pod data to track."
                 className="my-4"

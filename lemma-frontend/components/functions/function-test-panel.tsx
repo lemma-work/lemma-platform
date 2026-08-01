@@ -11,10 +11,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Play, Loader2, Clock, FunctionSquare, X, RotateCcw, FileJson, TerminalSquare, AlertCircle, CheckCircle2, ChevronRight } from '@/components/ui/icons';
+import { Play, Clock, FunctionSquare, X, RotateCcw, FileJson, TerminalSquare, AlertCircle, CheckCircle2, ChevronRight } from '@/components/ui/icons';
 import type { FunctionRun } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { StepLoader } from '@/components/brand/loader';
 
 interface FunctionTestPanelProps {
     podId: string;
@@ -342,7 +343,7 @@ function LogsViewer({ logs }: { logs: string }) {
                     <span className="text-xs text-[var(--text-tertiary)]">{lines.length} lines</span>
                 </div>
                 <Button
-                    variant="ghost"
+                    variant="quiet"
                     size="sm"
                     onClick={() => setIsExpanded((prev) => !prev)}
                     className="h-6 px-2 text-xs text-[var(--text-tertiary)]"
@@ -646,7 +647,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                     <>
                         <div className="w-px h-4 bg-[var(--bg-muted)] mx-1" />
                         <Button
-                            variant="ghost"
+                            variant="quiet"
                             size="icon"
                             onClick={onClose}
                             className="h-7 w-7 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] rounded-md"
@@ -667,7 +668,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                                 <div className="flex items-center gap-2">
                                     {hasSchema && (
                                         <Button
-                                            variant="ghost"
+                                            variant="quiet"
                                             size="sm"
                                             onClick={() => setUseRawJson((prev) => !prev)}
                                             className={cn(
@@ -681,7 +682,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                                             Raw JSON
                                         </Button>
                                     )}
-                                    <Button variant="ghost" size="sm" onClick={handleReset} className="h-6 text-xs text-[var(--text-tertiary)]">
+                                    <Button variant="quiet" size="sm" onClick={handleReset} className="h-6 text-xs text-[var(--text-tertiary)]">
                                         Reset
                                     </Button>
                                 </div>
@@ -735,10 +736,10 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                                     />
                                 )}
 
-                                <Button onClick={handleRun} disabled={isSubmitting} className="w-full h-8">
+                                <Button variant="primary" onClick={handleRun} disabled={isSubmitting} className="w-full h-8">
                                     {isSubmitting ? (
                                         <>
-                                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                            <StepLoader size="sm" className="mr-2" />
                                             Running...
                                         </>
                                     ) : (
@@ -753,7 +754,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                     ) : (
                         <div className="flex items-center justify-end">
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 onClick={handleReset}
                                 className="h-8 text-xs text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
@@ -789,7 +790,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                 <div className="flex min-h-0 flex-1 flex-col bg-[color:color-mix(in_srgb,_var(--bg-canvas)_40%,_transparent)] p-2 pt-14 dark:bg-[color:color-mix(in_srgb,_var(--bg-canvas)_70%,_transparent)]">
                     {isLoadingRuns && runs.length === 0 ? (
                         <div className="flex flex-col items-center justify-center h-full text-[var(--text-tertiary)] p-8">
-                            <Loader2 className="w-8 h-8 mb-2 animate-spin opacity-30" />
+                            <StepLoader size="sm" className="mb-2 opacity-30" />
                             <p className="text-xs">Loading runs...</p>
                         </div>
                     ) : runs.length === 0 ? (
@@ -870,7 +871,7 @@ export function FunctionTestPanel({ podId, functionId, initialRunId, openRunRequ
                             <div ref={historySentinelRef} aria-hidden className="h-px" />
                             {isLoadingMoreRuns && (
                                 <div className="flex items-center justify-center py-3 text-[var(--text-tertiary)]">
-                                    <Loader2 className="w-4 h-4 animate-spin opacity-40" />
+                                    <StepLoader size="sm" className="opacity-40" />
                                 </div>
                             )}
                             </div>

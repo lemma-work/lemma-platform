@@ -1,7 +1,7 @@
 'use client';
 
 import type { RefObject } from 'react';
-import { Folder, FolderPlus, Loader2, Plus, Upload } from '@/components/ui/icons';
+import { Folder, FolderPlus, Plus, Upload } from '@/components/ui/icons';
 
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { folderInputAttributes } from '../_lib/folder-upload';
 import type { FileNamespaceMode } from '../_lib/file-helpers';
 import { FileNamespaceToggle, FilesViewToggle } from './files-toolbar-toggles';
+import { StepLoader } from '@/components/brand/loader';
 
 export interface DataHubHeaderActionsProps {
     showingFiles: boolean;
@@ -85,14 +86,14 @@ export function DataHubHeaderActions({
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <Button
-                                    variant="ghost"
+                                    variant="quiet"
                                     size="icon"
                                     className="h-8 w-8 rounded"
                                     onClick={onUploadFilesClick}
                                     disabled={isUploading || isFolderUploading || !activeDatastoreName}
                                     aria-label="Upload files"
                                 >
-                                    {isUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                                    {isUploading ? <StepLoader size="xs" /> : <Upload className="h-3.5 w-3.5" />}
                                 </Button>
                             </TooltipTrigger>
                             <TooltipContent>Upload files</TooltipContent>
@@ -102,21 +103,21 @@ export function DataHubHeaderActions({
                         <Tooltip>
                             <TooltipTrigger asChild>
                                 <Button
-                                    variant="ghost"
+                                    variant="quiet"
                                     size="icon"
                                     className="h-8 w-8 rounded"
                                     onClick={() => void onUploadFolderClick()}
                                     disabled={isFolderUploading || isUploading || !activeDatastoreName}
                                     aria-label="Upload folder"
                                 >
-                                    {isFolderUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Folder className="h-3.5 w-3.5" />}
+                                    {isFolderUploading ? <StepLoader size="xs" /> : <Folder className="h-3.5 w-3.5" />}
                                 </Button>
                             </TooltipTrigger>
                             <TooltipContent>Upload folder</TooltipContent>
                         </Tooltip>
                     ) : null}
                     {canWriteFiles ? <Button
-                        variant="ghost"
+                        variant="quiet"
                         size="sm"
                         className="h-8 gap-1.5 rounded px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-2)]"
                         onClick={onToggleNewFolderInput}
@@ -125,7 +126,7 @@ export function DataHubHeaderActions({
                         <FolderPlus className="h-3.5 w-3.5" />
                         New folder
                     </Button> : null}
-                    {canWriteFiles ? <Button
+                    {canWriteFiles ? <Button variant="secondary"
                         size="sm"
                         className="h-8 gap-1.5"
                         onClick={onOpenNewFile}
@@ -135,7 +136,7 @@ export function DataHubHeaderActions({
                     </Button> : null}
                 </>
             ) : (
-                canCreateTable ? <Button
+                canCreateTable ? <Button variant="secondary"
                     size="sm"
                     className="h-8 gap-1.5"
                     onClick={onNewTable}

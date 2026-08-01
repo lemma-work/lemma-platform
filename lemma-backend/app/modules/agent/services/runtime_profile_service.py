@@ -2,18 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
-import ipaddress
 import os
-import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
-import httpx
 from dotenv import load_dotenv
 from pydantic import HttpUrl
 
@@ -37,6 +32,7 @@ from app.modules.agent.domain.runtime_profiles import (
     RuntimeModelCatalogEntry,
     RuntimeProfileKind,
     RuntimeProfileProtocol,
+    RuntimeProfileAvailability,
     RuntimeProfileScope,
     RuntimeProfileStatus,
     reveal_credentials,
@@ -50,26 +46,14 @@ from app.modules.agent.infrastructure.agent_host_repository import AgentHostRepo
 from app.modules.agent.infrastructure.repositories import (
     AgentRuntimeProfileRepository,
 )
+# Imported as a module, not by name: tests patch the discovery functions, and a
+# `from ... import f` binding here would keep calling the unpatched original.
+from app.modules.agent.services import runtime_provider_discovery as discovery
 
 logger = get_logger(__name__)
 
 SYSTEM_LEMMA_PROFILE_ID = "system:lemma"
 DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID = SYSTEM_LEMMA_PROFILE_ID
-
-
-@dataclass(frozen=True, slots=True)
-class DiscoveredModel:
-    """A model returned by a provider's ``/models`` endpoint.
-
-    ``supports_vision`` is best-effort: it is ``True`` only when the provider
-    advertises image input for the model (OpenRouter-style
-    ``architecture.input_modalities``). Most OpenAI-compatible ``/models``
-    payloads carry no modality data, so this stays ``False`` and vision must be
-    declared via configuration instead.
-    """
-
-    name: str
-    supports_vision: bool = False
 
 
 def _openai_compat_vision_model_names() -> set[str]:
@@ -234,6 +218,41 @@ class AgentRuntimeProfileService:
             )
         return profiles
 
+    async def list_profiles_with_availability(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        include_disabled: bool = False,
+    ) -> list[tuple[AgentRuntimeProfile, RuntimeProfileAvailability | None]]:
+        """Every visible profile, paired with whether it can take work now.
+
+        Availability is derived per read, never stored: the same harness profile
+        is READY or OFFLINE depending only on whether someone's laptop is awake.
+        Two batched queries rather than one per profile.
+        """
+        profiles = await self.list_profiles(
+            organization_id=organization_id,
+            user_id=user_id,
+            include_disabled=include_disabled,
+        )
+        harness_ids = {
+            profile.harness_id for profile in profiles if profile.harness_id is not None
+        }
+        if self.host_repository is None or not harness_ids:
+            # Two other call sites build this service without a host repository.
+            # They never render availability, so degrade rather than fail.
+            return [(profile, None) for profile in profiles]
+
+        harnesses = await self.host_repository.get_harnesses(harness_ids)
+        hosts = await self.host_repository.get_many(
+            {harness.host_id for harness in harnesses.values()}
+        )
+        return [
+            (profile, _profile_availability(profile, harnesses, hosts))
+            for profile in profiles
+        ]
+
     async def create_agent_host_profile(
         self,
         *,
@@ -264,7 +283,7 @@ class AgentRuntimeProfileService:
             raise ValueError("Agent Host profile scope must be ORGANIZATION or PERSONAL")
 
         normalized_name = _normalize_profile_name(name)
-        harness = await self._require_ready_harness(
+        harness = await self.require_ready_harness(
             harness_id=harness_id,
             organization_id=organization_id,
             user_id=user_id,
@@ -311,31 +330,37 @@ class AgentRuntimeProfileService:
         )
         return await self.repository.create(profile)
 
-    async def _require_ready_harness(
+    async def require_ready_harness(
         self,
         *,
         harness_id: UUID,
         organization_id: UUID,
         user_id: UUID,
         scope: RuntimeProfileScope,
+        require_owner: bool = True,
     ):
         assert self.host_repository is not None
         harness = await self.host_repository.get_harness(harness_id=harness_id)
         if harness is None:
             raise ValueError("Agent Host harness is not available")
-        host = await self.host_repository.get_for_user(
-            host_id=harness.host_id,
-            user_id=user_id,
-        )
+        if require_owner:
+            host = await self.host_repository.get_for_user(
+                host_id=harness.host_id,
+                user_id=user_id,
+            )
+        else:
+            # Editing an already-bound shared profile is not binding a machine.
+            # Requiring ownership here would stop an org admin from fixing a
+            # profile a colleague created, while dispatch imposes no such check.
+            host = await self.host_repository.get(host_id=harness.host_id)
         if host is None or host.revoked_at is not None:
             raise ValueError("Agent Host harness is not owned by the current user")
-        if host.organization_id not in {None, organization_id}:
-            raise ValueError("Agent Host is paired to a different organization")
-        if (
-            scope is RuntimeProfileScope.ORGANIZATION
-            and host.organization_id != organization_id
-        ):
-            raise ValueError("Shared Agent Host profiles require an organization pairing")
+        # A paired computer belongs to the person who paired it, not to a
+        # workspace: it runs on their machine, with their credentials. Sharing
+        # it is the *profile's* decision - giving a profile ORGANIZATION scope
+        # is the owner saying "my colleagues may send work here". The host
+        # carries no organization at all, and dispatch already works this way:
+        # it resolves a run through `harness.host_id` alone.
         if (
             effective_agent_host_status(host.status, host.last_seen_at)
             is not AgentHostStatus.ONLINE
@@ -363,19 +388,19 @@ class AgentRuntimeProfileService:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
-        discovered_models = await _discover_openai_compatible_models(
+        discovered_models = await discovery._discover_openai_compatible_models(
             base_url=str(base_url),
             api_key=api_key,
             headers=normalized_headers,
         )
-        catalog = _provider_model_catalog(
+        catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
             explicit_vision_model_names={
                 name.strip() for name in (vision_model_names or []) if name.strip()
             },
         )
-        selected_default_model = _select_provider_default_model(
+        selected_default_model = discovery._select_provider_default_model(
             requested_model_name=default_model_name,
             catalog=catalog,
         )
@@ -424,19 +449,19 @@ class AgentRuntimeProfileService:
             raise RuntimeError("Runtime profile repository is required")
         normalized_name = _normalize_profile_name(name)
         normalized_headers = _normalized_headers(headers)
-        discovered_models = await _discover_anthropic_compatible_models(
+        discovered_models = await discovery._discover_anthropic_compatible_models(
             base_url=str(base_url or "https://api.anthropic.com"),
             api_key=api_key,
             headers=normalized_headers,
         )
-        catalog = _provider_model_catalog(
+        catalog = discovery._provider_model_catalog(
             discovered_models=discovered_models,
             fallback_model_names=model_names or [],
             # Anthropic/Claude models are uniformly multimodal, so every model in
             # an Anthropic-compatible profile keeps the vision tools.
             default_vision=True,
         )
-        selected_default_model = _select_provider_default_model(
+        selected_default_model = discovery._select_provider_default_model(
             requested_model_name=default_model_name,
             catalog=catalog,
         )
@@ -488,6 +513,21 @@ class AgentRuntimeProfileService:
                     code="model_not_configured",
                     status_code=503,
                 )
+            archived = await self._archived_profile(
+                profile_id=profile_id,
+                organization_id=organization_id,
+                user_id=user_id,
+            )
+            if archived is not None:
+                # Archiving is a routine action now, so the agents, conversations
+                # and pod defaults still pinned to this profile must say what
+                # happened instead of surfacing an opaque 500.
+                raise DomainError(
+                    f"The model {archived.name!r} was removed from this workspace. "
+                    "Pick another one, or restore it in Models settings.",
+                    code="runtime_profile_archived",
+                    status_code=409,
+                )
             raise RuntimeError(f"Agent runtime profile {profile_id!r} is not available")
         model = _selected_model(profile, runtime.model_name)
         if model is None and profile.kind is not RuntimeProfileKind.HARNESS:
@@ -502,6 +542,30 @@ class AgentRuntimeProfileService:
             provider_model_name=model.provider_model_name if model else None,
             credentials=credentials,
         )
+
+    async def _archived_profile(
+        self,
+        *,
+        profile_id: str,
+        organization_id: UUID | None,
+        user_id: UUID,
+    ) -> AgentRuntimeProfile | None:
+        """One extra lookup, on the failure path only, to tell "archived" from
+        "never existed"."""
+        if self.repository is None or organization_id is None:
+            return None
+        try:
+            profile = await self.repository.get_visible_by_id(
+                profile_id=profile_id,
+                organization_id=organization_id,
+                user_id=user_id,
+                include_disabled=True,
+            )
+        except Exception:  # noqa: BLE001 - a diagnostic must never mask the real error
+            return None
+        if profile is None or profile.status is RuntimeProfileStatus.ACTIVE:
+            return None
+        return profile
 
     def system_default_runtime_config(self) -> AgentRuntimeConfig:
         return AgentRuntimeConfig(profile_id=DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID)
@@ -684,6 +748,36 @@ def _agent_host_model_catalog(
     return entries
 
 
+def _profile_availability(
+    profile: AgentRuntimeProfile,
+    harnesses: dict[UUID, object],
+    hosts: dict[UUID, object],
+) -> RuntimeProfileAvailability | None:
+    """Why a harness-backed profile can or cannot take work.
+
+    ``None`` for a model provider: it is reachable whenever its endpoint is, and
+    Lemma has nothing local to report about it.
+    """
+    if profile.harness_id is None:
+        return None
+    harness = harnesses.get(profile.harness_id)
+    if harness is None:
+        return RuntimeProfileAvailability.NOT_INSTALLED
+    host = hosts.get(getattr(harness, "host_id", None))
+    if host is None or getattr(host, "revoked_at", None) is not None:
+        return RuntimeProfileAvailability.UNAVAILABLE
+    if (
+        effective_agent_host_status(
+            getattr(host, "status", None), getattr(host, "last_seen_at", None)
+        )
+        is not AgentHostStatus.ONLINE
+    ):
+        return RuntimeProfileAvailability.OFFLINE
+    if getattr(harness, "health", None) != AgentHostHarnessHealth.READY.value:
+        return RuntimeProfileAvailability.UNAVAILABLE
+    return RuntimeProfileAvailability.READY
+
+
 def _normalize_profile_name(name: str) -> str:
     normalized = name.strip()
     if not normalized:
@@ -709,222 +803,6 @@ async def _create_profile(
 ) -> AgentRuntimeProfile:
     del name
     return await repository.create(profile)
-
-
-def _provider_model_catalog(
-    *,
-    discovered_models: list[DiscoveredModel],
-    fallback_model_names: list[str],
-    explicit_vision_model_names: set[str] | None = None,
-    default_vision: bool = False,
-) -> list[RuntimeModelCatalogEntry]:
-    """Build a model catalog, marking each model VISION-capable when the
-    provider advertised image input (``DiscoveredModel.supports_vision``), the
-    caller declared it (``explicit_vision_model_names``), or the protocol is
-    universally multimodal (``default_vision`` — e.g. Anthropic/Claude).
-
-    Caller-supplied ``fallback_model_names`` (used when discovery yields nothing)
-    carry no modality data, so they get vision only via the explicit override or
-    ``default_vision``.
-    """
-    explicit = explicit_vision_model_names or set()
-    vision_by_name: dict[str, bool] = {}
-    order: list[str] = []
-    for discovered in discovered_models:
-        name = discovered.name.strip()
-        if name and name not in vision_by_name:
-            order.append(name)
-            vision_by_name[name] = discovered.supports_vision
-    for model_name in fallback_model_names:
-        name = model_name.strip()
-        if name and name not in vision_by_name:
-            order.append(name)
-            vision_by_name[name] = False
-    if not order:
-        raise ValueError(
-            "Provider model catalog could not be discovered; provide model_names"
-        )
-    catalog: list[RuntimeModelCatalogEntry] = []
-    for name in order:
-        supports_vision = default_vision or vision_by_name[name] or name in explicit
-        capabilities = [RuntimeModelCapability.TEXT, RuntimeModelCapability.TOOLS]
-        if supports_vision:
-            capabilities.append(RuntimeModelCapability.VISION)
-        catalog.append(
-            RuntimeModelCatalogEntry(
-                name=name,
-                display_name=name,
-                provider_model_name=name,
-                capabilities=capabilities,
-            )
-        )
-    return catalog
-
-
-def _select_provider_default_model(
-    *,
-    requested_model_name: str | None,
-    catalog: list[RuntimeModelCatalogEntry],
-) -> str:
-    if requested_model_name is None:
-        return catalog[0].name
-    normalized = requested_model_name.strip()
-    catalog_names = {model.name for model in catalog}
-    if normalized not in catalog_names:
-        raise ValueError("default_model_name must be one of the provider model names")
-    return normalized
-
-
-async def _discover_openai_compatible_models(
-    *,
-    base_url: str,
-    api_key: str | None,
-    headers: dict[str, str],
-) -> list[DiscoveredModel]:
-    request_headers = dict(headers)
-    if api_key:
-        request_headers.setdefault("Authorization", f"Bearer {api_key}")
-    return await _discover_models(
-        url=_join_url(base_url, "models"),
-        headers=request_headers,
-        parser=_parse_openai_compatible_models,
-    )
-
-
-async def _discover_anthropic_compatible_models(
-    *,
-    base_url: str,
-    api_key: str,
-    headers: dict[str, str],
-) -> list[DiscoveredModel]:
-    request_headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        **headers,
-    }
-    return await _discover_models(
-        url=_join_url(base_url, "models"),
-        headers=request_headers,
-        parser=_parse_openai_compatible_models,
-    )
-
-
-_PUBLIC_URL_ERROR = "base_url must be a public http(s) URL"
-
-
-async def _validate_public_base_url(url: str) -> None:
-    """Reject SSRF targets before issuing a server-side request to ``url``.
-
-    A model provider's ``base_url`` is caller-supplied, so block non-http(s)
-    schemes and any host that resolves to a loopback/private/link-local/reserved
-    address (e.g. ``http://169.254.169.254/`` cloud metadata, ``http://10.x``).
-    Loopback is permitted in local/testing mode so development against a model
-    server on localhost still works. (Note: this validates at resolve time; it
-    does not pin the connection, so it is not fully DNS-rebinding-proof — it
-    closes the practical metadata/internal-service vector.)
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        raise ValueError(_PUBLIC_URL_ERROR)
-    host = parsed.hostname
-    allow_loopback = settings.is_local_mode()
-    candidates: list[str] = []
-    try:
-        ipaddress.ip_address(host)
-        candidates.append(host)
-    except ValueError:
-        try:
-            infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
-        except OSError as exc:
-            raise ValueError(_PUBLIC_URL_ERROR) from exc
-        candidates.extend(info[4][0] for info in infos)
-    if not candidates:
-        raise ValueError(_PUBLIC_URL_ERROR)
-    for addr in candidates:
-        try:
-            ip = ipaddress.ip_address(addr)
-        except ValueError as exc:
-            raise ValueError(_PUBLIC_URL_ERROR) from exc
-        if ip.is_loopback and allow_loopback:
-            continue
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            raise ValueError(_PUBLIC_URL_ERROR)
-
-
-async def _discover_models(
-    *,
-    url: str,
-    headers: dict[str, str],
-    parser,
-) -> list[DiscoveredModel]:
-    await _validate_public_base_url(url)
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(url, headers=headers)
-        response.raise_for_status()
-    except httpx.HTTPError:
-        return []
-    try:
-        payload = response.json()
-    except ValueError:
-        return []
-    return parser(payload)
-
-
-def _parse_openai_compatible_models(payload: object) -> list[DiscoveredModel]:
-    if not isinstance(payload, dict):
-        return []
-    data = payload.get("data")
-    if not isinstance(data, list):
-        return []
-    models: list[DiscoveredModel] = []
-    seen: set[str] = set()
-    for item in data:
-        model_name: object
-        supports_vision = False
-        if isinstance(item, dict):
-            model_name = item.get("id") or item.get("name")
-            supports_vision = _payload_advertises_image_input(item)
-        else:
-            model_name = item
-        if isinstance(model_name, str):
-            normalized = model_name.strip()
-            if normalized and normalized not in seen:
-                seen.add(normalized)
-                models.append(
-                    DiscoveredModel(name=normalized, supports_vision=supports_vision)
-                )
-    return models
-
-
-def _payload_advertises_image_input(item: dict) -> bool:
-    """Best-effort image-input detection from an OpenAI-compatible ``/models``
-    entry. Honors OpenRouter-style ``architecture.input_modalities`` /
-    ``architecture.modality``; absent that metadata (the standard OpenAI schema),
-    returns ``False`` so vision falls back to explicit configuration.
-    """
-    architecture = item.get("architecture")
-    if not isinstance(architecture, dict):
-        return False
-    modalities = architecture.get("input_modalities")
-    if isinstance(modalities, list) and any(
-        isinstance(modality, str) and modality.strip().lower() == "image"
-        for modality in modalities
-    ):
-        return True
-    modality = architecture.get("modality")
-    return isinstance(modality, str) and "image" in modality.lower()
-
-
-def _join_url(base_url: str, path: str) -> str:
-    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
 
 
 def _load_runtime_env() -> None:

@@ -47,30 +47,6 @@ export function firstUserInput(messages: MessageLike[]): Record<string, unknown>
   return extractJsonObject(extractMessageText(firstUser));
 }
 
-export function previewAgentOutputValue(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (Array.isArray(value)) return value.map((entry) => previewAgentOutputValue(entry)).filter(Boolean).join("\n");
-  if (value === null || typeof value === "undefined") return "";
-
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
-export function schemaFieldKeys(schema: unknown, fallback?: Record<string, unknown>): string[] {
-  if (isRecord(schema) && isRecord(schema.properties)) {
-    const schemaKeys = Object.keys(schema.properties);
-    const fallbackKeys = fallback
-      ? Object.keys(fallback).filter((key) => !schemaKeys.includes(key))
-      : [];
-    return [...schemaKeys, ...fallbackKeys];
-  }
-  return fallback ? Object.keys(fallback) : [];
-}
-
 export function isTaskConversationLike(conversation: unknown): boolean {
   if (!isRecord(conversation)) return false;
   return String(conversation.type || "").trim().toUpperCase() === "TASK";

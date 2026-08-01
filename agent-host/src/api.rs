@@ -123,7 +123,6 @@ impl TargetClient {
             base_url,
             host_id: response.host_id,
             user_id: response.user_id,
-            organization_id: response.organization_id,
             host_secret: response.host_secret,
             enabled: true,
             allow_insecure_http,
@@ -215,14 +214,26 @@ impl TargetClient {
     }
 }
 
+/// Whether a host name can only ever mean this machine.
+///
+/// `.localhost` is reserved for exactly that by RFC 6761 — resolvers must not
+/// send it to DNS and must answer loopback — so `app.lemma.localhost`, which is
+/// the hostname Lemma Desktop serves its own workspace and API on, is as
+/// loopback as `127.0.0.1`. Accepting only the three literal spellings meant a
+/// desktop install could not pair with itself: locald handed the host its own
+/// API URL and the host refused it as a non-loopback plain-HTTP target.
+#[must_use]
+pub fn is_loopback_host(host: Option<&str>) -> bool {
+    matches!(host, Some("localhost" | "127.0.0.1" | "::1"))
+        || host.is_some_and(|host| host.ends_with(".localhost"))
+}
+
 pub fn validate_target_url(url: &Url, allow_insecure_http: bool) -> anyhow::Result<()> {
     if url.scheme() == "https" {
         return Ok(());
     }
     anyhow::ensure!(
-        allow_insecure_http
-            && url.scheme() == "http"
-            && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1")),
+        allow_insecure_http && url.scheme() == "http" && is_loopback_host(url.host_str()),
         "targets must use HTTPS; plain HTTP requires --allow-insecure-http and a loopback host"
     );
     Ok(())
@@ -271,6 +282,38 @@ mod tests {
     fn insecure_network_target_is_rejected() {
         assert!(validate_target_url(&Url::parse("http://example.com").unwrap(), true).is_err());
         validate_target_url(&Url::parse("http://127.0.0.1:8000").unwrap(), true).unwrap();
+    }
+
+    #[test]
+    fn a_desktop_install_can_pair_with_its_own_workspace() {
+        // Lemma Desktop serves its workspace and API on app.lemma.localhost.
+        // Accepting only the three literal loopback spellings meant the host
+        // refused the very workspace that had just handed it a pairing code,
+        // so "Connect this computer" could never succeed in local mode.
+        validate_target_url(
+            &Url::parse("http://app.lemma.localhost:52502").unwrap(),
+            true,
+        )
+        .unwrap();
+        // Still opt-in: plain HTTP without the flag is refused wherever it points.
+        assert!(
+            validate_target_url(
+                &Url::parse("http://app.lemma.localhost:52502").unwrap(),
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn only_a_real_localhost_suffix_counts_as_loopback() {
+        assert!(is_loopback_host(Some("app.lemma.localhost")));
+        assert!(is_loopback_host(Some("localhost")));
+        // A name someone else can own must not pass because it merely contains
+        // the word.
+        assert!(!is_loopback_host(Some("localhost.attacker.example")));
+        assert!(!is_loopback_host(Some("notlocalhost")));
+        assert!(!is_loopback_host(None));
     }
 
     fn status(status: StatusCode) -> ApiError {

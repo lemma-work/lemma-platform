@@ -2,7 +2,7 @@
 
 import { use, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Check, Loader2 } from '@/components/ui/icons';
+import { Check } from '@/components/ui/icons';
 
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { useAIAssistant } from '@/components/ai/ai-assistant-context';
@@ -11,6 +11,7 @@ import {
     CONVERSATION_STAGE_EMBED_PARAM,
     CONVERSATION_STAGE_EMBED_VALUE,
 } from '@/lib/assistant/conversation-presentation';
+import { StepLoader } from '@/components/brand/loader';
 
 function isHttpUrl(value: string | null): string | null {
     if (!value) return null;
@@ -121,7 +122,7 @@ export default function DisplayResourceWidgetPage({
                             disabled={saving}
                             className="inline-flex items-center gap-1.5 rounded-full border border-[var(--border-subtle)] bg-[var(--bg-canvas)] px-3 py-1.5 text-xs font-medium text-[var(--text-primary)] shadow-[var(--shadow-xs)] hover:bg-[var(--bg-subtle)] disabled:opacity-60"
                         >
-                            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                            {saving ? <StepLoader size="xs" /> : null}
                             {saving ? 'Saving…' : 'Save as app'}
                         </button>
                     )}

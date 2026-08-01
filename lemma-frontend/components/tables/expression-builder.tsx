@@ -67,7 +67,7 @@ export function ExpressionBuilder({ availableFields, value, onChange }: Expressi
                 {value ? (
                     <Button
                         type="button"
-                        variant="ghost"
+                        variant="quiet"
                         size="icon"
                         onClick={clear}
                         className="hover-state-error absolute right-1 top-1 h-5 w-5 rounded text-[var(--text-tertiary)] hover:text-[var(--state-error)]"

@@ -222,6 +222,10 @@ function toFinalOutputRecord(value: unknown): AgentFinalOutput | null {
   return null;
 }
 
+// `is_final_answer` alone proves nothing: the backend stamps it on *every*
+// assistant text message, so only the `structured_output` payload beside it is
+// evidence of a structured answer. Scraping JSON out of the message text is a
+// guess, and lives behind `parseTextFallback` with the other text paths.
 function finalOutputFromMetadata(messages: MessageLike[]): AgentFinalOutput | null {
   for (const message of latestFirst(messages)) {
     const metadata = getMessageMetadata(message);
@@ -229,14 +233,6 @@ function finalOutputFromMetadata(messages: MessageLike[]): AgentFinalOutput | nu
 
     const structured = toFinalOutputRecord(metadata.structured_output ?? metadata.structuredOutput);
     if (structured) return structured;
-
-    const content = typeof message.text === "string"
-      ? message.text
-      : typeof message.content === "string"
-        ? message.content
-        : "";
-    const parsed = extractJsonObject(content);
-    if (parsed) return parsed;
   }
 
   return null;
@@ -319,17 +315,22 @@ function finalOutputFromJsonText(messages: MessageLike[]): AgentFinalOutput | nu
 
 /**
  * Extract the structured final output of an agent run, trying each known place
- * the answer can hide, in order of reliability: message metadata → final-result
- * tool invocation → raw tool message → text marked final → (opt-in) any JSON in
- * the assistant text.
+ * the answer can hide, in order of reliability: `structured_output` metadata →
+ * final-result tool invocation → raw tool message. Those three are declarations
+ * by the run itself. Everything after them reads JSON out of prose the model
+ * wrote, which is a guess — an agent that quotes a JSON snippet in a chat reply
+ * has not produced a structured result — so it stays behind `parseTextFallback`
+ * for callers that know the run was supposed to return structured output.
  */
 export function extractAgentFinalOutput(
   messages: MessageLike[],
   options: { parseTextFallback?: boolean } = {},
 ): AgentFinalOutput | null {
-  return finalOutputFromMetadata(messages)
+  const declared = finalOutputFromMetadata(messages)
     ?? finalOutputFromToolInvocations(messages)
-    ?? finalOutputFromRawToolMessages(messages)
-    ?? finalOutputFromMarkedText(messages)
-    ?? (options.parseTextFallback ? finalOutputFromJsonText(messages) : null);
+    ?? finalOutputFromRawToolMessages(messages);
+  if (declared) return declared;
+
+  if (!options.parseTextFallback) return null;
+  return finalOutputFromMarkedText(messages) ?? finalOutputFromJsonText(messages);
 }

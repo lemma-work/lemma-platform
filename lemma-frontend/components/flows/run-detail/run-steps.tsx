@@ -5,7 +5,6 @@ import {
     ChevronDown,
     ChevronRight,
     Clock,
-    Loader2,
     MessageCircle,
     XCircle,
 } from '@/components/ui/icons';
@@ -55,6 +54,7 @@ import {
     getLastVisibleOutputBeforeStep,
     getRunCompletionTiming,
 } from './run-completion';
+import { StepLoader } from '@/components/brand/loader';
 
 export function RunPlaybackStep({
     podId,
@@ -176,7 +176,7 @@ export function RunPlaybackStep({
                     ) : null}
                     {node.type === NodeType.FUNCTION && state === 'running' ? (
                         <div className="flex min-h-40 items-center gap-3 text-sm text-[var(--text-secondary)]">
-                            <Loader2 className="h-4 w-4 animate-spin text-[var(--text-primary)]" />
+                            <StepLoader size="sm" className="text-[var(--text-primary)]" />
                             Executing function. Output will appear here when it returns.
                         </div>
                     ) : null}
@@ -248,7 +248,7 @@ export function RunPlaybackStep({
                         ) : isAgentStage && state === 'running' ? (
                             <div className="signal-surface-intelligence rounded-lg px-3 py-3">
                                 <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
-                                    <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--intelligence)]" />
+                                    <span className="h-2 w-2 lemma-live-pulse rounded-full bg-[var(--intelligence)]" />
                                     Waiting for the first agent message.
                                 </div>
                             </div>
@@ -393,7 +393,6 @@ function AgentStepChamber({
                         showHeader={false}
                         showModelPicker={false}
                         showNewConversationButton={false}
-                        showFinalOutput={false}
                         placeholder={isBusy ? 'Message the agent while it works...' : 'Follow up with the agent...'}
                         className="h-full min-h-0 rounded-none border-0 bg-[var(--card-bg)] shadow-none"
                         contentWidthClassName="max-w-none gap-4"
@@ -412,7 +411,7 @@ function AgentStepChamber({
                     </div>
                 ) : (
                     <div className="flex h-full min-h-[220px] items-center gap-3 text-sm text-[var(--text-secondary)]">
-                        {state === 'failed' ? <XCircle className="h-4 w-4 text-[var(--state-error)]" /> : <Loader2 className="h-4 w-4 animate-spin text-[var(--text-primary)]" />}
+                        {state === 'failed' ? <XCircle className="h-4 w-4 text-[var(--state-error)]" /> : <StepLoader size="sm" className="text-[var(--text-primary)]" />}
                         {state === 'failed' ? 'No agent transcript was recorded.' : 'Waiting for the agent to start.'}
                     </div>
                 )}
@@ -635,7 +634,7 @@ function EmbeddedAgentConversationProgress({
 
             {conversation.isLoading && !outputText ? (
                 <div className="mt-3 flex items-center gap-2 rounded-lg bg-[var(--surface-2)] px-3 py-2 text-xs text-[var(--text-secondary)]">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <StepLoader size="xs" />
                     Loading agent messages
                 </div>
             ) : null}
@@ -668,7 +667,7 @@ function EmbeddedAgentConversationProgress({
                 </div>
             ) : !conversation.isLoading ? (
                 <div className="mt-3 flex items-center gap-2 rounded-lg bg-[var(--card-bg)] px-3 py-2 text-xs text-[var(--text-secondary)]">
-                    <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--intelligence)]" />
+                    <span className="h-2 w-2 lemma-live-pulse rounded-full bg-[var(--intelligence)]" />
                     Waiting for the first agent message.
                 </div>
             ) : null}

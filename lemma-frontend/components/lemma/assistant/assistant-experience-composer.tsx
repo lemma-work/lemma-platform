@@ -145,7 +145,7 @@ export function AssistantExperienceComposerBody({
       <div className="flex min-w-0 items-center gap-2">
         <Button
           type="button"
-          variant="ghost"
+          variant="quiet"
           size="icon"
           onClick={() => fileInputRef.current?.click()}
           disabled={isConversationBusy || controller.isUploadingFiles}
@@ -167,7 +167,7 @@ export function AssistantExperienceComposerBody({
         <span className="min-w-0 flex-1" />
         <Button
           type="button"
-          variant={isConversationBusy ? "destructive" : draft.trim() || hasPendingFileUploads ? "primary" : "ghost"}
+          variant={isConversationBusy ? "destructive" : draft.trim() || hasPendingFileUploads ? "primary" : "quiet"}
           size="icon"
           onClick={isConversationBusy ? controller.stop : () => { onSubmit(); }}
           disabled={!isConversationBusy && !draft.trim() && !hasPendingFileUploads}
@@ -224,7 +224,7 @@ export function AssistantExperienceComposer({
         isPlanHidden ? (
           <Button
             type="button"
-            variant="outline"
+            variant="secondary"
             size="sm"
             onClick={onShowPlan}
             className="h-7 px-2 text-xs"

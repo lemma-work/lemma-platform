@@ -9,8 +9,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
-import { QuietEmptyState } from '@/components/shared/empty-state';
 import { DatastoreTableSkeleton } from '@/components/data/datastore-table-skeleton';
+import { TableRowsSkeleton } from '@/components/shared/loading';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -116,7 +116,7 @@ export function DatastoreTableView({
         ...tableQueryOptions(podId, tableName),
     });
 
-    const { data: recordsData, isLoading: recordsLoading } = useQuery({
+    const { data: recordsData, isLoading: recordsLoading, isFetching: recordsFetching } = useQuery({
         ...tableRecordsQueryOptions(podId, datastoreName, tableName, {
             page,
             limit,
@@ -296,14 +296,17 @@ export function DatastoreTableView({
             <div className="surface-card py-12 text-center">
                 <h2 className="font-display mb-2 text-2xl font-semibold text-[var(--text-primary)]">Table not found</h2>
                 <p className="mb-4 text-[var(--text-secondary)]">The table &quot;{tableName}&quot; could not be loaded</p>
-                <Button onClick={() => router.back()}>Go Back</Button>
+                <Button variant="quiet" onClick={() => router.back()}>Go Back</Button>
             </div>
         );
     }
 
     return (
         <div className={embedded ? 'datastore-table-workbench lemma-workbench-panel data-table-workbench relative flex h-full min-h-0 flex-col overflow-hidden' : 'h-full flex flex-col bg-transparent'}>
-            <div className={embedded ? 'data-table-toolbar shrink-0 border-b border-[color:var(--row-border)] bg-[var(--card-bg)]' : 'sticky top-0 z-20 shrink-0 border-b border-[color:var(--row-border)] bg-[var(--card-bg)] backdrop-blur-sm'}>
+            {/* Embedded: the workbench CSS owns this row's surface — it is canvas
+                chrome with a hairline, not a filled card. Standalone keeps the
+                sticky filled bar, because there it *is* the page header. */}
+            <div className={embedded ? 'data-table-toolbar shrink-0' : 'sticky top-0 z-20 shrink-0 border-b border-[color:var(--row-border)] bg-[var(--card-bg)] backdrop-blur-sm'}>
                 <div className={embedded ? 'flex w-full items-center justify-between gap-2' : 'w-full px-4 py-2 flex items-center justify-between'}>
                     {headerLeft ? (
                         <div className="min-w-0 flex-1">
@@ -350,12 +353,12 @@ export function DatastoreTableView({
                         ) : null}
                         <ViewSwitcher currentView={currentView} onViewChange={setCurrentView} />
                         <div className="mx-0.5 h-5 w-px bg-[color:color-mix(in_srgb,var(--border-subtle)_55%,transparent)]" />
-                        <Button variant="ghost" size="sm" onClick={() => setShowFilters(true)} className="datastore-table-toolbar-button h-8 gap-2 rounded px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-2)]">
+                        <Button variant="quiet" size="sm" onClick={() => setShowFilters(true)} className="datastore-table-toolbar-button h-8 gap-2 rounded px-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--surface-2)]">
                             <Filter className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
                             Filter {filters.length > 0 && `(${filters.length})`}
                         </Button>
                         {canDeleteTable ? <Button
-                            variant="ghost"
+                            variant="quiet"
                             size="icon"
                             onClick={() => setShowDeleteTableDialog(true)}
                             className="h-8 w-8 rounded text-[var(--text-tertiary)] hover:bg-[var(--surface-2)] hover:text-[var(--state-error)]"
@@ -363,7 +366,7 @@ export function DatastoreTableView({
                         >
                             <Trash2 className="w-3.5 h-3.5" />
                         </Button> : null}
-                        {canWriteRecords ? <Button size="sm" onClick={() => setShowRecordEditor(true)} className="h-8 text-xs">
+                        {canWriteRecords ? <Button variant="primary" size="sm" onClick={() => setShowRecordEditor(true)} className="h-8 text-xs">
                             <Plus className="w-3.5 h-3.5" />
                             New Record
                         </Button> : null}
@@ -377,7 +380,7 @@ export function DatastoreTableView({
                     <div className="h-4 w-px bg-[var(--row-border)]" />
                     <div className="flex items-center gap-1">
                         <Button
-                            variant="ghost"
+                            variant="quiet"
                             size="sm"
                             className="h-8 rounded-full"
                             onClick={() => {
@@ -393,7 +396,7 @@ export function DatastoreTableView({
                             Edit
                         </Button>
                         <Button
-                            variant="ghost"
+                            variant="quiet"
                             size="sm"
                             className="hover-state-error h-8 rounded-full text-[var(--state-error)]"
                             onClick={() => setShowDeleteRecordsDialog(true)}
@@ -440,7 +443,7 @@ export function DatastoreTableView({
                                                     {canUpdateTable && column.name !== table.primary_key_column && (
                                                         <DropdownMenu>
                                                             <DropdownMenuTrigger asChild>
-                                                                <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity -mr-2">
+                                                                <Button variant="quiet" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity -mr-2">
                                                                     <MoreVertical className="h-3 w-3 text-[var(--text-tertiary)]" />
                                                                 </Button>
                                                             </DropdownMenuTrigger>
@@ -460,7 +463,7 @@ export function DatastoreTableView({
                                         ))}
                                         {canUpdateTable ? <th className="w-10 px-2.5 py-2">
                                             <Button
-                                                variant="ghost"
+                                                variant="quiet"
                                                 size="sm"
                                                 onClick={() => setShowAddColumnDialog(true)}
                                                 className="h-7 w-7 rounded-md bg-[var(--bg-subtle)] p-0 text-[var(--text-secondary)] hover:bg-[var(--bg-muted)] hover:text-[var(--text-primary)]"
@@ -471,19 +474,60 @@ export function DatastoreTableView({
                                         </th> : null}
                                     </tr>
                                 </thead>
-                                <tbody className="divide-y divide-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)]">
+                                {/* Paging and filtering keep the rows they already
+                                    have and dim them. Swapping real records for
+                                    placeholders on every page turn was a downgrade
+                                    dressed up as feedback. */}
+                                <tbody
+                                    className="divide-y divide-[color:color-mix(in_srgb,var(--border-subtle)_42%,transparent)]"
+                                    data-refreshing={recordsFetching && !recordsLoading ? 'true' : undefined}
+                                >
+                                    {/* Rows, not a caption. The version this replaces
+                                        collapsed a page-height body to one line of
+                                        "Loading records…" and then expanded it again
+                                        — two height changes for one fetch. A fixed
+                                        run of row-shaped placeholders keeps the grid,
+                                        the scrollbar, and the footer exactly where
+                                        the records will put them. */}
                                     {recordsLoading ? (
-                                        <tr>
-                                            <td colSpan={gridColumnCount} className="px-3 py-8 text-center text-[var(--text-secondary)]">
-                                                <div className="animate-pulse">Loading records...</div>
-                                            </td>
-                                        </tr>
+                                        <TableRowsSkeleton rows={12} columns={gridColumnCount} />
                                     ) : records.length === 0 ? (
                                         <tr>
-                                            <td colSpan={gridColumnCount} className="px-3 py-8 text-center text-[var(--text-secondary)]">
-                                                <QuietEmptyState className="justify-center">
-                                                    No records yet.
-                                                </QuietEmptyState>
+                                            {/* The columns are already drawn above this
+                                                row, so the pane is not blank — it is a
+                                                table waiting for a row. Say that, and
+                                                give it the button, instead of dropping
+                                                one grey sentence into the middle. */}
+                                            <td colSpan={gridColumnCount} className="px-6 py-14 text-center">
+                                                <p className="text-sm font-medium text-[var(--text-primary)]">
+                                                    {filters.length > 0 ? 'No records match these filters' : 'No records yet'}
+                                                </p>
+                                                <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-[var(--text-tertiary)]">
+                                                    {filters.length > 0
+                                                        ? 'Clear a filter to see the rest of this table.'
+                                                        : `${table.name} has its columns. Add the first row, or let an agent or workflow write into it.`}
+                                                </p>
+                                                {filters.length > 0 ? (
+                                                    <Button
+                                                        variant="secondary"
+                                                        size="sm"
+                                                        className="mt-4 gap-1.5"
+                                                        onClick={() => setShowFilters(true)}
+                                                    >
+                                                        <Filter className="h-3.5 w-3.5" />
+                                                        Edit filters
+                                                    </Button>
+                                                ) : canWriteRecords ? (
+                                                    <Button
+                                                        variant="secondary"
+                                                        size="sm"
+                                                        className="mt-4 gap-1.5"
+                                                        onClick={() => setShowRecordEditor(true)}
+                                                    >
+                                                        <Plus className="h-3.5 w-3.5" />
+                                                        New record
+                                                    </Button>
+                                                ) : null}
                                             </td>
                                         </tr>
                                     ) : (
@@ -562,11 +606,15 @@ export function DatastoreTableView({
                 <div className="data-table-footer shrink-0 border-t border-[color:var(--row-border)] bg-[var(--card-bg)]">
                     <div className="flex items-center justify-between">
                         <div className="text-sm text-[var(--text-secondary)]">
-                            Showing {page * limit + 1} to {page * limit + records.length} of {recordsData?.total || records.length} records
+                            {/* An empty table used to report "Showing 1 to 0 of 0
+                                records" — a range that counts backwards. */}
+                            {records.length === 0
+                                ? 'No records'
+                                : `Showing ${page * limit + 1} to ${page * limit + records.length} of ${recordsData?.total || records.length} records`}
                         </div>
                         <div className="flex items-center gap-2">
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-canvas)] hover:text-[var(--text-primary)]"
                                 onClick={() => setPage(Math.max(0, page - 1))}
@@ -575,7 +623,7 @@ export function DatastoreTableView({
                                 Previous
                             </Button>
                             <Button
-                                variant="ghost"
+                                variant="quiet"
                                 size="sm"
                                 className="bg-[var(--bg-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-canvas)] hover:text-[var(--text-primary)]"
                                 onClick={() => {
