@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
-# Run Desktop against a locally built host pack with Local settings open.
+# Run Desktop locally.
 #
-#   dev-local.sh /absolute/path/to/local-runtime   run a released host pack
 #   dev-local.sh --source                          run this checkout's code
+#   dev-local.sh /absolute/path/to/local-runtime   run a released host pack
+#   dev-local.sh --source --control                ...and open Local settings
+#
+# Opens the workspace, like the packaged app does. This script used to force
+# Local settings open because iterating on that page was the only thing it was
+# for; now that it can run the whole app from source, that was just the wrong
+# window. `--control` brings it back for when Local settings *is* the thing
+# being worked on.
 #
 # `--source` is the one to use while developing: locald supervises the backend
 # out of lemma-backend/ through `uv run` and the frontend through `next dev`, so
@@ -20,19 +27,23 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 dev_support_root="${LEMMA_DESKTOP_APP_SUPPORT_DIR:-/tmp/lemma-desktop-dev}"
 source_mode=0
+open_control=0
 host_pack_root="${LEMMA_DESKTOP_HOST_PACK_ROOT:-}"
-if [[ "${1:-}" == "--source" ]]; then
-  source_mode=1
-else
-  host_pack_root="${1:-${host_pack_root}}"
-fi
+for argument in "$@"; do
+  case "${argument}" in
+    --source) source_mode=1 ;;
+    --control) open_control=1 ;;
+    -*) echo "Unknown option: ${argument}" >&2; exit 1 ;;
+    *) host_pack_root="${argument}" ;;
+  esac
+done
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
   echo "desktop/scripts/dev-local.sh currently supports macOS hosts only." >&2
   exit 1
 fi
 if (( ! source_mode )) && [[ -z "${host_pack_root}" || ! -f "${host_pack_root}/release.json" ]]; then
-  echo "Usage: desktop/scripts/dev-local.sh --source" >&2
+  echo "Usage: desktop/scripts/dev-local.sh --source [--control]" >&2
   echo "   or: desktop/scripts/dev-local.sh /absolute/path/to/local-runtime" >&2
   echo "The host pack must contain release.json." >&2
   exit 1
@@ -98,14 +109,18 @@ else
   source_env=("LEMMA_DESKTOP_HOST_PACK_ROOT=${host_pack_root}")
 fi
 
+declare -a control_env=()
+if (( open_control )); then
+  control_env=("LEMMA_DESKTOP_OPEN_CONTROL=1" "LEMMA_DESKTOP_CONTROL_DEBUG=1")
+fi
+
 cd "${repo_root}/desktop"
 exec env \
   LEMMA_DESKTOP_APP_SUPPORT_DIR="${dev_support_root}" \
   LEMMA_DESKTOP_CONNECTION_MODE="local" \
   LEMMA_DESKTOP_RUNTIME_ROOT="${repo_root}" \
   "${source_env[@]}" \
+  ${control_env[@]+"${control_env[@]}"} \
   LEMMA_DESKTOP_LOCALD_BIN="${locald_bin}" \
   LEMMA_DESKTOP_VZ_BIN="${vz_bin}" \
-  LEMMA_DESKTOP_OPEN_CONTROL="1" \
-  LEMMA_DESKTOP_CONTROL_DEBUG="1" \
   npx -y @tauri-apps/cli@2.11.4 dev

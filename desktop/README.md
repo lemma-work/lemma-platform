@@ -91,6 +91,9 @@ the last release. The managed runtime, ports, health checks and restart policy
 are the packaged ones — a dev run that exercised a different supervisor would
 prove nothing about the real one.
 
+It opens the workspace, as the packaged app does. Add `--control` when Local
+settings is the thing you are working on.
+
 It borrows the VM guest artifacts from an installed release (the one thing a
 checkout cannot build on demand) read-only; override the location with
 `LEMMA_DESKTOP_MANAGED_RUNTIME_ROOT`. To run a released pack instead, pass its
