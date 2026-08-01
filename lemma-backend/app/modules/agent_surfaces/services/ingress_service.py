@@ -27,11 +27,13 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     ParsedInboundSurfaceEvent,
     ParsedSurfaceInteraction,
+    ReachKind,
     ResolvedSurfaceUser,
     SurfaceChannelRoute,
     SurfaceCredentialMode,
     SurfaceMode,
     SurfacePlatform,
+    SurfaceTarget,
 )
 from app.modules.agent_surfaces.domain.ingress_request import (
     SurfaceDirectWebhookIngress,
@@ -64,6 +66,12 @@ from app.modules.agent_surfaces.infrastructure.adapters.registry import (
 )
 from app.modules.agent_surfaces.infrastructure.repositories.external_user_repository import (
     ExternalSurfaceUserRepository,
+)
+from app.modules.agent_surfaces.infrastructure.repositories.member_reach_repository import (
+    MemberReachRepository,
+)
+from app.modules.agent_surfaces.platforms.platform_capabilities import (
+    get_platform_capabilities,
 )
 from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
     SurfaceConversationLinkRepository,
@@ -181,6 +189,7 @@ class AgentSurfaceIngressService:
         # paths; the worker execute_chat path opens its own short UoWs instead.
         if uow is not None:
             self.external_user_repository = ExternalSurfaceUserRepository(uow)
+            self.member_reach_repository = MemberReachRepository(uow)
             self.identity_service = SurfaceIdentityResolutionService(
                 uow, self.external_user_repository
             )
@@ -190,6 +199,7 @@ class AgentSurfaceIngressService:
             )
         else:
             self.external_user_repository = None
+            self.member_reach_repository = None
             self.identity_service = None
             self.credential_resolver = None
 
@@ -818,13 +828,19 @@ class AgentSurfaceIngressService:
         """
         if not surface.is_active:
             return False
-        # Only ever reach members of the surface's pod.
-        if self.pod_membership_port is not None:
-            member_pod_ids = set(
-                await self.pod_membership_port.get_user_pod_ids(user_id)
+        # Only ever reach members of the surface's pod. Fail CLOSED: a service
+        # constructed without the membership port used to skip this check
+        # entirely, which turns a mis-wiring into "any user id can be messaged"
+        # rather than into an error anyone would notice.
+        if self.pod_membership_port is None:
+            logger.debug(
+                "agent_surfaces.ingress_service.send_refused_no_membership_port.diagnostic",
+                surface_id=str(surface.id),
             )
-            if surface.pod_id not in member_pod_ids:
-                return False
+            return False
+        member_pod_ids = set(await self.pod_membership_port.get_user_pod_ids(user_id))
+        if surface.pod_id not in member_pod_ids:
+            return False
         external_user_repository = getattr(self, "external_user_repository", None)
         if external_user_repository is None:
             return False
@@ -842,6 +858,63 @@ class AgentSurfaceIngressService:
             conversation_id=link.conversation_id, message=message
         )
 
+    async def _send_message_via(
+        self,
+        *,
+        adapter: Any,
+        credentials: dict[str, Any],
+        event: ParsedInboundSurfaceEvent,
+        message: str,
+        metadata: dict[str, Any],
+    ) -> bool:
+        """The single place a chat message actually leaves Lemma."""
+        # Safety net: never deliver model reasoning/thinking tokens
+        # (``<tool_call>…``) as a chat message to any surface. Some
+        # OpenAI-compatible models emit these inline in the text content.
+        clean_message = sanitize_user_visible_text(message)
+        if not clean_message:
+            return False
+        await adapter.send_message(
+            credentials=credentials,
+            event=event,
+            message=clean_message,
+            metadata=metadata,
+        )
+        return True
+
+    async def send_agent_message_to_target(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        target: SurfaceTarget,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> bool:
+        """Send to an address, with no inbound event in hand.
+
+        The counterpart to :meth:`send_agent_message_for_conversation`, which can
+        only ever reply to something. This is what makes an agent able to speak
+        first: the address comes from a stored :class:`MemberReach`, not from a
+        message someone just sent us.
+        """
+        if not surface.is_active:
+            return False
+        adapter = self.adapter_registry.get(surface.surface_type)
+        if adapter is None:
+            return False
+        credentials = await self._resolve_credentials(surface)
+        message_metadata = dict(metadata or {})
+        message_metadata.setdefault(
+            "agent_display_name", await self._agent_name_for_surface(surface) or "Lemma"
+        )
+        return await self._send_message_via(
+            adapter=adapter,
+            credentials=credentials,
+            event=target.to_event(),
+            message=message,
+            metadata=message_metadata,
+        )
+
     async def send_agent_message_for_conversation(
         self,
         *,
@@ -852,20 +925,13 @@ class AgentSurfaceIngressService:
         target = await self._resolve_egress_target(conversation_id)
         if target is None:
             return False
-        # Safety net: never deliver model reasoning/thinking tokens
-        # (``<tool_call>…``) as a chat message to any surface. Some
-        # OpenAI-compatible models emit these inline in the text content.
-        clean_message = sanitize_user_visible_text(message)
-        if not clean_message:
-            return False
-        message_metadata = await self._egress_metadata_with_agent_name(target, metadata)
-        await target.adapter.send_message(
+        return await self._send_message_via(
+            adapter=target.adapter,
             credentials=target.credentials,
             event=target.event,
-            message=clean_message,
-            metadata=message_metadata,
+            message=message,
+            metadata=await self._egress_metadata_with_agent_name(target, metadata),
         )
-        return True
 
     async def send_display_resource_for_conversation(
         self,
@@ -2058,6 +2124,55 @@ class AgentSurfaceIngressService:
             route_key=route_key,
         )
 
+    async def _record_reach(
+        self,
+        *,
+        surface: AgentSurfaceEntity,
+        parsed: ParsedInboundSurfaceEvent,
+        resolved_user: ResolvedSurfaceUser,
+    ) -> None:
+        """Remember that we can reach this person here.
+
+        Every inbound event already carries the address a reply would go to; this
+        is just keeping it. Best-effort by design — failing to record a reach must
+        never cost the user their reply, and the next message they send will write
+        it again.
+        """
+        repository = getattr(self, "member_reach_repository", None)
+        if repository is None or resolved_user.internal_user_id is None:
+            return
+        # A DM is a reach; a channel is not. Being @-mentioned in #general says
+        # nothing about how to reach you privately, and treating it as an address
+        # would have the agent answer a personal notification in a team channel.
+        if not parsed.is_dm:
+            return
+        now = datetime.now(timezone.utc)
+        window_hours = None
+        caps = get_platform_capabilities(surface.surface_type.value)
+        if caps is not None and caps.reply_window_hours:
+            window_hours = timedelta(hours=caps.reply_window_hours)
+        try:
+            await repository.upsert(
+                pod_id=surface.pod_id,
+                user_id=resolved_user.internal_user_id,
+                kind=ReachKind.for_platform(surface.surface_type),
+                surface_id=surface.id,
+                external_user_id=resolved_user.external_user_id,
+                target=parsed.to_target(),
+                last_inbound_at=now,
+                window_expires_at=(now + window_hours) if window_hours else None,
+            )
+            # Everyone we can reach anywhere can also be reached in Lemma.
+            await repository.ensure_app_reach(
+                pod_id=surface.pod_id, user_id=resolved_user.internal_user_id
+            )
+        except Exception:
+            logger.debug(
+                "agent_surfaces.ingress_service.reach_record_failed.diagnostic",
+                surface_id=str(surface.id),
+                exc_info=True,
+            )
+
     async def _get_or_create_conversation_link(
         self,
         *,
@@ -2067,6 +2182,9 @@ class AgentSurfaceIngressService:
         route: ResolvedSurfaceRoute,
         current_conversation_agent_id: UUID | None = None,
     ) -> AgentSurfaceConversationLink:
+        await self._record_reach(
+            surface=surface, parsed=parsed, resolved_user=resolved_user
+        )
         external_user_id = resolved_user.external_user_id
         link = await self.conversation_link_repository.get_by_external_thread(
             surface_id=surface.id,
@@ -2160,7 +2278,12 @@ class AgentSurfaceIngressService:
         reset_hours = surface.config.dm_conversation_reset_after_hours
         if reset_hours <= 0:
             return False
-        last_seen = link.updated_at
+        # Inbound recency, NOT ``updated_at``. Proactive sends repoint and touch
+        # this row too, so keying the reset off row recency would let an agent
+        # message silently suppress the reset and leak yesterday's context into
+        # today. Falls back to ``updated_at`` for links written before the column
+        # existed, where the two were the same thing.
+        last_seen = link.last_inbound_at or link.updated_at
         if last_seen.tzinfo is None:
             last_seen = last_seen.replace(tzinfo=timezone.utc)
         return datetime.now(timezone.utc) - last_seen > timedelta(hours=reset_hours)

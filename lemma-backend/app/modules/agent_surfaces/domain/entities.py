@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.domain.aggregate import AggregateRoot
 from app.core.domain.entity import Entity
@@ -113,11 +113,61 @@ class SurfaceChannelRoute(BaseModel):
         )
 
 
-class SurfaceSendPolicy(BaseModel):
-    """Controls proactive sending (``surface.send``) for a surface."""
+class SendAudience(StrEnum):
+    """Who an agent on this surface is allowed to reach unprompted."""
 
-    # Expose the current-user ``surface_send_message`` tool to the agent.
-    allow_send: bool = False
+    # Nothing proactive at all. The default, because it is what every surface
+    # created before this field existed already did — a new capability must not
+    # switch itself on for surfaces nobody has revisited.
+    NOBODY = "NOBODY"
+    # Only the person whose conversation the agent is already in. Telling
+    # someone about work they asked for is not the same act as putting words in
+    # front of a colleague, so the two are separate rungs.
+    SELF = "SELF"
+    # Any member of the surface's pod.
+    POD_MEMBERS = "POD_MEMBERS"
+
+
+class SurfaceSendPolicy(BaseModel):
+    """Controls proactive sending for a surface.
+
+    An agent that can message any pod member is a real capability and a real
+    hazard: the recipient sees the pod's bot, not "the agent someone else's
+    schedule is running", and will extend the bot the trust they extend to
+    Lemma. So the audience is explicit, attribution is mandatory rather than
+    optional, and there is a ceiling on how often one agent can reach one person.
+    """
+
+    audience: SendAudience = SendAudience.NOBODY
+    # Ceiling per (agent, recipient) per hour. A badly-prompted agent in a retry
+    # loop is the expected failure, not a malicious one, and there is no circuit
+    # breaker on the send path the way there is on schedules.
+    max_messages_per_recipient_per_hour: int = 6
+
+    # Deprecated: the original single boolean, kept readable for one release so
+    # existing surface rows keep working. ``allow_send=True`` meant "expose the
+    # current-user send tool", which is exactly SELF.
+    allow_send: bool | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def _adopt_legacy_allow_send(self) -> "SurfaceSendPolicy":
+        # Only let the legacy flag speak when the new field was left at its
+        # default, so an explicit audience always wins over a stale boolean.
+        if self.allow_send is not None and "audience" not in self.model_fields_set:
+            object.__setattr__(
+                self,
+                "audience",
+                SendAudience.SELF if self.allow_send else SendAudience.NOBODY,
+            )
+        return self
+
+    @property
+    def allows_self(self) -> bool:
+        return self.audience in {SendAudience.SELF, SendAudience.POD_MEMBERS}
+
+    @property
+    def allows_pod_members(self) -> bool:
+        return self.audience is SendAudience.POD_MEMBERS
 
 
 class SurfaceTelegramConfig(BaseModel):
@@ -152,6 +202,136 @@ class ExternalSurfaceUserEntity(Entity):
     last_seen_at: datetime | None = None
 
 
+class ReachKind(StrEnum):
+    """Where a person can be reached.
+
+    ``APP`` is Lemma itself and is deliberately not a :class:`SurfacePlatform`:
+    the web app is not a third-party bot install, it has no credentials, no
+    webhook and no external identity. Every other value mirrors a platform.
+    """
+
+    APP = "APP"
+    SLACK = "SLACK"
+    TEAMS = "TEAMS"
+    WHATSAPP = "WHATSAPP"
+    TELEGRAM = "TELEGRAM"
+    GMAIL = "GMAIL"
+    OUTLOOK = "OUTLOOK"
+    RESEND = "RESEND"
+
+    @property
+    def is_app(self) -> bool:
+        return self is ReachKind.APP
+
+    @classmethod
+    def for_platform(cls, platform: SurfacePlatform) -> "ReachKind":
+        return cls(platform.value)
+
+
+class ReachStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    # The identity behind this reach was invalidated (e.g. a profile phone
+    # change clears the cached platform identity). Kept, not deleted, so
+    # "we used to be able to reach you here" stays answerable.
+    STALE = "STALE"
+    # The platform rejected delivery in a way that will not self-heal.
+    BLOCKED = "BLOCKED"
+
+
+class MemberReach(Entity):
+    """How this pod can reach one person on one channel.
+
+    Today this fact is implied by a three-way join — the cached platform
+    identity, the conversation link, and the ``last_event`` blob inside it — and
+    is only discoverable per-surface, after the person has spoken first. As a row
+    it becomes answerable up front: *can we reach Deepak at all, and where?*
+
+    Pod-scoped on purpose. ``AgentSurfaceExternalUser`` is correctly cross-pod
+    (one Telegram account, many pods); conflating the two is how a shared bot
+    cross-posts between organizations.
+    """
+
+    pod_id: UUID
+    user_id: UUID
+    kind: ReachKind
+    # None for APP, which has no surface behind it.
+    surface_id: UUID | None = None
+    # Denormalized from the identity cache so clearing ``resolved_user_id``
+    # (a profile phone change) degrades to STALE rather than silently orphaning.
+    external_user_id: str | None = None
+    target: SurfaceTarget | None = None
+    status: ReachStatus = ReachStatus.ACTIVE
+    last_inbound_at: datetime | None = None
+    # WhatsApp's 24h customer-service window, and anything like it. Held as data
+    # rather than recomputed in code at every send site.
+    window_expires_at: datetime | None = None
+    opted_out_at: datetime | None = None
+
+    @property
+    def is_opted_out(self) -> bool:
+        return self.opted_out_at is not None
+
+    def is_deliverable(self, *, now: datetime | None = None) -> bool:
+        """Whether a message sent right now would be allowed to land.
+
+        The APP reach is always deliverable — that is its whole job. It is the
+        one channel that cannot 403, expire, or be muted out of existence, which
+        is what makes it a safe fallback.
+        """
+        if self.is_opted_out or self.status is not ReachStatus.ACTIVE:
+            return False
+        if self.kind.is_app:
+            return True
+        if self.target is None:
+            return False
+        if self.window_expires_at is not None:
+            moment = now or datetime.now(timezone.utc)
+            expires = self.window_expires_at
+            if expires.tzinfo is None:
+                expires = expires.replace(tzinfo=timezone.utc)
+            if expires <= moment:
+                return False
+        return True
+
+
+class NotificationOrigin(StrEnum):
+    """What produced a notification. Answers "why am I being told this?"."""
+
+    SCHEDULE_RUN = "SCHEDULE_RUN"
+    WORKFLOW_RUN = "WORKFLOW_RUN"
+    AGENT_RUN = "AGENT_RUN"
+
+
+class Notification(Entity):
+    """One thing a person is being told, in Lemma itself.
+
+    Written on every ``notify`` regardless of whether a chat platform also got
+    it, because the app reach is the only one that cannot fail — which makes it
+    both the fallback and the durable record of what was sent.
+
+    Unread state lives here rather than being derived from conversations:
+    deciding "which conversations count as notifications" by reading
+    ``conversation_metadata`` is exactly the ambiguity this row exists to remove.
+    """
+
+    pod_id: UUID
+    user_id: UUID
+    # The conversation this notification belongs to — where clicking it lands,
+    # and where a reply continues. None only for notifications with no thread
+    # behind them.
+    conversation_id: UUID | None = None
+    agent_id: UUID | None = None
+    title: str | None = None
+    body: str
+    origin_type: NotificationOrigin | None = None
+    origin_id: UUID | None = None
+    read_at: datetime | None = None
+
+    @property
+    def is_read(self) -> bool:
+        return self.read_at is not None
+
+
 class ParsedInboundSurfaceEvent(BaseModel):
     platform: SurfacePlatform
     conversation_type: ConversationType
@@ -180,6 +360,83 @@ class ParsedInboundSurfaceEvent(BaseModel):
             self.reply_target.get("channel")
             or self.reply_target.get("chat_id")
             or self.external_channel_id
+        )
+
+    def to_target(self) -> "SurfaceTarget":
+        """Project this event down to the address a reply would go to."""
+        return SurfaceTarget(
+            platform=self.platform,
+            reply_target=dict(self.reply_target),
+            external_channel_id=self.external_channel_id,
+            external_thread_id=self.external_thread_id,
+            external_message_id=self.external_message_id,
+            sender_external_user_id=self.sender_external_user_id,
+            sender_display_name=self.sender_display_name,
+            sender_email=self.sender_email,
+            sender_phone=self.sender_phone,
+            is_dm=self.is_dm,
+            metadata=dict(self.metadata),
+        )
+
+
+class SurfaceTarget(BaseModel):
+    """Where a message goes — the addressable half of a surface conversation.
+
+    Egress has historically been "reply to the last inbound event": every adapter
+    takes a :class:`ParsedInboundSurfaceEvent` and reads a handful of routing
+    fields off it. That makes proactive delivery impossible, because a message
+    the *agent* starts has no inbound event behind it.
+
+    This type is that handful of fields, extracted and stored in its own right —
+    a durable address for one person on one surface. ``reply_target`` and
+    ``metadata`` are carried whole rather than key-by-key: they are already JSONB
+    on the wire, they are small, and projecting them field-by-field would silently
+    drop whatever a platform starts depending on next.
+
+    ``raw_payload`` is deliberately absent. The only consumer is Outlook's
+    ``requires_message_fetch`` enrichment, which is an inbound concern, and it can
+    be large.
+    """
+
+    platform: SurfacePlatform
+    reply_target: dict[str, Any] = Field(default_factory=dict)
+    external_channel_id: str | None = None
+    external_thread_id: str
+    external_message_id: str | None = None
+    sender_external_user_id: str | None = None
+    sender_display_name: str | None = None
+    sender_email: str | None = None
+    sender_phone: str | None = None
+    is_dm: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    def to_event(self) -> "ParsedInboundSurfaceEvent":
+        """Rebuild an egress-shaped event for the platform adapters.
+
+        Adapters still take an event; until that signature moves, this is the
+        seam. The inbound-only fields (``message_text``, ``raw_payload``,
+        ``mentioned_agent``) are empty on purpose — no send path reads them, and
+        anything that starts to is a bug worth failing on rather than feeding a
+        plausible-looking blank.
+        """
+        return ParsedInboundSurfaceEvent(
+            platform=self.platform,
+            conversation_type=(
+                ConversationType.EXTERNAL_DM
+                if self.is_dm
+                else ConversationType.EXTERNAL_GROUP
+            ),
+            external_channel_id=self.external_channel_id,
+            external_thread_id=self.external_thread_id,
+            external_message_id=self.external_message_id,
+            sender_external_user_id=self.sender_external_user_id,
+            sender_email=self.sender_email,
+            sender_phone=self.sender_phone,
+            sender_display_name=self.sender_display_name,
+            message_text="",
+            is_dm=self.is_dm,
+            reply_target=dict(self.reply_target),
+            metadata=dict(self.metadata),
         )
 
 
@@ -537,3 +794,6 @@ class AgentSurfaceConversationLink(Entity):
     route_key: str | None = None
     last_event: dict[str, Any] = Field(default_factory=dict)
     last_message_id: str | None = None
+    # Last time the *person* wrote here. ``updated_at`` is not a substitute:
+    # proactive sends bump the row too.
+    last_inbound_at: datetime | None = None

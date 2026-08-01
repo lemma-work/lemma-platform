@@ -30,6 +30,7 @@ from app.modules.workflow.domain.nodes.wait_until import (
     WaitUntilNode,
     WaitUntilNodeConfig,
 )
+from app.modules.workflow.domain.nodes.notify import NotifyNode, NotifyNodeConfig
 from app.modules.workflow.domain.nodes.end import EndNode, EndNodeConfig
 
 WorkflowNode = Annotated[
@@ -40,6 +41,7 @@ WorkflowNode = Annotated[
         DecisionNode,
         LoopNode,
         WaitUntilNode,
+        NotifyNode,
         EndNode,
     ],
     Field(discriminator="type"),
@@ -65,6 +67,8 @@ __all__ = [
     "LiteralInputBinding",
     "LoopNode",
     "LoopNodeConfig",
+    "NotifyNode",
+    "NotifyNodeConfig",
     "NodeType",
     "RESERVED_NODE_IDS",
     "WaitUntilNode",

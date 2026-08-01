@@ -41,6 +41,15 @@ class PlatformCapabilities:
     formatting_style: str  # one-line human guidance, used verbatim in the fragment
     soft_char_limit: int  # rough per-message length budget for guidance
     reply_tool: str | None = None  # email reply tool name (gmail/outlook); None for chat
+    # Whether the platform lets us start a conversation with someone who has
+    # never written to us. "Bots can't cold-DM" is a chat-platform truth, not a
+    # universal one — email genuinely can, and treating it as universal is why
+    # proactive messaging was limited to people who had already said hello.
+    can_cold_open: bool = False
+    # How long after an inbound message the platform allows a free-form reply.
+    # None means no window. WhatsApp's 24h customer-service rule is the reason
+    # this is data rather than a branch buried in the send path.
+    reply_window_hours: int | None = None
 
     @property
     def attachment_byte_cap(self) -> int:
@@ -119,6 +128,10 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         markdown_mode="whatsapp",
         formatting_style=_WHATSAPP_FORMATTING,
         soft_char_limit=1500,
+        # A cold open needs a pre-approved template; free-form outside the
+        # window is rejected by Meta. Stays False until templates are modelled.
+        can_cold_open=False,
+        reply_window_hours=24,
     ),
     "TELEGRAM": PlatformCapabilities(
         platform="TELEGRAM",
@@ -145,6 +158,9 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
         reply_tool="gmail_reply_email",
+        # Email is addressed, not permission-threaded: a first message to a
+        # known address is ordinary, not a cold DM.
+        can_cold_open=True,
     ),
     "OUTLOOK": PlatformCapabilities(
         platform="OUTLOOK",
@@ -157,6 +173,9 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
         reply_tool="outlook_reply_email",
+        # Email is addressed, not permission-threaded: a first message to a
+        # known address is ordinary, not a cold DM.
+        can_cold_open=True,
     ),
     "RESEND": PlatformCapabilities(
         platform="RESEND",
@@ -169,6 +188,9 @@ PLATFORM_CAPABILITIES: dict[str, PlatformCapabilities] = {
         formatting_style=_EMAIL_FORMATTING,
         soft_char_limit=6000,
         reply_tool="resend_reply_email",
+        # Email is addressed, not permission-threaded: a first message to a
+        # known address is ordinary, not a cold DM.
+        can_cold_open=True,
     ),
 }
 

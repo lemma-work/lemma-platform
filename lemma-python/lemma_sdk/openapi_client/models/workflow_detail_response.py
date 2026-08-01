@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from ..models.function_node_response import FunctionNodeResponse
     from ..models.loop_node_response import LoopNodeResponse
     from ..models.manual_workflow_start_output import ManualWorkflowStartOutput
+    from ..models.notify_node_response import NotifyNodeResponse
     from ..models.scheduled_workflow_start_output import ScheduledWorkflowStartOutput
     from ..models.wait_until_node_response import WaitUntilNodeResponse
     from ..models.workflow_edge import WorkflowEdge
@@ -45,7 +46,7 @@ class WorkflowDetailResponse:
         is_active (bool | Unset):  Default: True.
         mode (WorkflowMode | Unset): Workflow schedule ownership mode.
         nodes (list[AgentNodeResponse | DecisionNodeResponse | EndNodeResponse | FormNodeResponse | FunctionNodeResponse
-            | LoopNodeResponse | WaitUntilNodeResponse] | Unset):
+            | LoopNodeResponse | NotifyNodeResponse | WaitUntilNodeResponse] | Unset):
         start (DataStoreWorkflowStartOutput | EventWorkflowStartOutput | ManualWorkflowStartOutput | None |
             ScheduledWorkflowStartOutput | Unset):
         updated_at (datetime.datetime | None | Unset):
@@ -70,6 +71,7 @@ class WorkflowDetailResponse:
             | FormNodeResponse
             | FunctionNodeResponse
             | LoopNodeResponse
+            | NotifyNodeResponse
             | WaitUntilNodeResponse
         ]
         | Unset
@@ -97,6 +99,7 @@ class WorkflowDetailResponse:
         from ..models.function_node_response import FunctionNodeResponse
         from ..models.loop_node_response import LoopNodeResponse
         from ..models.manual_workflow_start_output import ManualWorkflowStartOutput
+        from ..models.notify_node_response import NotifyNodeResponse
         from ..models.scheduled_workflow_start_output import (
             ScheduledWorkflowStartOutput,
         )
@@ -161,6 +164,8 @@ class WorkflowDetailResponse:
                 elif isinstance(nodes_item_data, LoopNodeResponse):
                     nodes_item = nodes_item_data.to_dict()
                 elif isinstance(nodes_item_data, WaitUntilNodeResponse):
+                    nodes_item = nodes_item_data.to_dict()
+                elif isinstance(nodes_item_data, NotifyNodeResponse):
                     nodes_item = nodes_item_data.to_dict()
                 else:
                     nodes_item = nodes_item_data.to_dict()
@@ -238,6 +243,7 @@ class WorkflowDetailResponse:
         from ..models.function_node_response import FunctionNodeResponse
         from ..models.loop_node_response import LoopNodeResponse
         from ..models.manual_workflow_start_output import ManualWorkflowStartOutput
+        from ..models.notify_node_response import NotifyNodeResponse
         from ..models.scheduled_workflow_start_output import (
             ScheduledWorkflowStartOutput,
         )
@@ -315,6 +321,7 @@ class WorkflowDetailResponse:
                 | FormNodeResponse
                 | FunctionNodeResponse
                 | LoopNodeResponse
+                | NotifyNodeResponse
                 | WaitUntilNodeResponse
             ]
             | Unset
@@ -332,6 +339,7 @@ class WorkflowDetailResponse:
                     | FormNodeResponse
                     | FunctionNodeResponse
                     | LoopNodeResponse
+                    | NotifyNodeResponse
                     | WaitUntilNodeResponse
                 ):
                     try:
@@ -382,11 +390,19 @@ class WorkflowDetailResponse:
                         return nodes_item_type_5
                     except TypeError, ValueError, AttributeError, KeyError:
                         pass
+                    try:
+                        if not isinstance(data, dict):
+                            raise TypeError()
+                        nodes_item_type_6 = NotifyNodeResponse.from_dict(data)
+
+                        return nodes_item_type_6
+                    except TypeError, ValueError, AttributeError, KeyError:
+                        pass
                     if not isinstance(data, dict):
                         raise TypeError()
-                    nodes_item_type_6 = EndNodeResponse.from_dict(data)
+                    nodes_item_type_7 = EndNodeResponse.from_dict(data)
 
-                    return nodes_item_type_6
+                    return nodes_item_type_7
 
                 nodes_item = _parse_nodes_item(nodes_item_data)
 

@@ -153,9 +153,7 @@ async def merge_surface_config(
             config_input.dm_conversation_reset_after_hours
         )
     if "send_policy" in config_input.model_fields_set:
-        updates["send_policy"] = SurfaceSendPolicy(
-            allow_send=config_input.send_policy.allow_send
-        )
+        updates["send_policy"] = config_input.send_policy.to_domain()
     if "telegram" in config_input.model_fields_set:
         updates["telegram"] = await resolve_telegram_config(
             uow=uow,

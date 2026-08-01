@@ -22,6 +22,8 @@ from app.modules.agent_surfaces.api.schemas import (
     AvailableSurfaceChannelResponse,
     AvailableSurfaceChannelsResponse,
     AvailableSurfacesResponse,
+    NotifyMemberRequest,
+    NotifyMemberResponse,
     SurfaceConfigResponse,
     SurfaceCreateRequest,
     SurfaceReach,
@@ -32,6 +34,7 @@ from app.modules.agent_surfaces.api.schemas import (
 )
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
+    NotificationOrigin,
     SurfacePlatform,
 )
 from app.modules.agent_surfaces.api.surface_config_resolver import (
@@ -66,6 +69,10 @@ setup_guide_router = APIRouter(
 available_surfaces_router = APIRouter(
     prefix="/pods/{pod_id}/available-surfaces", tags=["Agent Surfaces"]
 )
+
+# Reaching a person is not an operation *on* a surface — Lemma picks the channel
+# — so it gets its own path rather than hanging off /surfaces/{name}.
+notify_router = APIRouter(prefix="/pods/{pod_id}/notify", tags=["Notifications"])
 
 
 def _surface_response(
@@ -452,6 +459,53 @@ async def send_surface_message(
         )
     del user
     return SurfaceSendResponse(sent=True)
+
+
+@notify_router.post(
+    "",
+    response_model=NotifyMemberResponse,
+    operation_id="pod.notify",
+    dependencies=[require_action(Permissions.CONVERSATION_WRITE)],
+)
+async def notify_pod_member(
+    pod_id: UUID,
+    request: NotifyMemberRequest,
+    user: CurrentUser,
+) -> NotifyMemberResponse:
+    """Tell a pod member something, letting Lemma choose where to reach them.
+
+    Unlike ``surfaces/{name}/send``, which targets one named surface and needs a
+    thread the person already started, this picks whichever channel they last
+    used and always leaves the message in their Lemma inbox — so it cannot
+    silently reach nobody.
+
+    Gated on ``conversation.write`` rather than ``agent.update``: sending
+    somebody a message is not an act of editing agents, and requiring an editor
+    permission is what kept functions and apps from using this at all.
+    """
+    from app.modules.agent_surfaces.services.surface_display_delivery import (
+        notify_member,
+    )
+
+    outcome = await notify_member(
+        pod_id=pod_id,
+        recipient_user_id=request.user_id,
+        body=request.body,
+        title=request.title,
+        origin_type=NotificationOrigin.AGENT_RUN,
+    )
+    del user
+    if outcome is None:
+        raise HTTPException(
+            status_code=404, detail="That user is not a member of this pod."
+        )
+    return NotifyMemberResponse(
+        notification_id=outcome.notification_id,
+        conversation_id=outcome.conversation_id,
+        delivered_via=(
+            outcome.delivered_via.value if outcome.delivered_via else None
+        ),
+    )
 
 
 @router.get(

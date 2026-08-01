@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ..models.function_node import FunctionNode
     from ..models.loop_node import LoopNode
     from ..models.manual_workflow_start_input import ManualWorkflowStartInput
+    from ..models.notify_node import NotifyNode
     from ..models.scheduled_workflow_start_input import ScheduledWorkflowStartInput
     from ..models.wait_until_node import WaitUntilNode
     from ..models.workflow_edge import WorkflowEdge
@@ -37,11 +38,11 @@ class WorkflowCreateRequest:
         edges (list[WorkflowEdge] | Unset): Optional initial graph edges connecting the provided nodes.
         icon_url (None | str | Unset): Optional public icon URL for the workflow.
         mode (WorkflowMode | Unset): Workflow schedule ownership mode.
-        nodes (list[AgentNode | DecisionNode | EndNode | FormNode | FunctionNode | LoopNode | WaitUntilNode] | Unset):
-            Optional initial graph nodes. When provided, the graph is stored at creation time so a separate
-            `workflow.graph.update` call is not required. Omit (or pass an empty list) to create a shell and upload the
-            graph later. Node `input_mapping` entries must use explicit typed bindings like `{"type": "expression", "value":
-            "start.payload.x"}`.
+        nodes (list[AgentNode | DecisionNode | EndNode | FormNode | FunctionNode | LoopNode | NotifyNode |
+            WaitUntilNode] | Unset): Optional initial graph nodes. When provided, the graph is stored at creation time so a
+            separate `workflow.graph.update` call is not required. Omit (or pass an empty list) to create a shell and upload
+            the graph later. Node `input_mapping` entries must use explicit typed bindings like `{"type": "expression",
+            "value": "start.payload.x"}`.
         start (DataStoreWorkflowStartInput | EventWorkflowStartInput | ManualWorkflowStartInput | None |
             ScheduledWorkflowStartInput | Unset): Start configuration. If omitted, the workflow can be started manually via
             `workflow.start`.
@@ -61,6 +62,7 @@ class WorkflowCreateRequest:
             | FormNode
             | FunctionNode
             | LoopNode
+            | NotifyNode
             | WaitUntilNode
         ]
         | Unset
@@ -85,6 +87,7 @@ class WorkflowCreateRequest:
         from ..models.function_node import FunctionNode
         from ..models.loop_node import LoopNode
         from ..models.manual_workflow_start_input import ManualWorkflowStartInput
+        from ..models.notify_node import NotifyNode
         from ..models.scheduled_workflow_start_input import ScheduledWorkflowStartInput
         from ..models.wait_until_node import WaitUntilNode
 
@@ -129,6 +132,8 @@ class WorkflowCreateRequest:
                 elif isinstance(nodes_item_data, LoopNode):
                     nodes_item = nodes_item_data.to_dict()
                 elif isinstance(nodes_item_data, WaitUntilNode):
+                    nodes_item = nodes_item_data.to_dict()
+                elif isinstance(nodes_item_data, NotifyNode):
                     nodes_item = nodes_item_data.to_dict()
                 else:
                     nodes_item = nodes_item_data.to_dict()
@@ -188,6 +193,7 @@ class WorkflowCreateRequest:
         from ..models.function_node import FunctionNode
         from ..models.loop_node import LoopNode
         from ..models.manual_workflow_start_input import ManualWorkflowStartInput
+        from ..models.notify_node import NotifyNode
         from ..models.scheduled_workflow_start_input import ScheduledWorkflowStartInput
         from ..models.wait_until_node import WaitUntilNode
         from ..models.workflow_edge import WorkflowEdge
@@ -238,6 +244,7 @@ class WorkflowCreateRequest:
                 | FormNode
                 | FunctionNode
                 | LoopNode
+                | NotifyNode
                 | WaitUntilNode
             ]
             | Unset
@@ -255,6 +262,7 @@ class WorkflowCreateRequest:
                     | FormNode
                     | FunctionNode
                     | LoopNode
+                    | NotifyNode
                     | WaitUntilNode
                 ):
                     try:
@@ -305,11 +313,19 @@ class WorkflowCreateRequest:
                         return nodes_item_type_5
                     except TypeError, ValueError, AttributeError, KeyError:
                         pass
+                    try:
+                        if not isinstance(data, dict):
+                            raise TypeError()
+                        nodes_item_type_6 = NotifyNode.from_dict(data)
+
+                        return nodes_item_type_6
+                    except TypeError, ValueError, AttributeError, KeyError:
+                        pass
                     if not isinstance(data, dict):
                         raise TypeError()
-                    nodes_item_type_6 = EndNode.from_dict(data)
+                    nodes_item_type_7 = EndNode.from_dict(data)
 
-                    return nodes_item_type_6
+                    return nodes_item_type_7
 
                 nodes_item = _parse_nodes_item(nodes_item_data)
 

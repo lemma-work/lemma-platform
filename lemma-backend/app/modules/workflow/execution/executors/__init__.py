@@ -16,6 +16,7 @@ from app.modules.workflow.execution.executors.function import FunctionExecutor
 from app.modules.workflow.execution.executors.decision import DecisionExecutor
 from app.modules.workflow.execution.executors.loop import LoopExecutor
 from app.modules.workflow.execution.executors.wait_until import WaitUntilExecutor
+from app.modules.workflow.execution.executors.notify import NotifyExecutor
 from app.modules.workflow.execution.executors.end import EndExecutor
 
 
@@ -30,6 +31,7 @@ EXECUTOR_REGISTRY: dict[NodeType, NodeExecutor] = {
     NodeType.DECISION: DecisionExecutor(),
     NodeType.LOOP: LoopExecutor(),
     NodeType.WAIT_UNTIL: WaitUntilExecutor(),
+    NodeType.NOTIFY: NotifyExecutor(),
     NodeType.END: EndExecutor(),
 }
 

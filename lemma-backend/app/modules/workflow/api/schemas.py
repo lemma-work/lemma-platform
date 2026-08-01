@@ -32,6 +32,7 @@ from app.modules.workflow.domain.nodes import (
     DecisionNode,
     EndNode,
     FormNode,
+    NotifyNode,
     FunctionNode,
     LoopNode,
     WaitUntilNode,
@@ -386,6 +387,10 @@ class WaitUntilNodeResponse(WaitUntilNode):
     model_config = ConfigDict(from_attributes=True, title="WaitUntilNodeResponse")
 
 
+class NotifyNodeResponse(NotifyNode):
+    model_config = ConfigDict(from_attributes=True, title="NotifyNodeResponse")
+
+
 class EndNodeResponse(EndNode):
     model_config = ConfigDict(from_attributes=True, title="EndNodeResponse")
 
@@ -398,6 +403,7 @@ WorkflowNodeResponse = Annotated[
         | DecisionNodeResponse
         | LoopNodeResponse
         | WaitUntilNodeResponse
+        | NotifyNodeResponse
         | EndNodeResponse
     ),
     Field(discriminator="type"),

@@ -16,6 +16,9 @@ class NodeType(str, Enum):
     DECISION = "DECISION"
     LOOP = "LOOP"
     WAIT_UNTIL = "WAIT_UNTIL"
+    # Tell a person something and carry on. A FORM blocks the run until somebody
+    # answers; this one never suspends.
+    NOTIFY = "NOTIFY"
     END = "END"
 
 

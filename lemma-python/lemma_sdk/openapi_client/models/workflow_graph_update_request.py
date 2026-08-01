@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from ..models.function_node import FunctionNode
     from ..models.loop_node import LoopNode
     from ..models.manual_workflow_start_input import ManualWorkflowStartInput
+    from ..models.notify_node import NotifyNode
     from ..models.scheduled_workflow_start_input import ScheduledWorkflowStartInput
     from ..models.wait_until_node import WaitUntilNode
     from ..models.workflow_edge import WorkflowEdge
@@ -38,9 +39,10 @@ class WorkflowGraphUpdateRequest:
 
     Attributes:
         edges (list[WorkflowEdge]): Complete edge list connecting the provided nodes.
-        nodes (list[AgentNode | DecisionNode | EndNode | FormNode | FunctionNode | LoopNode | WaitUntilNode]): Complete
-            node list for the workflow graph. Agent/function `input_mapping` entries must use explicit typed bindings like
-            `{"type": "expression", "value": "start.payload.issue.key"}` or `{"type": "literal", "value": "finance"}`.
+        nodes (list[AgentNode | DecisionNode | EndNode | FormNode | FunctionNode | LoopNode | NotifyNode |
+            WaitUntilNode]): Complete node list for the workflow graph. Agent/function `input_mapping` entries must use
+            explicit typed bindings like `{"type": "expression", "value": "start.payload.issue.key"}` or `{"type":
+            "literal", "value": "finance"}`.
         start (DataStoreWorkflowStartInput | EventWorkflowStartInput | ManualWorkflowStartInput | None |
             ScheduledWorkflowStartInput | Unset): Optional replacement start configuration stored with the graph.
     """
@@ -53,6 +55,7 @@ class WorkflowGraphUpdateRequest:
         | FormNode
         | FunctionNode
         | LoopNode
+        | NotifyNode
         | WaitUntilNode
     ]
     start: (
@@ -74,6 +77,7 @@ class WorkflowGraphUpdateRequest:
         from ..models.function_node import FunctionNode
         from ..models.loop_node import LoopNode
         from ..models.manual_workflow_start_input import ManualWorkflowStartInput
+        from ..models.notify_node import NotifyNode
         from ..models.scheduled_workflow_start_input import ScheduledWorkflowStartInput
         from ..models.wait_until_node import WaitUntilNode
 
@@ -96,6 +100,8 @@ class WorkflowGraphUpdateRequest:
             elif isinstance(nodes_item_data, LoopNode):
                 nodes_item = nodes_item_data.to_dict()
             elif isinstance(nodes_item_data, WaitUntilNode):
+                nodes_item = nodes_item_data.to_dict()
+            elif isinstance(nodes_item_data, NotifyNode):
                 nodes_item = nodes_item_data.to_dict()
             else:
                 nodes_item = nodes_item_data.to_dict()
@@ -140,6 +146,7 @@ class WorkflowGraphUpdateRequest:
         from ..models.function_node import FunctionNode
         from ..models.loop_node import LoopNode
         from ..models.manual_workflow_start_input import ManualWorkflowStartInput
+        from ..models.notify_node import NotifyNode
         from ..models.scheduled_workflow_start_input import ScheduledWorkflowStartInput
         from ..models.wait_until_node import WaitUntilNode
         from ..models.workflow_edge import WorkflowEdge
@@ -165,6 +172,7 @@ class WorkflowGraphUpdateRequest:
                 | FormNode
                 | FunctionNode
                 | LoopNode
+                | NotifyNode
                 | WaitUntilNode
             ):
                 try:
@@ -215,11 +223,19 @@ class WorkflowGraphUpdateRequest:
                     return nodes_item_type_5
                 except TypeError, ValueError, AttributeError, KeyError:
                     pass
+                try:
+                    if not isinstance(data, dict):
+                        raise TypeError()
+                    nodes_item_type_6 = NotifyNode.from_dict(data)
+
+                    return nodes_item_type_6
+                except TypeError, ValueError, AttributeError, KeyError:
+                    pass
                 if not isinstance(data, dict):
                     raise TypeError()
-                nodes_item_type_6 = EndNode.from_dict(data)
+                nodes_item_type_7 = EndNode.from_dict(data)
 
-                return nodes_item_type_6
+                return nodes_item_type_7
 
             nodes_item = _parse_nodes_item(nodes_item_data)
 

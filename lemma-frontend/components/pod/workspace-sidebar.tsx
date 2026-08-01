@@ -57,6 +57,7 @@ import {
 } from '@/lib/assistant/sidebar-conversations';
 import { getAppRecipeExamples } from '@/lib/recipes/recipes';
 import type { Conversation } from '@/lib/types';
+import { NotificationsButton } from '@/components/notifications/notifications-button';
 import { getConversationStatusView } from '@/lib/utils/conversations';
 import { Skeleton } from '@/components/shared/loading';
 
@@ -775,6 +776,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 >
                     <Logo size="xs" variant="mark-only" />
                 </Link>
+                <NotificationsButton podId={podId} />
                 <DropdownMenu.Root>
                     <DropdownMenu.Trigger asChild>
                         <button

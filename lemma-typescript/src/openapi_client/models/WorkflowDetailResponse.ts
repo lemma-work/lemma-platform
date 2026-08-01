@@ -11,6 +11,7 @@ import type { FormNodeResponse } from './FormNodeResponse.js';
 import type { FunctionNodeResponse } from './FunctionNodeResponse.js';
 import type { LoopNodeResponse } from './LoopNodeResponse.js';
 import type { ManualWorkflowStartOutput } from './ManualWorkflowStartOutput.js';
+import type { NotifyNodeResponse } from './NotifyNodeResponse.js';
 import type { ScheduledWorkflowStartOutput } from './ScheduledWorkflowStartOutput.js';
 import type { WaitUntilNodeResponse } from './WaitUntilNodeResponse.js';
 import type { WorkflowEdge } from './WorkflowEdge.js';
@@ -25,7 +26,7 @@ export type WorkflowDetailResponse = {
     is_active?: boolean;
     mode?: WorkflowMode;
     name: string;
-    nodes?: Array<(FormNodeResponse | AgentNodeResponse | FunctionNodeResponse | DecisionNodeResponse | LoopNodeResponse | WaitUntilNodeResponse | EndNodeResponse)>;
+    nodes?: Array<(FormNodeResponse | AgentNodeResponse | FunctionNodeResponse | DecisionNodeResponse | LoopNodeResponse | WaitUntilNodeResponse | NotifyNodeResponse | EndNodeResponse)>;
     pod_id: string;
     start?: ((ManualWorkflowStartOutput | ScheduledWorkflowStartOutput | EventWorkflowStartOutput | DataStoreWorkflowStartOutput) | null);
     updated_at?: (string | null);

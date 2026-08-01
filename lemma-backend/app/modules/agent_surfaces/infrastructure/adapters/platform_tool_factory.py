@@ -90,12 +90,12 @@ class SurfacePlatformToolFactory:
                 credentials = await resolver.for_surface(surface, force_refresh=True)
             if not credentials:
                 return []
-            allow_send = surface.config.send_policy.allow_send
+            send_policy = surface.config.send_policy
 
         toolsets = [builder(credentials=credentials)]
         # The current-user surface_send_message tool, opt-in per surface and only
         # on chat surfaces (email replies go through the email reply tool).
         caps = get_platform_capabilities(surface.surface_type.value)
-        if allow_send and (caps is None or not caps.is_email):
+        if send_policy.allows_self and (caps is None or not caps.is_email):
             toolsets.append(build_surface_send_toolset())
         return toolsets

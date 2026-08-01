@@ -11,6 +11,7 @@ import type { FormNode } from './FormNode.js';
 import type { FunctionNode } from './FunctionNode.js';
 import type { LoopNode } from './LoopNode.js';
 import type { ManualWorkflowStartInput } from './ManualWorkflowStartInput.js';
+import type { NotifyNode } from './NotifyNode.js';
 import type { ScheduledWorkflowStartInput } from './ScheduledWorkflowStartInput.js';
 import type { WaitUntilNode } from './WaitUntilNode.js';
 import type { WorkflowEdge } from './WorkflowEdge.js';
@@ -25,7 +26,7 @@ export type WorkflowGraphUpdateRequest = {
     /**
      * Complete node list for the workflow graph. Agent/function `input_mapping` entries must use explicit typed bindings like `{"type": "expression", "value": "start.payload.issue.key"}` or `{"type": "literal", "value": "finance"}`.
      */
-    nodes: Array<(FormNode | AgentNode | FunctionNode | DecisionNode | LoopNode | WaitUntilNode | EndNode)>;
+    nodes: Array<(FormNode | AgentNode | FunctionNode | DecisionNode | LoopNode | WaitUntilNode | NotifyNode | EndNode)>;
     /**
      * Optional replacement start configuration stored with the graph.
      */

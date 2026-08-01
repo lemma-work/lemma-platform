@@ -275,6 +275,17 @@ _NAME_TO_MODULE = {
     'MessageResponse': 'message_response',
     'MessageResponseMetadataType0': 'message_response_metadata_type_0',
     'MessageResponseSchema': 'message_response_schema',
+    'NotificationListResponse': 'notification_list_response',
+    'NotificationOrigin': 'notification_origin',
+    'NotificationResponse': 'notification_response',
+    'NotificationUnreadCountResponse': 'notification_unread_count_response',
+    'NotifyMemberRequest': 'notify_member_request',
+    'NotifyMemberResponse': 'notify_member_response',
+    'NotifyNode': 'notify_node',
+    'NotifyNodeConfig': 'notify_node_config',
+    'NotifyNodePositionType0': 'notify_node_position_type_0',
+    'NotifyNodeResponse': 'notify_node_response',
+    'NotifyNodeResponsePositionType0': 'notify_node_response_position_type_0',
     'OAuth2DefaultsResponseSchema': 'o_auth_2_defaults_response_schema',
     'OAuth2DefaultsResponseSchemaExtraParams': 'o_auth_2_defaults_response_schema_extra_params',
     'OperationDetail': 'operation_detail',
@@ -376,6 +387,7 @@ _NAME_TO_MODULE = {
     'ScheduledWorkflowStartOutput': 'scheduled_workflow_start_output',
     'SearchMethod': 'search_method',
     'SearchResult': 'search_result',
+    'SendAudience': 'send_audience',
     'SendMessageRequest': 'send_message_request',
     'SendMessageRequestMetadataType0': 'send_message_request_metadata_type_0',
     'SetDefaultSurfaceRequest': 'set_default_surface_request',
@@ -768,6 +780,17 @@ if TYPE_CHECKING:
     from .message_response import MessageResponse
     from .message_response_metadata_type_0 import MessageResponseMetadataType0
     from .message_response_schema import MessageResponseSchema
+    from .notification_list_response import NotificationListResponse
+    from .notification_origin import NotificationOrigin
+    from .notification_response import NotificationResponse
+    from .notification_unread_count_response import NotificationUnreadCountResponse
+    from .notify_member_request import NotifyMemberRequest
+    from .notify_member_response import NotifyMemberResponse
+    from .notify_node import NotifyNode
+    from .notify_node_config import NotifyNodeConfig
+    from .notify_node_position_type_0 import NotifyNodePositionType0
+    from .notify_node_response import NotifyNodeResponse
+    from .notify_node_response_position_type_0 import NotifyNodeResponsePositionType0
     from .o_auth_2_defaults_response_schema import OAuth2DefaultsResponseSchema
     from .o_auth_2_defaults_response_schema_extra_params import OAuth2DefaultsResponseSchemaExtraParams
     from .operation_detail import OperationDetail
@@ -869,6 +892,7 @@ if TYPE_CHECKING:
     from .scheduled_workflow_start_output import ScheduledWorkflowStartOutput
     from .search_method import SearchMethod
     from .search_result import SearchResult
+    from .send_audience import SendAudience
     from .send_message_request import SendMessageRequest
     from .send_message_request_metadata_type_0 import SendMessageRequestMetadataType0
     from .set_default_surface_request import SetDefaultSurfaceRequest
@@ -1274,6 +1298,17 @@ __all__ = [
     'MessageResponse',
     'MessageResponseMetadataType0',
     'MessageResponseSchema',
+    'NotificationListResponse',
+    'NotificationOrigin',
+    'NotificationResponse',
+    'NotificationUnreadCountResponse',
+    'NotifyMemberRequest',
+    'NotifyMemberResponse',
+    'NotifyNode',
+    'NotifyNodeConfig',
+    'NotifyNodePositionType0',
+    'NotifyNodeResponse',
+    'NotifyNodeResponsePositionType0',
     'OAuth2DefaultsResponseSchema',
     'OAuth2DefaultsResponseSchemaExtraParams',
     'OperationDetail',
@@ -1375,6 +1410,7 @@ __all__ = [
     'ScheduledWorkflowStartOutput',
     'SearchMethod',
     'SearchResult',
+    'SendAudience',
     'SendMessageRequest',
     'SendMessageRequestMetadataType0',
     'SetDefaultSurfaceRequest',

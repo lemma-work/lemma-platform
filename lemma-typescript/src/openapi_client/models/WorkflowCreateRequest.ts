@@ -11,6 +11,7 @@ import type { FormNode } from './FormNode.js';
 import type { FunctionNode } from './FunctionNode.js';
 import type { LoopNode } from './LoopNode.js';
 import type { ManualWorkflowStartInput } from './ManualWorkflowStartInput.js';
+import type { NotifyNode } from './NotifyNode.js';
 import type { ResourceVisibility } from './ResourceVisibility.js';
 import type { ScheduledWorkflowStartInput } from './ScheduledWorkflowStartInput.js';
 import type { WaitUntilNode } from './WaitUntilNode.js';
@@ -40,7 +41,7 @@ export type WorkflowCreateRequest = {
     /**
      * Optional initial graph nodes. When provided, the graph is stored at creation time so a separate `workflow.graph.update` call is not required. Omit (or pass an empty list) to create a shell and upload the graph later. Node `input_mapping` entries must use explicit typed bindings like `{"type": "expression", "value": "start.payload.x"}`.
      */
-    nodes?: Array<(FormNode | AgentNode | FunctionNode | DecisionNode | LoopNode | WaitUntilNode | EndNode)>;
+    nodes?: Array<(FormNode | AgentNode | FunctionNode | DecisionNode | LoopNode | WaitUntilNode | NotifyNode | EndNode)>;
     /**
      * Start configuration. If omitted, the workflow can be started manually via `workflow.start`.
      */

@@ -62,6 +62,83 @@ def build_agent_surface_ingress_service(
     )
 
 
+def build_notification_service(uow: SqlAlchemyUnitOfWork):
+    """Construct the notification service from a unit of work.
+
+    Same shape as :func:`build_agent_surface_ingress_service` and for the same
+    reason: the delivery path must not depend on a FastAPI request or a worker
+    context, because schedules, workflows and agent tools all reach it from
+    different places.
+    """
+    from app.composition.surface_agent import get_conversation_service
+    from app.modules.agent.infrastructure.repositories import ConversationRepository
+    from app.modules.agent_surfaces.api.dependencies import surface_repository_factory
+    from app.modules.agent_surfaces.infrastructure.adapters.routing_resolution_adapter import (
+        SqlAlchemySurfaceRoutingResolutionAdapter,
+    )
+    from app.modules.agent_surfaces.infrastructure.repositories.member_reach_repository import (
+        MemberReachRepository,
+    )
+    from app.modules.agent_surfaces.infrastructure.repositories.notification_repository import (
+        NotificationRepository,
+    )
+    from app.modules.agent_surfaces.infrastructure.repositories.surface_repository import (
+        SurfaceConversationLinkRepository,
+    )
+    from app.modules.agent_surfaces.services.notification_service import (
+        NotificationService,
+    )
+
+    return NotificationService(
+        uow=uow,
+        reach_repository=MemberReachRepository(uow),
+        notification_repository=NotificationRepository(uow),
+        conversation_repository=ConversationRepository(uow),
+        surface_repository=surface_repository_factory(uow),
+        conversation_link_repository=SurfaceConversationLinkRepository(uow),
+        conversation_service=get_conversation_service(uow),
+        ingress_service=build_agent_surface_ingress_service(uow),
+        pod_membership_port=SqlAlchemySurfaceRoutingResolutionAdapter(uow),
+    )
+
+
+async def notify_member(
+    *,
+    pod_id: UUID,
+    recipient_user_id: UUID,
+    body: str,
+    title: str | None = None,
+    agent_id: UUID | None = None,
+    agent_name: str | None = None,
+    origin_type: Any | None = None,
+    origin_id: UUID | None = None,
+    conversation_id: UUID | None = None,
+    attribution: str | None = None,
+):
+    """Tell a pod member something, from anywhere.
+
+    Opens its own short unit of work and commits, so callers that have no
+    session in hand — an agent tool mid-run, a workflow executor, a schedule
+    handler — can reach a person without threading a uow through.
+    """
+    async with create_uow_from_session_maker(async_session_maker) as uow:
+        service = build_notification_service(uow)
+        outcome = await service.notify(
+            pod_id=pod_id,
+            recipient_user_id=recipient_user_id,
+            body=body,
+            title=title,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            origin_type=origin_type,
+            origin_id=origin_id,
+            conversation_id=conversation_id,
+            attribution=attribution,
+        )
+        await uow.commit()
+        return outcome
+
+
 async def deliver_display_resource_to_surface(
     *,
     conversation_id: UUID,

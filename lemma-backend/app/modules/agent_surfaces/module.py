@@ -12,8 +12,12 @@ logger = get_logger(__name__)
 def _routers():
     from app.modules.agent_surfaces.api.controllers.surface_controller import (
         available_surfaces_router as surface_catalog,
+        notify_router as pod_notify,
         router as surface,
         setup_guide_router as surface_setup_guide,
+    )
+    from app.modules.agent_surfaces.api.controllers.notification_controller import (
+        router as notifications,
     )
     from app.modules.agent_surfaces.api.controllers.user_surfaces_controller import (
         router as user_surfaces,
@@ -31,6 +35,8 @@ def _routers():
         surface_catalog,
         telegram_manager,
         user_surfaces,
+        pod_notify,
+        notifications,
         surface_public,
     ]
 

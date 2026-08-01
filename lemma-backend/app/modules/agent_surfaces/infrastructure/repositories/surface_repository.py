@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 from sqlalchemy.orm import Session
 
 from app.core.crypto import get_secret_cipher
@@ -456,6 +457,8 @@ class SurfaceConversationLinkRepository:
             route_key=link.route_key,
             last_event=link.last_event,
             last_message_id=link.last_message_id,
+            # A link is only ever created by an inbound event.
+            last_inbound_at=link.last_inbound_at or datetime.now(timezone.utc),
         )
         self.session.add(model)
         await self.session.flush()
@@ -473,8 +476,38 @@ class SurfaceConversationLinkRepository:
             return None
         model.last_event = last_event
         model.last_message_id = last_message_id
+        # This method is only reached from the inbound path, so it is the one
+        # place inbound recency is stamped. Proactive sends repoint the
+        # conversation without touching it — that separation is the whole point
+        # of the column.
+        model.last_inbound_at = datetime.now(timezone.utc)
         await self.session.flush()
         return model.to_entity()
+
+    async def repoint_conversation(
+        self,
+        *,
+        link_id: UUID,
+        conversation_id: UUID,
+        expected_conversation_id: UUID,
+    ) -> bool:
+        """Move a thread onto a new conversation, but only if it has not moved.
+
+        Compare-and-set rather than read-then-write: a proactive send opening a
+        conversation races an inbound event doing the same thing, and losing that
+        race silently would either strand the notification on an abandoned
+        conversation or split one thread across two.
+        """
+        result = await self.session.execute(
+            sa_update(AgentSurfaceConversationLinkModel)
+            .where(
+                AgentSurfaceConversationLinkModel.id == link_id,
+                AgentSurfaceConversationLinkModel.conversation_id
+                == expected_conversation_id,
+            )
+            .values(conversation_id=conversation_id)
+        )
+        return bool(result.rowcount)
 
     async def update_conversation(
         self,

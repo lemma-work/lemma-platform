@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -8,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.modules.connectors.contracts import AuthScheme
 from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceStatus,
+    NotificationOrigin,
+    SendAudience,
     SurfaceChannelRoute,
     SurfaceConfig,
     SurfaceCredentialMode,
@@ -44,9 +47,33 @@ class SurfaceChannelRouteInput(BaseModel):
 
 
 class SurfaceSendPolicyConfig(BaseModel):
-    """Proactive-send controls. Mirrored across request and response."""
+    """Proactive-send controls. Mirrored across request and response.
 
-    allow_send: bool = False
+    ``audience`` is the field to set. ``allow_send`` is the original boolean,
+    still accepted so existing clients and stored bundles keep working: it maps
+    to ``SELF`` / ``NOBODY``. When both are present, ``audience`` wins.
+    """
+
+    audience: SendAudience = SendAudience.NOBODY
+    max_messages_per_recipient_per_hour: int = 6
+    allow_send: bool | None = None
+
+    def to_domain(self) -> SurfaceSendPolicy:
+        return SurfaceSendPolicy.model_validate(
+            self.model_dump(exclude_none=True, exclude_unset=True)
+        )
+
+    @classmethod
+    def from_domain(cls, policy: SurfaceSendPolicy) -> "SurfaceSendPolicyConfig":
+        return cls(
+            audience=policy.audience,
+            max_messages_per_recipient_per_hour=(
+                policy.max_messages_per_recipient_per_hour
+            ),
+            # Echoed so a client written against the boolean still reads a
+            # truthful answer instead of silently seeing nothing.
+            allow_send=policy.allows_self,
+        )
 
 
 class SurfaceTelegramConfigInput(BaseModel):
@@ -107,7 +134,12 @@ class SurfaceConfigResponse(BaseModel):
 
     @classmethod
     def from_domain(cls, config: SurfaceConfig) -> "SurfaceConfigResponse":
-        return cls.model_validate(config.model_dump(mode="json"))
+        response = cls.model_validate(config.model_dump(mode="json"))
+        # The domain policy excludes the deprecated boolean from its dump, so
+        # rebuild the response policy explicitly — a client still reading
+        # ``allow_send`` must get a true answer, not a missing field.
+        response.send_policy = SurfaceSendPolicyConfig.from_domain(config.send_policy)
+        return response
 
 
 def surface_config_from_input(
@@ -124,7 +156,7 @@ def surface_config_from_input(
             allowed_email_addresses=config_input.identity.allowed_email_addresses,
         ),
         channels=channel_routes,
-        send_policy=SurfaceSendPolicy(allow_send=config_input.send_policy.allow_send),
+        send_policy=config_input.send_policy.to_domain(),
         telegram=SurfaceTelegramConfig(app_name=config_input.telegram.app_name),
     )
 
@@ -228,6 +260,45 @@ class AgentSurfaceResponse(BaseModel):
     status: AgentSurfaceStatus = AgentSurfaceStatus.ACTIVE
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationResponse(BaseModel):
+    id: UUID
+    pod_id: UUID
+    conversation_id: UUID | None = None
+    agent_id: UUID | None = None
+    title: str | None = None
+    body: str
+    origin_type: NotificationOrigin | None = None
+    origin_id: UUID | None = None
+    read_at: datetime | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationListResponse(BaseModel):
+    items: list[NotificationResponse]
+    unread_count: int = 0
+
+
+class NotificationUnreadCountResponse(BaseModel):
+    unread_count: int = 0
+
+
+class NotifyMemberRequest(BaseModel):
+    """Reach one pod member, letting Lemma choose where."""
+
+    user_id: UUID
+    body: str = Field(min_length=1)
+    title: str | None = None
+
+
+class NotifyMemberResponse(BaseModel):
+    notification_id: UUID
+    conversation_id: UUID | None = None
+    # APP means only the Lemma inbox has it.
+    delivered_via: str | None = None
 
 
 class AgentSurfaceListResponse(BaseModel):

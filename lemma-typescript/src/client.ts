@@ -21,6 +21,7 @@ import { PodPermissionsNamespace } from "./namespaces/pod-permissions.js";
 import { PodJoinRequestsNamespace } from "./namespaces/pod-join-requests.js";
 import { PodsNamespace } from "./namespaces/pods.js";
 import { PodRolesNamespace } from "./namespaces/pod-roles.js";
+import { NotificationsNamespace, PodNotifyNamespace } from "./namespaces/notifications.js";
 import { PodSurfacesNamespace } from "./namespaces/pod-surfaces.js";
 import { UserSurfacesNamespace } from "./namespaces/user-surfaces.js";
 import { RecordsNamespace } from "./namespaces/records.js";
@@ -82,6 +83,10 @@ export class LemmaClient {
   readonly podSurfaces: PodSurfacesNamespace;
   /** The caller's own surfaces across all pods (grouped by platform). */
   readonly userSurfaces: UserSurfacesNamespace;
+  /** The caller's own in-app inbox, across every pod. */
+  readonly notifications: NotificationsNamespace;
+  /** Reach a member of the current pod, letting Lemma pick the channel. */
+  readonly notify: PodNotifyNamespace;
 
   constructor(
     overrides: Partial<LemmaConfig> = {},
@@ -142,6 +147,8 @@ export class LemmaClient {
     this.organizations = new OrganizationsNamespace(this._generated, this._http);
     this.podSurfaces = new PodSurfacesNamespace(this._generated);
     this.userSurfaces = new UserSurfacesNamespace(this._generated);
+    this.notifications = new NotificationsNamespace(this._generated);
+    this.notify = new PodNotifyNamespace(this._generated, podIdFn);
   }
 
   /** Change the active pod ID for subsequent calls. */

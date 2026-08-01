@@ -27,6 +27,10 @@ class SurfaceConfigResponse:
         dm_conversation_reset_after_hours (int | Unset):  Default: 24.
         identity (SurfaceIdentityConfigResponse | Unset):
         send_policy (SurfaceSendPolicyConfig | Unset): Proactive-send controls. Mirrored across request and response.
+
+            ``audience`` is the field to set. ``allow_send`` is the original boolean,
+            still accepted so existing clients and stored bundles keep working: it maps
+            to ``SELF`` / ``NOBODY``. When both are present, ``audience`` wins.
         telegram (SurfaceTelegramConfigInput | Unset): Selects the pod app exposed as this bot's Telegram Mini App.
     """
 

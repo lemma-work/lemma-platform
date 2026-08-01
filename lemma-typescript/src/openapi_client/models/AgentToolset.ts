@@ -14,5 +14,6 @@ export enum AgentToolset {
     POD = 'POD',
     SUBAGENTS = 'SUBAGENTS',
     TODO = 'TODO',
+    MESSAGING = 'MESSAGING',
     VIEW_IMAGE = 'VIEW_IMAGE',
 }

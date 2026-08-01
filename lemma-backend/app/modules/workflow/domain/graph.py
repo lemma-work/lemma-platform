@@ -20,6 +20,7 @@ from app.modules.workflow.domain.nodes import (
     FormNode,
     LoopNode,
     NodeType,
+    NotifyNode,
     RESERVED_NODE_IDS,
     WorkflowNode,
 )
@@ -119,6 +120,26 @@ class WorkflowGraphValidator:
                     issues.append(
                         f"node '{node.id}' has {len(node_edges)} outgoing edges; only "
                         "decision nodes may branch"
+                    )
+            if isinstance(node, NotifyNode):
+                # Surface a bad recipient expression at save time, like every
+                # other binding — a notify that silently resolves to nobody is
+                # indistinguishable from one that was never configured.
+                if node.config.recipient_user_id_expression:
+                    issues.extend(
+                        cls._expression_issues(
+                            node.id,
+                            "recipient_user_id_expression",
+                            node.config.recipient_user_id_expression,
+                        )
+                    )
+                if (
+                    not node.config.recipient_user_id
+                    and not node.config.recipient_user_id_expression
+                ):
+                    issues.append(
+                        f"notify node '{node.id}' has no recipient; set "
+                        "recipient_user_id or recipient_user_id_expression"
                     )
             if isinstance(node, FormNode):
                 if node.config.assignee_pod_member_id_expression:

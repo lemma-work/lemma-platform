@@ -2387,6 +2387,7 @@
           "POD",
           "SUBAGENTS",
           "TODO",
+          "MESSAGING",
           "VIEW_IMAGE"
         ],
         "title": "AgentToolset",
@@ -8426,6 +8427,366 @@
         "title": "MessageResponseSchema",
         "type": "object"
       },
+      "NotificationListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NotificationResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "unread_count": {
+            "default": 0,
+            "title": "Unread Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "NotificationListResponse",
+        "type": "object"
+      },
+      "NotificationOrigin": {
+        "description": "What produced a notification. Answers \"why am I being told this?\".",
+        "enum": [
+          "SCHEDULE_RUN",
+          "WORKFLOW_RUN",
+          "AGENT_RUN"
+        ],
+        "title": "NotificationOrigin",
+        "type": "string"
+      },
+      "NotificationResponse": {
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "origin_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Id"
+          },
+          "origin_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NotificationOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "id",
+          "pod_id",
+          "body",
+          "created_at"
+        ],
+        "title": "NotificationResponse",
+        "type": "object"
+      },
+      "NotificationUnreadCountResponse": {
+        "properties": {
+          "unread_count": {
+            "default": 0,
+            "title": "Unread Count",
+            "type": "integer"
+          }
+        },
+        "title": "NotificationUnreadCountResponse",
+        "type": "object"
+      },
+      "NotifyMemberRequest": {
+        "description": "Reach one pod member, letting Lemma choose where.",
+        "properties": {
+          "body": {
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "body"
+        ],
+        "title": "NotifyMemberRequest",
+        "type": "object"
+      },
+      "NotifyMemberResponse": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "delivered_via": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered Via"
+          },
+          "notification_id": {
+            "format": "uuid",
+            "title": "Notification Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "notification_id"
+        ],
+        "title": "NotifyMemberResponse",
+        "type": "object"
+      },
+      "NotifyNode": {
+        "description": "Notify node. Delivers to the member's freshest channel and always to\ntheir Lemma inbox, then advances \u2014 it does not wait for a reply.",
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/NotifyNodeConfig"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "type": {
+            "const": "NOTIFY",
+            "default": "NOTIFY",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "config"
+        ],
+        "title": "NotifyNode",
+        "type": "object"
+      },
+      "NotifyNodeConfig": {
+        "description": "Who to tell, and what.\n\nDistinct from a FORM node: a form *blocks* the run until somebody answers,\nwhich is right when the run needs their input and wrong when it merely needs\nthem informed. This node never suspends.",
+        "properties": {
+          "message": {
+            "description": "What to say. Supports the same expression interpolation as other node inputs, so it can carry values from earlier steps.",
+            "title": "Message",
+            "type": "string"
+          },
+          "recipient_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pod member to notify.",
+            "title": "Recipient User Id"
+          },
+          "recipient_user_id_expression": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional JMESPath expression resolving to a pod member id. Takes precedence over recipient_user_id.",
+            "title": "Recipient User Id Expression"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional short subject line for the inbox.",
+            "title": "Title"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "NotifyNodeConfig",
+        "type": "object"
+      },
+      "NotifyNodeResponse": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/NotifyNodeConfig"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "type": {
+            "const": "NOTIFY",
+            "default": "NOTIFY",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "config"
+        ],
+        "title": "NotifyNodeResponse",
+        "type": "object"
+      },
       "OAuth2DefaultsResponseSchema": {
         "properties": {
           "access_token_path": {
@@ -11537,6 +11898,16 @@
         "title": "SearchResult",
         "type": "object"
       },
+      "SendAudience": {
+        "description": "Who an agent on this surface is allowed to reach unprompted.",
+        "enum": [
+          "NOBODY",
+          "SELF",
+          "POD_MEMBERS"
+        ],
+        "title": "SendAudience",
+        "type": "string"
+      },
       "SendMessageRequest": {
         "properties": {
           "content": {
@@ -12108,12 +12479,27 @@
         "type": "object"
       },
       "SurfaceSendPolicyConfig": {
-        "description": "Proactive-send controls. Mirrored across request and response.",
+        "description": "Proactive-send controls. Mirrored across request and response.\n\n``audience`` is the field to set. ``allow_send`` is the original boolean,\nstill accepted so existing clients and stored bundles keep working: it maps\nto ``SELF`` / ``NOBODY``. When both are present, ``audience`` wins.",
         "properties": {
           "allow_send": {
-            "default": false,
-            "title": "Allow Send",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow Send"
+          },
+          "audience": {
+            "$ref": "#/components/schemas/SendAudience",
+            "default": "NOBODY"
+          },
+          "max_messages_per_recipient_per_hour": {
+            "default": 6,
+            "title": "Max Messages Per Recipient Per Hour",
+            "type": "integer"
           }
         },
         "title": "SurfaceSendPolicyConfig",
@@ -14883,6 +15269,7 @@
                   "FORM": "#/components/schemas/FormNode",
                   "FUNCTION": "#/components/schemas/FunctionNode",
                   "LOOP": "#/components/schemas/LoopNode",
+                  "NOTIFY": "#/components/schemas/NotifyNode",
                   "WAIT_UNTIL": "#/components/schemas/WaitUntilNode"
                 },
                 "propertyName": "type"
@@ -14905,6 +15292,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/WaitUntilNode"
+                },
+                {
+                  "$ref": "#/components/schemas/NotifyNode"
                 },
                 {
                   "$ref": "#/components/schemas/EndNode"
@@ -15037,6 +15427,7 @@
                   "FORM": "#/components/schemas/FormNodeResponse",
                   "FUNCTION": "#/components/schemas/FunctionNodeResponse",
                   "LOOP": "#/components/schemas/LoopNodeResponse",
+                  "NOTIFY": "#/components/schemas/NotifyNodeResponse",
                   "WAIT_UNTIL": "#/components/schemas/WaitUntilNodeResponse"
                 },
                 "propertyName": "type"
@@ -15059,6 +15450,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/WaitUntilNodeResponse"
+                },
+                {
+                  "$ref": "#/components/schemas/NotifyNodeResponse"
                 },
                 {
                   "$ref": "#/components/schemas/EndNodeResponse"
@@ -15222,6 +15616,7 @@
                   "FORM": "#/components/schemas/FormNode",
                   "FUNCTION": "#/components/schemas/FunctionNode",
                   "LOOP": "#/components/schemas/LoopNode",
+                  "NOTIFY": "#/components/schemas/NotifyNode",
                   "WAIT_UNTIL": "#/components/schemas/WaitUntilNode"
                 },
                 "propertyName": "type"
@@ -15244,6 +15639,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/WaitUntilNode"
+                },
+                {
+                  "$ref": "#/components/schemas/NotifyNode"
                 },
                 {
                   "$ref": "#/components/schemas/EndNode"
@@ -16331,7 +16729,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.1"
+    "version": "0.8.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -17167,6 +17565,261 @@
           "resource": "agent.host.harnesses",
           "result": "collection",
           "verb": "list"
+        }
+      }
+    },
+    "/notifications": {
+      "get": {
+        "description": "The current user's notifications, newest first.",
+        "operationId": "notification.list",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pod_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pod Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "unread_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Unread Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Notifications",
+        "tags": [
+          "Notifications"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "notification",
+          "result": "collection",
+          "verb": "list"
+        }
+      }
+    },
+    "/notifications/read-all": {
+      "post": {
+        "operationId": "notification.mark_all_read",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pod_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pod Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark All Read",
+        "tags": [
+          "Notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "notification"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "mark_all_read"
+        }
+      }
+    },
+    "/notifications/unread-count": {
+      "get": {
+        "description": "Just the badge number \u2014 the one query on the render hot path.",
+        "operationId": "notification.unread_count",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "pod_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pod Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationUnreadCountResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unread Count",
+        "tags": [
+          "Notifications"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "unread_count"
+        }
+      }
+    },
+    "/notifications/{notification_id}/read": {
+      "post": {
+        "description": "Mark one notification read.\n\nScoped to the caller, so a notification id alone is never enough to reach\ninto somebody else's inbox. Already-read is success, not a 404 \u2014 marking\ntwice is what a double click looks like.",
+        "operationId": "notification.mark_read",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Notification Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Read",
+        "tags": [
+          "Notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "notification"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "notification",
+          "result": "entity",
+          "verb": "mark_read"
         }
       }
     },
@@ -26657,6 +27310,70 @@
           "resource": "pod.member",
           "result": "entity",
           "verb": "update_roles"
+        }
+      }
+    },
+    "/pods/{pod_id}/notify": {
+      "post": {
+        "description": "Tell a pod member something, letting Lemma choose where to reach them.\n\nUnlike ``surfaces/{name}/send``, which targets one named surface and needs a\nthread the person already started, this picks whichever channel they last\nused and always leaves the message in their Lemma inbox \u2014 so it cannot\nsilently reach nobody.\n\nGated on ``conversation.write`` rather than ``agent.update``: sending\nsomebody a message is not an act of editing agents, and requiring an editor\npermission is what kept functions and apps from using this at all.",
+        "operationId": "pod.notify",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotifyMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotifyMemberResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Notify Pod Member",
+        "tags": [
+          "Notifications"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "pod"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "pod",
+          "result": "entity",
+          "verb": "notify"
         }
       }
     },

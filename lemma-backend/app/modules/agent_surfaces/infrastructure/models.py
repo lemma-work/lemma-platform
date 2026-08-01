@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, UniqueConstraint
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,10 +22,16 @@ from app.modules.agent_surfaces.domain.entities import (
     AgentSurfaceEntity,
     AgentSurfaceStatus,
     ExternalSurfaceUserEntity,
+    MemberReach,
+    Notification,
+    NotificationOrigin,
+    ReachKind,
+    ReachStatus,
     SurfaceCredentialMode,
     SurfaceEventMode,
     SurfaceMode,
     SurfacePlatform,
+    SurfaceTarget,
 )
 
 
@@ -135,6 +149,134 @@ class AgentSurfaceExternalUser(UUIDAuditBase):
         return ExternalSurfaceUserEntity.model_validate(self)
 
 
+class MemberReachModel(UUIDAuditBase):
+    """How a pod can reach one person on one channel."""
+
+    __tablename__ = "member_reaches"
+    __table_args__ = (
+        # A person has at most one reach per channel per pod. Two indexes rather
+        # than one because the APP reach has no surface, and Postgres treats
+        # NULLs as distinct in a unique constraint — a single index would happily
+        # admit duplicate APP rows.
+        Index(
+            "uq_member_reach_pod_user_kind_surface",
+            "pod_id",
+            "user_id",
+            "kind",
+            "surface_id",
+            unique=True,
+            postgresql_where=text("surface_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_member_reach_pod_user_kind_app",
+            "pod_id",
+            "user_id",
+            "kind",
+            unique=True,
+            postgresql_where=text("surface_id IS NULL"),
+        ),
+        # The delivery-path query: every live reach for one person in one pod.
+        Index("ix_member_reach_pod_user_status", "pod_id", "user_id", "status"),
+    )
+
+    pod_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pods.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    surface_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_surfaces.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    external_user_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="ACTIVE", server_default="ACTIVE"
+    )
+    last_inbound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    window_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    opted_out_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def to_entity(self) -> MemberReach:
+        return MemberReach(
+            id=self.id,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            pod_id=self.pod_id,
+            user_id=self.user_id,
+            kind=ReachKind(self.kind),
+            surface_id=self.surface_id,
+            external_user_id=self.external_user_id,
+            target=SurfaceTarget.model_validate(self.target) if self.target else None,
+            status=ReachStatus(self.status or ReachStatus.ACTIVE.value),
+            last_inbound_at=self.last_inbound_at,
+            window_expires_at=self.window_expires_at,
+            opted_out_at=self.opted_out_at,
+        )
+
+
+class NotificationModel(UUIDAuditBase):
+    """One thing a person is being told, in Lemma itself."""
+
+    __tablename__ = "notifications"
+    __table_args__ = (
+        # The badge query, and the only one on the render hot path.
+        Index(
+            "ix_notification_user_unread",
+            "user_id",
+            postgresql_where=text("read_at IS NULL"),
+        ),
+        Index("ix_notification_pod_user_created", "pod_id", "user_id", "created_at"),
+    )
+
+    pod_id: Mapped[UUID] = mapped_column(
+        ForeignKey("pods.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    conversation_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    agent_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    origin_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    origin_id: Mapped[UUID | None] = mapped_column(nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def to_entity(self) -> Notification:
+        return Notification(
+            id=self.id,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            pod_id=self.pod_id,
+            user_id=self.user_id,
+            conversation_id=self.conversation_id,
+            agent_id=self.agent_id,
+            title=self.title,
+            body=self.body,
+            origin_type=(
+                NotificationOrigin(self.origin_type) if self.origin_type else None
+            ),
+            origin_id=self.origin_id,
+            read_at=self.read_at,
+        )
+
+
 class AgentSurfaceConversationLinkModel(UUIDAuditBase):
     __tablename__ = "agent_surface_conversation_links"
     __table_args__ = (
@@ -175,6 +317,13 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
     route_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
     last_event: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     last_message_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # When this thread last heard from the *person*. Distinct from updated_at,
+    # which a proactive send also bumps — the DM reset rule has to key off
+    # inbound recency or an agent message silently suppresses the reset and
+    # leaks yesterday's context into today.
+    last_inbound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     def to_entity(self) -> AgentSurfaceConversationLink:
         return AgentSurfaceConversationLink(
@@ -192,4 +341,5 @@ class AgentSurfaceConversationLinkModel(UUIDAuditBase):
             route_key=self.route_key,
             last_event=self.last_event or {},
             last_message_id=self.last_message_id,
+            last_inbound_at=self.last_inbound_at,
         )
