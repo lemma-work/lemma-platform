@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma App Design"
+  short_description: "Design distinctive, production-quality pod apps"
+  default_prompt: "Use $lemma-app-design to design and visually refine a distinctive, accessible Lemma app grounded in real pod work."

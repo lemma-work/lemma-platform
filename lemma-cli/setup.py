@@ -51,8 +51,8 @@ def _vendor_skills() -> None:
         raise SystemExit(
             "Cannot build lemma-terminal: lemma-skills source not found at "
             f"{_SKILLS_SOURCE} and no vendored skills at {_SKILLS_DEST}. "
-            "Build from the monorepo (so ../lemma-skills exists) or run "
-            "scripts/sync_cli_skills.py first."
+            "Build from the monorepo so ../lemma-skills exists, or provide an "
+            "sdist that already contains the vendored skill directory."
         )
 
 

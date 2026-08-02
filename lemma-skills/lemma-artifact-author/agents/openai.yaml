@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma Artifact Author"
+  short_description: "Create and verify durable work artifacts"
+  default_prompt: "Use $lemma-artifact-author to create, revise, render, verify, and save a polished document, spreadsheet, presentation, PDF, or HTML artifact."

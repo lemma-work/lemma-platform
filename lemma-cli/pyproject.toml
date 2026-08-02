@@ -92,10 +92,9 @@ lemma_cli = [
     "cli_core/assets/app_vite_template/*",
     "cli_core/assets/app_vite_template/**/*",
     "cli_core/assets/app_vite_template/gitignore",
-    # Vendored agent skills (synced from repo-root lemma-skills/ by
-    # scripts/sync_cli_skills.py before build; grafted into the sdist via
-    # MANIFEST.in). Ship inside the wheel so `lemma skills install` works with
-    # no repo checkout present.
+    # Agent skills vendored from repo-root lemma-skills/ by the setup.py build
+    # hooks and grafted into the sdist via MANIFEST.in. Ship them inside the
+    # wheel so `lemma skills install` works with no repo checkout present.
     "skills/**",
     "skills/**/*",
 ]

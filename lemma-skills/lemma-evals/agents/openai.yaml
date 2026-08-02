@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma Evals"
+  short_description: "Evaluate agents, functions, and workflows"
+  default_prompt: "Use $lemma-evals to design and run repeatable evaluations for Lemma agents, functions, or workflows and report regressions."
