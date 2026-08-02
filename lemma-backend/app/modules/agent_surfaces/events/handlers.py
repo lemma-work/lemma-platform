@@ -149,18 +149,29 @@ async def _process_surface_webhook(
     consumer="surface-schedule-events-consumer",
 )
 async def handle_surface_schedule_event(
-    event: ScheduleFired,
+    event: dict,
     fs_logger: Logger,
     uow_factory: UnitOfWorkFactory = Depends(provide_uow_factory),
     job_queue: SharedStreaqJobQueue = Depends(provide_job_queue),
     inbox: EventInboxPort = Depends(provide_domain_event_inbox),
 ) -> None:
+    # ``schedule_events`` carries the lifecycle events too (created, updated,
+    # deleted, deactivated). Only fires reach a surface, so the parameter stays
+    # untyped and the fire is parsed after the tag check — declaring
+    # ``ScheduleFired`` here instead makes every lifecycle event a validation
+    # error that is redelivered forever, because a poison message is never
+    # acked and XAUTOCLAIM keeps reclaiming it.
+    if event.get("event_type") != ScheduleFired.get_event_type():
+        return
+
+    fired = ScheduleFired.model_validate(event)
+
     async def process() -> None:
         await _process_surface_schedule_event(
-            event, fs_logger, uow_factory=uow_factory, job_queue=job_queue
+            fired, fs_logger, uow_factory=uow_factory, job_queue=job_queue
         )
 
-    await inbox.process("agent-surfaces.schedule", event, process)
+    await inbox.process("agent-surfaces.schedule", fired, process)
 
 
 async def _process_surface_schedule_event(
