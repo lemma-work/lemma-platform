@@ -29,9 +29,13 @@ _SKILL_PROVIDERS = frozenset({"lemma", "composio", "package", "http", "sql", "mc
 def _resolve_skill_file(connector_id: str, provider: str | None) -> Path | None:
     """Resolve a skill doc: provider-specific, then generic, else None.
 
-    Both components are validated against a fixed shape rather than sanitized,
-    and the resolved path is re-checked for containment afterwards -- so even a
-    future change to the naming scheme cannot turn this into a file read.
+    The request never contributes to a path. Both components are validated
+    against a fixed shape, and the result is then used to *select* from the
+    directory's own listing by name -- so the returned path is always one the
+    server enumerated, and traversal has nothing to act on. Building the path
+    and re-checking containment afterwards would also be safe today, but only
+    for as long as every check stayed correct; selection has nothing to get
+    wrong.
     """
     if not _CONNECTOR_ID_RE.match(connector_id or ""):
         return None
@@ -41,12 +45,15 @@ def _resolve_skill_file(connector_id: str, provider: str | None) -> Path | None:
         candidates.append(f"{connector_id}.{provider.lower()}.md")
     candidates.append(f"{connector_id}.md")
 
+    try:
+        available = {entry.name: entry for entry in SKILLS_DIR.iterdir() if entry.is_file()}
+    except OSError:
+        return None
+
     for name in candidates:
-        candidate = (SKILLS_DIR / name).resolve()
-        if SKILLS_DIR not in candidate.parents:
-            continue
-        if candidate.is_file():
-            return candidate
+        found = available.get(name)
+        if found is not None:
+            return found
     return None
 
 router = APIRouter(prefix="/connectors", tags=["Connectors"])

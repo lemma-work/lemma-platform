@@ -9,12 +9,13 @@ set — ``query`` / ``list_tables`` / ``describe_table`` — selected by the
 Safety: ``query`` accepts only a single read-only SELECT-family statement
 (validated with sqlglot, reusing the datastore's forbidden-node/allowed-root
 rules), runs in a ``READ ONLY`` transaction with a ``statement_timeout``, and
-caps returned rows. Engines are cached per DSN and reused across calls.
+caps returned rows. Engines are cached per connection and reused across calls.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 from collections import OrderedDict
 from typing import Any
 from urllib.parse import quote_plus
@@ -92,14 +93,20 @@ class SqlExecutor:
     """Runs read-only queries against a tenant's own database.
 
     Engines are pooled per connection because building one per call would defeat
-    connection pooling entirely. The cache is keyed on a digest rather than the
-    DSN itself: the DSN embeds the account password, and a process-global dict
-    keyed by plaintext credentials is exactly the sort of thing that ends up in a
-    heap dump.
+    connection pooling entirely. The key covers only the non-secret half of the
+    connection -- driver, user, host, port, database -- so no password is ever
+    hashed or used as a dict key.
+
+    A rotated password still has to invalidate the pooled engine, or the tenant
+    would keep reaching their database with a credential they revoked. That is
+    handled by comparing the secret against the cached entry in constant time
+    rather than by folding it into the key. The comparison holds the password in
+    the entry, which costs nothing: SQLAlchemy already retains it inside the
+    engine's URL so the pool can reconnect.
     """
 
     def __init__(self) -> None:
-        self._engines: "OrderedDict[str, AsyncEngine]" = OrderedDict()
+        self._engines: "OrderedDict[str, tuple[AsyncEngine, bytes]]" = OrderedDict()
 
     async def execute(
         self,
@@ -205,19 +212,29 @@ class SqlExecutor:
         password = quote_plus(str(creds.get("password") or ""))
         userinfo = f"{user}:{password}@" if user else ""
         dsn = f"{driver}://{userinfo}{host}:{port}/{database}"
-        # Key on a digest so the cache never holds a password as a dict key.
-        cache_key = hashlib.sha256(dsn.encode()).hexdigest()
+        # The key identifies the connection; it deliberately excludes the secret.
+        cache_key = hashlib.sha256(
+            f"{driver}\0{user}\0{host}\0{port}\0{database}".encode()
+        ).hexdigest()
+        secret = password.encode()
 
-        engine = self._engines.get(cache_key)
-        if engine is not None:
-            self._engines.move_to_end(cache_key)
-            return engine
+        cached = self._engines.get(cache_key)
+        if cached is not None:
+            engine, cached_secret = cached
+            if hmac.compare_digest(cached_secret, secret):
+                self._engines.move_to_end(cache_key)
+                return engine
+            # The password changed under the same connection identity. Reusing
+            # the pool here would keep serving queries on connections opened
+            # with the revoked credential.
+            del self._engines[cache_key]
+            await engine.dispose()
 
         engine = create_async_engine(dsn, pool_size=2, max_overflow=2, pool_pre_ping=True)
-        self._engines[cache_key] = engine
+        self._engines[cache_key] = (engine, secret)
         self._engines.move_to_end(cache_key)
         while len(self._engines) > connector_settings.connector_sql_engine_cache_size:
-            _evicted_key, evicted = self._engines.popitem(last=False)
+            _evicted_key, (evicted, _secret) = self._engines.popitem(last=False)
             # Dropping the reference is not enough: the engine owns a live pool
             # against a customer database, and garbage collection will not close
             # those sockets promptly (or at all, for asyncpg). Without this the
@@ -227,7 +244,7 @@ class SqlExecutor:
 
     async def dispose_all(self) -> None:
         """Close every pooled engine. Called on process shutdown."""
-        engines = list(self._engines.values())
+        engines = [engine for engine, _secret in self._engines.values()]
         self._engines.clear()
         for engine in engines:
             await engine.dispose()
