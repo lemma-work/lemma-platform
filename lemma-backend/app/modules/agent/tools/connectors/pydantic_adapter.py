@@ -65,9 +65,15 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
         return _no_organization()
 
     async with connector_services(deps) as services:
-        configs, _ = await services.connector.list_auth_configs(
-            user_id=deps.user_id, organization_id=deps.org_id, limit=200
-        )
+        try:
+            configs, _ = await services.connector.list_auth_configs(
+                user_id=deps.user_id, organization_id=deps.org_id, limit=200
+            )
+        except DomainError as exc:
+            # The other three tools already return failures as data. Raising
+            # here instead would end the agent's run over something it could
+            # simply report -- an org it cannot read is not a crash.
+            return _error(exc.code or "connector_error", str(exc))
         items = [
             {
                 "auth_config": config.name,

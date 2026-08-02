@@ -29,6 +29,10 @@ from app.modules.connectors.domain.ports import (
     ConnectorRepositoryPort,
     AppOperationGatewayPort,
 )
+from app.modules.connectors.services.operation_visibility import (
+    find_install_or_catalog_operation,
+    list_operations_for_install,
+)
 from app.modules.connectors.services.account_resolution_service import (
     AccountResolutionService,
 )
@@ -77,22 +81,15 @@ class ConnectorOperationService:
         kind: str | None = None,
         search_query: str | None = None,
         limit: int | None = None,
+        auth_config_id: UUID | None = None,
     ) -> list[Any]:
         await self._get_connector(connector_id)
-        if kind:
-            operations = await self.operation_repository.list_by_connector_kind(
-                connector_id,
-                kind,
-                search_query=search_query,
-                limit=limit,
-            )
-        else:
-            operations = await self.operation_repository.list_by_connector(
-                connector_id,
-                search_query=search_query,
-                limit=limit,
-            )
-        return list(operations)
+        return await list_operations_for_install(
+            catalog_repository=self.operation_repository,
+            install_repository=self.auth_config_operation_repository,
+            connector_id=connector_id, kind=kind, auth_config_id=auth_config_id,
+            search_query=search_query, limit=limit,
+        )
 
     async def _resolve_auth_config_context(
         self,
@@ -301,7 +298,7 @@ class ConnectorOperationService:
         query: str | None = None,
         limit: int | None = None,
     ) -> OperationDiscoverResponse:
-        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
+        auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -311,6 +308,7 @@ class ConnectorOperationService:
             query=query,
             limit=limit,
             kind=kind,
+            auth_config_id=auth_config.id,
         )
 
     async def discover_operations(
@@ -319,15 +317,19 @@ class ConnectorOperationService:
         query: str | None = None,
         limit: int | None = None,
         kind: str | None = None,
+        auth_config_id: UUID | None = None,
     ) -> OperationDiscoverResponse:
         total_operations = len(
-            await self._list_operation_entities(connector_id, kind=kind)
+            await self._list_operation_entities(
+                connector_id, kind=kind, auth_config_id=auth_config_id
+            )
         )
         selected_operations = await self._list_operation_entities(
             connector_id,
             kind=kind,
             search_query=query,
             limit=limit,
+            auth_config_id=auth_config_id,
         )
 
         items = [
@@ -347,21 +349,17 @@ class ConnectorOperationService:
         connector_id: str,
         operation_name: str,
         kind: str | None = None,
+        auth_config_id: UUID | None = None,
     ) -> OperationDetail:
         await self._get_connector(connector_id)
-        if kind:
-            operation = (
-                await self.operation_repository.get_by_connector_kind_and_name(
-                    connector_id,
-                    kind,
-                    operation_name,
-                )
-            )
-        else:
-            operation = await self.operation_repository.get_by_connector_and_name(
-                connector_id,
-                operation_name,
-            )
+        operation = await find_install_or_catalog_operation(
+            catalog_repository=self.operation_repository,
+            install_repository=self.auth_config_operation_repository,
+            connector_id=connector_id,
+            kind=kind,
+            operation_name=operation_name,
+            auth_config_id=auth_config_id,
+        )
         if not operation:
             raise OperationNotFoundError(operation_name)
         return self._build_operation_detail(operation)
@@ -374,7 +372,7 @@ class ConnectorOperationService:
         auth_config_name: str,
         operation_name: str,
     ) -> OperationDetail:
-        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
+        auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -383,6 +381,7 @@ class ConnectorOperationService:
             connector_id,
             operation_name,
             kind=kind,
+            auth_config_id=auth_config.id,
         )
 
     async def get_operation_details_batch(
@@ -390,10 +389,12 @@ class ConnectorOperationService:
         connector_id: str,
         operation_names: list[str] | None = None,
         kind: str | None = None,
+        auth_config_id: UUID | None = None,
     ) -> OperationDetailsBatchResponse:
         operations = await self._list_operation_entities(
             connector_id,
             kind=kind,
+            auth_config_id=auth_config_id,
         )
         operations_by_name = {
             self._normalize_operation_lookup_name(operation.name): operation
@@ -435,7 +436,7 @@ class ConnectorOperationService:
         auth_config_name: str,
         operation_names: list[str] | None = None,
     ) -> OperationDetailsBatchResponse:
-        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
+        auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -444,6 +445,7 @@ class ConnectorOperationService:
             connector_id,
             operation_names=operation_names,
             kind=kind,
+            auth_config_id=auth_config.id,
         )
 
     # -- Resolve / execute split ------------------------------------------------

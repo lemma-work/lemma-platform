@@ -536,3 +536,76 @@ class TestUpdatingAnInstallInPlace:
         assert promoted.is_default is True
         demoted = await service.auth_config_repository.get(first.id)
         assert demoted.is_default is False
+
+
+class TestDiscoveredOperationsAreVisibleThroughTheApi:
+    """Listing an install's operations must return the ones it discovered.
+
+    Execution always consulted the install's own operation set, but every
+    listing path resolved the auth config and then queried the *catalog* by
+    (connector_id, kind). For mcp and http the catalog is empty by
+    construction, so an MCP server's tools were executable only by someone who
+    already knew a name -- list returned nothing, detail 404'd, and the CLI,
+    the SDKs and the agent toolset all reported an install with no operations.
+    """
+
+    @pytest_asyncio.fixture
+    async def install(
+        self, db_session, mcp_connector, fixed_test_org, fixed_test_user,
+        live_mcp_server, allow_private_targets,
+    ):
+        service = _service(db_session)
+        return await service.create_auth_config(
+            user_id=UUID(str(fixed_test_user["id"])),
+            organization_id=UUID(str(fixed_test_org["id"])),
+            connector_id=mcp_connector.id,
+            config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+            config={"server_url": live_mcp_server},
+            name=f"mcp-vis-{uuid4().hex[:8]}",
+        )
+
+    async def test_listing_returns_the_discovered_tools(
+        self, authenticated_client, fixed_test_org, install
+    ):
+        org_id = fixed_test_org["id"]
+        listed = await authenticated_client.get(
+            f"/organizations/{org_id}/connectors/{install.name}/operations"
+        )
+        assert listed.status_code == 200, listed.text
+        names = {item["name"] for item in listed.json()["items"]}
+        assert {"add", "lookup_customer"} <= names
+
+    async def test_searching_narrows_to_the_matching_tool(
+        self, authenticated_client, fixed_test_org, install
+    ):
+        org_id = fixed_test_org["id"]
+        found = await authenticated_client.get(
+            f"/organizations/{org_id}/connectors/{install.name}/operations",
+            params={"query": "customer"},
+        )
+        assert found.status_code == 200, found.text
+        names = {item["name"] for item in found.json()["items"]}
+        assert "lookup_customer" in names
+
+    async def test_detail_returns_the_schema_the_server_published(
+        self, authenticated_client, fixed_test_org, install
+    ):
+        org_id = fixed_test_org["id"]
+        detail = await authenticated_client.get(
+            f"/organizations/{org_id}/connectors/{install.name}/operations/add"
+        )
+        assert detail.status_code == 200, detail.text
+        schema = detail.json()["input_schema"]
+        assert schema["properties"]["a"]["type"] == "integer"
+
+    async def test_batch_details_include_discovered_tools(
+        self, authenticated_client, fixed_test_org, install
+    ):
+        org_id = fixed_test_org["id"]
+        batch = await authenticated_client.post(
+            f"/organizations/{org_id}/connectors/{install.name}/operations/details",
+            json={"operation_names": ["add"]},
+        )
+        assert batch.status_code == 200, batch.text
+        names = {item["name"] for item in batch.json()["items"]}
+        assert "add" in names
