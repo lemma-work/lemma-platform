@@ -167,6 +167,13 @@ export class ConnectorsNamespace {
         organizationId,
         authConfigName,
       )),
+    // Re-discovers an MCP or OpenAPI install's operations. The recovery path:
+    // deleting and recreating the install cascades away its accounts.
+    refreshOperations: (organizationId: string, authConfigName: string) =>
+      this.client.request(() => ConnectorsService.connectorAuthConfigRefreshOperations(
+        organizationId,
+        authConfigName,
+      )),
   };
 
   async enableApp(

@@ -397,6 +397,25 @@ def delete_auth_config(
     emit(state, result if result is not None else {"ok": True})
 
 
+@auth_configs_app.command("refresh-operations")
+def refresh_auth_config_operations(
+    ctx: typer.Context,
+    auth_config: str = typer.Argument(...),
+) -> None:
+    """Re-discover the operations of an MCP or OpenAPI auth config.
+
+    Run this after the remote server's tools change, or to recover an install
+    whose first discovery failed -- deleting and recreating would disconnect
+    every account attached to it.
+    """
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.connectors.auth_configs.refresh_operations(auth_config),
+    )
+    emit(state, result if result is not None else {"ok": True})
+
+
 @connect_requests_app.command("create")
 def create_connect_request(
     ctx: typer.Context,

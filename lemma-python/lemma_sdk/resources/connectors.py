@@ -19,6 +19,7 @@ from ..openapi_client.api.connectors import (
     connector_auth_config_delete as auth_config_delete,
     connector_auth_config_get as auth_config_get,
     connector_auth_config_list as auth_config_list,
+    connector_auth_config_refresh_operations as auth_config_refresh_operations,
     connector_connect_request_create,
 )
 from ..openapi_client.models.account_create_schema import AccountCreateSchema
@@ -105,6 +106,17 @@ class ConnectorAuthConfigs:
 
     def delete(self, name: str) -> None:
         self._parent._call(auth_config_delete, self._parent._org_uuid(), name)
+
+    def refresh_operations(self, name: str) -> dict:
+        """Re-discover the operations of an MCP or OpenAPI install.
+
+        The recovery path for an install whose first discovery failed. Without
+        it the only fix is delete-and-recreate, and accounts cascade from the
+        install, so that disconnects every user who had connected.
+        """
+        return self._parent._call(
+            auth_config_refresh_operations, self._parent._org_uuid(), name
+        )
 
 
 class ConnectorAccounts:

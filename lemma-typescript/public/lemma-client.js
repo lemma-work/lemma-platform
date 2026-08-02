@@ -9835,7 +9835,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.7.0";
+  var SDK_VERSION = "0.7.1";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
   function shouldSendClientHeader(apiUrl, method) {
@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.0",
+    VERSION: "0.7.1",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -12916,6 +12916,27 @@ var LemmaClient = (() => {
       });
     }
     /**
+     * Refresh Auth Config Operations
+     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.
+     * @param organizationId
+     * @param authConfigName
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static connectorAuthConfigRefreshOperations(organizationId, authConfigName) {
+      return request(OpenAPI, {
+        method: "POST",
+        url: "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh",
+        path: {
+          "organization_id": organizationId,
+          "auth_config_name": authConfigName
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * Initiate Connect Request
      * Initiate an OAuth connection request for a connector
      * @param organizationId
@@ -13230,6 +13251,12 @@ var LemmaClient = (() => {
           authConfigName
         )),
         delete: (organizationId, authConfigName) => this.client.request(() => ConnectorsService.connectorAuthConfigDelete(
+          organizationId,
+          authConfigName
+        )),
+        // Re-discovers an MCP or OpenAPI install's operations. The recovery path:
+        // deleting and recreating the install cascades away its accounts.
+        refreshOperations: (organizationId, authConfigName) => this.client.request(() => ConnectorsService.connectorAuthConfigRefreshOperations(
           organizationId,
           authConfigName
         ))
