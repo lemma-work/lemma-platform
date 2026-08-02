@@ -1311,3 +1311,100 @@ async def test_resource_access_unknown_name_returns_404_e2e(
     )
     assert access.status_code == status.HTTP_404_NOT_FOUND, access.text
     assert "missing_agent" in access.text
+
+
+async def test_pod_editor_can_rewire_the_resources_they_author_e2e(
+    authenticated_client,
+    async_client,
+    fixed_test_org,
+):
+    """A pod editor can replace agent and function grants.
+
+    Replacing grants used to require the delete-tier permission, which
+    POD_EDITOR does not hold — so the role that exists to build agents and
+    functions could not rewire the ones it had just built, and the denial named
+    `agent.delete` at someone who was only editing. Deleting is still gated.
+    """
+    pod_id = await _create_pod(authenticated_client, fixed_test_org, "Editor Rewire Pod")
+
+    agent_response = await authenticated_client.post(
+        f"/pods/{pod_id}/agents",
+        json={"name": "rewire_agent", "instruction": "Use granted resources."},
+    )
+    assert agent_response.status_code == status.HTTP_201_CREATED, agent_response.text
+    function_response = await authenticated_client.post(
+        f"/pods/{pod_id}/functions",
+        json={"name": "rewire_function", "description": "Editor rewire target"},
+    )
+    assert function_response.status_code == status.HTTP_201_CREATED, (
+        function_response.text
+    )
+    table_response = await authenticated_client.post(
+        f"/pods/{pod_id}/datastore/tables",
+        json={
+            "name": "rewire_table",
+            "visibility": "RESTRICTED",
+            "columns": [{"name": "title", "type": "TEXT"}],
+        },
+    )
+    assert table_response.status_code == status.HTTP_201_CREATED, table_response.text
+    table_name = table_response.json()["name"]
+
+    editor = await signup_user(async_client, "rewire-editor")
+    editor_org = await invite_org_member(
+        authenticated_client, async_client, org_id=fixed_test_org["id"], user=editor
+    )
+    await add_pod_member(
+        authenticated_client,
+        pod_id=pod_id,
+        organization_member_id=editor_org["id"],
+        role="POD_EDITOR",
+        roles=["POD_EDITOR"],
+    )
+    editor_headers = auth_headers(editor)
+
+    effective = await async_client.get(
+        f"/pods/{pod_id}/permissions/me", headers=editor_headers
+    )
+    assert effective.status_code == status.HTTP_200_OK, effective.text
+    actions = effective.json()["actions"]
+    assert "agent.update" in actions
+    assert "agent.delete" not in actions, (
+        "the test is meaningless if the editor holds the delete permission"
+    )
+
+    grants = {
+        "grants": [
+            {
+                "resource_type": "datastore_table",
+                "resource_name": table_name,
+                "permission_ids": ["datastore.table.read"],
+            }
+        ]
+    }
+
+    agent_grants = await async_client.put(
+        f"/pods/{pod_id}/agents/rewire_agent/permissions",
+        json=grants,
+        headers=editor_headers,
+    )
+    assert agent_grants.status_code == status.HTTP_200_OK, agent_grants.text
+    assert {grant["resource_name"] for grant in agent_grants.json()["grants"]} == {
+        table_name
+    }
+
+    function_grants = await async_client.put(
+        f"/pods/{pod_id}/functions/rewire_function/permissions",
+        json=grants,
+        headers=editor_headers,
+    )
+    assert function_grants.status_code == status.HTTP_200_OK, function_grants.text
+    assert {grant["resource_name"] for grant in function_grants.json()["grants"]} == {
+        table_name
+    }
+
+    # The delete gate did not move with it.
+    deleted = await async_client.delete(
+        f"/pods/{pod_id}/agents/rewire_agent", headers=editor_headers
+    )
+    assert deleted.status_code == status.HTTP_403_FORBIDDEN, deleted.text

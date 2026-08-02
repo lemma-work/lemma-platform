@@ -60,8 +60,8 @@ def _redact_credential_config(value: dict | None) -> dict | None:
 
 def _response_from_entity(entity) -> AuthConfigResponseSchema:
     data = entity.model_dump(mode="json")
-    # `provider` is a computed view on `kind`, so it is absent from model_dump.
-    data["kind"] = entity.kind.value
+    # `provider` is a computed view on `kind` now, so it is absent from the dump
+    # and has to be put back explicitly. The wire shape is unchanged.
     data["provider"] = entity.provider.value
     data["credential_config"] = _redact_credential_config(data.pop("config", None))
     return AuthConfigResponseSchema.model_validate(data)

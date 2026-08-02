@@ -2673,9 +2673,6 @@
             "title": "Id",
             "type": "string"
           },
-          "kind": {
-            "$ref": "#/components/schemas/ConnectorKind"
-          },
           "payload_example": {
             "anyOf": [
               {
@@ -2712,7 +2709,6 @@
         "required": [
           "id",
           "connector_id",
-          "kind",
           "provider",
           "description",
           "config_schema",
@@ -2758,9 +2754,6 @@
             "title": "Id",
             "type": "string"
           },
-          "kind": {
-            "$ref": "#/components/schemas/ConnectorKind"
-          },
           "provider": {
             "$ref": "#/components/schemas/AuthProvider"
           },
@@ -2773,7 +2766,6 @@
         "required": [
           "id",
           "connector_id",
-          "kind",
           "provider",
           "description",
           "created_at",
@@ -2935,15 +2927,6 @@
             "title": "Id",
             "type": "string"
           },
-          "is_default": {
-            "default": false,
-            "title": "Is Default",
-            "type": "boolean"
-          },
-          "kind": {
-            "title": "Kind",
-            "type": "string"
-          },
           "metadata": {
             "anyOf": [
               {
@@ -2983,7 +2966,6 @@
           "id",
           "organization_id",
           "connector_id",
-          "kind",
           "provider",
           "config_source",
           "status",
@@ -2995,7 +2977,6 @@
         "type": "object"
       },
       "AuthProvider": {
-        "description": "Deprecated. Use :class:`ConnectorKind`.\n\nRetained so callers outside this module keep working for one release. Read\npaths map through :func:`kind_to_provider`; ``LEMMA`` means \"any non-Composio\nkind\" and therefore cannot round-trip back to a single kind on its own.",
         "enum": [
           "LEMMA",
           "COMPOSIO"
@@ -3673,18 +3654,6 @@
         ],
         "title": "ConnectorDetailResponseSchema",
         "type": "object"
-      },
-      "ConnectorKind": {
-        "description": "How an install authenticates, discovers and executes operations.",
-        "enum": [
-          "composio",
-          "http",
-          "sql",
-          "mcp",
-          "package"
-        ],
-        "title": "ConnectorKind",
-        "type": "string"
       },
       "ConnectorListResponseSchema": {
         "description": "Schema for connector list response.",
@@ -16403,7 +16372,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.4"
+    "version": "0.7.0"
   },
   "openapi": "3.1.0",
   "paths": {

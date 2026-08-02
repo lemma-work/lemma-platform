@@ -44,7 +44,6 @@ from app.modules.function.api.dependencies import (
     FunctionViewerDep,
     FunctionResourceDeleteDep,
     FunctionResourceEditorDep,
-    FunctionResourceAdminDep,
     FunctionResourceViewerDep,
 )
 from app.composition.function_workspace import (
@@ -222,7 +221,10 @@ async def get_function_permissions(
     operation_id="function.permissions.replace",
     summary="Replace Function Resource Permissions",
     description="Replace explicit resource grants assigned to a function.",
-    dependencies=[FunctionResourceAdminDep],
+    # Matches the agent side: editing a function's wiring is editing the
+    # function, not deleting it. function.delete locked pod editors out of
+    # the resources they author.
+    dependencies=[FunctionResourceEditorDep],
 )
 async def replace_function_permissions(
     request: Request,

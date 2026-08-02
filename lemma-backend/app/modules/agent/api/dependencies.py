@@ -66,11 +66,6 @@ AgentResourceEditorDep = require_resource_action(
     resource_type=ResourceType.AGENT,
     name_param="agent_name",
 )
-AgentResourceAdminDep = require_resource_action(
-    Permissions.AGENT_DELETE,
-    resource_type=ResourceType.AGENT,
-    name_param="agent_name",
-)
 AgentResourceDeleteDep = require_resource_admin_or_creator(
     Permissions.AGENT_DELETE,
     resource_type=ResourceType.AGENT,

@@ -53,14 +53,16 @@ class DiscoveryMode(str, enum.Enum):
     OPENAPI = "openapi"
 
 
+# Deprecated in favour of ConnectorKind, and retained so callers outside this
+# module keep working for one release. Read paths map through kind_to_provider;
+# LEMMA means "any non-Composio kind" and so cannot round-trip back to a single
+# kind on its own.
+#
+# Deliberately a comment rather than a docstring: this enum is reachable from
+# response models, and pydantic publishes a class docstring as the schema's
+# `description` -- an internal deprecation note would become part of the public
+# OpenAPI contract and force an API version bump.
 class AuthProvider(str, enum.Enum):
-    """Deprecated. Use :class:`ConnectorKind`.
-
-    Retained so callers outside this module keep working for one release. Read
-    paths map through :func:`kind_to_provider`; ``LEMMA`` means "any non-Composio
-    kind" and therefore cannot round-trip back to a single kind on its own.
-    """
-
     LEMMA = "LEMMA"
     COMPOSIO = "COMPOSIO"
 

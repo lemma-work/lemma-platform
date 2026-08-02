@@ -160,6 +160,61 @@ async function buildResourceGrants(
     return grants;
 }
 
+export type AgentAccessFields = Pick<
+    CreateAgentData | UpdateAgentData,
+    'accessible_connectors' | 'accessible_folders' | 'accessible_tables' | 'accessible_functions' | 'accessible_agents'
+>;
+
+function agentAccessFields(agent: Agent): AgentAccessFields {
+    return {
+        accessible_tables: agent.accessible_tables,
+        accessible_folders: agent.accessible_folders,
+        accessible_connectors: agent.accessible_connectors,
+        accessible_functions: agent.function_names ?? undefined,
+        accessible_agents: agent.agent_names ?? undefined,
+    };
+}
+
+export function carriesAccess(data: AgentAccessFields): boolean {
+    return data.accessible_connectors !== undefined
+        || data.accessible_folders !== undefined
+        || data.accessible_tables !== undefined
+        || data.accessible_functions !== undefined
+        || data.accessible_agents !== undefined;
+}
+
+function sameEntries<T>(
+    current: T[] | null | undefined,
+    next: T[] | null | undefined,
+    toKey: (entry: T) => string,
+): boolean {
+    // An absent field isn't a change — the caller simply isn't touching it.
+    // An explicit null is: it clears the wiring, so it compares as empty.
+    if (next === undefined) return true;
+    const left = (current || []).map(toKey).sort();
+    const right = (next || []).map(toKey).sort();
+    return left.length === right.length && left.every((key, index) => key === right[index]);
+}
+
+/**
+ * Replacing an agent's grants needs `agent.delete`, which pod editors do not
+ * hold — so the permissions call has to fire only when the wiring genuinely
+ * moved. Presence of the `accessible_*` fields is not that signal: a normalized
+ * agent always carries them (as arrays, never undefined), so every save used to
+ * look like an access change and every editor save died on a 403 that named a
+ * delete permission they were not exercising.
+ */
+export function agentAccessChanged(agent: Agent, next: AgentAccessFields): boolean {
+    const current = agentAccessFields(agent);
+    const unchanged =
+        sameEntries(current.accessible_tables, next.accessible_tables, (table) => `${table.table_name}:${table.mode}`)
+        && sameEntries(current.accessible_folders, next.accessible_folders, (folder) => `${folder.folder_path}:${folder.mode}`)
+        && sameEntries(current.accessible_connectors, next.accessible_connectors, (app) => `${app.app_name}:${app.mode}:${app.account_id ?? ''}`)
+        && sameEntries(current.accessible_functions, next.accessible_functions, (name) => name)
+        && sameEntries(current.accessible_agents, next.accessible_agents, (name) => name);
+    return !unchanged;
+}
+
 function normalizeAgent(raw: Record<string, unknown>): Agent {
     const permissions = raw.permissions as Agent['permissions'] | undefined;
     const grants = permissions?.grants as ResourcePermissionGrant[] | undefined;
@@ -232,11 +287,15 @@ export const useCreateAgent = () => {
     return useMutation({
         mutationFn: async ({ podId, data }: { podId: string; data: CreateAgentData }) => {
             const client = getLemmaClient(podId);
-            const response = await client.agents.create(toSdkAgentPayload(data) as CreateAgentInput);
             const grants = await buildResourceGrants(client, data);
-            if (grants.length > 0) {
-                await client.agents.permissions.replace(response.name, { grants: grants as never });
-            }
+            const payload = toSdkAgentPayload(data) as CreateAgentInput;
+            // Grants ride along with the create instead of following it as a
+            // separate permissions-replace: one request, applied in the same
+            // transaction, and gated on `agent.create` alone. The old two-step
+            // left an editor with an agent that existed but reached nothing.
+            const response = await client.agents.create(
+                grants.length > 0 ? { ...payload, permissions: { grants: grants as never } } : payload,
+            );
             return normalizeAgent(response as unknown as Record<string, unknown>);
         },
         onSuccess: (_, variables) => {
@@ -254,14 +313,16 @@ export const useUpdateAgent = () => {
     return useMutation({
         mutationFn: async ({ podId, agentName, data }: { podId: string; agentName: string; data: UpdateAgentData }) => {
             const client = getLemmaClient(podId);
+            // Read the pre-update wiring before the PATCH lands, so the
+            // comparison is against what the server currently holds. Only the
+            // agent editor sends `accessible_*` at all, so nothing else pays
+            // for the lookup.
+            const current = carriesAccess(data)
+                ? queryClient.getQueryData<Agent>(['agent', podId, agentName])
+                    ?? normalizeAgent(await client.agents.get(agentName) as unknown as Record<string, unknown>)
+                : undefined;
             const response = await client.agents.update(agentName, toSdkAgentPayload(data) as UpdateAgentInput);
-            if (
-                data.accessible_connectors !== undefined ||
-                data.accessible_folders !== undefined ||
-                data.accessible_tables !== undefined ||
-                data.accessible_functions !== undefined ||
-                data.accessible_agents !== undefined
-            ) {
+            if (current && agentAccessChanged(current, data)) {
                 const grants = await buildResourceGrants(client, data);
                 await client.agents.permissions.replace(agentName, { grants: grants as never });
             }

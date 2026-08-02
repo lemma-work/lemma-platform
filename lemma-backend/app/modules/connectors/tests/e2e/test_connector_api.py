@@ -3,7 +3,7 @@ from uuid import uuid4
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.modules.connectors.domain.connector import ConnectorKind
+from app.modules.connectors.domain.connector import ConnectorKind, kind_to_provider
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_operation import (
@@ -173,7 +173,8 @@ async def test_triggers_filtered_by_auth_config_kind(
     data = response.json()
     assert len(data["items"]) == 1
     item = data["items"][0]
-    assert item["kind"] == kind
+    # The wire still reports the legacy provider view of the install's kind.
+    assert item["provider"] == kind_to_provider(kind).value
     # The list endpoint returns the lightweight trigger summary, which omits the
     # heavy config_schema/payload_schema (see TriggerSummaryResponse). The full
     # config_schema is asserted on the detail endpoint below.
@@ -181,5 +182,5 @@ async def test_triggers_filtered_by_auth_config_kind(
     detail = await authenticated_client.get(f"{triggers_url}/new_message")
     assert detail.status_code == 200, detail.text
     detail_data = detail.json()
-    assert detail_data["kind"] == kind
+    assert detail_data["provider"] == kind_to_provider(kind).value
     assert expected_config_field in detail_data["config_schema"]["properties"]
