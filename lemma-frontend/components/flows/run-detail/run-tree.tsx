@@ -256,7 +256,7 @@ function RunBranch({ branch, depth, ...rest }: TreeContext & { branch: StepBranc
                 {/* `parseDefinition` invents "Branch 1/2/3" for graphs that never
                     stored a label. The condition is the thing that actually
                     distinguishes one path from another. */}
-                <span className="truncate font-mono text-[0.75em]">{branchLabel(branch)}</span>
+                <span className="truncate font-mono text-xs">{branchLabel(branch)}</span>
                 {/* The fact worth stating about a branch is whether the run went
                     down it — not repeated per step inside it. */}
                 {taken ? null : (
