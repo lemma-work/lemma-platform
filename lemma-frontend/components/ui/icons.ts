@@ -200,6 +200,7 @@ export {
 // The social marks below name share destinations, where a generic glyph would
 // leave people guessing which button posts where.
 export {
+    DiscordLogo,
     GithubLogo,
     LinkedinLogo,
     RedditLogo,
