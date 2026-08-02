@@ -61,6 +61,11 @@ class RunToolAssembler:
         )
         if not allow_subagents:
             toolset_names = [t for t in toolset_names if t != AgentToolset.SUBAGENTS]
+            # A sub-agent that snoozes blocks its parent's tool call while the
+            # parent is still mid-run and subject to its own limits — the parent
+            # would sit waiting on a child that is deliberately asleep. Same
+            # depth=1 rule, same reason.
+            toolset_names = [t for t in toolset_names if t != AgentToolset.SNOOZE]
         toolsets: list[object] = list(resolve_agent_toolsets(toolset_names))
         # TODO is conversation-scoped (its list lives in conversation metadata), so
         # it isn't a static singleton in the registry — build it per conversation
