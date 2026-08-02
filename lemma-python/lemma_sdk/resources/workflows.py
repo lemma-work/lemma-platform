@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from ..openapi_client.api.workflows import (
     workflow_create,
     workflow_delete,
@@ -11,6 +13,8 @@ from ..openapi_client.api.workflows import (
     workflow_run_form_submit,
     workflow_run_get,
     workflow_run_list,
+    workflow_run_list_for_pod,
+    workflow_run_stream,
     workflow_run_waiting_assigned_to_me,
     workflow_update,
 )
@@ -77,6 +81,35 @@ class PodWorkflows(BoundResource):
 
     def runs(self, name: str, *, limit: int = 100) -> WorkflowRunListResponse:
         return self._call(workflow_run_list, self._pod_uuid(), name, limit=limit)
+
+    def all_runs(
+        self,
+        *,
+        limit: int = 50,
+        status: list[str] | None = None,
+        page_token: str | None = None,
+    ) -> WorkflowRunListResponse:
+        """Recent runs across every workflow in the pod, newest first.
+
+        One request for "what has been happening here", rather than one per
+        workflow. `status` is repeatable.
+        """
+        kwargs: dict[str, Any] = {"limit": limit}
+        if status is not None:
+            kwargs["status"] = status
+        if page_token is not None:
+            kwargs["page_token"] = page_token
+        return self._call(workflow_run_list_for_pod, self._pod_uuid(), **kwargs)
+
+    def stream_run(self, run_id: str) -> Any:
+        """Server-sent events carrying the run's state as it advances.
+
+        The first frame is the current run, so there is no need for a separate
+        `run_get`; each later frame is the whole run again rather than a diff,
+        which makes reconnecting a matter of replacing state. A `completed`
+        frame closes the stream.
+        """
+        return self._call(workflow_run_stream, self._pod_uuid(), as_uuid(run_id))
 
     def submit_form(
         self,
