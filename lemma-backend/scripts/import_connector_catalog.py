@@ -96,11 +96,16 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     AuthMethod,
     AuthProvider,
-    provider_to_kind,
     ComposioProviderCapability,
+    DiscoveryMode,
+    HttpKindSpec,
     LemmaProviderCapability,
+    McpKindSpec,
     OAuth2Defaults,
+    PackageKindSpec,
+    SqlKindSpec,
     SystemOAuthCredentialRef,
+    provider_to_kind,
 )
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
@@ -579,7 +584,7 @@ def _native_package_provider_capability(
         except ValueError:
             pass
 
-    return _lemma_provider_capability(
+    return _native_kind_spec(
         auth_method=auth_method, profile_operation_names=profile_operation_names
     )
 
@@ -605,7 +610,7 @@ def _default_auth_config_schema(auth_method: AuthMethod) -> dict:
     }
 
 
-def _lemma_provider_capability(
+def _native_kind_spec(
     *,
     auth_method: AuthMethod,
     oauth2_defaults: dict | None = None,
@@ -613,11 +618,31 @@ def _lemma_provider_capability(
     credential_schema: dict | None = None,
     system_oauth: dict | None = None,
     profile_operation_names: list[str] | None = None,
-) -> LemmaProviderCapability:
+    kind: str | None = None,
+):
+    """Build the spec for a connector's native install kind.
+
+    `kind` comes from the catalog entry and selects which spec class -- and so
+    which executor, discoverer and installer -- an install of this connector
+    gets. Absent, it is a vendored package, which is what every native connector
+    was before the tenant-configured kinds existed.
+    """
     system_default_available = (
         auth_method != AuthMethod.OAUTH2 or _system_oauth_available(system_oauth)
     )
-    return LemmaProviderCapability(
+    spec_cls = {
+        "sql": SqlKindSpec,
+        "mcp": McpKindSpec,
+        "http": HttpKindSpec,
+    }.get(kind or "", PackageKindSpec)
+    discovery = {
+        "mcp": DiscoveryMode.MCP,
+        # An `http` install discovers only when it points at a spec; a connector
+        # whose spec is bundled at import time has a static operation set.
+        "http": DiscoveryMode.OPENAPI,
+    }.get(kind or "", DiscoveryMode.NONE)
+    return spec_cls(
+        discovery=discovery,
         auth_scheme=auth_method,
         oauth2_defaults=OAuth2Defaults.model_validate(oauth2_defaults)
         if oauth2_defaults
@@ -869,6 +894,7 @@ async def _upsert_operation(
     output_schema: dict | None,
     search_document: str | None,
     normalize_name: bool = True,
+    execution: dict | None = None,
 ) -> None:
     operation_name = (
         _normalize_operation_name(public_name) if normalize_name else public_name.strip()
@@ -889,11 +915,50 @@ async def _upsert_operation(
         search_document=search_document,
         input_schema=input_schema,
         output_schema=output_schema,
+        execution=execution,
     )
     if existing:
         await operation_repository.update(entity)
     else:
         await operation_repository.create(entity)
+
+
+async def _sync_static_operations(
+    operation_repository: ConnectorOperationRepository,
+    connector_id: str,
+    static_operations: list[dict],
+) -> int:
+    """Seed operations declared inline in the catalog config.
+
+    The SQL connector's query/list_tables/describe_table are the case: its
+    operation set is fixed and known at import time, so there is nothing to
+    discover per install. Each carries the execution descriptor its kind's
+    executor reads.
+    """
+    count = 0
+    for op in static_operations:
+        public_name = op["name"]
+        description = op.get("description") or _humanize_operation_name(public_name)
+        display_name = op.get("display_name") or public_name
+        await _upsert_operation(
+            operation_repository,
+            connector_id,
+            provider=AuthProvider.LEMMA,
+            public_name=public_name,
+            provider_operation_name=_normalize_operation_name(public_name),
+            display_name=display_name,
+            description=description,
+            input_schema=op.get("input_schema"),
+            output_schema=op.get("output_schema"),
+            search_document=_build_operation_search_document(
+                public_name=public_name,
+                display_name=display_name,
+                description=description,
+            ),
+            execution=op["execution"],
+        )
+        count += 1
+    return count
 
 
 async def _upsert_trigger(
@@ -1075,7 +1140,7 @@ async def _sync_native_catalog(
             icon=app_config.get("icon") or (existing.icon if existing else None),
             provider_capabilities=_merge_provider_capabilities(
                 existing,
-                _lemma_provider_capability(
+                _native_kind_spec(
                     auth_method=auth_method,
                     oauth2_defaults=app_config.get("oauth2_config"),
                     auth_config_schema=app_config.get("auth_config_schema"),
@@ -1096,6 +1161,19 @@ async def _sync_native_catalog(
             "connector_catalog.app.synced",
             connector_id=app_name,
         )
+
+        # Operations declared inline in config (the SQL connector's fixed set).
+        static_ops = app_config.get("static_operations")
+        if static_ops:
+            op_count = await _sync_static_operations(
+                operation_repository, connector_id, static_ops
+            )
+            total_operations += op_count
+            logger.info(
+                "connector_catalog.static_operations.synced",
+                connector_id=connector_id,
+                count=op_count,
+            )
 
         # Sync triggers for this app
         for trigger_data in app_config.get("triggers", []):
@@ -1331,7 +1409,7 @@ async def _sync_single_composio_toolkit(
                 update={"profile_operation_names": lemma_profile_operation_names}
             )
         else:
-            lemma_capability = _lemma_provider_capability(
+            lemma_capability = _native_kind_spec(
                 auth_method=_infer_native_auth_method(connector_id, existing),
                 profile_operation_names=lemma_profile_operation_names,
             )

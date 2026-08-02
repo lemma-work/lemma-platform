@@ -807,7 +807,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
     )
 
     with patch(
-        "app.modules.connectors.services.connector_service.create_lemma_execution_client",
+        "app.modules.connectors.services.account_profile.create_lemma_execution_client",
         return_value=native_client,
     ):
         account = await service.handle_oauth_callback(

@@ -138,6 +138,30 @@ async def get_auth_config(
     return _response_from_entity(auth_config)
 
 
+@router.post(
+    "/{auth_config_name}/operations/refresh",
+    operation_id="connector.auth_config.refresh_operations",
+    summary="Refresh Auth Config Operations",
+    description=(
+        "Re-discover the operations exposed by a discovery-based install "
+        "(MCP server, OpenAPI URL). Use after the upstream server changes its "
+        "tools, or to retry a discovery that failed when the install was created."
+    ),
+)
+async def refresh_auth_config_operations(
+    user: CurrentUser,
+    organization_id: UUID,
+    auth_config_name: str,
+    connector_service: ConnectorServiceDep,
+) -> dict:
+    count = await connector_service.refresh_auth_config_operations(
+        user_id=user.id,
+        organization_id=organization_id,
+        auth_config_name=auth_config_name,
+    )
+    return {"auth_config_name": auth_config_name, "operation_count": count}
+
+
 @router.delete(
     "/{auth_config_name}",
     operation_id="connector.auth_config.delete",

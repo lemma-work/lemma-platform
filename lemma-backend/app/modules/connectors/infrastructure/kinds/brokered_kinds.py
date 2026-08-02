@@ -12,7 +12,7 @@ from typing import Any
 
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.auth_config import AuthConfigSource
-from app.modules.connectors.domain.connector import KindSpec
+from app.modules.connectors.domain.connector import KindSpec, kind_to_provider
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.kinds import ExecutionRequest
 from app.modules.connectors.infrastructure.kinds._install_validation import (
@@ -65,7 +65,7 @@ class ComposioInstaller:
                 "Composio installs use Composio-managed credentials.",
                 details={"reason": "org_custom_not_supported_for_composio"},
             )
-        return validate_install_config(spec, config)
+        return validate_install_config(spec, config, config_source)
 
 
 class PackageInstaller:
@@ -76,11 +76,17 @@ class PackageInstaller:
         config: dict[str, Any],
         config_source: AuthConfigSource,
     ) -> dict[str, Any]:
-        return validate_install_config(spec, config)
+        return validate_install_config(spec, config, config_source)
 
 
 class ComposioKindExecutor:
-    """Runs a Composio tool. The SDK is synchronous and is offloaded inside."""
+    """Runs a Composio tool. The SDK is synchronous and is offloaded inside.
+
+    ``provider`` is passed explicitly. The gateway this delegates to still routes
+    on the legacy vocabulary and defaults to LEMMA when it is absent -- so
+    omitting it silently sent every Composio call down the vendored-package path,
+    where the operation does not exist.
+    """
 
     def __init__(self, gateway: Any):
         self._gateway = gateway
@@ -91,6 +97,7 @@ class ComposioKindExecutor:
             operation_name=request.operation.execution_name,
             payload=request.payload,
             third_party_credentials=request.credentials,
+            provider=kind_to_provider(request.kind).value,
         )
 
 
@@ -108,4 +115,5 @@ class PackageKindExecutor:
             third_party_credentials=request.credentials,
             auth_token=request.auth_token,
             api_url=request.api_url,
+            provider=kind_to_provider(request.kind).value,
         )

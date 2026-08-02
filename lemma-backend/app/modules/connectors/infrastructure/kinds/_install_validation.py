@@ -58,8 +58,42 @@ def validate_against_schema(
 
 
 def validate_install_config(
-    spec: KindSpec, config: dict[str, Any] | None
+    spec: KindSpec,
+    config: dict[str, Any] | None,
+    config_source: Any = None,
 ) -> dict[str, Any]:
+    """Validate an install's config against its kind's schema.
+
+    One exception, and it is not a loophole: for an OAuth2 kind the install
+    schema describes the *org-supplied* client credentials, which only exist
+    when the org brings its own OAuth app. A system-default install uses the
+    platform's client and legitimately supplies nothing, so validating it
+    against that schema would reject every such install for missing a
+    client_id it was never meant to provide. It is still checked -- against a
+    closed empty schema, so stray keys are refused rather than stored.
+
+    The tenant-configured kinds (sql/mcp/http) are unaffected: their schema
+    describes the connection itself, which is always supplied.
+    """
+    from app.modules.connectors.domain.auth_config import AuthConfigSource
+    from app.modules.connectors.domain.connector import AuthScheme
+
+    org_supplies_credentials = config_source == AuthConfigSource.ORG_CUSTOM
+    if spec.auth_scheme == AuthScheme.OAUTH2:
+        if not org_supplies_credentials:
+            return validate_against_schema(None, config, what="install config")
+        # Org-custom OAuth credentials may arrive flat or nested under
+        # `oauth2_credentials`; both shapes are part of the existing API. The
+        # schema describes the flat one, so validate whichever was supplied and
+        # return the caller's original shape untouched.
+        supplied = dict(config or {})
+        nested = supplied.get("oauth2_credentials")
+        validate_against_schema(
+            spec.install_schema,
+            nested if isinstance(nested, dict) else supplied,
+            what="install config",
+        )
+        return supplied
     return validate_against_schema(spec.install_schema, config, what="install config")
 
 

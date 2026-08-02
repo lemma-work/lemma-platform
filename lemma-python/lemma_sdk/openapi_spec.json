@@ -2387,6 +2387,7 @@
           "POD",
           "SUBAGENTS",
           "TODO",
+          "CONNECTORS",
           "VIEW_IMAGE"
         ],
         "title": "AgentToolset",
@@ -16372,7 +16373,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.0"
+    "version": "0.7.1"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -19132,6 +19133,71 @@
           "resource": "connector.auth_config",
           "result": "entity",
           "verb": "get"
+        }
+      }
+    },
+    "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh": {
+      "post": {
+        "description": "Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.",
+        "operationId": "connector.auth_config.refresh_operations",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "auth_config_name",
+            "required": true,
+            "schema": {
+              "title": "Auth Config Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Connector.Auth Config.Refresh Operations",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Refresh Auth Config Operations",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.auth_config"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.auth_config",
+          "result": "entity",
+          "verb": "refresh_operations"
         }
       }
     },

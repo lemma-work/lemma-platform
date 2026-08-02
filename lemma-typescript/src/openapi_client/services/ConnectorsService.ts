@@ -326,6 +326,30 @@ export class ConnectorsService {
         });
     }
     /**
+     * Refresh Auth Config Operations
+     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.
+     * @param organizationId
+     * @param authConfigName
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static connectorAuthConfigRefreshOperations(
+        organizationId: string,
+        authConfigName: string,
+    ): CancelablePromise<Record<string, any>> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh',
+            path: {
+                'organization_id': organizationId,
+                'auth_config_name': authConfigName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * Initiate Connect Request
      * Initiate an OAuth connection request for a connector
      * @param organizationId

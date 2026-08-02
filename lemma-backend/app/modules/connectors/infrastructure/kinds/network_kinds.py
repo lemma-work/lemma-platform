@@ -66,7 +66,7 @@ class _TenantConfiguredInstaller:
         config: dict[str, Any],
         config_source: AuthConfigSource,
     ) -> dict[str, Any]:
-        validated = validate_install_config(spec, config)
+        validated = validate_install_config(spec, config, config_source)
         try:
             for field in self._url_fields:
                 value = validated.get(field)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -13,7 +12,11 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
     OperationSummary,
 )
-from app.modules.connectors.domain.connector import AuthProvider, kind_to_provider
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    ConnectorKind,
+    kind_to_provider,
+)
 from app.modules.connectors.domain.errors import (
     AccountResolutionError,
     ConnectorNotFoundError,
@@ -30,29 +33,16 @@ from app.modules.connectors.services.account_resolution_service import (
     AccountResolutionService,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
+from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecution
+
+__all__ = ["ConnectorOperationService", "ResolvedConnectorExecution"]
+from app.modules.connectors.services.execution.plumbing import (
+    build_dispatcher,
+    execution_request,
+)
 from app.modules.connectors.services.credential_freshness import (
     resolve_execution_credentials,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class ResolvedConnectorExecution:
-    """Session-free output of the connector-operation resolve phase, handed to
-    the external execute phase so the operation runs with no pooled DB connection
-    held. Carries only plain values -- never ORM/session-bound objects."""
-
-    connector_id: str
-    operation_execution_name: str
-    provider: str | None
-    third_party_credentials: dict[str, Any]
-    payload: dict[str, Any]
-    auth_token: str | None
-    api_url: str | None
-    # Plain identifiers (never session-bound) so the execute phase can flag the
-    # account for re-auth on an unauthorized failure without re-resolving it.
-    account_id: UUID | None = None
-    account_user_id: UUID | None = None
-    organization_id: UUID | None = None
 
 
 class ConnectorOperationService:
@@ -64,12 +54,15 @@ class ConnectorOperationService:
         operation_gateway: AppOperationGatewayPort,
         account_resolution_service: AccountResolutionService,
         connector_service: ConnectorService | None = None,
+        auth_config_operation_repository: Any | None = None,
     ):
         self.connector_repository = connector_repository
         self.operation_repository = operation_repository
         self.operation_gateway = operation_gateway
         self.account_resolution_service = account_resolution_service
         self.connector_service = connector_service
+        self.auth_config_operation_repository = auth_config_operation_repository
+        self._kind_dispatcher = None
 
     async def _get_connector(self, connector_id: str):
         connector = await self.connector_repository.get(connector_id)
@@ -540,17 +533,27 @@ class ConnectorOperationService:
                 if auth_config is not None:
                     kind = auth_config.kind.value
 
-        if kind:
-            operation = await self.operation_repository.get_by_connector_kind_and_name(
-                connector_id,
-                kind,
-                operation_name,
+        # An install's own discovered operation wins over a catalog one of the
+        # same name: for mcp/openapi the catalog has nothing to offer, and where
+        # both exist the install describes the server actually being called.
+        operation = None
+        if auth_config_id is not None and self.auth_config_operation_repository:
+            operation = (
+                await self.auth_config_operation_repository.get_by_auth_config_and_name(
+                    auth_config_id, operation_name
+                )
             )
-        else:
-            operation = await self.operation_repository.get_by_connector_and_name(
-                connector_id,
-                operation_name,
-            )
+        if operation is None:
+            if kind:
+                operation = (
+                    await self.operation_repository.get_by_connector_kind_and_name(
+                        connector_id, kind, operation_name
+                    )
+                )
+            else:
+                operation = await self.operation_repository.get_by_connector_and_name(
+                    connector_id, operation_name
+                )
         if not operation:
             raise OperationNotFoundError(operation_name)
 
@@ -568,6 +571,13 @@ class ConnectorOperationService:
             provider=(
                 kind_to_provider(kind).value if kind else AuthProvider.LEMMA.value
             ),
+            kind=kind or ConnectorKind.PACKAGE.value,
+            connection_config=(
+                getattr(auth_config, "config", None) if auth_config else None
+            ),
+            execution=getattr(operation, "execution", None),
+            operation_name=operation.name,
+            input_schema=getattr(operation, "input_schema", None),
             third_party_credentials=third_party_credentials,
             payload=payload or {},
             auth_token=auth_token,
@@ -577,6 +587,11 @@ class ConnectorOperationService:
             organization_id=getattr(account, "organization_id", None),
         )
 
+    def _dispatcher(self):
+        if self._kind_dispatcher is None:
+            self._kind_dispatcher = build_dispatcher(self.operation_gateway)
+        return self._kind_dispatcher
+
     async def execute_resolved(
         self, resolved: ResolvedConnectorExecution
     ) -> OperationExecutionResponse:
@@ -585,14 +600,8 @@ class ConnectorOperationService:
         ``provider`` is supplied (the connector was validated in the resolve
         phase), and the concrete provider gateways are DB-free."""
         try:
-            result = await self.operation_gateway.execute_operation(
-                connector_id=resolved.connector_id,
-                operation_name=resolved.operation_execution_name,
-                payload=resolved.payload or {},
-                third_party_credentials=resolved.third_party_credentials,
-                auth_token=resolved.auth_token,
-                api_url=resolved.api_url,
-                provider=resolved.provider,
+            result = await self._dispatcher().execute(
+                execution_request(self._dispatcher(), resolved)
             )
         except ConnectorDomainError:
             raise

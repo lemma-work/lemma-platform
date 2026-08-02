@@ -131,6 +131,7 @@ _NAME_TO_MODULE = {
     'ConnectRequestResponseSchemaAttributesType0': 'connect_request_response_schema_attributes_type_0',
     'ConnectedAccountSummary': 'connected_account_summary',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete': 'connector_auth_config_delete_response_connector_auth_config_delete',
+    'ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations': 'connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations',
     'ConnectorDetailResponseSchema': 'connector_detail_response_schema',
     'ConnectorDetailResponseSchemaOperations': 'connector_detail_response_schema_operations',
     'ConnectorListResponseSchema': 'connector_list_response_schema',
@@ -624,6 +625,7 @@ if TYPE_CHECKING:
     from .connect_request_response_schema_attributes_type_0 import ConnectRequestResponseSchemaAttributesType0
     from .connected_account_summary import ConnectedAccountSummary
     from .connector_auth_config_delete_response_connector_auth_config_delete import ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete
+    from .connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations import ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
     from .connector_detail_response_schema import ConnectorDetailResponseSchema
     from .connector_detail_response_schema_operations import ConnectorDetailResponseSchemaOperations
     from .connector_list_response_schema import ConnectorListResponseSchema
@@ -1130,6 +1132,7 @@ __all__ = [
     'ConnectRequestResponseSchemaAttributesType0',
     'ConnectedAccountSummary',
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete',
+    'ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations',
     'ConnectorDetailResponseSchema',
     'ConnectorDetailResponseSchemaOperations',
     'ConnectorListResponseSchema',
