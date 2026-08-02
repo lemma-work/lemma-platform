@@ -1,6 +1,6 @@
 [project]
 name = "agentbox"
-version = "0.8.0"
+version = "0.7.0"
 description = "Provider-neutral sandbox fabric for Lemma workspaces and functions"
 requires-python = ">=3.14,<3.15"
 dependencies = [
