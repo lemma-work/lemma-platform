@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma Skill Creator"
+  short_description: "Create and improve pod-owned Lemma skills"
+  default_prompt: "Use $lemma-skill-creator to create, validate, and smoke-test a pod-owned Lemma skill under /skills."

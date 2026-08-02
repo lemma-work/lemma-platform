@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma App QA"
+  short_description: "Test Lemma apps through real user journeys"
+  default_prompt: "Use $lemma-app-qa to test a Lemma app in an authenticated browser and produce an evidence-backed defect report."

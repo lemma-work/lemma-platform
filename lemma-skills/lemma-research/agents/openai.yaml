@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma Research"
+  short_description: "Run durable, source-backed investigations"
+  default_prompt: "Use $lemma-research to investigate a question with web and pod sources, preserve evidence, and publish a cited result."

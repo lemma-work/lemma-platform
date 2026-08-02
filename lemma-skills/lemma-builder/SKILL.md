@@ -133,5 +133,5 @@ Read what the task needs:
 - `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; LEMMA vs COMPOSIO providers; delegated execution.
 - `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, LLM event filtering.
 - `references/surfaces.md` — exposing a pod agent on Slack/Teams/Telegram/WhatsApp/Gmail/Outlook.
-- `references/apps.md` — design-doc-first method, scaffold/dev/deploy, TS SDK, components, UX rules.
+- `references/apps.md` — app architecture, SDK/auth/data wiring, scaffold/dev/deploy, and components. Pair it with `lemma-app-design` for UX/visual direction and `lemma-app-qa` for systematic release testing.
 - `references/app-recipes/*.md` — copy-paste app patterns: agent chat, RLS tables, workflow forms, file viewer, connector actions (load the one you need).
