@@ -105,12 +105,14 @@ _NAME_TO_MODULE = {
     'ApprovalDecisionResponse': 'approval_decision_response',
     'Attach': 'attach',
     'AuthConfigCreateSchema': 'auth_config_create_schema',
-    'AuthConfigCreateSchemaCredentialConfigType0': 'auth_config_create_schema_credential_config_type_0',
+    'AuthConfigCreateSchemaConfigType0': 'auth_config_create_schema_config_type_0',
     'AuthConfigListResponseSchema': 'auth_config_list_response_schema',
     'AuthConfigResponseSchema': 'auth_config_response_schema',
-    'AuthConfigResponseSchemaCredentialConfigType0': 'auth_config_response_schema_credential_config_type_0',
+    'AuthConfigResponseSchemaConfigType0': 'auth_config_response_schema_config_type_0',
     'AuthConfigResponseSchemaMetadataType0': 'auth_config_response_schema_metadata_type_0',
-    'AuthProvider': 'auth_provider',
+    'AuthConfigUpdateResponseSchema': 'auth_config_update_response_schema',
+    'AuthConfigUpdateSchema': 'auth_config_update_schema',
+    'AuthConfigUpdateSchemaConfigType0': 'auth_config_update_schema_config_type_0',
     'AuthScheme': 'auth_scheme',
     'AvailableSurface': 'available_surface',
     'AvailableSurfaceChannelResponse': 'available_surface_channel_response',
@@ -124,8 +126,6 @@ _NAME_TO_MODULE = {
     'BundleSourceKind': 'bundle_source_kind',
     'ColumnSchema': 'column_schema',
     'ColumnSchemaTypeParamsType0': 'column_schema_type_params_type_0',
-    'ComposioProviderCapabilityResponseSchema': 'composio_provider_capability_response_schema',
-    'ComposioProviderCapabilityResponseSchemaAuthConfigSchemaType0': 'composio_provider_capability_response_schema_auth_config_schema_type_0',
     'ConnectRequestInitiateSchema': 'connect_request_initiate_schema',
     'ConnectRequestResponseSchema': 'connect_request_response_schema',
     'ConnectRequestResponseSchemaAttributesType0': 'connect_request_response_schema_attributes_type_0',
@@ -134,6 +134,10 @@ _NAME_TO_MODULE = {
     'ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations': 'connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations',
     'ConnectorDetailResponseSchema': 'connector_detail_response_schema',
     'ConnectorDetailResponseSchemaOperations': 'connector_detail_response_schema_operations',
+    'ConnectorKind': 'connector_kind',
+    'ConnectorKindResponseSchema': 'connector_kind_response_schema',
+    'ConnectorKindResponseSchemaConfigSchemaType0': 'connector_kind_response_schema_config_schema_type_0',
+    'ConnectorKindResponseSchemaCredentialSchemaType0': 'connector_kind_response_schema_credential_schema_type_0',
     'ConnectorListResponseSchema': 'connector_list_response_schema',
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
@@ -260,9 +264,6 @@ _NAME_TO_MODULE = {
     'ImportStatusResponse': 'import_status_response',
     'InstalledAppSummary': 'installed_app_summary',
     'JsonObject': 'json_object',
-    'LemmaProviderCapabilityResponseSchema': 'lemma_provider_capability_response_schema',
-    'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0': 'lemma_provider_capability_response_schema_auth_config_schema_type_0',
-    'LemmaProviderCapabilityResponseSchemaCredentialSchemaType0': 'lemma_provider_capability_response_schema_credential_schema_type_0',
     'LiteralInputBinding': 'literal_input_binding',
     'LoopNode': 'loop_node',
     'LoopNodeConfig': 'loop_node_config',
@@ -599,12 +600,14 @@ if TYPE_CHECKING:
     from .approval_decision_response import ApprovalDecisionResponse
     from .attach import Attach
     from .auth_config_create_schema import AuthConfigCreateSchema
-    from .auth_config_create_schema_credential_config_type_0 import AuthConfigCreateSchemaCredentialConfigType0
+    from .auth_config_create_schema_config_type_0 import AuthConfigCreateSchemaConfigType0
     from .auth_config_list_response_schema import AuthConfigListResponseSchema
     from .auth_config_response_schema import AuthConfigResponseSchema
-    from .auth_config_response_schema_credential_config_type_0 import AuthConfigResponseSchemaCredentialConfigType0
+    from .auth_config_response_schema_config_type_0 import AuthConfigResponseSchemaConfigType0
     from .auth_config_response_schema_metadata_type_0 import AuthConfigResponseSchemaMetadataType0
-    from .auth_provider import AuthProvider
+    from .auth_config_update_response_schema import AuthConfigUpdateResponseSchema
+    from .auth_config_update_schema import AuthConfigUpdateSchema
+    from .auth_config_update_schema_config_type_0 import AuthConfigUpdateSchemaConfigType0
     from .auth_scheme import AuthScheme
     from .available_surface import AvailableSurface
     from .available_surface_channel_response import AvailableSurfaceChannelResponse
@@ -618,8 +621,6 @@ if TYPE_CHECKING:
     from .bundle_source_kind import BundleSourceKind
     from .column_schema import ColumnSchema
     from .column_schema_type_params_type_0 import ColumnSchemaTypeParamsType0
-    from .composio_provider_capability_response_schema import ComposioProviderCapabilityResponseSchema
-    from .composio_provider_capability_response_schema_auth_config_schema_type_0 import ComposioProviderCapabilityResponseSchemaAuthConfigSchemaType0
     from .connect_request_initiate_schema import ConnectRequestInitiateSchema
     from .connect_request_response_schema import ConnectRequestResponseSchema
     from .connect_request_response_schema_attributes_type_0 import ConnectRequestResponseSchemaAttributesType0
@@ -628,6 +629,10 @@ if TYPE_CHECKING:
     from .connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations import ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations
     from .connector_detail_response_schema import ConnectorDetailResponseSchema
     from .connector_detail_response_schema_operations import ConnectorDetailResponseSchemaOperations
+    from .connector_kind import ConnectorKind
+    from .connector_kind_response_schema import ConnectorKindResponseSchema
+    from .connector_kind_response_schema_config_schema_type_0 import ConnectorKindResponseSchemaConfigSchemaType0
+    from .connector_kind_response_schema_credential_schema_type_0 import ConnectorKindResponseSchemaCredentialSchemaType0
     from .connector_list_response_schema import ConnectorListResponseSchema
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
@@ -754,9 +759,6 @@ if TYPE_CHECKING:
     from .import_status_response import ImportStatusResponse
     from .installed_app_summary import InstalledAppSummary
     from .json_object import JsonObject
-    from .lemma_provider_capability_response_schema import LemmaProviderCapabilityResponseSchema
-    from .lemma_provider_capability_response_schema_auth_config_schema_type_0 import LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0
-    from .lemma_provider_capability_response_schema_credential_schema_type_0 import LemmaProviderCapabilityResponseSchemaCredentialSchemaType0
     from .literal_input_binding import LiteralInputBinding
     from .loop_node import LoopNode
     from .loop_node_config import LoopNodeConfig
@@ -1106,12 +1108,14 @@ __all__ = [
     'ApprovalDecisionResponse',
     'Attach',
     'AuthConfigCreateSchema',
-    'AuthConfigCreateSchemaCredentialConfigType0',
+    'AuthConfigCreateSchemaConfigType0',
     'AuthConfigListResponseSchema',
     'AuthConfigResponseSchema',
-    'AuthConfigResponseSchemaCredentialConfigType0',
+    'AuthConfigResponseSchemaConfigType0',
     'AuthConfigResponseSchemaMetadataType0',
-    'AuthProvider',
+    'AuthConfigUpdateResponseSchema',
+    'AuthConfigUpdateSchema',
+    'AuthConfigUpdateSchemaConfigType0',
     'AuthScheme',
     'AvailableSurface',
     'AvailableSurfaceChannelResponse',
@@ -1125,8 +1129,6 @@ __all__ = [
     'BundleSourceKind',
     'ColumnSchema',
     'ColumnSchemaTypeParamsType0',
-    'ComposioProviderCapabilityResponseSchema',
-    'ComposioProviderCapabilityResponseSchemaAuthConfigSchemaType0',
     'ConnectRequestInitiateSchema',
     'ConnectRequestResponseSchema',
     'ConnectRequestResponseSchemaAttributesType0',
@@ -1135,6 +1137,10 @@ __all__ = [
     'ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations',
     'ConnectorDetailResponseSchema',
     'ConnectorDetailResponseSchemaOperations',
+    'ConnectorKind',
+    'ConnectorKindResponseSchema',
+    'ConnectorKindResponseSchemaConfigSchemaType0',
+    'ConnectorKindResponseSchemaCredentialSchemaType0',
     'ConnectorListResponseSchema',
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',
@@ -1261,9 +1267,6 @@ __all__ = [
     'ImportStatusResponse',
     'InstalledAppSummary',
     'JsonObject',
-    'LemmaProviderCapabilityResponseSchema',
-    'LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0',
-    'LemmaProviderCapabilityResponseSchemaCredentialSchemaType0',
     'LiteralInputBinding',
     'LoopNode',
     'LoopNodeConfig',

@@ -143,13 +143,13 @@ class VariableSpecResponse(BaseModel):
             "connector. Null for non-connector variables."
         ),
     )
-    provider: str | None = Field(
+    connector_kind: str | None = Field(
         default=None,
         description=(
-            "For a connector account variable, the auth provider backing the "
-            "connector ('LEMMA' or 'COMPOSIO'), so the importer connects/selects "
-            "an account through the right provider. Null for non-connector "
-            "variables."
+            "For a connector account variable, which of the connector's kinds "
+            "the source install used ('composio', 'package', 'mcp', 'sql', "
+            "'http'), so the importer selects an account of the same kind. "
+            "Null for non-connector variables."
         ),
     )
 
@@ -188,7 +188,7 @@ class ImportPlanResponse(BaseModel):
                     required=v.required,
                     default=v.default,
                     connector=v.connector,
-                    provider=v.provider,
+                    connector_kind=v.connector_kind,
                 )
                 for v in plan.variables
             ],

@@ -45,10 +45,10 @@ def _resolve_auth_config(client: Any, auth_config: str | None) -> str:
             "with `lemma connectors auth-configs create <app>`.",
             param_hint="AUTH_CONFIG",
         )
-    # Operations/triggers differ per provider, so the name (which encodes the
-    # provider choice) must be explicit. Show provider to make the choice obvious.
+    # Operations/triggers differ per kind, so the name (which encodes the kind
+    # choice) must be explicit. Show the kind to make the choice obvious.
     names = ", ".join(
-        f"{i.get('name') or i.get('id')} ({i.get('provider') or '?'})" for i in items
+        f"{i.get('name') or i.get('id')} ({i.get('kind') or '?'})" for i in items
     )
     raise typer.BadParameter(
         f"Multiple auth configs — specify one (see `lemma connectors overview`): {names}",
@@ -333,14 +333,18 @@ def create_auth_config(
     ctx: typer.Context,
     connector: str = typer.Argument(...),
     name: str | None = typer.Option(None, "--name"),
-    provider: str = typer.Option("LEMMA", "--provider"),
+    kind: str | None = typer.Option(
+        None,
+        "--kind",
+        help="Which of the connector's kinds to install. Optional when it offers one.",
+    ),
     config_source: str = typer.Option("SYSTEM_DEFAULT", "--config-source"),
     credential_json: str | None = typer.Option(
-        None, "--data", "-d", "--credential-json", help="Credential config JSON payload."
+        None, "--data", "-d", "--config-json", help="Install config JSON payload."
     ),
     credential_file: Path | None = typer.Option(
         None,
-        "--credential-file",
+        "--config-file",
         "--file",
         exists=True,
         dir_okay=False,
@@ -360,9 +364,9 @@ def create_auth_config(
                     {
                         "connector_id": connector,
                         "name": name,
-                        "provider": provider,
+                        "kind": kind,
                         "config_source": config_source,
-                        "credential_config": credential_config,
+                        "config": credential_config,
                     }
                 )
             )
@@ -371,10 +375,64 @@ def create_auth_config(
                 organization_id=org_for(client, s),
                 connector_id=connector,
                 name=name,
-                provider=provider,
+                kind=kind,
                 config_source=config_source,
-                credential_config=credential_config,
+                config=credential_config,
             )
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
+@auth_configs_app.command("update")
+def update_auth_config(
+    ctx: typer.Context,
+    auth_config: str = typer.Argument(...),
+    name: str | None = typer.Option(None, "--name", help="Rename this install."),
+    status: str | None = typer.Option(None, "--status", help="ACTIVE or DISABLED."),
+    is_default: bool | None = typer.Option(
+        None,
+        "--default/--no-default",
+        help="Make this the install a bare connector id resolves to.",
+    ),
+    config_json: str | None = typer.Option(
+        None, "--data", "-d", "--config-json", help="Replacement config JSON payload."
+    ),
+    config_file: Path | None = typer.Option(
+        None,
+        "--config-file",
+        "--file",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+    ),
+) -> None:
+    """Update an auth config in place.
+
+    Use this to rotate an MCP server URL or an OAuth app: deleting and
+    recreating the install cascades away every account connected to it, while
+    this keeps them. Accounts whose credentials the change invalidates are
+    marked for reconnect, and the response says how many.
+    """
+    from lemma_sdk.openapi_client.models.auth_config_update_schema import (
+        AuthConfigUpdateSchema,
+    )
+
+    config = read_json(config_json, config_file, required=False) or None
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.connectors.auth_configs.update(
+            auth_config,
+            AuthConfigUpdateSchema.from_dict(
+                {
+                    "name": name,
+                    "status": status,
+                    "is_default": is_default,
+                    "config": config,
+                }
+            ),
         ),
     )
     if result is not None:
@@ -628,7 +686,7 @@ def list_triggers(
 ) -> None:
     """List connector triggers for an org auth config.
 
-    Only triggers for the auth config's provider are returned (a COMPOSIO auth
+    Only triggers for the auth config's kind are returned (a composio auth
     config returns only COMPOSIO triggers, a LEMMA auth config only LEMMA).
     """
 
@@ -676,7 +734,7 @@ def _account_label(account: dict) -> str:
 
 
 def _build_overview_rows(configs: list, accounts: list) -> list[dict]:
-    """One row per auth config: the app, the name to pass, provider, and accounts."""
+    """One row per auth config: the app, the name to pass, kind, and accounts."""
     rows: list[dict] = []
     for cfg in configs:
         cfg_id = cfg.get("id")
@@ -691,7 +749,7 @@ def _build_overview_rows(configs: list, accounts: list) -> list[dict]:
             {
                 "app": app_id,
                 "auth_config": cfg.get("name") or str(cfg_id or ""),
-                "provider": cfg.get("provider") or "",
+                "kind": cfg.get("kind") or "",
                 "status": cfg.get("status") or "",
                 "accounts": ", ".join(_account_label(a) for a in matched) or "(none)",
             }
@@ -712,12 +770,12 @@ def _render_overview(rows: list[dict]) -> None:
     view = Table(title="Connectors", box=box.SIMPLE_HEAVY)
     view.add_column("App")
     view.add_column("Auth Config")
-    view.add_column("Provider")
+    view.add_column("Kind")
     view.add_column("Status")
     view.add_column("Accounts", overflow="fold")
-    for row in sorted(rows, key=lambda r: (r["app"], r["provider"])):
+    for row in sorted(rows, key=lambda r: (r["app"], r["kind"])):
         view.add_row(
-            row["app"], row["auth_config"], row["provider"], row["status"], row["accounts"]
+            row["app"], row["auth_config"], row["kind"], row["status"], row["accounts"]
         )
     console.print(view)
     console.print(
@@ -728,11 +786,11 @@ def _render_overview(rows: list[dict]) -> None:
 
 @app.command("overview")
 def connectors_overview(ctx: typer.Context) -> None:
-    """Show every configured app: auth-config name, provider, and connected accounts.
+    """Show every configured app: auth-config name, kind, and connected accounts.
 
     Operations and triggers are addressed by AUTH-CONFIG NAME (and differ per
-    provider — LEMMA vs COMPOSIO), so this is the one place to find the exact
-    name to pass to `operations` and `triggers`.
+    kind), so this is the one place to find the exact name to pass to
+    `operations` and `triggers`.
     """
     state = state_from_ctx(ctx)
 
@@ -779,8 +837,8 @@ def connector_status(
                 name = item.get("name") or item.get("connector_id") or "?"
                 title = item.get("title") or ""
                 status = item.get("status") or ""
-                provider = item.get("provider") or ""
-                typer.echo(f"  {name:<20} {title:<20} {status:<10} {provider}")
+                kind = item.get("kind") or ""
+                typer.echo(f"  {name:<20} {title:<20} {status:<10} {kind}")
         else:
             typer.echo("Installed apps: (none)")
 
@@ -800,8 +858,8 @@ def connector_status(
         emit(state, result)
 
 
-def _resolve_provider_for_app(client: Any, connector: str) -> str | None:
-    """Look up the installed auth config for this app and return its provider (lowercase)."""
+def _resolve_kind_for_app(client: Any, connector: str) -> str | None:
+    """Look up the installed auth config for this app and return its kind (lowercase)."""
     try:
         raw = client.connectors.auth_configs.list(limit=50)
         data = to_plain(raw)
@@ -813,8 +871,8 @@ def _resolve_provider_for_app(client: Any, connector: str) -> str | None:
         for item in items:
             app_id = item.get("connector_id") or item.get("app_id") or ""
             if app_id == connector:
-                provider = item.get("provider") or ""
-                return provider.lower() if provider else None
+                kind = item.get("kind") or ""
+                return kind.lower() if kind else None
     except Exception:
         pass
     return None
@@ -824,23 +882,23 @@ def _resolve_provider_for_app(client: Any, connector: str) -> str | None:
 def describe_connector(
     ctx: typer.Context,
     connector: str = typer.Argument(..., help="Connector ID (e.g. gmail, slack)."),
-    provider: Optional[str] = typer.Option(
+    kind: Optional[str] = typer.Option(
         None,
-        "--provider",
-        help="Override provider: lemma or composio. Auto-detected from installed auth config when omitted.",
+        "--kind",
+        help="Override kind, e.g. package or composio. Auto-detected from the installed auth config when omitted.",
     ),
 ) -> None:
     """Show the skill guide for a connector app.
 
-    Automatically selects the provider-specific skill when the app supports both
-    LEMMA and Composio providers and an auth config is installed for this org.
+    Automatically selects the kind-specific skill when the app ships as both a
+    vendored package and a Composio toolkit and an auth config is installed.
     """
 
     state = state_from_ctx(ctx)
 
     def _fetch(client: Any, _s: Any) -> Any:
-        effective_provider = provider or _resolve_provider_for_app(client, connector)
-        return client.connectors.apps.skill(connector, provider=effective_provider)
+        effective_kind = kind or _resolve_kind_for_app(client, connector)
+        return client.connectors.apps.skill(connector, kind=effective_kind)
 
     result = run_with_client(ctx, _fetch)
     if result is None:

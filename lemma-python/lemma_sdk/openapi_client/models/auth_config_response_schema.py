@@ -12,8 +12,8 @@ from dateutil.parser import isoparse
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.auth_config_response_schema_credential_config_type_0 import (
-        AuthConfigResponseSchemaCredentialConfigType0,
+    from ..models.auth_config_response_schema_config_type_0 import (
+        AuthConfigResponseSchemaConfigType0,
     )
     from ..models.auth_config_response_schema_metadata_type_0 import (
         AuthConfigResponseSchemaMetadataType0,
@@ -31,12 +31,13 @@ class AuthConfigResponseSchema:
         connector_id (str):
         created_at (datetime.datetime):
         id (UUID):
+        kind (str):
         name (str):
         organization_id (UUID):
-        provider (str):
         status (str):
         updated_at (datetime.datetime):
-        credential_config (AuthConfigResponseSchemaCredentialConfigType0 | None | Unset):
+        config (AuthConfigResponseSchemaConfigType0 | None | Unset):
+        is_default (bool | Unset):  Default: False.
         metadata (AuthConfigResponseSchemaMetadataType0 | None | Unset):
     """
 
@@ -44,20 +45,19 @@ class AuthConfigResponseSchema:
     connector_id: str
     created_at: datetime.datetime
     id: UUID
+    kind: str
     name: str
     organization_id: UUID
-    provider: str
     status: str
     updated_at: datetime.datetime
-    credential_config: AuthConfigResponseSchemaCredentialConfigType0 | None | Unset = (
-        UNSET
-    )
+    config: AuthConfigResponseSchemaConfigType0 | None | Unset = UNSET
+    is_default: bool | Unset = False
     metadata: AuthConfigResponseSchemaMetadataType0 | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.auth_config_response_schema_credential_config_type_0 import (
-            AuthConfigResponseSchemaCredentialConfigType0,
+        from ..models.auth_config_response_schema_config_type_0 import (
+            AuthConfigResponseSchemaConfigType0,
         )
         from ..models.auth_config_response_schema_metadata_type_0 import (
             AuthConfigResponseSchemaMetadataType0,
@@ -71,25 +71,25 @@ class AuthConfigResponseSchema:
 
         id = str(self.id)
 
+        kind = self.kind
+
         name = self.name
 
         organization_id = str(self.organization_id)
-
-        provider = self.provider
 
         status = self.status
 
         updated_at = self.updated_at.isoformat()
 
-        credential_config: dict[str, Any] | None | Unset
-        if isinstance(self.credential_config, Unset):
-            credential_config = UNSET
-        elif isinstance(
-            self.credential_config, AuthConfigResponseSchemaCredentialConfigType0
-        ):
-            credential_config = self.credential_config.to_dict()
+        config: dict[str, Any] | None | Unset
+        if isinstance(self.config, Unset):
+            config = UNSET
+        elif isinstance(self.config, AuthConfigResponseSchemaConfigType0):
+            config = self.config.to_dict()
         else:
-            credential_config = self.credential_config
+            config = self.config
+
+        is_default = self.is_default
 
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
@@ -107,15 +107,17 @@ class AuthConfigResponseSchema:
                 "connector_id": connector_id,
                 "created_at": created_at,
                 "id": id,
+                "kind": kind,
                 "name": name,
                 "organization_id": organization_id,
-                "provider": provider,
                 "status": status,
                 "updated_at": updated_at,
             }
         )
-        if credential_config is not UNSET:
-            field_dict["credential_config"] = credential_config
+        if config is not UNSET:
+            field_dict["config"] = config
+        if is_default is not UNSET:
+            field_dict["is_default"] = is_default
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
 
@@ -123,8 +125,8 @@ class AuthConfigResponseSchema:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.auth_config_response_schema_credential_config_type_0 import (
-            AuthConfigResponseSchemaCredentialConfigType0,
+        from ..models.auth_config_response_schema_config_type_0 import (
+            AuthConfigResponseSchemaConfigType0,
         )
         from ..models.auth_config_response_schema_metadata_type_0 import (
             AuthConfigResponseSchemaMetadataType0,
@@ -139,19 +141,19 @@ class AuthConfigResponseSchema:
 
         id = UUID(d.pop("id"))
 
+        kind = d.pop("kind")
+
         name = d.pop("name")
 
         organization_id = UUID(d.pop("organization_id"))
-
-        provider = d.pop("provider")
 
         status = d.pop("status")
 
         updated_at = isoparse(d.pop("updated_at"))
 
-        def _parse_credential_config(
+        def _parse_config(
             data: object,
-        ) -> AuthConfigResponseSchemaCredentialConfigType0 | None | Unset:
+        ) -> AuthConfigResponseSchemaConfigType0 | None | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -159,18 +161,16 @@ class AuthConfigResponseSchema:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                credential_config_type_0 = (
-                    AuthConfigResponseSchemaCredentialConfigType0.from_dict(data)
-                )
+                config_type_0 = AuthConfigResponseSchemaConfigType0.from_dict(data)
 
-                return credential_config_type_0
+                return config_type_0
             except TypeError, ValueError, AttributeError, KeyError:
                 pass
-            return cast(
-                AuthConfigResponseSchemaCredentialConfigType0 | None | Unset, data
-            )
+            return cast(AuthConfigResponseSchemaConfigType0 | None | Unset, data)
 
-        credential_config = _parse_credential_config(d.pop("credential_config", UNSET))
+        config = _parse_config(d.pop("config", UNSET))
+
+        is_default = d.pop("is_default", UNSET)
 
         def _parse_metadata(
             data: object,
@@ -196,12 +196,13 @@ class AuthConfigResponseSchema:
             connector_id=connector_id,
             created_at=created_at,
             id=id,
+            kind=kind,
             name=name,
             organization_id=organization_id,
-            provider=provider,
             status=status,
             updated_at=updated_at,
-            credential_config=credential_config,
+            config=config,
+            is_default=is_default,
             metadata=metadata,
         )
 

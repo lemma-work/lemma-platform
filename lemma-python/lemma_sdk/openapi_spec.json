@@ -192,6 +192,17 @@
             "title": "Is Default",
             "type": "boolean"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
           "organization_id": {
             "format": "uuid",
             "title": "Organization Id",
@@ -208,17 +219,6 @@
               }
             ],
             "title": "Preferences"
-          },
-          "provider": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Provider"
           },
           "provider_account_id": {
             "anyOf": [
@@ -2674,6 +2674,9 @@
             "title": "Id",
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/ConnectorKind"
+          },
           "payload_example": {
             "anyOf": [
               {
@@ -2698,9 +2701,6 @@
             ],
             "title": "Payload Schema"
           },
-          "provider": {
-            "$ref": "#/components/schemas/AuthProvider"
-          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -2710,7 +2710,7 @@
         "required": [
           "id",
           "connector_id",
-          "provider",
+          "kind",
           "description",
           "config_schema",
           "payload_schema",
@@ -2755,8 +2755,8 @@
             "title": "Id",
             "type": "string"
           },
-          "provider": {
-            "$ref": "#/components/schemas/AuthProvider"
+          "kind": {
+            "$ref": "#/components/schemas/ConnectorKind"
           },
           "updated_at": {
             "format": "date-time",
@@ -2767,7 +2767,7 @@
         "required": [
           "id",
           "connector_id",
-          "provider",
+          "kind",
           "description",
           "created_at",
           "updated_at"
@@ -2820,16 +2820,7 @@
       },
       "AuthConfigCreateSchema": {
         "properties": {
-          "config_source": {
-            "default": "SYSTEM_DEFAULT",
-            "title": "Config Source",
-            "type": "string"
-          },
-          "connector_id": {
-            "title": "Connector Id",
-            "type": "string"
-          },
-          "credential_config": {
+          "config": {
             "anyOf": [
               {
                 "additionalProperties": true,
@@ -2839,7 +2830,28 @@
                 "type": "null"
               }
             ],
-            "title": "Credential Config"
+            "title": "Config"
+          },
+          "config_source": {
+            "default": "SYSTEM_DEFAULT",
+            "title": "Config Source",
+            "type": "string"
+          },
+          "connector_id": {
+            "title": "Connector Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which of the connector's kinds to install. Optional when the connector offers only one.",
+            "title": "Kind"
           },
           "name": {
             "anyOf": [
@@ -2851,11 +2863,6 @@
               }
             ],
             "title": "Name"
-          },
-          "provider": {
-            "default": "LEMMA",
-            "title": "Provider",
-            "type": "string"
           }
         },
         "required": [
@@ -2898,6 +2905,18 @@
       },
       "AuthConfigResponseSchema": {
         "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
           "config_source": {
             "title": "Config Source",
             "type": "string"
@@ -2911,21 +2930,18 @@
             "title": "Created At",
             "type": "string"
           },
-          "credential_config": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Credential Config"
-          },
           "id": {
             "format": "uuid",
             "title": "Id",
+            "type": "string"
+          },
+          "is_default": {
+            "default": false,
+            "title": "Is Default",
+            "type": "boolean"
+          },
+          "kind": {
+            "title": "Kind",
             "type": "string"
           },
           "metadata": {
@@ -2949,10 +2965,6 @@
             "title": "Organization Id",
             "type": "string"
           },
-          "provider": {
-            "title": "Provider",
-            "type": "string"
-          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -2967,7 +2979,7 @@
           "id",
           "organization_id",
           "connector_id",
-          "provider",
+          "kind",
           "config_source",
           "status",
           "name",
@@ -2977,13 +2989,84 @@
         "title": "AuthConfigResponseSchema",
         "type": "object"
       },
-      "AuthProvider": {
-        "enum": [
-          "LEMMA",
-          "COMPOSIO"
+      "AuthConfigUpdateResponseSchema": {
+        "properties": {
+          "accounts_marked_for_reauth": {
+            "default": 0,
+            "description": "Connected accounts flagged for reconnect because the change invalidated their stored credentials. They are never deleted: the account keeps its id and grants, and reconnecting updates it in place, so anything referencing it keeps working.",
+            "title": "Accounts Marked For Reauth",
+            "type": "integer"
+          },
+          "auth_config": {
+            "$ref": "#/components/schemas/AuthConfigResponseSchema"
+          },
+          "operations_discovered": {
+            "default": 0,
+            "description": "Operations re-discovered because the change altered where they come from. Zero for a connector whose operations are static.",
+            "title": "Operations Discovered",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "auth_config"
         ],
-        "title": "AuthProvider",
-        "type": "string"
+        "title": "AuthConfigUpdateResponseSchema",
+        "type": "object"
+      },
+      "AuthConfigUpdateSchema": {
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Replacement configuration. Re-validated against the connector's schema, and re-checked against the network-target guard.",
+            "title": "Config"
+          },
+          "is_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Make this the install that a bare connector_id resolves to. Demotes whichever install currently holds that role.",
+            "title": "Is Default"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New name for this install. Accounts follow the rename, since they reference the install by id.",
+            "title": "Name"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ACTIVE or DISABLED.",
+            "title": "Status"
+          }
+        },
+        "title": "AuthConfigUpdateSchema",
+        "type": "object"
       },
       "AuthScheme": {
         "enum": [
@@ -3367,51 +3450,6 @@
         "title": "ColumnSchema",
         "type": "object"
       },
-      "ComposioProviderCapabilityResponseSchema": {
-        "properties": {
-          "auth_config_schema": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Auth Config Schema"
-          },
-          "auth_scheme": {
-            "$ref": "#/components/schemas/AuthScheme",
-            "default": "OAUTH2"
-          },
-          "provider": {
-            "const": "COMPOSIO",
-            "default": "COMPOSIO",
-            "title": "Provider",
-            "type": "string"
-          },
-          "supports_org_custom_auth_config": {
-            "default": false,
-            "title": "Supports Org Custom Auth Config",
-            "type": "boolean"
-          },
-          "system_default_available": {
-            "default": true,
-            "title": "System Default Available",
-            "type": "boolean"
-          },
-          "toolkit_slug": {
-            "title": "Toolkit Slug",
-            "type": "string"
-          }
-        },
-        "required": [
-          "toolkit_slug"
-        ],
-        "title": "ComposioProviderCapabilityResponseSchema",
-        "type": "object"
-      },
       "ConnectRequestInitiateSchema": {
         "description": "Schema for initiating a connect request.",
         "properties": {
@@ -3607,26 +3645,19 @@
             "title": "Is Active",
             "type": "boolean"
           },
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/ConnectorKindResponseSchema"
+            },
+            "title": "Kinds",
+            "type": "array"
+          },
           "operations": {
             "additionalProperties": {
               "$ref": "#/components/schemas/OperationSummary"
             },
             "title": "Operations",
             "type": "object"
-          },
-          "provider_capabilities": {
-            "items": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/LemmaProviderCapabilityResponseSchema"
-                },
-                {
-                  "$ref": "#/components/schemas/ComposioProviderCapabilityResponseSchema"
-                }
-              ]
-            },
-            "title": "Provider Capabilities",
-            "type": "array"
           },
           "title": {
             "anyOf": [
@@ -3654,6 +3685,112 @@
           "updated_at"
         ],
         "title": "ConnectorDetailResponseSchema",
+        "type": "object"
+      },
+      "ConnectorKind": {
+        "description": "How an install authenticates, discovers and executes operations.",
+        "enum": [
+          "composio",
+          "http",
+          "sql",
+          "mcp",
+          "package"
+        ],
+        "title": "ConnectorKind",
+        "type": "string"
+      },
+      "ConnectorKindResponseSchema": {
+        "description": "One way a connector can be installed.\n\nFlat rather than a union over the five kinds: a client's job here is to\ndecide what to put in an install's `config`, and for that `kind` plus the\nschemas is the whole answer. The per-kind extras below are populated only\nwhere they apply.",
+        "properties": {
+          "auth_scheme": {
+            "$ref": "#/components/schemas/AuthScheme",
+            "default": "OAUTH2"
+          },
+          "config_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JSON Schema for an install's `config`.",
+            "title": "Config Schema"
+          },
+          "credential_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Schema"
+          },
+          "discovery": {
+            "default": "none",
+            "title": "Discovery",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ConnectorKind"
+          },
+          "oauth2_defaults": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OAuth2DefaultsResponseSchema"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "package_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package Name"
+          },
+          "supports_org_custom_auth_config": {
+            "default": false,
+            "title": "Supports Org Custom Auth Config",
+            "type": "boolean"
+          },
+          "supports_org_custom_oauth": {
+            "default": false,
+            "title": "Supports Org Custom Oauth",
+            "type": "boolean"
+          },
+          "system_default_available": {
+            "default": false,
+            "title": "System Default Available",
+            "type": "boolean"
+          },
+          "toolkit_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toolkit Slug"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "ConnectorKindResponseSchema",
         "type": "object"
       },
       "ConnectorListResponseSchema": {
@@ -3727,18 +3864,11 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "provider_capabilities": {
+          "kinds": {
             "items": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/LemmaProviderCapabilityResponseSchema"
-                },
-                {
-                  "$ref": "#/components/schemas/ComposioProviderCapabilityResponseSchema"
-                }
-              ]
+              "$ref": "#/components/schemas/ConnectorKindResponseSchema"
             },
-            "title": "Provider Capabilities",
+            "title": "Kinds",
             "type": "array"
           },
           "title": {
@@ -3775,11 +3905,7 @@
             "title": "Connector Id",
             "type": "string"
           },
-          "markdown": {
-            "title": "Markdown",
-            "type": "string"
-          },
-          "provider": {
+          "kind": {
             "anyOf": [
               {
                 "type": "string"
@@ -3788,7 +3914,11 @@
                 "type": "null"
               }
             ],
-            "title": "Provider"
+            "title": "Kind"
+          },
+          "markdown": {
+            "title": "Markdown",
+            "type": "string"
           },
           "title": {
             "anyOf": [
@@ -7950,12 +8080,12 @@
             "title": "Connector Id",
             "type": "string"
           },
-          "name": {
-            "title": "Name",
+          "kind": {
+            "title": "Kind",
             "type": "string"
           },
-          "provider": {
-            "title": "Provider",
+          "name": {
+            "title": "Name",
             "type": "string"
           },
           "status": {
@@ -7978,7 +8108,7 @@
           "name",
           "connector_id",
           "status",
-          "provider"
+          "kind"
         ],
         "title": "InstalledAppSummary",
         "type": "object"
@@ -7990,77 +8120,6 @@
         "type": "object"
       },
       "JsonValue": {},
-      "LemmaProviderCapabilityResponseSchema": {
-        "properties": {
-          "auth_config_schema": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Auth Config Schema"
-          },
-          "auth_scheme": {
-            "$ref": "#/components/schemas/AuthScheme",
-            "default": "OAUTH2"
-          },
-          "credential_schema": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Credential Schema"
-          },
-          "oauth2_defaults": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OAuth2DefaultsResponseSchema"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "package_name": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Package Name"
-          },
-          "provider": {
-            "const": "LEMMA",
-            "default": "LEMMA",
-            "title": "Provider",
-            "type": "string"
-          },
-          "supports_org_custom_oauth": {
-            "default": false,
-            "title": "Supports Org Custom Oauth",
-            "type": "boolean"
-          },
-          "system_default_available": {
-            "default": false,
-            "title": "System Default Available",
-            "type": "boolean"
-          }
-        },
-        "title": "LemmaProviderCapabilityResponseSchema",
-        "type": "object"
-      },
       "LiteralInputBinding": {
         "description": "Pass a literal JSON value into the target input without resolution.",
         "properties": {
@@ -14550,6 +14609,18 @@
             "description": "For a connector account variable, the connector the account must belong to (e.g. 'slack'), so the importer can connect the right connector. Null for non-connector variables.",
             "title": "Connector"
           },
+          "connector_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a connector account variable, which of the connector's kinds the source install used ('composio', 'package', 'mcp', 'sql', 'http'), so the importer selects an account of the same kind. Null for non-connector variables.",
+            "title": "Connector Kind"
+          },
           "default": {
             "anyOf": [
               {
@@ -14579,18 +14650,6 @@
           "name": {
             "title": "Name",
             "type": "string"
-          },
-          "provider": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "For a connector account variable, the auth provider backing the connector ('LEMMA' or 'COMPOSIO'), so the importer connects/selects an account through the right provider. Null for non-connector variables.",
-            "title": "Provider"
           },
           "required": {
             "default": false,
@@ -16373,7 +16432,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.1"
+    "version": "0.8.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -16920,7 +16979,7 @@
     },
     "/connectors/{connector_id}/skill": {
       "get": {
-        "description": "Get the skill guide markdown for a connector. Pass `provider=lemma` or `provider=composio` to get provider-specific instructions when the app supports both. Falls back to the generic doc if no provider-specific file exists. Returns 404 if no skill doc has been generated yet.",
+        "description": "Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.",
         "operationId": "connector.skill.get",
         "parameters": [
           {
@@ -16933,9 +16992,9 @@
             }
           },
           {
-            "description": "Provider override: lemma or composio",
+            "description": "Kind override, e.g. package or composio",
             "in": "query",
-            "name": "provider",
+            "name": "kind",
             "required": false,
             "schema": {
               "anyOf": [
@@ -16946,8 +17005,8 @@
                   "type": "null"
                 }
               ],
-              "description": "Provider override: lemma or composio",
-              "title": "Provider"
+              "description": "Kind override, e.g. package or composio",
+              "title": "Kind"
             }
           }
         ],
@@ -19133,6 +19192,77 @@
           "resource": "connector.auth_config",
           "result": "entity",
           "verb": "get"
+        }
+      },
+      "patch": {
+        "description": "Update an install in place. Rotating an MCP server URL or an OAuth app no longer requires deleting the install, which cascades away every account connected to it. Accounts are never deleted here: if the change invalidates their credentials they are marked REAUTH_REQUIRED, and reconnecting updates them in place. `kind`, `connector_id` and `config_source` are immutable -- changing any of them reinterprets every stored operation and credential, so that is a new install rather than an update.",
+        "operationId": "connector.auth_config.update",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "auth_config_name",
+            "required": true,
+            "schema": {
+              "title": "Auth Config Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthConfigUpdateSchema"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfigUpdateResponseSchema"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Auth Config",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "invalidates": [
+            "connector.auth_config"
+          ],
+          "kind": "mutation",
+          "paginates": false,
+          "resource": "connector.auth_config",
+          "result": "entity",
+          "verb": "update"
         }
       }
     },

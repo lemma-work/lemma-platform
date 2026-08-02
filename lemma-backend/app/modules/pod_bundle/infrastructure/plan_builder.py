@@ -405,7 +405,9 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
             kind = "free"
         default = (meta or {}).get("default")
         connector = (meta or {}).get("connector")
-        provider = (meta or {}).get("provider")
+        # `provider` is the pre-rename spelling, still read so bundles exported
+        # before it keep planning.
+        connector_kind = (meta or {}).get("connector_kind") or (meta or {}).get("provider")
         specs.append(
             VariableSpec(
                 name=str(name),
@@ -414,7 +416,7 @@ def _variables_from_manifest(pod_manifest: dict[str, Any]) -> list[VariableSpec]
                 required=(kind == "account") or (kind == "free" and default is None),
                 default=str(default) if default is not None else None,
                 connector=str(connector) if connector else None,
-                provider=str(provider) if provider else None,
+                connector_kind=str(connector_kind) if connector_kind else None,
             )
         )
     return specs

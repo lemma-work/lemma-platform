@@ -1,5 +1,5 @@
 {
-  "name": "Connector Schedule Pod",
+  "name": "Legacy Provider Pod",
   "format_version": 3,
   "description": "A pod with a webhook schedule bound to a connector account variable.",
   "variables": {
@@ -7,7 +7,7 @@
       "type": "account",
       "source_value": "019ebad7-9c4f-7143-8273-60e9ff368697",
       "connector": "jira",
-      "connector_kind": "composio",
+      "provider": "COMPOSIO",
       "description": "Connector account for schedule 'on_ticket'"
     }
   }

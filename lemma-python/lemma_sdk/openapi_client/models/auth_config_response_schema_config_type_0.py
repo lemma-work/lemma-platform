@@ -6,11 +6,11 @@ from typing import Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-T = TypeVar("T", bound="LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0")
+T = TypeVar("T", bound="AuthConfigResponseSchemaConfigType0")
 
 
 @_attrs_define
-class LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0:
+class AuthConfigResponseSchemaConfigType0:
     """ """
 
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -25,10 +25,10 @@ class LemmaProviderCapabilityResponseSchemaAuthConfigSchemaType0:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        lemma_provider_capability_response_schema_auth_config_schema_type_0 = cls()
+        auth_config_response_schema_config_type_0 = cls()
 
-        lemma_provider_capability_response_schema_auth_config_schema_type_0.additional_properties = d
-        return lemma_provider_capability_response_schema_auth_config_schema_type_0
+        auth_config_response_schema_config_type_0.additional_properties = d
+        return auth_config_response_schema_config_type_0
 
     @property
     def additional_keys(self) -> list[str]:

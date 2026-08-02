@@ -122,15 +122,16 @@ class VariableSpec(BaseModel):
     description: str | None = None
     required: bool = False
     default: str | None = None
-    # For ``kind="account"`` variables: the connector the account must belong to
-    # (e.g. "slack", "jira") and the auth provider backing it ("LEMMA" or
-    # "COMPOSIO"), both resolved from the source account at export time — never
-    # inferred from a resource's own name — so the importer UI can prompt for
-    # and connect exactly the right connector/provider combination. Both are
-    # required for every ``kind="account"`` variable; None only for non-account
-    # variables.
+    # For ``kind="account"`` variables: the connector the account must belong
+    # to (e.g. "slack", "jira") and which of its kinds the source install used
+    # ("composio", "package", "mcp", ...), both resolved from the source
+    # account at export time -- never inferred from a resource's own name -- so
+    # the importer can prompt for, and verify, exactly the right combination.
+    # Both are required for every ``kind="account"`` variable; None only for
+    # non-account variables. ``connector_kind`` rather than ``kind`` because
+    # ``kind`` above already names the variable's own type.
     connector: str | None = None
-    provider: str | None = None
+    connector_kind: str | None = None
 
 
 class ImportPlan(BaseModel):

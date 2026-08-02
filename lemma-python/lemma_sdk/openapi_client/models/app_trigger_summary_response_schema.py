@@ -8,7 +8,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-from ..models.auth_provider import AuthProvider
+from ..models.connector_kind import ConnectorKind
 
 T = TypeVar("T", bound="AppTriggerSummaryResponseSchema")
 
@@ -25,7 +25,7 @@ class AppTriggerSummaryResponseSchema:
             created_at (datetime.datetime):
             description (None | str):
             id (str):
-            provider (AuthProvider):
+            kind (ConnectorKind): How an install authenticates, discovers and executes operations.
             updated_at (datetime.datetime):
     """
 
@@ -33,7 +33,7 @@ class AppTriggerSummaryResponseSchema:
     created_at: datetime.datetime
     description: None | str
     id: str
-    provider: AuthProvider
+    kind: ConnectorKind
     updated_at: datetime.datetime
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -48,7 +48,7 @@ class AppTriggerSummaryResponseSchema:
 
         id = self.id
 
-        provider = self.provider.value
+        kind = self.kind.value
 
         updated_at = self.updated_at.isoformat()
 
@@ -60,7 +60,7 @@ class AppTriggerSummaryResponseSchema:
                 "created_at": created_at,
                 "description": description,
                 "id": id,
-                "provider": provider,
+                "kind": kind,
                 "updated_at": updated_at,
             }
         )
@@ -89,7 +89,7 @@ class AppTriggerSummaryResponseSchema:
 
         id = d.pop("id")
 
-        provider = AuthProvider(d.pop("provider"))
+        kind = ConnectorKind(d.pop("kind"))
 
         updated_at = isoparse(d.pop("updated_at"))
 
@@ -98,7 +98,7 @@ class AppTriggerSummaryResponseSchema:
             created_at=created_at,
             description=description,
             id=id,
-            provider=provider,
+            kind=kind,
             updated_at=updated_at,
         )
 

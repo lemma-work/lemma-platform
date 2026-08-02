@@ -2,7 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { AuthProvider } from './AuthProvider.js';
+import type { ConnectorKind } from './ConnectorKind.js';
 /**
  * Schema for trigger response.
  */
@@ -12,8 +12,8 @@ export type AppTriggerResponseSchema = {
     created_at: string;
     description: (string | null);
     id: string;
+    kind: ConnectorKind;
     payload_example: (Record<string, any> | null);
     payload_schema: (Record<string, any> | null);
-    provider: AuthProvider;
     updated_at: string;
 };

@@ -9835,7 +9835,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.7.1";
+  var SDK_VERSION = "0.8.0";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
   function shouldSendClientHeader(apiUrl, method) {
@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.1",
+    VERSION: "0.8.0",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -12718,13 +12718,13 @@ var LemmaClient = (() => {
     }
     /**
      * Get Connector Skill
-     * Get the skill guide markdown for a connector. Pass `provider=lemma` or `provider=composio` to get provider-specific instructions when the app supports both. Falls back to the generic doc if no provider-specific file exists. Returns 404 if no skill doc has been generated yet.
+     * Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.
      * @param connectorId
-     * @param provider Provider override: lemma or composio
+     * @param kind Kind override, e.g. package or composio
      * @returns ConnectorSkillResponse Successful Response
      * @throws ApiError
      */
-    static connectorSkillGet(connectorId, provider) {
+    static connectorSkillGet(connectorId, kind) {
       return request(OpenAPI, {
         method: "GET",
         url: "/connectors/{connector_id}/skill",
@@ -12732,7 +12732,7 @@ var LemmaClient = (() => {
           "connector_id": connectorId
         },
         query: {
-          "provider": provider
+          "kind": kind
         },
         errors: {
           422: `Validation Error`
@@ -12910,6 +12910,30 @@ var LemmaClient = (() => {
           "organization_id": organizationId,
           "auth_config_name": authConfigName
         },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Update Auth Config
+     * Update an install in place. Rotating an MCP server URL or an OAuth app no longer requires deleting the install, which cascades away every account connected to it. Accounts are never deleted here: if the change invalidates their credentials they are marked REAUTH_REQUIRED, and reconnecting updates them in place. `kind`, `connector_id` and `config_source` are immutable -- changing any of them reinterprets every stored operation and credential, so that is a new install rather than an update.
+     * @param organizationId
+     * @param authConfigName
+     * @param requestBody
+     * @returns AuthConfigUpdateResponseSchema Successful Response
+     * @throws ApiError
+     */
+    static connectorAuthConfigUpdate(organizationId, authConfigName, requestBody) {
+      return request(OpenAPI, {
+        method: "PATCH",
+        url: "/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}",
+        path: {
+          "organization_id": organizationId,
+          "auth_config_name": authConfigName
+        },
+        body: requestBody,
+        mediaType: "application/json",
         errors: {
           422: `Validation Error`
         }
@@ -13254,6 +13278,15 @@ var LemmaClient = (() => {
           organizationId,
           authConfigName
         )),
+        // Updates an install in place. Rotating a server URL or an OAuth app this
+        // way keeps the accounts attached to it; delete-and-recreate cascades them
+        // away. Accounts whose credentials the change invalidates are marked for
+        // reconnect, never deleted, and the response says how many.
+        update: (organizationId, authConfigName, payload) => this.client.request(() => ConnectorsService.connectorAuthConfigUpdate(
+          organizationId,
+          authConfigName,
+          payload
+        )),
         // Re-discovers an MCP or OpenAPI install's operations. The recovery path:
         // deleting and recreating the install cascades away its accounts.
         refreshOperations: (organizationId, authConfigName) => this.client.request(() => ConnectorsService.connectorAuthConfigRefreshOperations(
@@ -13272,15 +13305,15 @@ var LemmaClient = (() => {
       return this.client.request(() => ConnectorsService.connectorGet(connectorId));
     }
     async enableApp(organizationId, connectorId, options = {}) {
-      var _a, _b;
+      var _a;
       const configs = await this.authConfigs.list(organizationId, { limit: 100 });
       const existing = configs.items.find((config) => config.connector_id === connectorId && config.status === "ACTIVE");
       if (existing) return existing;
       return this.authConfigs.create(organizationId, {
         connector_id: connectorId,
-        provider: options.provider,
+        kind: options.kind,
         config_source: (_a = options.config_source) != null ? _a : "SYSTEM_DEFAULT",
-        credential_config: (_b = options.credential_config) != null ? _b : options.provider_config,
+        config: options.config,
         name: options.name
       });
     }

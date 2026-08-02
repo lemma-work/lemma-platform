@@ -20,6 +20,7 @@ from ..openapi_client.api.connectors import (
     connector_auth_config_get as auth_config_get,
     connector_auth_config_list as auth_config_list,
     connector_auth_config_refresh_operations as auth_config_refresh_operations,
+    connector_auth_config_update as auth_config_update,
     connector_connect_request_create,
 )
 from ..openapi_client.models.account_create_schema import AccountCreateSchema
@@ -40,6 +41,10 @@ from ..openapi_client.models.auth_config_list_response_schema import (
     AuthConfigListResponseSchema,
 )
 from ..openapi_client.models.auth_config_response_schema import AuthConfigResponseSchema
+from ..openapi_client.models.auth_config_update_schema import AuthConfigUpdateSchema
+from ..openapi_client.models.auth_config_update_response_schema import (
+    AuthConfigUpdateResponseSchema,
+)
 from ..openapi_client.models.connect_request_initiate_schema import (
     ConnectRequestInitiateSchema,
 )
@@ -74,15 +79,15 @@ class ConnectorApps:
     def get(self, app: str) -> ConnectorDetailResponseSchema:
         return self._parent._call(connector_get, app)
 
-    def skill(self, app: str, *, provider: str | None = None) -> dict:
+    def skill(self, app: str, *, kind: str | None = None) -> dict:
         """Get the skill guide markdown for a connector.
 
-        Pass provider='lemma' or provider='composio' for apps that support both providers.
-        Falls back to the generic doc when no provider-specific file exists.
+        Pass kind='package' or kind='composio' for apps that ship as both.
+        Falls back to the generic doc when no kind-specific file exists.
         """
         from ..errors import LemmaAPIError
         http = self._parent._transport.generated.get_httpx_client()
-        params = {"provider": provider} if provider else {}
+        params = {"kind": kind} if kind else {}
         response = http.get(f"/connectors/{app}/skill", params=params)
         status_code = int(response.status_code)
         if status_code >= 400:
@@ -103,6 +108,21 @@ class ConnectorAuthConfigs:
 
     def create(self, request: AuthConfigCreateSchema) -> AuthConfigResponseSchema:
         return self._parent._call(auth_config_create, self._parent._org_uuid(), body=request)
+
+    def update(
+        self, name: str, request: AuthConfigUpdateSchema
+    ) -> AuthConfigUpdateResponseSchema:
+        """Update an install in place.
+
+        Rotating a server URL or an OAuth app this way keeps the accounts
+        attached to the install; deleting and recreating it cascades them away.
+        Where the change invalidates credentials the affected accounts are
+        marked for reconnect rather than removed, and the response says how
+        many.
+        """
+        return self._parent._call(
+            auth_config_update, self._parent._org_uuid(), name, body=request
+        )
 
     def delete(self, name: str) -> None:
         self._parent._call(auth_config_delete, self._parent._org_uuid(), name)

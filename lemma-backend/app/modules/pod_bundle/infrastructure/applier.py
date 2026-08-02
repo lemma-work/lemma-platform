@@ -306,21 +306,27 @@ class BundleApplier:
         *,
         account_id: object,
         expected_connector: object,
-        expected_provider: object,
+        expected_kind: object,
         resource_label: str,
     ) -> None:
         """Guard against a surface/schedule being wired to the wrong connector
         account on import.
 
-        The bundle stamps every account reference with the ``connector_id`` (and
-        ``provider``) it was exported against; the importer supplies one of *their
-        own* org's account ids for the ``${..._account}`` variable. Here we confirm
-        that supplied account actually exists in the target org and belongs to the
-        expected connector — otherwise the resource is created pointing at a
+        The bundle stamps every account reference with the ``connector_id`` and
+        ``connector_kind`` it was exported against; the importer supplies one of
+        *their own* org's account ids for the ``${..._account}`` variable. Here we
+        confirm that supplied account actually exists in the target org and matches
+        both — otherwise the resource is created pointing at a
         missing/mismatched account and only fails opaquely when it next runs. The
         connector match mirrors the surface account-binding rule
         (``SurfaceAccountBindingResolver``), so an imported surface is held to the
         same contract as a hand-configured one.
+
+        The kind check matters because one connector id can be installed more
+        than one way: a bundle exported against a vendored Slack package does
+        not work against a Composio Slack account, since the operation names
+        differ. Bundles written before kinds carry the old ``LEMMA``/``COMPOSIO``
+        vocabulary, which is compared in its own terms rather than rejected.
         """
         if not account_id or not expected_connector:
             return
@@ -353,6 +359,46 @@ class BundleApplier:
                 f"'{expected_connector}' account and re-run the import.",
                 code="POD_BUNDLE_ACCOUNT_CONNECTOR_MISMATCH",
             )
+        await self._validate_account_kind(
+            service=service,
+            account=account,
+            expected_kind=expected_kind,
+            expected_connector=expected_connector,
+            resource_label=resource_label,
+        )
+
+    async def _validate_account_kind(
+        self,
+        *,
+        service,
+        account,
+        expected_kind: object,
+        expected_connector: object,
+        resource_label: str,
+    ) -> None:
+        if not expected_kind:
+            return
+        actual = await service.get_account_kind(account)
+        if actual is None:
+            return
+        wanted = str(expected_kind).lower()
+        # Legacy bundles say LEMMA/COMPOSIO. LEMMA covered every non-composio
+        # kind, so it is satisfied by any of them rather than by `package`
+        # alone -- an MCP install exported before the rename would otherwise be
+        # unimportable.
+        if wanted in ("lemma", "composio"):
+            from app.modules.connectors.domain.connector import kind_to_provider
+
+            if kind_to_provider(actual).value.lower() == wanted:
+                return
+        elif actual.lower() == wanted:
+            return
+        raise PodBundleDomainError(
+            f"{resource_label} needs a '{expected_connector}' account installed "
+            f"as '{expected_kind}', but the supplied account's install is "
+            f"'{actual}'. Connect the right one and re-run the import.",
+            code="POD_BUNDLE_ACCOUNT_KIND_MISMATCH",
+        )
 
     async def _apply_schedule(self, step: PlanStep) -> None:
         from app.composition.pod_bundle_resources import get_schedule_service
@@ -379,7 +425,7 @@ class BundleApplier:
         await self._validate_account_binding(
             account_id=fields.get("account_id"),
             expected_connector=payload.get("connector_id"),
-            expected_provider=payload.get("provider"),
+            expected_kind=payload.get("connector_kind") or payload.get("provider"),
             resource_label=f"Schedule '{step.name}'",
         )
         entity = ScheduleCreateEntity(
@@ -486,7 +532,7 @@ class BundleApplier:
         await self._validate_account_binding(
             account_id=request.account_id,
             expected_connector=payload.get("connector_id"),
-            expected_provider=payload.get("provider"),
+            expected_kind=payload.get("connector_kind") or payload.get("provider"),
             resource_label=f"Surface '{resolved_name}'",
         )
 

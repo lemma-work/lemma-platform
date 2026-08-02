@@ -2,8 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { ComposioProviderCapabilityResponseSchema } from './ComposioProviderCapabilityResponseSchema.js';
-import type { LemmaProviderCapabilityResponseSchema } from './LemmaProviderCapabilityResponseSchema.js';
+import type { ConnectorKindResponseSchema } from './ConnectorKindResponseSchema.js';
 /**
  * Schema for connector response.
  */
@@ -13,7 +12,7 @@ export type ConnectorResponseSchema = {
     icon: (string | null);
     id: string;
     is_active: boolean;
-    provider_capabilities?: Array<(LemmaProviderCapabilityResponseSchema | ComposioProviderCapabilityResponseSchema)>;
+    kinds?: Array<ConnectorKindResponseSchema>;
     title?: (string | null);
     updated_at: string;
 };
