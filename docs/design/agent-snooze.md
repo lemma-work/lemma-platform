@@ -1,10 +1,20 @@
 # Agents can sleep
 
 **Status:** Implemented (backend + skills) · **Surface area:** `lemma-backend`,
-`lemma-skills`, regenerated `lemma-python` SDK. The conversation-list state in
-`lemma-frontend` is **not** built — a snoozed conversation still reads as
-"Waiting", which is the one place the product currently lies about what is
-happening.
+`lemma-skills`, regenerated `lemma-python` SDK.
+
+Two things are **not** built, and one of them is a sequencing hazard:
+
+- The conversation-list state in `lemma-frontend`. A snoozed conversation still
+  reads as "Waiting" — the one place the product currently misrepresents what is
+  happening.
+- **The workflow wait-expiry exemption.** See the table below: the ceiling this
+  needs to defend against does not exist on `main` yet, so the fix has nothing
+  to attach to and is deliberately absent here. It must land **with** the
+  wait-expiry work, not after it — the moment a 6h ceiling on AGENT waits
+  arrives without the exemption, an agent that snoozes inside a flow node starts
+  failing its workflow while the agent is perfectly healthy. A silent wrong
+  outcome, not a visible error.
 
 ## The change in one sentence
 
@@ -42,14 +52,8 @@ The turn *is* serialized — as message history — and replay is the resume. Th
 agent wakes believing its tool call just returned.
 
 So a snooze is that pause with a non-human wake source. What is genuinely new is
-narrow: a durable row saying what we are waiting for, two wake sources, and
-prying step four loose from the approval semantics it is currently welded to.
-
-The record bus exists too. Datastore emits `DatastoreRecordEvent` →
-[datastore_consumer.py](../../lemma-backend/app/modules/schedule/handlers/datastore_consumer.py)
-→ [DatastoreEventHandler](../../lemma-backend/app/modules/schedule/services/datastore_event_handler.py)
-→ matching `DATASTORE` schedules → the agent or workflow. It matches on
-`(pod_id, table_name, operation)` and nothing finer.
+narrow: a durable row saying what we are waiting for, a timer, and prying step
+four loose from the approval semantics it is currently welded to.
 
 ## Decisions
 
@@ -203,7 +207,7 @@ refactor covered by existing tests.
 | Constraint | Consequence | Disposition |
 | --- | --- | --- |
 | `supports_pause_signal` is `harness_kind == LEMMA` ([agent_runner_service.py:264](../../lemma-backend/app/modules/agent/services/agent_runner_service.py)) | Codex / Claude Code / OpenCode run tools over MCP and own their session — they cannot pause mid-call | **Out of scope.** Return the same `interaction_fallback` shape `ask_user` uses |
-| `workflow_wait_max_age_seconds` is 6h and [`_expire_overdue_wait`](../../lemma-backend/app/modules/workflow/services/run_resume_service.py) fails any AGENT wait past it, exempting only TIME | An agent node whose agent snoozes 8h **fails the workflow** while the agent is healthy | **Required companion fix.** Give the AGENT wait a `scheduled_at` and expire it like a TIME wait |
+| A wait-expiry ceiling on AGENT waits (`workflow_wait_max_age_seconds` + `_expire_overdue_wait`) — **in flight, not yet on `main`** | Once it lands, an agent node whose agent snoozes past the ceiling **fails the workflow** while the agent is healthy | **Required, and must land with that work.** Exempt an AGENT wait whose conversation reports `wait_reason: SNOOZE`, or give it a `scheduled_at` and expire it like a TIME wait. Not in this change because the ceiling it defends against does not exist yet |
 | `get_conversation_status` returns `WAITING` for both a human block and a snooze ([workflow_agent.py:155](../../lemma-backend/app/composition/workflow_agent.py)) | A workflow cannot tell "blocked forever" from "wakes in an hour" | **Required.** Add a wait reason to the status |
 | Workspace sessions are idle-reaped ([workspace_activity_store.py:148](../../lemma-backend/app/modules/workspace/services/workspace_activity_store.py)) | The sandbox is gone on wake; `/workspace` state does not survive | **Docstring, in plain words.** Re-establish `cwd` on wake. This will be the top source of confused behavior |
 | `ask_user` fails fast on email surfaces because pausing strands the run | Snooze self-resolves, so it is legitimate there — the guard must not be copied | **Do not copy** `platform_is_email`. Surface renders "snoozed", not "waiting for you" |
@@ -216,11 +220,10 @@ refactor covered by existing tests.
 | Phase | Scope | Risk |
 | --- | --- | --- |
 | 0 | Extract `resume_conversation_from_pause`; migrate the approval path onto it | Low — refactor under existing tests |
-| 1 | `agent_conversation_waits` (migration `0011`, revises `0010_proactive_messaging`) · `snooze(seconds=…)` · timer wake · sweep · **the 6h ceiling fix** | Medium — the ceiling fix touches workflow outcomes |
+| 1 | `agent_conversation_waits` (migration `0011`, revises `0010_proactive_messaging`) · `snooze(seconds=…)` · timer wake · sweep | Low — no ceiling exists on `main` to interact with |
 | 2 | Conversation-list state, remote harnesses | — |
 
-Phase 1 is small precisely because Phase 0 does the structural work. The ceiling
-fix is the only part of it that is not mechanical.
+Phase 1 is small precisely because Phase 0 does the structural work.
 
 ## Where this gets taught
 
@@ -233,7 +236,7 @@ matters.
 
 | Surface | Change | Gate |
 | --- | --- | --- |
-| [`snooze` docstring](../../lemma-backend/app/modules/agent/tools/) | Mechanics, the deadline discipline, `woke_because`, and "your sandbox will be gone" | — |
+| [`snooze` docstring](../../lemma-backend/app/modules/agent/tools/) | Mechanics, how to pick the duration, what `woke_because` does *not* mean, and "your sandbox will be gone" | — |
 | [`agent_tool_schemas.json`](../../lemma-backend/agent_tool_schemas.json) | Regenerate: `uv run python scripts/export_agent_tool_schemas.py` | **CI** — `test_checked_in_agent_tool_schemas_match_live_tools` fails on drift |
 | [`event_catalog.py`](../../lemma-backend/app/core/log/event_catalog.py) | Register every new snooze/wake event with its level and fields | **CI** — `test_logging_contract_static.py` |
 | [`prompts/snooze.md`](../../lemma-backend/app/modules/agent/prompts/) | Per-toolset fragment, following `todo.md` / `speech.md` | — |
