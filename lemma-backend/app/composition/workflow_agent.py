@@ -12,8 +12,12 @@ from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import AgentNotFoundError
-from app.modules.agent.domain.events import AgentRunStartedEvent
+from app.modules.agent.domain.events import (
+    AgentRunStartedEvent,
+    AgentRunStopRequestedEvent,
+)
 from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
     ConversationStatus,
     ConversationType,
     MessageDraft,
@@ -153,7 +157,17 @@ class AgentControlAdapter(AgentPort):
         if conversation.status is ConversationStatus.COMPLETED:
             return {"status": "COMPLETED", "output_data": output}
         if conversation.status is ConversationStatus.WAITING:
-            return {"status": "WAITING", "output_data": output}
+            # The expiry policy needs to know *why* a conversation is waiting:
+            # blocked on a person is the only reason today, and every reason is
+            # subject to the ceiling. A self-waking agent would be healthy and
+            # must not have its run failed out from under it — see the note in
+            # `run_resume_service._agent_wait_is_expired`.
+            return {
+                "status": "WAITING",
+                "wait_reason": "HUMAN",
+                "wakes_at": None,
+                "output_data": output,
+            }
         if conversation.status in {
             ConversationStatus.FAILED,
             ConversationStatus.STOPPED,
@@ -164,6 +178,33 @@ class AgentControlAdapter(AgentPort):
                 "output_data": output,
             }
         return {"status": "RUNNING"}
+
+    async def stop_conversation(self, conversation_id: UUID, user_id: UUID) -> None:
+        """Ask the conversation's active run to stop.
+
+        Mirrors ConversationService.stop_conversation minus the access checks —
+        the caller is the engine cancelling a run it already authorized, not a
+        user reaching in. Nothing to stop is success, not an error: the agent
+        may have finished between the cancel and this call.
+        """
+        active_run = await self.conversation_repo.get_active_agent_run_for_update(
+            conversation_id
+        )
+        if active_run is None:
+            return
+        await self.conversation_repo.finish_agent_run(
+            agent_run_id=active_run.id,
+            status=AgentRunStatus.STOP_REQUESTED,
+        )
+        self.conversation_repo.collect_events(
+            [
+                AgentRunStopRequestedEvent(
+                    conversation_id=conversation_id,
+                    agent_run_id=active_run.id,
+                    user_id=user_id,
+                )
+            ]
+        )
 
     async def _default_agent_runtime_for_pod(
         self, *, pod_id: UUID

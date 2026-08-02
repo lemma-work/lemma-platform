@@ -149,6 +149,16 @@ class AgentPort(ABC):
         """Gets status and output from the latest internal run in a conversation."""
         ...
 
+    @abstractmethod
+    async def stop_conversation(self, conversation_id: UUID, user_id: UUID) -> None:
+        """Requests that a running agent conversation stop.
+
+        Best effort: a conversation that already finished is a no-op. Called
+        when a workflow run is cancelled, so the agent stops working on an
+        answer nobody will read.
+        """
+        ...
+
 
 class FunctionPort(ABC):
     """Port for interacting with the Function module."""
@@ -166,6 +176,11 @@ class FunctionPort(ABC):
     @abstractmethod
     async def get_run_status(self, function_run_id: UUID) -> Dict[str, Any]:
         """Gets status and output of a function run (for reconciliation)."""
+        ...
+
+    @abstractmethod
+    async def cancel_run(self, function_run_id: UUID) -> None:
+        """Cancels a dispatched function run. Best effort; see stop_conversation."""
         ...
 
 
