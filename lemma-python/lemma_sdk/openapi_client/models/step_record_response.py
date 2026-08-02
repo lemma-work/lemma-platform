@@ -24,6 +24,7 @@ class StepRecordResponse:
         step_index (int):
         completed_at (datetime.datetime | None | Unset):
         error (None | str | Unset):
+        external_ref (None | str | Unset):
         output_data (Any | None | Unset):
     """
 
@@ -33,6 +34,7 @@ class StepRecordResponse:
     step_index: int
     completed_at: datetime.datetime | None | Unset = UNSET
     error: None | str | Unset = UNSET
+    external_ref: None | str | Unset = UNSET
     output_data: Any | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -59,6 +61,12 @@ class StepRecordResponse:
         else:
             error = self.error
 
+        external_ref: None | str | Unset
+        if isinstance(self.external_ref, Unset):
+            external_ref = UNSET
+        else:
+            external_ref = self.external_ref
+
         output_data: Any | None | Unset
         if isinstance(self.output_data, Unset):
             output_data = UNSET
@@ -79,6 +87,8 @@ class StepRecordResponse:
             field_dict["completed_at"] = completed_at
         if error is not UNSET:
             field_dict["error"] = error
+        if external_ref is not UNSET:
+            field_dict["external_ref"] = external_ref
         if output_data is not UNSET:
             field_dict["output_data"] = output_data
 
@@ -121,6 +131,15 @@ class StepRecordResponse:
 
         error = _parse_error(d.pop("error", UNSET))
 
+        def _parse_external_ref(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        external_ref = _parse_external_ref(d.pop("external_ref", UNSET))
+
         def _parse_output_data(data: object) -> Any | None | Unset:
             if data is None:
                 return data
@@ -137,6 +156,7 @@ class StepRecordResponse:
             step_index=step_index,
             completed_at=completed_at,
             error=error,
+            external_ref=external_ref,
             output_data=output_data,
         )
 
