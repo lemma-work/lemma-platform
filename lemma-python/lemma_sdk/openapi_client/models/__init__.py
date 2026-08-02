@@ -133,7 +133,6 @@ _NAME_TO_MODULE = {
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete': 'connector_auth_config_delete_response_connector_auth_config_delete',
     'ConnectorDetailResponseSchema': 'connector_detail_response_schema',
     'ConnectorDetailResponseSchemaOperations': 'connector_detail_response_schema_operations',
-    'ConnectorKind': 'connector_kind',
     'ConnectorListResponseSchema': 'connector_list_response_schema',
     'ConnectorResponseSchema': 'connector_response_schema',
     'ConnectorSkillResponse': 'connector_skill_response',
@@ -627,7 +626,6 @@ if TYPE_CHECKING:
     from .connector_auth_config_delete_response_connector_auth_config_delete import ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete
     from .connector_detail_response_schema import ConnectorDetailResponseSchema
     from .connector_detail_response_schema_operations import ConnectorDetailResponseSchemaOperations
-    from .connector_kind import ConnectorKind
     from .connector_list_response_schema import ConnectorListResponseSchema
     from .connector_response_schema import ConnectorResponseSchema
     from .connector_skill_response import ConnectorSkillResponse
@@ -1134,7 +1132,6 @@ __all__ = [
     'ConnectorAuthConfigDeleteResponseConnectorAuthConfigDelete',
     'ConnectorDetailResponseSchema',
     'ConnectorDetailResponseSchemaOperations',
-    'ConnectorKind',
     'ConnectorListResponseSchema',
     'ConnectorResponseSchema',
     'ConnectorSkillResponse',

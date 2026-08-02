@@ -31,14 +31,12 @@ class AuthConfigResponseSchema:
         connector_id (str):
         created_at (datetime.datetime):
         id (UUID):
-        kind (str):
         name (str):
         organization_id (UUID):
         provider (str):
         status (str):
         updated_at (datetime.datetime):
         credential_config (AuthConfigResponseSchemaCredentialConfigType0 | None | Unset):
-        is_default (bool | Unset):  Default: False.
         metadata (AuthConfigResponseSchemaMetadataType0 | None | Unset):
     """
 
@@ -46,7 +44,6 @@ class AuthConfigResponseSchema:
     connector_id: str
     created_at: datetime.datetime
     id: UUID
-    kind: str
     name: str
     organization_id: UUID
     provider: str
@@ -55,7 +52,6 @@ class AuthConfigResponseSchema:
     credential_config: AuthConfigResponseSchemaCredentialConfigType0 | None | Unset = (
         UNSET
     )
-    is_default: bool | Unset = False
     metadata: AuthConfigResponseSchemaMetadataType0 | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -74,8 +70,6 @@ class AuthConfigResponseSchema:
         created_at = self.created_at.isoformat()
 
         id = str(self.id)
-
-        kind = self.kind
 
         name = self.name
 
@@ -97,8 +91,6 @@ class AuthConfigResponseSchema:
         else:
             credential_config = self.credential_config
 
-        is_default = self.is_default
-
         metadata: dict[str, Any] | None | Unset
         if isinstance(self.metadata, Unset):
             metadata = UNSET
@@ -115,7 +107,6 @@ class AuthConfigResponseSchema:
                 "connector_id": connector_id,
                 "created_at": created_at,
                 "id": id,
-                "kind": kind,
                 "name": name,
                 "organization_id": organization_id,
                 "provider": provider,
@@ -125,8 +116,6 @@ class AuthConfigResponseSchema:
         )
         if credential_config is not UNSET:
             field_dict["credential_config"] = credential_config
-        if is_default is not UNSET:
-            field_dict["is_default"] = is_default
         if metadata is not UNSET:
             field_dict["metadata"] = metadata
 
@@ -149,8 +138,6 @@ class AuthConfigResponseSchema:
         created_at = isoparse(d.pop("created_at"))
 
         id = UUID(d.pop("id"))
-
-        kind = d.pop("kind")
 
         name = d.pop("name")
 
@@ -185,8 +172,6 @@ class AuthConfigResponseSchema:
 
         credential_config = _parse_credential_config(d.pop("credential_config", UNSET))
 
-        is_default = d.pop("is_default", UNSET)
-
         def _parse_metadata(
             data: object,
         ) -> AuthConfigResponseSchemaMetadataType0 | None | Unset:
@@ -211,14 +196,12 @@ class AuthConfigResponseSchema:
             connector_id=connector_id,
             created_at=created_at,
             id=id,
-            kind=kind,
             name=name,
             organization_id=organization_id,
             provider=provider,
             status=status,
             updated_at=updated_at,
             credential_config=credential_config,
-            is_default=is_default,
             metadata=metadata,
         )
 

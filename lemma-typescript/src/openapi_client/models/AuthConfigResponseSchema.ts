@@ -8,8 +8,6 @@ export type AuthConfigResponseSchema = {
     created_at: string;
     credential_config?: (Record<string, any> | null);
     id: string;
-    is_default?: boolean;
-    kind: string;
     metadata?: (Record<string, any> | null);
     name: string;
     organization_id: string;
