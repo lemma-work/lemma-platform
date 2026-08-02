@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -16,18 +17,36 @@ from app.modules.connectors.api.schemas import (
     ConnectorSkillResponse,
 )
 
-SKILLS_DIR = Path(__file__).parent.parent / "skills"
+SKILLS_DIR = (Path(__file__).parent.parent / "skills").resolve()
+
+# A connector id is a catalog slug. Constraining it here is what stops a path
+# segment like `..` (or a percent-encoded separator) from walking out of the
+# skills directory and reading an arbitrary file off the server.
+_CONNECTOR_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_SKILL_PROVIDERS = frozenset({"lemma", "composio", "package", "http", "sql", "mcp"})
 
 
 def _resolve_skill_file(connector_id: str, provider: str | None) -> Path | None:
-    """Resolve skill file: provider-specific → generic → None."""
-    if provider:
-        specific = SKILLS_DIR / f"{connector_id}.{provider.lower()}.md"
-        if specific.exists():
-            return specific
-    generic = SKILLS_DIR / f"{connector_id}.md"
-    if generic.exists():
-        return generic
+    """Resolve a skill doc: provider-specific, then generic, else None.
+
+    Both components are validated against a fixed shape rather than sanitized,
+    and the resolved path is re-checked for containment afterwards -- so even a
+    future change to the naming scheme cannot turn this into a file read.
+    """
+    if not _CONNECTOR_ID_RE.match(connector_id or ""):
+        return None
+
+    candidates = []
+    if provider and provider.lower() in _SKILL_PROVIDERS:
+        candidates.append(f"{connector_id}.{provider.lower()}.md")
+    candidates.append(f"{connector_id}.md")
+
+    for name in candidates:
+        candidate = (SKILLS_DIR / name).resolve()
+        if SKILLS_DIR not in candidate.parents:
+            continue
+        if candidate.is_file():
+            return candidate
     return None
 
 router = APIRouter(prefix="/connectors", tags=["Connectors"])

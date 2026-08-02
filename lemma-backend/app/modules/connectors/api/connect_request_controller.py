@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from html import escape
 from pathlib import Path
 from typing import Optional
@@ -83,6 +84,17 @@ def _render_callback_page(
     )
 
 
+# OAuth error codes are a bounded vocabulary (RFC 6749 §4.1.2.1 plus provider
+# extensions), all of which fit this shape.
+_OAUTH_ERROR_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _safe_oauth_error(error: str) -> str:
+    """Reduce a provider error to something safe to show and to log."""
+    candidate = (error or "").strip()
+    return candidate if _OAUTH_ERROR_RE.match(candidate) else "unrecognized_error"
+
+
 @router.get(
     "/oauth/callback",
     operation_id="connector.oauth.callback",
@@ -100,12 +112,18 @@ async def oauth_callback(
     wants_json = _wants_json(request, response_format)
 
     if error:
+        # Never reflect the provider's string back verbatim. OAuth error codes
+        # are a small set of tokens (`access_denied`, `invalid_scope`, ...), so
+        # anything outside that shape is not information worth relaying and is
+        # exactly what makes reflecting it a vulnerability.
+        safe_error = _safe_oauth_error(error)
         if wants_json:
             return JSONResponse(
                 status_code=400,
                 content={
                     "code": "OAUTH_PROVIDER_ERROR",
-                    "message": f"OAuth error: {error}",
+                    "message": "The provider rejected the authorization.",
+                    "provider_error": safe_error,
                 },
             )
         return _render_callback_page(
@@ -114,7 +132,7 @@ async def oauth_callback(
             title="We could not connect your account.",
             message="The provider did not complete the authorization. You can close this tab and try connecting again from Lemma.",
             detail_label="Provider response",
-            detail_value=error,
+            detail_value=safe_error,
             status_code=400,
         )
 
