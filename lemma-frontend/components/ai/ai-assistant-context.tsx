@@ -22,8 +22,6 @@ import {
 } from '@/lib/assistant/display-resource';
 import { buildConversationPresentationHref } from '@/lib/assistant/conversation-presentation';
 import { resolveAssistantControllerGates } from '@/lib/assistant/controller-gates';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
-import { getConversationStatusView } from '@/lib/utils/conversations';
 
 interface ConversationScope {
     podId?: string | null;
@@ -270,9 +268,6 @@ export function AIAssistantProvider({
     const allowAutoNavigationRef = useRef(false);
     const suppressAssistantUrlRestoreRef = useRef(false);
     const skipNextAssistantUrlSyncRef = useRef(false);
-    const conversationStatusesRef = useRef<Map<string, ReturnType<typeof getConversationStatusView>['state']>>(new Map());
-    const conversationStatusesInitializedRef = useRef(false);
-    const previousControllerErrorRef = useRef<string | null>(null);
     const router = useRouter();
     const pathname = usePathname();
     const searchParams = useSearchParams();
@@ -427,42 +422,6 @@ export function AIAssistantProvider({
     const controllerRef = useRef(controller);
 
     useEffect(() => {
-        const previousStatuses = conversationStatusesRef.current;
-        const nextStatuses = new Map<string, ReturnType<typeof getConversationStatusView>['state']>();
-
-        controller.conversations.forEach((conversation) => {
-            const nextState = getConversationStatusView(conversation.status).state;
-            const previousState = previousStatuses.get(conversation.id);
-            nextStatuses.set(conversation.id, nextState);
-
-            if (!conversationStatusesInitializedRef.current || !previousState || previousState === nextState) return;
-
-            const transitionVersion = conversation.updated_at || conversation.created_at || '';
-            if (nextState === 'completed' && (previousState === 'running' || previousState === 'waiting')) {
-                playSoundFeedback('work-complete', {
-                    onceKey: `agent:${conversation.id}:completed:${transitionVersion}`,
-                });
-            } else if (nextState === 'failed') {
-                playSoundFeedback('work-fail', {
-                    onceKey: `agent:${conversation.id}:failed:${transitionVersion}`,
-                });
-            }
-        });
-
-        conversationStatusesRef.current = nextStatuses;
-        conversationStatusesInitializedRef.current = true;
-    }, [controller.conversations]);
-
-    useEffect(() => {
-        const previousError = previousControllerErrorRef.current;
-        const nextError = controller.error;
-        previousControllerErrorRef.current = nextError;
-        if (nextError && nextError !== previousError) {
-            playSoundFeedback('work-fail');
-        }
-    }, [controller.error]);
-
-    useEffect(() => {
         isOpenRef.current = isOpen;
     }, [isOpen]);
 
@@ -476,7 +435,6 @@ export function AIAssistantProvider({
         onOpenAssistant?.();
         setHasActivatedController(true);
         if (isOpenRef.current) return;
-        playSoundFeedback('agent-open');
         isOpenRef.current = true;
         setSideViewMessageLoadGeneration((generation) => generation + 1);
         setIsOpen(true);
@@ -493,7 +451,6 @@ export function AIAssistantProvider({
             const next = !prev;
             isOpenRef.current = next;
             if (next) {
-                playSoundFeedback('agent-open');
                 onOpenAssistant?.();
                 setHasActivatedController(true);
                 setSideViewMessageLoadGeneration((generation) => generation + 1);
@@ -778,7 +735,6 @@ export function AIAssistantProvider({
                     : undefined,
             });
         } catch (error) {
-            playSoundFeedback('work-fail');
             throw error;
         }
     }, [displayMessages, isProviderEnabled]);

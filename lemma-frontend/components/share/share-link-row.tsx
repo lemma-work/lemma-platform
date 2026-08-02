@@ -6,7 +6,6 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import { shareSubject, type ShareSubject } from '@/lib/share/share-targets';
 import { cn } from '@/lib/utils';
 
@@ -51,7 +50,6 @@ export function ShareLinkRow({
         try {
             await navigator.clipboard.writeText(url);
             setCopied(true);
-            playSoundFeedback('action-success');
             window.setTimeout(() => setCopied(false), 1600);
         } catch {
             toast.error('Could not copy the link');

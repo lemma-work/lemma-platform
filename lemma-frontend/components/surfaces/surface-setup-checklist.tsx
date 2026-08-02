@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { Check, Copy, ExternalLink, ShieldCheck } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import type { SurfaceSetupAction, SurfaceSetupActionField } from 'lemma-sdk';
 
 /**
@@ -104,7 +103,6 @@ export function SetupCopyField({ field }: { field: SurfaceSetupActionField }) {
         try {
             await navigator.clipboard.writeText(field.value);
             setCopied(true);
-            playSoundFeedback('action-success');
             setTimeout(() => setCopied(false), 1500);
         } catch {
             toast.error('Could not copy to clipboard');

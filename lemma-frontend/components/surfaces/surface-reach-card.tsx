@@ -6,7 +6,6 @@ import { Check, Copy, ExternalLink } from '@/components/ui/icons';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import { getSurfaceDeepLink, getSurfaceIdentity } from '@/lib/utils/surfaces';
 import type { AssistantSurface } from '@/lib/types';
 
@@ -29,7 +28,6 @@ export function SurfaceReachCard({ surface }: { surface: AssistantSurface }) {
         try {
             await navigator.clipboard.writeText(deepLink || handle || '');
             setCopied(true);
-            playSoundFeedback('action-success');
             setTimeout(() => setCopied(false), 1500);
         } catch {
             toast.error('Could not copy to clipboard');

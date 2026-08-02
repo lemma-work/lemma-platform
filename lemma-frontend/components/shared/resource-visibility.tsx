@@ -25,7 +25,6 @@ import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { buildShareLink, shareKindForResourceType } from '@/lib/share/share-link';
 import type { SocialCardVariant } from '@/lib/share/social-card';
 import { cn } from '@/lib/utils';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 export type ResourceVisibilityValue = 'PERSONAL' | 'POD' | 'RESTRICTED' | 'PUBLIC';
 export type ShareableResourceType =
@@ -514,7 +513,6 @@ export function ResourceShareButton({
         onSuccess: () => {
             setSaveError(null);
             setOpen(false);
-            playSoundFeedback('action-success');
             void queryClient.invalidateQueries({ queryKey: accessQueryKey });
         },
         onError: (error) => {
