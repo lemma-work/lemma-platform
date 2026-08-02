@@ -213,7 +213,7 @@ A pod can be exported as plain files, so building one is a job a coding agent is
 
 ```bash
 lemma skills install             # auto-detects Claude Code / Codex / OpenCode / Cursor
-lemma skills install --target claude --all-skills   # or pick a target and include extras
+lemma skills install --target claude --all-skills   # or pick a target and include runtime helpers
 lemma skills install --target agents --scope project # Antigravity, from inside the pod directory
 ```
 

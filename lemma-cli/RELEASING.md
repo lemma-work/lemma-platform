@@ -69,12 +69,12 @@ From the **repo root**:
 # 1. Bump the version
 $EDITOR lemma-cli/lemma_cli/__init__.py        # __version__ = "X.Y.Z"
 
-# 2. Build (vendors skills automatically via setup.py; make cli-build also
-#    runs the sync first as belt-and-suspenders)
-make cli-build                                 # == python scripts/sync_cli_skills.py + (cd lemma-cli && uv build)
+# 2. Build (setup.py vendors the canonical repo-root skills automatically)
+cd lemma-cli && uv build && cd ..
 
-# 3. VERIFY the skills are in the wheel — must print 5
-unzip -l lemma-cli/dist/lemma_terminal-*.whl | grep -c SKILL.md
+# 3. VERIFY both commands print the same count (currently 12)
+find lemma-skills -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l
+unzip -l lemma-cli/dist/lemma_terminal-*.whl | grep -c 'SKILL.md$'
 
 # 4. Check metadata + long description
 uvx twine check lemma-cli/dist/*

@@ -1,6 +1,6 @@
 ---
 name: browser
-description: "Use this skill when a task needs a real browser in a Lemma workspace: opening web pages or local dev apps, UI inspection and debugging, screenshots, login flows, form filling, scraping, console/network logs, or saving web pages — all via the Agent Browser CLI and headful Chromium."
+description: "Operate a real browser in a Lemma workspace for web pages or local/deployed apps: navigation, screenshots, login flows, forms, scraping, console/network inspection, and saved pages through Agent Browser. Use lemma-app-qa alongside it for systematic app journeys, defect evidence, or release judgment."
 ---
 
 # Browser
@@ -140,6 +140,8 @@ looks right without a browser. (App design, deploy, and test details:
 ## See also
 
 - Full core reference (snapshot/ref model, every command) → `references/agent-browser-core.md`
-- Build, deploy, and design a pod app → `lemma-builder/references/apps.md`
+- Build and deploy a pod app → `lemma-builder/references/apps.md`
+- Design its product experience → the `lemma-app-design` skill
+- Test it systematically and judge a release → the `lemma-app-qa` skill
 - Operate the pod (open apps, mint file URLs) → the `lemma-user` skill
 - Inline live views over pod data → the `lemma-widget` skill

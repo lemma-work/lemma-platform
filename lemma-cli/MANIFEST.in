@@ -1,5 +1,4 @@
-# The vendored skills are synced into lemma_cli/skills/ at build time by
-# scripts/sync_cli_skills.py and are gitignored, so graft them explicitly to
-# guarantee they land in the sdist (and therefore the wheel built from it).
+# The setup.py build hooks vendor skills into the gitignored lemma_cli/skills/
+# directory, so graft them explicitly into the sdist and the wheel built from it.
 graft lemma_cli/skills
 include LICENSE

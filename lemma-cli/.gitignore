@@ -37,8 +37,8 @@ coverage.xml
 htmlcov/
 
 # Vendored agent skills. The canonical source is the repo-root lemma-skills/;
-# scripts/sync_cli_skills.py mirrors it here at build time (grafted into the
-# sdist via MANIFEST.in). NOT tracked — regenerated from source on every build.
+# setup.py mirrors it here during builds (grafted into the sdist via
+# MANIFEST.in). NOT tracked — regenerated from source on every build.
 lemma_cli/skills/
 
 # Local Node usage (e.g. while testing the scaffolded app template).

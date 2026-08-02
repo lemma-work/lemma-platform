@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lemma Data Analysis"
+  short_description: "Analyze pod tables and data artifacts"
+  default_prompt: "Use $lemma-data-analysis to validate, query, explain, and visualize data from the active Lemma pod."
