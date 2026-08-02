@@ -114,9 +114,12 @@ function UsageMetricStrip({
     const remaining = scope === 'organization' ? limitScope?.remaining_usd : userLimitScope?.remaining_usd;
     const resetAt = scope === 'organization' ? limitScope?.reset_at : userLimitScope?.reset_at;
 
+    // Read-only stats, not tabs. `active` draws the selected-tab underline,
+    // which made "Cost" look like the chosen one of five things you could pick —
+    // none of these are clickable.
     return (
         <ResourceMetricStrip className="lemma-index-tabs-left p-0">
-            <ResourceMetric label="Cost" value={formatCurrency(summary?.system_cost_usd)} active />
+            <ResourceMetric label="Cost" value={formatCurrency(summary?.system_cost_usd)} />
             <ResourceMetric label="Tokens" value={formatCompact(summary?.total_tokens)} />
             <ResourceMetric
                 label={scope === 'organization' ? 'Org monthly left' : 'Your weekly left'}

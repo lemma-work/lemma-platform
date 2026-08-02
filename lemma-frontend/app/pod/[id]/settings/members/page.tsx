@@ -52,7 +52,8 @@ import { usePod } from '@/lib/hooks/use-pods';
 import { useProfile } from '@/lib/hooks/use-user';
 import { OrganizationRole, PodRole } from '@/lib/types';
 import { buildPodInviteRedirectUri, getPodInviteRedirectOptions } from '@/lib/utils/invite-redirects';
-import { FieldRowsSkeleton } from '@/components/shared/loading';
+import { PodSettingsLedgerFill } from '@/components/pod/route-skeletons';
+import { SettingsPanel } from '@/components/settings/settings-kit';
 import { StepLoader } from '@/components/brand/loader';
 
 type AccessView = 'people' | 'invites' | 'requests' | 'roles' | 'available';
@@ -146,7 +147,6 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
     const roles = useMemo(() => rolesData?.items || [], [rolesData?.items]);
     const permissionCatalog = useMemo(() => permissionCatalogData?.items || [], [permissionCatalogData?.items]);
     const roleNames = useMemo(() => roles.map((role) => role.name), [roles]);
-    const roleMetaByName = useMemo(() => new Map(roles.map((role) => [role.name, role])), [roles]);
     const activeEditingRoleName = editingRoleName || roles[0]?.name || null;
     const editingRole = roles.find((role) => role.name === activeEditingRoleName) || null;
     const groupedPermissions = useMemo(() => groupPermissionCatalog(permissionCatalog), [permissionCatalog]);
@@ -364,18 +364,10 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
         );
     };
 
-    if (loadingMembers) {
-        return (
-            <div className="context-shell min-h-full bg-transparent">
-                <FieldRowsSkeleton rows={5} className="max-w-2xl" />
-            </div>
-        );
-    }
-
     return (
         <PodSettingsShell
             podId={podId}
-            title="Pod Settings"
+            title="Access"
             action={canManageMembers ? (
                 <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
                     <DialogTrigger asChild>
@@ -517,7 +509,11 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 </Dialog>
             ) : null}
         >
-            <div className="w-full max-w-5xl space-y-5">
+            {/* The view strip and the "Add person" action are known before the
+                member list is, so the wait fills the ledger and leaves the rest
+                of the page where it already was. */}
+            {loadingMembers ? <PodSettingsLedgerFill tabs={5} /> : (
+            <div className="space-y-5">
                 <ResourceMetricStrip className="lemma-index-tabs-left">
                     <ResourceMetricButton active={activeView === 'people'} label="People" count={members.length} onClick={() => setActiveView('people')} />
                     <ResourceMetricButton active={activeView === 'invites'} label="Email invites" count={pendingPodInvitations.length} onClick={() => setActiveView('invites')} />
@@ -575,13 +571,15 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                                                     type="button"
                                                     disabled={!canManageMembers || memberRoles.length <= 1 || isUpdatingRoles}
                                                     onClick={() => handleMemberRoleRemove(podMemberId, memberRoles, roleName)}
-                                                    className="chip chip-sm chip-muted shrink-0 gap-1.5 disabled:cursor-default"
+                                                    className="chip chip-sm chip-muted shrink-0 disabled:cursor-default"
                                                     title={canManageMembers && memberRoles.length > 1 ? 'Remove role' : undefined}
                                                 >
-                                                    <span>{formatRoleLabel(roleName)}</span>
-                                                    <span className="text-xs font-medium uppercase text-[var(--text-tertiary)]">
-                                                        {getRoleTypeLabel(roleName, roleMetaByName)}
-                                                    </span>
+                                                    {/* The role, and only the role. Whether it is
+                                                        a preset or a custom role is a fact about
+                                                        the role, not about this person holding it —
+                                                        the Roles tab is where that belongs, and
+                                                        "Admin PRESET" on every row is just noise. */}
+                                                    {formatRoleLabel(roleName)}
                                                 </button>
                                             ))}
                                         </div>
@@ -768,142 +766,135 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                 ) : null}
 
                 {activeView === 'roles' ? (
-                    <div className="space-y-4">
-                        <section className="space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div>
-                                    <h2 className="text-sm font-medium text-[var(--text-primary)]">Roles</h2>
-                                    <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-                                        Reusable access profiles for pod members.
-                                    </p>
-                                </div>
-                                {canManageRoles ? (
-                                    <Button size="sm" variant="secondary" className="gap-2" onClick={() => setCreateRoleDialogOpen(true)}>
-                                        <Plus className="h-3.5 w-3.5" />
-                                        New custom role
-                                    </Button>
-                                ) : (
-                                    <ShieldCheck className="h-4 w-4 text-[var(--delight)]" />
-                                )}
-                            </div>
+                    <div className="space-y-5">
+                        {/* The strip above already names this view, so there is
+                            no heading here — same as People and the invite
+                            lists. A lead line and the action, then the rows. */}
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
+                                Reusable access profiles for pod members.
+                            </p>
+                            {canManageRoles ? (
+                                <Button size="sm" variant="secondary" className="gap-2" onClick={() => setCreateRoleDialogOpen(true)}>
+                                    <Plus className="h-3.5 w-3.5" />
+                                    New custom role
+                                </Button>
+                            ) : (
+                                <ShieldCheck className="h-4 w-4 text-[var(--delight)]" />
+                            )}
+                        </div>
 
-                            <div className="lemma-index-list">
-                                {(roles.length ? roles : ROLE_GUIDANCE.map((role) => ({
-                                    name: `POD_${role.label.toUpperCase()}`,
-                                    description: role.description,
-                                    is_system: true,
-                                    permission_ids: [],
-                                }))).map((role) => {
-                                    const isActive = editingRole?.name === role.name;
-                                    return (
-                                        <Button
-                                            key={role.name}
-                                            variant="quiet"
-                                            onClick={() => setEditingRoleName(role.name)}
-                                            className="lemma-index-row group flex h-auto w-full items-center justify-start gap-3 text-left"
-                                            data-active={isActive}
-                                        >
-                                            <div className="w-36 shrink-0">
-                                                <p className="truncate text-sm font-medium text-[var(--text-primary)]">{formatRoleLabel(role.name)}</p>
-                                                <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{role.is_system ? 'Preset' : 'Custom'}</p>
-                                            </div>
-                                            <p className="min-w-0 flex-1 truncate text-sm text-[var(--text-secondary)]">
-                                                {getRoleDescription(role.name, role.description)}
-                                            </p>
-                                            <p className="hidden max-w-sm shrink-0 truncate text-xs text-[var(--text-tertiary)] lg:block">
-                                                {getRoleCapabilitySummary(role)}
-                                            </p>
-                                            {!role.is_system ? (
-                                                <span className="shrink-0 text-xs font-medium text-[var(--text-secondary)]">
-                                                    Edit
-                                                </span>
-                                            ) : null}
-                                        </Button>
-                                    );
-                                })}
-                            </div>
-                        </section>
-
-                        {editingRole && !editingRole.is_system ? (
-                        <section className="min-w-0 space-y-4 border-t border-[var(--border-subtle)] pt-4">
-                            <>
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <h2 className="text-base font-medium text-[var(--text-primary)]">{formatRoleLabel(editingRole.name)}</h2>
-                                        <p className="mt-1 max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">
-                                            {getRoleDescription(editingRole.name, editingRole.description)}
+                        <div className="lemma-index-list">
+                            {(roles.length ? roles : ROLE_GUIDANCE.map((role) => ({
+                                name: `POD_${role.label.toUpperCase()}`,
+                                description: role.description,
+                                is_system: true,
+                                permission_ids: [],
+                            }))).map((role) => {
+                                const isActive = editingRole?.name === role.name;
+                                return (
+                                    <Button
+                                        key={role.name}
+                                        variant="quiet"
+                                        onClick={() => setEditingRoleName(role.name)}
+                                        className="lemma-index-row group flex h-auto w-full items-center justify-start gap-3 text-left"
+                                        data-active={isActive}
+                                    >
+                                        <div className="w-36 shrink-0">
+                                            <p className="truncate text-sm font-medium text-[var(--text-primary)]">{formatRoleLabel(role.name)}</p>
+                                            <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{role.is_system ? 'Preset' : 'Custom'}</p>
+                                        </div>
+                                        <p className="min-w-0 flex-1 truncate text-sm text-[var(--text-secondary)]">
+                                            {getRoleDescription(role.name, role.description)}
                                         </p>
-                                        <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+                                        <p className="hidden max-w-sm shrink-0 truncate text-xs text-[var(--text-tertiary)] lg:block">
+                                            {getRoleCapabilitySummary(role)}
+                                        </p>
+                                        {!role.is_system ? (
+                                            <span className="shrink-0 text-xs font-medium text-[var(--text-secondary)]">
+                                                Edit
+                                            </span>
+                                        ) : null}
+                                    </Button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Editing a role is a form, so it gets the card every
+                            other settings form gets — rather than the bare
+                            hairline rule it used to hang off. */}
+                        {editingRole && !editingRole.is_system ? (
+                            <SettingsPanel
+                                title={formatRoleLabel(editingRole.name)}
+                                description={(
+                                    <>
+                                        {getRoleDescription(editingRole.name, editingRole.description)}
+                                        <span className="mt-1 block text-[var(--text-tertiary)]">
                                             {getRoleCapabilitySummary(editingRole)}
+                                        </span>
+                                    </>
+                                )}
+                                action={canManageRoles ? (
+                                    <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        disabled={isDeletingRole}
+                                        onClick={() => deletePodRole(editingRole.name, {
+                                            onSuccess: () => {
+                                                toast.success('Role deleted');
+                                                setEditingRoleName(null);
+                                            },
+                                            onError: (err) => toast.error(`Failed to delete role: ${err.message}`),
+                                        })}
+                                    >
+                                        Delete role
+                                    </Button>
+                                ) : null}
+                            >
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h3 className="text-sm font-medium text-[var(--text-primary)]">Capabilities</h3>
+                                        <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                                            Choose what this role can do across the pod. Share specific resources from the resource itself.
                                         </p>
                                     </div>
-                                    {canManageRoles ? (
-                                        <Button
-                                            variant="secondary"
-                                            size="sm"
-                                            disabled={isDeletingRole}
-                                            onClick={() => deletePodRole(editingRole.name, {
-                                                onSuccess: () => {
-                                                    toast.success('Role deleted');
-                                                    setEditingRoleName(null);
-                                                },
-                                                onError: (err) => toast.error(`Failed to delete role: ${err.message}`),
-                                            })}
-                                        >
-                                            Delete role
-                                        </Button>
+                                    {isSavingRole ? <StepLoader size="sm" className="text-[var(--text-tertiary)]" /> : null}
+                                </div>
+
+                                <div className="mt-3 grid gap-x-6 gap-y-4 lg:grid-cols-2">
+                                    {groupedPermissions.map((group) => (
+                                        <div key={group.name} className="border-b border-[var(--border-subtle)] pb-3">
+                                            <div className="mb-2 flex items-center justify-between gap-2">
+                                                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{group.label}</h4>
+                                                <span className="text-xs text-[var(--text-tertiary)]">
+                                                    {group.permissions.filter((permission) => editingRole.permission_ids?.includes(permission.id)).length} selected
+                                                </span>
+                                            </div>
+                                            <div className="space-y-1">
+                                                {group.permissions.map((permission) => {
+                                                    const checked = editingRole.permission_ids?.includes(permission.id) || false;
+                                                    return (
+                                                        <label key={permission.id} className="flex items-start gap-2 rounded-md py-1.5">
+                                                            <Checkbox
+                                                                checked={checked}
+                                                                disabled={!canManageRoles || isSavingRole}
+                                                                onCheckedChange={(value) => handleToggleRolePermission(permission.id, value === true)}
+                                                            />
+                                                            <span className="min-w-0 flex-1">
+                                                                <span className="block truncate text-sm font-medium text-[var(--text-primary)]">{shortPermissionLabel(permission.id)}</span>
+                                                                <span className="mt-0.5 block text-xs leading-5 text-[var(--text-secondary)]">{permission.description}</span>
+                                                            </span>
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {groupedPermissions.length === 0 ? (
+                                        <QuietEmptyState>No permissions are available in the catalog.</QuietEmptyState>
                                     ) : null}
                                 </div>
-
-                                <div className="space-y-3">
-                                    <div className="space-y-3">
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <h3 className="text-sm font-medium text-[var(--text-primary)]">Capabilities</h3>
-                                                <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-                                                    Choose what this role can do across the pod. Share specific resources from the resource itself.
-                                                </p>
-                                            </div>
-                                            {isSavingRole ? <StepLoader size="sm" className="text-[var(--text-tertiary)]" /> : null}
-                                        </div>
-
-                                        <div className="grid gap-x-6 gap-y-4 lg:grid-cols-2">
-                                            {groupedPermissions.map((group) => (
-                                                <div key={group.name} className="border-b border-[var(--border-subtle)] pb-3">
-                                                    <div className="mb-2 flex items-center justify-between gap-2">
-                                                        <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-secondary)]">{group.label}</h4>
-                                                        <span className="text-xs text-[var(--text-tertiary)]">
-                                                            {group.permissions.filter((permission) => editingRole.permission_ids?.includes(permission.id)).length} selected
-                                                        </span>
-                                                    </div>
-                                                    <div className="space-y-1">
-                                                        {group.permissions.map((permission) => {
-                                                            const checked = editingRole.permission_ids?.includes(permission.id) || false;
-                                                            return (
-                                                                <label key={permission.id} className="flex items-start gap-2 rounded-md py-1.5">
-                                                                    <Checkbox
-                                                                        checked={checked}
-                                                                        disabled={!canManageRoles || isSavingRole}
-                                                                        onCheckedChange={(value) => handleToggleRolePermission(permission.id, value === true)}
-                                                                    />
-                                                                    <span className="min-w-0 flex-1">
-                                                                        <span className="block truncate text-sm font-medium text-[var(--text-primary)]">{shortPermissionLabel(permission.id)}</span>
-                                                                        <span className="mt-0.5 block text-xs leading-5 text-[var(--text-secondary)]">{permission.description}</span>
-                                                                    </span>
-                                                                </label>
-                                                            );
-                                                        })}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                            {groupedPermissions.length === 0 ? (
-                                                <QuietEmptyState>No permissions are available in the catalog.</QuietEmptyState>
-                                            ) : null}
-                                        </div>
-                                    </div>
-                                </div>
-                            </>
-                        </section>
+                            </SettingsPanel>
                         ) : null}
                     </div>
                 ) : null}
@@ -990,6 +981,7 @@ function PodMembersPageContent({ params }: { params: Promise<{ id: string }> }) 
                     )
                 ) : null}
             </div>
+            )}
             <DestructiveConfirmationDialog
                 open={Boolean(memberPendingRemove)}
                 onOpenChange={(open) => {
@@ -1080,28 +1072,10 @@ function getRoleDescription(roleName: string, fallback?: string | null) {
     return 'Custom pod role.';
 }
 
-type RoleMeta = {
-    name: string;
-    is_system?: boolean;
-};
-
 function resolveMemberRoles(member: { roles?: string[] | null; role?: string | null }) {
     if (member.roles?.length) return member.roles;
     if (member.role) return [member.role];
     return [PodRole.POD_USER];
-}
-
-function getRoleTypeLabel(roleName: string, roleMetaByName: Map<string, RoleMeta>) {
-    const role = roleMetaByName.get(roleName);
-    if (role) return role.is_system ? 'Preset' : 'Custom';
-    return isSystemRoleName(roleName) ? 'Preset' : 'Custom';
-}
-
-function isSystemRoleName(roleName: string) {
-    return roleName === PodRole.POD_ADMIN ||
-        roleName === PodRole.POD_EDITOR ||
-        roleName === PodRole.POD_USER ||
-        roleName === PodRole.POD_VIEWER;
 }
 
 function getRoleCapabilitySummary(role: { name: string; permission_ids?: string[]; description?: string | null; is_system?: boolean }) {

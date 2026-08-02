@@ -2,6 +2,7 @@
 
 import { use, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
     AlertTriangle,
     CheckCircle2,
@@ -33,6 +34,8 @@ import { ResourceHeader, ResourceIndexShell, ResourceMetricButton } from '@/comp
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { getFunctionNodeName } from '@/lib/utils/flow-node-config';
+import { getLemmaClient } from '@/lib/sdk/lemma-client';
+import { showResourceErrorToast } from '@/components/shared/resource-feedback';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -261,7 +264,10 @@ export default function FlowsIndexPage({
     }, [recentCompletedRuns]);
 
     const filteredFlows = useMemo(() => {
-        return flows
+        // Copy first: `flows` is the array React Query handed us, and Array#sort
+        // mutates. Sorting it in place rewrote the cache under every other
+        // consumer of this query.
+        return [...flows]
             .sort((a, b) => {
                 if (workflowSort === 'az') return a.name.localeCompare(b.name);
                 const aTime = getRunSortTime(runsByWorkflowName.get(a.name)?.[0] || { id: a.id, created_at: a.updated_at || a.created_at || '', updated_at: a.updated_at || a.created_at || '' } as WorkflowRun);
@@ -690,8 +696,27 @@ function WorkflowCard({
     onDelete: (flow: WorkflowType) => void;
     onShareVisibilityChange: (visibility: ResourceVisibilityValue) => Promise<void>;
 }) {
+    const router = useRouter();
+    const [isStartingRun, setIsStartingRun] = useState(false);
     const participants = getParticipants(flow);
     const stepCount = flow.node_count ?? flow.nodes?.length ?? 0;
+
+    // The menu item says "Run" under a play icon; it used to be a link to the
+    // detail page. Start the run and follow it to where it is happening.
+    const startRun = async () => {
+        setIsStartingRun(true);
+        try {
+            const created = await getLemmaClient(podId).workflows.runs.create(flow.name);
+            const runId = (created as { id?: string })?.id;
+            router.push(runId
+                ? `/pod/${podId}/flows/${encodeURIComponent(flow.name)}/runs/${encodeURIComponent(runId)}`
+                : `/pod/${podId}/flows/${encodeURIComponent(flow.name)}`);
+        } catch (error) {
+            showResourceErrorToast(error, `Could not start ${flow.name}`);
+        } finally {
+            setIsStartingRun(false);
+        }
+    };
     const lastRun = runs[0];
     const lastRunTime = getReliableRunTimestamp(lastRun);
     const lastStatus = normalizeRunStatus(lastRun?.status);
@@ -758,10 +783,14 @@ function WorkflowCard({
                             </DropdownMenuItem>
                         ) : null}
                         {canExecute ? (
-                            <DropdownMenuItem asChild>
-                                <Link href={`/pod/${podId}/flows/${encodeURIComponent(flow.name)}`}>
-                                    <Play className="mr-2 h-4 w-4" />Run
-                                </Link>
+                            <DropdownMenuItem
+                                disabled={isStartingRun}
+                                onSelect={(event) => {
+                                    event.preventDefault();
+                                    void startRun();
+                                }}
+                            >
+                                <Play className="mr-2 h-4 w-4" />Run
                             </DropdownMenuItem>
                         ) : null}
                         {canDelete ? (

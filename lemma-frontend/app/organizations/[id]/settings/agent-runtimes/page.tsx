@@ -44,9 +44,10 @@ function OrganizationAgentRuntimesPageContent({ params }: { params: Promise<{ id
             meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={organizationId} />}
             contentWidthClassName="max-w-6xl"
+            contentAlign="left"
             contentClassName="pb-16 sm:pb-20"
         >
-            <section className="office-arrive settings-stack">
+            <section className="office-arrive">
                 {isLoadingRuntimeCatalog && !runtimeCatalog ? (
                     <div className="mb-3 flex h-10 items-center gap-2 rounded-md px-2 text-sm text-[var(--text-tertiary)]">
                         <InlineLoader size="xs" label="Loading models" />

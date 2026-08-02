@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 
 import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { ProductIcon } from '@/components/pod/product-icon';
-import { SettingsPanel } from '@/components/settings/settings-kit';
+import { ResourceMetricButton, ResourceMetricStrip } from '@/components/pod/resource-layout';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { EmptyState } from '@/components/shared/empty-state';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
@@ -99,54 +99,65 @@ export default function PodAutomationSettingsPage({
                 { label: 'Active', value: String(activeCount) },
             ]}
         >
-            <SettingsPanel
-                title="Triggers"
-                description="Everything this pod does without being asked. Each run borrows the access of whoever set it — or, for a change on a table with row-level security, of the person that record belongs to. Add or change a trigger on the agent or workflow it wakes up."
-            >
-                <div className="lemma-index-tabs lemma-index-tabs-left mb-4 flex-wrap">
-                    {([
-                        { value: 'all' as const, label: 'All', count: schedules.length },
-                        { value: 'active' as const, label: 'Active', count: activeCount },
-                        { value: 'paused' as const, label: 'Paused', count: schedules.length - activeCount },
-                    ]).map((tab) => (
-                        <button
-                            key={tab.value}
-                            type="button"
-                            onClick={() => setFilter(tab.value)}
-                            className="choice-chip choice-chip-sm"
-                            data-active={filter === tab.value ? 'true' : undefined}
-                        >
-                            {tab.label} · {tab.count}
-                        </button>
-                    ))}
-                </div>
+            {/* A ledger, not a form — so it reads like Functions and Workflows
+                do: a lead paragraph, the count strip, then bare rows. The card
+                that used to wrap all this was the one place in the pod where a
+                `lemma-index-list` sat inside a panel. */}
+            <p className="mb-5 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
+                Everything this pod does without being asked. Each run borrows the access of whoever
+                set it — or, for a change on a table with row-level security, of the person that
+                record belongs to. Add or change a trigger on the agent or workflow it wakes up.
+            </p>
 
-                {isLoading ? (
-                    <ListSkeleton rows={5} />
-                ) : filtered.length === 0 ? (
-                    <EmptyState
-                        variant="region"
-                        icon={<CalendarClock className="h-4 w-4" />}
-                        title={filter === 'paused' ? 'Nothing paused' : filter === 'active' ? 'Nothing running on its own' : 'No triggers yet'}
-                        description="Open an agent or workflow and use “Runs when” to give it a rhythm, an app event, or a data change to wake up on."
-                    />
-                ) : (
-                    <ul className="lemma-index-list">
-                        {filtered.map((schedule) => (
-                            <TriggerLedgerRow
-                                key={schedule.id}
-                                podId={podId}
-                                schedule={schedule}
-                                isMutating={isMutating}
-                                canUpdate={resourceAllows(schedule, 'schedule.update', canUpdateSchedule)}
-                                canDelete={resourceAllows(schedule, 'schedule.delete', canDeleteSchedule)}
-                                onToggle={() => void handleToggle(schedule)}
-                                onDelete={() => setPendingDelete(schedule)}
-                            />
-                        ))}
-                    </ul>
-                )}
-            </SettingsPanel>
+            {/* The strip stays put across all three states — its labels are
+                known before the query is, and each count says `—` until it
+                isn't. Only the rows below it are unknown. */}
+            <ResourceMetricStrip className="lemma-index-tabs-left">
+                <ResourceMetricButton
+                    active={filter === 'all'}
+                    label="All"
+                    count={isLoading ? undefined : schedules.length}
+                    onClick={() => setFilter('all')}
+                />
+                <ResourceMetricButton
+                    active={filter === 'active'}
+                    label="Active"
+                    count={isLoading ? undefined : activeCount}
+                    onClick={() => setFilter('active')}
+                />
+                <ResourceMetricButton
+                    active={filter === 'paused'}
+                    label="Paused"
+                    count={isLoading ? undefined : schedules.length - activeCount}
+                    onClick={() => setFilter('paused')}
+                />
+            </ResourceMetricStrip>
+
+            {isLoading ? (
+                <ListSkeleton rows={5} />
+            ) : filtered.length === 0 ? (
+                <EmptyState
+                    variant="region"
+                    icon={<CalendarClock className="h-5 w-5" />}
+                    title={filter === 'paused' ? 'Nothing paused' : filter === 'active' ? 'Nothing running on its own' : 'No triggers yet'}
+                    description="Open an agent or workflow and use “Runs when” to give it a rhythm, an app event, or a data change to wake up on."
+                />
+            ) : (
+                <ul className="lemma-index-list">
+                    {filtered.map((schedule) => (
+                        <TriggerLedgerRow
+                            key={schedule.id}
+                            podId={podId}
+                            schedule={schedule}
+                            isMutating={isMutating}
+                            canUpdate={resourceAllows(schedule, 'schedule.update', canUpdateSchedule)}
+                            canDelete={resourceAllows(schedule, 'schedule.delete', canDeleteSchedule)}
+                            onToggle={() => void handleToggle(schedule)}
+                            onDelete={() => setPendingDelete(schedule)}
+                        />
+                    ))}
+                </ul>
+            )}
 
             <DestructiveConfirmationDialog
                 open={Boolean(pendingDelete)}

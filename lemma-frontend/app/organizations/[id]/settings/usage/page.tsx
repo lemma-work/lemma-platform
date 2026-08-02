@@ -30,6 +30,7 @@ function OrganizationUsagePageContent({ params }: { params: Promise<{ id: string
             meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={organizationId} />}
             contentWidthClassName="max-w-6xl"
+            contentAlign="left"
             contentClassName="pb-16 sm:pb-20"
         >
             <section className="office-arrive space-y-5">

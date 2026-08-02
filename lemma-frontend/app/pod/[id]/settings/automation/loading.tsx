@@ -1,6 +1,6 @@
-import { PodIndexListSkeleton } from '@/components/pod/route-skeletons';
+import { PodSettingsLedgerSkeleton } from '@/components/pod/route-skeletons';
 
-/** Triggers settle into a list. */
+/** Triggers settle into a ledger under a count strip, at the settings width. */
 export default function TriggersLoading() {
-    return <PodIndexListSkeleton tabs={3} />;
+    return <PodSettingsLedgerSkeleton tabs={3} />;
 }
