@@ -75,10 +75,12 @@ from app.composition.agent_usage import UsageLimitExceededError, UsageService
 
 _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
-# Tools that pause the run for user input. Both persist their tool call (rendered
-# as a card by the client) and are resolved via the approvals endpoint, which
-# synthesizes their tool return and resumes the run.
-_PAUSING_TOOL_NAMES = ("ask_user", "request_approval")
+# Tools that end their run by pausing rather than returning. Each persists its
+# tool call and is resolved later by synthesizing that call's return and starting
+# a fresh run that replays it. ask_user/request_approval resolve through the
+# approvals endpoint; snooze resolves on a timer or a record change, with no
+# person involved — but the resume is the same, which is why they share a list.
+_PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "snooze")
 
 
 class ApprovalResolution(NamedTuple):
@@ -659,11 +661,11 @@ class ConversationService:
             tool_call_id=approval_id,
         )
         if existing_return is None:
-            # Synthesize the tool return the resumed run will replay, and persist it
-            # under the *paused* run (the one that made the call). For an approved
-            # request_approval this runs the wrapped tool as the user. History is
-            # reconstructed per conversation, so _build_tool_batch pairs this return
-            # with its call regardless of which run each lives in.
+            # Build the return the resumed run will replay. This check guards the
+            # *build*, which for an approved request_approval runs the wrapped tool
+            # as the user — re-executing it (re-deploying an app, re-recording
+            # session grants) would be a correctness bug. The append below re-checks
+            # cheaply and closes the race.
             return_tool_name, tool_result = await self._build_resume_tool_return(
                 conversation=conversation,
                 user_id=user_id,
@@ -673,19 +675,12 @@ class ConversationService:
                 response=response,
                 paused_agent_run_id=paused_run_id,
             )
-            saved_return = await self.conversation_repository.append_message(
-                conversation_id=conversation.id,
-                agent_run_id=paused_run_id,
-                draft=MessageDraft.of_tool_return(
-                    tool_call_id=approval_id,
-                    tool_name=return_tool_name,
-                    tool_result=tool_result,
-                ),
-            )
-            await self.uow.commit()
-            await publish_conversation_event(
-                conversation.id,
-                message_payload(paused_run_id, message_to_payload(saved_return)),
+            await self.append_pause_tool_return(
+                conversation=conversation,
+                paused_run_id=paused_run_id,
+                tool_call_id=approval_id,
+                tool_name=return_tool_name,
+                tool_result=tool_result,
             )
 
         if agent_host_permission_request(tool_args) is not None:
@@ -695,26 +690,98 @@ class ConversationService:
             # duplicate host run for the same turn.
             return
 
-        # A turn can pause with several pending interactions (e.g. request_approval +
-        # ask_user in one assistant turn). Resume only once every pausing tool call in
-        # the paused run is resolved — otherwise the unresolved sibling would be
-        # orphaned (no return) and dropped from the resumed run's history, making the
-        # agent re-ask it.
+        await self.start_resume_run_if_ready(
+            conversation=conversation,
+            paused_run_id=paused_run_id,
+            resumed_tool_call_id=approval_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+            source="approval_resume",
+        )
+
+    # -- the shared pause/resume primitive ---------------------------------------
+    #
+    # ``ask_user`` / ``request_approval`` were the first pausing tools, so this
+    # machinery grew inside the approval path. It is not approval-specific: any
+    # tool that raises ``AgentInputRequired`` pauses the same way, and resumes by
+    # having its return synthesized and replayed. ``snooze`` is the second caller
+    # — it resolves on a timer or a record change instead of on a person.
+
+    async def append_pause_tool_return(
+        self,
+        *,
+        conversation: Conversation,
+        paused_run_id: UUID,
+        tool_call_id: str,
+        tool_name: str,
+        tool_result: object,
+    ) -> bool:
+        """Persist the return the resumed run will replay. Idempotent.
+
+        Returns True if it wrote one, False if a return already existed — the
+        caller uses that to avoid re-running side effects (an approved tool must
+        execute at most once). Persisted under the *paused* run, since history is
+        reconstructed per conversation and ``_build_tool_batch`` pairs a return
+        with its call regardless of which run each lives in.
+        """
+        existing = await self.conversation_repository.get_tool_return(
+            conversation_id=conversation.id,
+            tool_call_id=tool_call_id,
+        )
+        if existing is not None:
+            return False
+        saved_return = await self.conversation_repository.append_message(
+            conversation_id=conversation.id,
+            agent_run_id=paused_run_id,
+            draft=MessageDraft.of_tool_return(
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                tool_result=tool_result,
+            ),
+        )
+        await self.uow.commit()
+        await publish_conversation_event(
+            conversation.id,
+            message_payload(paused_run_id, message_to_payload(saved_return)),
+        )
+        return True
+
+    async def start_resume_run_if_ready(
+        self,
+        *,
+        conversation: Conversation,
+        paused_run_id: UUID,
+        resumed_tool_call_id: str,
+        user_id: UUID,
+        pod_id: UUID,
+        agent_name: str | None,
+        source: str,
+    ) -> None:
+        """Start the run that replays the synthesized return, at most once.
+
+        A turn can pause with several pending interactions (e.g. request_approval
+        + ask_user in one assistant turn, or an ask_user alongside a snooze).
+        Resume only once every pausing call in the paused run is resolved —
+        otherwise the unresolved sibling is orphaned (no return), dropped from the
+        resumed run's history, and the agent re-asks it. The conversation lock
+        serializes this so two near-simultaneous resolutions don't each start one.
+        """
         await self.conversation_repository.lock_conversation(conversation.id)
         remaining = await self._unresolved_pausing_call_ids(
             conversation_id=conversation.id,
             agent_run_id=paused_run_id,
         )
         if remaining:
-            # Still waiting on the user; the frontend reload surfaces the next card.
+            # Still paused on something else; that resolution will start the run.
             await self.uow.commit()
             return
         active_run = await self.conversation_repository.get_active_agent_run_for_update(
             conversation.id
         )
         if active_run is not None:
-            # Another resolve already started the resume run (or a normal run is live);
-            # it will replay the now-complete tool returns. Nothing more to do.
+            # Another resolution already started the resume run (or a normal run is
+            # live); it will replay the now-complete tool returns. Nothing to do.
             await self.uow.commit()
             return
         agent = await self._resolve_agent(conversation=conversation, user_id=user_id)
@@ -727,7 +794,7 @@ class ConversationService:
             conversation_id=conversation.id,
             agent_id=conversation.agent_id,
             agent_runtime=selected_agent_runtime,
-            metadata={"source": "approval_resume", "resumed_tool_call_id": approval_id},
+            metadata={"source": source, "resumed_tool_call_id": resumed_tool_call_id},
         )
         self.uow.collect_events(
             [
@@ -748,7 +815,15 @@ class ConversationService:
         conversation_id: UUID,
         agent_run_id: UUID,
     ) -> list[str]:
-        """Pausing tool calls in the paused run that still lack a recorded decision."""
+        """Pausing tool calls in the paused run that are still outstanding.
+
+        A call counts as resolved once it has *either* a recorded approval
+        decision or a persisted tool return. Approvals record the decision first
+        and build the return second, so the decision is what unblocks them; a
+        snooze has no decision at all and is resolved purely by its return. Taking
+        the union means one check serves both without either knowing about the
+        other.
+        """
         resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
             conversation_id=conversation_id
         )
@@ -756,6 +831,13 @@ class ConversationService:
             conversation_id=conversation_id,
             limit=500,
         )
+        returned_ids = {
+            message.tool_call_id
+            for message in messages
+            if message.kind == MessageKind.TOOL_RETURN
+            and message.tool_call_id is not None
+        }
+        resolved = set(resolved_ids) | returned_ids
         return [
             message.tool_call_id
             for message in messages
@@ -763,7 +845,7 @@ class ConversationService:
             and message.tool_name in _PAUSING_TOOL_NAMES
             and message.agent_run_id == agent_run_id
             and message.tool_call_id is not None
-            and message.tool_call_id not in resolved_ids
+            and message.tool_call_id not in resolved
         ]
 
     async def _build_resume_tool_return(
