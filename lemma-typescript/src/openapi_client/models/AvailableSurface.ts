@@ -19,9 +19,9 @@ export type AvailableSurface = {
     connector_id: string;
     description?: (string | null);
     icon?: (string | null);
+    kind: string;
     managed_setup_available?: boolean;
     platform: SurfacePlatform;
-    provider: string;
     supported_credential_modes: Array<SurfaceCredentialMode>;
     system_claim?: (SurfaceSystemClaim | null);
     title?: (string | null);

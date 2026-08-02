@@ -200,5 +200,5 @@ class SurfaceCredentialResolver:
             return None
         if auth_config is None:
             return None
-        provider = auth_config.provider
-        return str(getattr(provider, "value", provider) or "").upper() or None
+        kind = auth_config.kind
+        return str(getattr(kind, "value", kind) or "").lower() or None

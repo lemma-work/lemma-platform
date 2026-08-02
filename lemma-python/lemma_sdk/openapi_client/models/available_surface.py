@@ -28,8 +28,8 @@ class AvailableSurface:
 
         Attributes:
             connector_id (str):
+            kind (str):
             platform (SurfacePlatform):
-            provider (str):
             supported_credential_modes (list[SurfaceCredentialMode]):
             connect (None | SurfaceConnectDescriptor | Unset):
             connector_available (bool | Unset):  Default: True.
@@ -41,8 +41,8 @@ class AvailableSurface:
     """
 
     connector_id: str
+    kind: str
     platform: SurfacePlatform
-    provider: str
     supported_credential_modes: list[SurfaceCredentialMode]
     connect: None | SurfaceConnectDescriptor | Unset = UNSET
     connector_available: bool | Unset = True
@@ -59,9 +59,9 @@ class AvailableSurface:
 
         connector_id = self.connector_id
 
-        platform = self.platform.value
+        kind = self.kind
 
-        provider = self.provider
+        platform = self.platform.value
 
         supported_credential_modes = []
         for supported_credential_modes_item_data in self.supported_credential_modes:
@@ -111,8 +111,8 @@ class AvailableSurface:
         field_dict.update(
             {
                 "connector_id": connector_id,
+                "kind": kind,
                 "platform": platform,
-                "provider": provider,
                 "supported_credential_modes": supported_credential_modes,
             }
         )
@@ -141,9 +141,9 @@ class AvailableSurface:
         d = dict(src_dict)
         connector_id = d.pop("connector_id")
 
-        platform = SurfacePlatform(d.pop("platform"))
+        kind = d.pop("kind")
 
-        provider = d.pop("provider")
+        platform = SurfacePlatform(d.pop("platform"))
 
         supported_credential_modes = []
         _supported_credential_modes = d.pop("supported_credential_modes")
@@ -221,8 +221,8 @@ class AvailableSurface:
 
         available_surface = cls(
             connector_id=connector_id,
+            kind=kind,
             platform=platform,
-            provider=provider,
             supported_credential_modes=supported_credential_modes,
             connect=connect,
             connector_available=connector_available,

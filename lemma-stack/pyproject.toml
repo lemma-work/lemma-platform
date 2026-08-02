@@ -1,6 +1,6 @@
 [project]
 name = "lemma-stack"
-version = "0.7.0"
+version = "0.8.0"
 description = "Installer and management tool for a fully-local Lemma stack"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"

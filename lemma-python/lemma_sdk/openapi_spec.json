@@ -3121,6 +3121,10 @@
             ],
             "title": "Icon"
           },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
           "managed_setup_available": {
             "default": false,
             "title": "Managed Setup Available",
@@ -3128,10 +3132,6 @@
           },
           "platform": {
             "$ref": "#/components/schemas/SurfacePlatform"
-          },
-          "provider": {
-            "title": "Provider",
-            "type": "string"
           },
           "supported_credential_modes": {
             "items": {
@@ -3165,7 +3165,7 @@
         "required": [
           "platform",
           "connector_id",
-          "provider",
+          "kind",
           "supported_credential_modes"
         ],
         "title": "AvailableSurface",

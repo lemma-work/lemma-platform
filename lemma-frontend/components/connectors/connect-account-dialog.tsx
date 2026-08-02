@@ -8,12 +8,12 @@ import { buildSchemaFormPayload, buildSchemaFormValues } from 'lemma-sdk';
 import { toast } from 'sonner';
 import type { Connector } from '@/lib/types';
 import { SchemaFields } from './schema-fields';
-import { getAppLabel, getCredentialSchema, type ProviderCapability, type SchemaValues } from './connector-utils';
+import { getAppLabel, getCredentialSchema, type ConnectorKindSpec, type SchemaValues } from './connector-utils';
 import { StepLoader } from '@/components/brand/loader';
 
 export interface CredentialTarget {
     connector: Connector;
-    capability: ProviderCapability | null;
+    capability: ConnectorKindSpec | null;
     authConfigId: string | null;
     mode: 'connect' | 'reconnect';
     accountId?: string;

@@ -320,7 +320,7 @@ export function SurfaceModal({
                 boundAccountId = usesJourney
                     ? await connectAccount({
                           connectorId: catalogEntry?.connector_id ?? definition.platform.toLowerCase(),
-                          provider: catalogEntry?.provider,
+                          kind: catalogEntry?.kind,
                           credentials,
                       })
                     : accountId;

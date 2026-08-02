@@ -33,7 +33,7 @@ class SurfaceConnectorBinding:
     """
 
     connector_id: str
-    provider: str
+    kind: str
     self_managed_credentials: bool
 
 
@@ -41,25 +41,25 @@ class SurfaceConnectorBinding:
 # lowercased platform — Teams is the deliberate exception).
 SURFACE_CONNECTOR_BINDINGS: dict[SurfacePlatform, SurfaceConnectorBinding] = {
     SurfacePlatform.SLACK: SurfaceConnectorBinding(
-        connector_id="slack", provider="LEMMA", self_managed_credentials=False
+        connector_id="slack", kind="package", self_managed_credentials=False
     ),
     SurfacePlatform.TEAMS: SurfaceConnectorBinding(
-        connector_id="microsoft_teams", provider="LEMMA", self_managed_credentials=True
+        connector_id="microsoft_teams", kind="package", self_managed_credentials=True
     ),
     SurfacePlatform.WHATSAPP: SurfaceConnectorBinding(
-        connector_id="whatsapp", provider="LEMMA", self_managed_credentials=True
+        connector_id="whatsapp", kind="package", self_managed_credentials=True
     ),
     SurfacePlatform.TELEGRAM: SurfaceConnectorBinding(
-        connector_id="telegram", provider="LEMMA", self_managed_credentials=True
+        connector_id="telegram", kind="package", self_managed_credentials=True
     ),
     SurfacePlatform.GMAIL: SurfaceConnectorBinding(
-        connector_id="gmail", provider="LEMMA", self_managed_credentials=False
+        connector_id="gmail", kind="package", self_managed_credentials=False
     ),
     SurfacePlatform.OUTLOOK: SurfaceConnectorBinding(
-        connector_id="outlook", provider="LEMMA", self_managed_credentials=False
+        connector_id="outlook", kind="package", self_managed_credentials=False
     ),
     SurfacePlatform.RESEND: SurfaceConnectorBinding(
-        connector_id="resend", provider="LEMMA", self_managed_credentials=True
+        connector_id="resend", kind="package", self_managed_credentials=True
     ),
 }
 

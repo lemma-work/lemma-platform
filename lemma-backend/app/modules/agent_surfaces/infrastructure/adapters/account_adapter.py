@@ -50,7 +50,7 @@ class SqlAlchemySurfaceAuthConfigAdapter:
             return None
         return SurfaceAuthConfigInfo(
             id=auth_config.id,
-            provider=auth_config.provider,
+            kind=auth_config.kind,
             connector_id=auth_config.connector_id,
             config_source=auth_config.config_source,
         )

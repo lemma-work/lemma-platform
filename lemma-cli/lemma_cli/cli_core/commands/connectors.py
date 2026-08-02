@@ -344,7 +344,7 @@ def create_auth_config(
     ),
     credential_file: Path | None = typer.Option(
         None,
-        "--config-file",
+        "--connector-config-file",
         "--file",
         exists=True,
         dir_okay=False,
@@ -401,7 +401,7 @@ def update_auth_config(
     ),
     config_file: Path | None = typer.Option(
         None,
-        "--config-file",
+        "--connector-config-file",
         "--file",
         exists=True,
         dir_okay=False,

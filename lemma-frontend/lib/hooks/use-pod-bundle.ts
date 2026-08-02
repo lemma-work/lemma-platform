@@ -70,10 +70,11 @@ export interface VariableSpec {
     default: string | null;
     /** For `account`-kind variables: the connector, e.g. "slack". */
     connector?: string | null;
-    /** For `account`-kind variables: the auth provider ("LEMMA" or "COMPOSIO")
-     * backing the connector, so the picker can select/create the right kind
-     * of account instead of any account for that connector. */
-    provider?: string | null;
+    /** For `account`-kind variables: which of the connector's kinds the source
+     * install used ("composio", "package", "mcp", ...), so the picker selects
+     * or creates an account of the same kind rather than any account for that
+     * connector. */
+    connector_kind?: string | null;
 }
 
 export interface ImportPlan {

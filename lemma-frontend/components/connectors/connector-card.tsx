@@ -8,7 +8,7 @@ import type { Account, Connector } from '@/lib/types';
 import { ConnectorIcon } from './connector-icon';
 import {
     getAccountStatusMeta,
-    getPrimaryCapability,
+    getPrimaryKindSpec,
     usesDirectCredentials,
 } from './connector-utils';
 import { StepLoader } from '@/components/brand/loader';
@@ -37,7 +37,7 @@ export function ConnectorRow({
     onConnect: (app: Connector) => void;
     onAdvanced: (app: Connector) => void;
 }) {
-    const capability = getPrimaryCapability(app);
+    const capability = getPrimaryKindSpec(app);
     const connectsWithCredentials = usesDirectCredentials(capability);
     const label = app.title || app.name || app.id;
 

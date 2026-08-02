@@ -1,6 +1,6 @@
 [project]
 name = "agentbox-client"
-version = "0.7.0"
+version = "0.8.0"
 description = "Typed async Python client for the AgentBox sandbox fabric"
 requires-python = ">=3.14,<3.15"
 dependencies = [
