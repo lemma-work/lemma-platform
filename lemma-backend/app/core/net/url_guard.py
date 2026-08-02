@@ -28,7 +28,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from collections.abc import Collection
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
 
 from app.core.config import settings
@@ -208,6 +210,117 @@ async def assert_safe_url(url: str, *, policy: GuardPolicy | None = None) -> str
                 reason=reason,
             )
     return url
+
+
+def _same_origin(left: str, right: str) -> bool:
+    import httpx
+
+    a, b = httpx.URL(left), httpx.URL(right)
+    return (a.scheme, a.host, a.port) == (b.scheme, b.host, b.port)
+
+
+def _redirected_request(
+    method: str, status_code: int, body_kwargs: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
+    """How a redirect rewrites the method and body, per RFC 9110.
+
+    303 always becomes GET; 301/302 turn a POST into a GET (what every client
+    does in practice); 307/308 preserve both. Getting this wrong would either
+    replay a write against the new target or silently drop a body.
+    """
+    if status_code == 303 or (status_code in (301, 302) and method.upper() == "POST"):
+        return "GET", {}
+    return method, body_kwargs
+
+
+async def request_guarded(
+    client,
+    method: str,
+    url: str,
+    *,
+    headers: Any = None,
+    params: Any = None,
+    credential_header_names: Collection[str] = (),
+    credential_param_names: Collection[str] = (),
+    follow_redirects: bool = True,
+    max_redirects: int = 3,
+    policy: GuardPolicy | None = None,
+    **kwargs: Any,
+):
+    """Issue a request, re-validating the target on every redirect hop.
+
+    The shared client has redirects off process-wide because each new
+    ``Location`` is a fresh target that has to be checked: a tenant-supplied URL
+    on a host they control, answering ``302 -> 169.254.169.254``, is the obvious
+    way around a check that only ran at install time. Letting the client follow
+    redirects itself hands that target the request unguarded, which is the whole
+    hole this closes.
+
+    Credentials are dropped the moment a redirect leaves the original origin.
+    The caller names which header and query keys carry them, because an OpenAPI
+    spec can nominate any key as its auth carrier -- there is no fixed set to
+    recognise -- and replaying a tenant's API key to whoever their own server
+    redirects to would hand it away.
+    """
+    import httpx
+
+    policy = policy or GuardPolicy.from_settings()
+    origin = current = url
+    current_method = method
+    body_kwargs = kwargs
+    dropped_headers = {name.lower() for name in credential_header_names}
+    dropped_params = set(credential_param_names)
+
+    for _ in range(max_redirects + 1):
+        await assert_safe_url(current, policy=policy)
+        if _same_origin(origin, current):
+            request_headers, request_params = headers, params
+        else:
+            request_headers = {
+                key: value
+                for key, value in dict(headers or {}).items()
+                if key.lower() not in dropped_headers
+            }
+            request_params = [
+                (key, value)
+                for key, value in _as_param_pairs(params)
+                if key not in dropped_params
+            ]
+
+        response = await client.request(
+            current_method,
+            current,
+            headers=request_headers,
+            params=request_params,
+            follow_redirects=False,
+            **body_kwargs,
+        )
+        # Raw passthrough opts out and hands the redirect back to the caller,
+        # which is what it did before redirects were guarded here.
+        if not response.is_redirect or not follow_redirects:
+            return response
+
+        location = response.headers.get("location")
+        if not location:
+            raise UnsafeUrlError("Redirect without a target.", reason="invalid_redirect")
+        await response.aread()
+        current = str(httpx.URL(current).join(location))
+        current_method, body_kwargs = _redirected_request(
+            current_method, response.status_code, body_kwargs
+        )
+        # The Location carries its own query string; re-appending the original
+        # request's parameters to it would corrupt the target.
+        params = None
+
+    raise UnsafeUrlError("Too many redirects.", reason="too_many_redirects")
+
+
+def _as_param_pairs(params: Any) -> list[tuple[str, Any]]:
+    if not params:
+        return []
+    if isinstance(params, dict):
+        return list(params.items())
+    return list(params)
 
 
 async def fetch_guarded(

@@ -7,13 +7,12 @@ part, so they live together rather than being copied three times.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from app.core.net.url_guard import UnsafeUrlError, assert_safe_host, assert_safe_url
 from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.auth_config import AuthConfigSource
-from app.modules.connectors.domain.connector import ConnectorKind, KindSpec
+from app.modules.connectors.domain.connector import KindSpec
 from app.modules.connectors.domain.errors import ConnectorValidationError
 from app.modules.connectors.domain.kinds import (
     DiscoveredOperation,
@@ -28,13 +27,6 @@ from app.modules.connectors.infrastructure.adapters.sql_executor import SqlExecu
 from app.modules.connectors.infrastructure.kinds._install_validation import (
     validate_install_config,
 )
-
-
-class _NeverRefreshes:
-    """Static credentials: an API key or password does not expire on a clock."""
-
-    def refresh_due(self, credentials: dict[str, Any], *, now: datetime) -> bool:
-        return False
 
 
 class _TenantConfiguredInstaller:
@@ -132,7 +124,14 @@ class McpKindExecutor:
 
 
 class OpenApiDiscoverer:
-    """Discovers operations from a spec the install points at (or inlines)."""
+    """Discovers operations from a spec the install points at (or inlines).
+
+    An `http` install need not carry a spec: a connector whose spec was bundled
+    at catalog-import time (GitHub) has a static operation set living in the
+    catalog. That is not a discovery failure, so it returns nothing rather than
+    raising -- which it did, turning the create of any spec-less http install
+    into a 500.
+    """
 
     async def discover(
         self, install: ResolvedInstall, credentials: dict[str, Any] | None
@@ -140,6 +139,10 @@ class OpenApiDiscoverer:
         from app.modules.connectors.services.discovery.openapi_discoverer import (
             discover_openapi,
         )
+
+        config = install.config or {}
+        if not (config.get("spec_url") or config.get("spec_inline")):
+            return []
 
         found = await discover_openapi(
             connection_config=install.config, credentials=credentials
@@ -195,18 +198,3 @@ def mcp_installer() -> _TenantConfiguredInstaller:
     return _TenantConfiguredInstaller(url_fields=("server_url",))
 
 
-def never_refreshes() -> _NeverRefreshes:
-    return _NeverRefreshes()
-
-
-# An `http` install only discovers when it points at a spec; a connector whose
-# spec was bundled at catalog-import time (GitHub) has a static operation set.
-def http_discoverer_if_needed(config: dict[str, Any]) -> bool:
-    return bool(config.get("spec_url") or config.get("spec_inline"))
-
-
-KIND_TIMEOUTS: dict[ConnectorKind, float] = {
-    ConnectorKind.HTTP: 45.0,
-    ConnectorKind.SQL: 35.0,
-    ConnectorKind.MCP: 60.0,
-}

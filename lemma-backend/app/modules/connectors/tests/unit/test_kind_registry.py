@@ -9,7 +9,6 @@ every kind resolves through one registry, and nothing runs unbounded.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -37,7 +36,6 @@ from app.modules.connectors.infrastructure.kinds import build_kind_registry
 from app.modules.connectors.infrastructure.kinds._install_validation import (
     validate_install_config,
 )
-from app.modules.connectors.infrastructure.kinds.brokered_kinds import ExpiryBasedRefresh
 from app.modules.connectors.infrastructure.kinds.registry import KindRegistry
 from app.modules.connectors.services.execution import KindDispatcher
 
@@ -256,38 +254,33 @@ class TestInstallValidation:
         assert validate_install_config(spec, config) == config
 
 
-class TestExpiryBasedRefresh:
-    """Refresh is a predicate now, not something done before every single call."""
 
-    def setup_method(self):
-        self.policy = ExpiryBasedRefresh()
-        self.now = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
 
-    def test_a_credential_with_no_expiry_is_never_proactively_refreshed(self):
-        # API keys, bot tokens, and providers that report no expiry. Refreshing
-        # these on every call is what made each execution pay a round trip.
-        assert self.policy.refresh_due({"access_token": "t"}, now=self.now) is False
+class TestHttpDiscoveryWithoutASpec:
+    """An `http` install need not carry a spec.
 
-    def test_a_comfortably_valid_credential_is_left_alone(self):
-        creds = {"expires_at": self.now + timedelta(hours=1)}
-        assert self.policy.refresh_due(creds, now=self.now) is False
+    A connector whose spec was bundled at catalog-import time (GitHub) has a
+    static operation set, so there is nothing to discover. Discovery used to
+    raise ValueError there, and neither the dispatcher nor
+    `discover_install_operations` catches that -- so creating any spec-less
+    http install returned a 500.
+    """
 
-    def test_a_credential_inside_the_skew_window_is_refreshed(self):
-        creds = {"expires_at": self.now + timedelta(seconds=30)}
-        assert self.policy.refresh_due(creds, now=self.now) is True
+    @pytest.mark.asyncio
+    async def test_it_returns_nothing_rather_than_raising(self):
+        from app.modules.connectors.domain.auth_config import AuthConfigSource
+        from app.modules.connectors.domain.connector import HttpKindSpec
+        from app.modules.connectors.domain.kinds import ResolvedInstall
+        from app.modules.connectors.services.execution import KindDispatcher
 
-    def test_an_already_expired_credential_is_refreshed(self):
-        creds = {"expires_at": self.now - timedelta(minutes=5)}
-        assert self.policy.refresh_due(creds, now=self.now) is True
-
-    def test_an_iso_string_expiry_is_understood(self):
-        creds = {"expires_at": (self.now - timedelta(minutes=1)).isoformat()}
-        assert self.policy.refresh_due(creds, now=self.now) is True
-
-    def test_a_naive_expiry_is_treated_as_utc_rather_than_crashing(self):
-        creds = {"expires_at": (self.now + timedelta(hours=1)).replace(tzinfo=None)}
-        assert self.policy.refresh_due(creds, now=self.now) is False
-
-    def test_an_unparseable_expiry_does_not_raise(self):
-        # A malformed stored credential must not take down every execution.
-        assert self.policy.refresh_due({"expires_at": "not-a-date"}, now=self.now) is False
+        registry = build_kind_registry(composio_gateway=None, package_gateway=None)
+        install = ResolvedInstall(
+            connector_id="github",
+            kind=ConnectorKind.HTTP,
+            auth_config_id=uuid4(),
+            organization_id=uuid4(),
+            config={"server_url": "https://api.github.com"},
+            config_source=AuthConfigSource.SYSTEM_DEFAULT,
+            spec=HttpKindSpec(),
+        )
+        assert await KindDispatcher(registry).discover(install, None) == []

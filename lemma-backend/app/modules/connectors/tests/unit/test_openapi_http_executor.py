@@ -232,3 +232,132 @@ async def test_raw_mode_and_ssrf_guard(monkeypatch):
 
     with pytest.raises(OpenApiHttpExecutionError, match="absolute path"):
         await _run(monkeypatch, hr, {"method": "GET", "path": "//evil.com/x"}, handler)
+
+
+class TestRedirectsAreGuarded:
+    """A redirect is a fresh target, and the tenant chooses where it points.
+
+    For an `http` install the org admin supplies `server_url`. If the client
+    followed redirects itself, that host could answer `302 ->
+    169.254.169.254` and walk straight past the guard, which only ever saw the
+    original URL. These pin that every hop is re-validated, and that the
+    account's credentials do not travel to another origin.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_redirect_to_the_metadata_service_is_refused(self, monkeypatch):
+        from app.core.config import settings
+
+        # Even with the self-hosting hatch open, link-local stays refused.
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            if "169.254" in str(request.url):
+                return httpx.Response(200, json={"secret": "instance-credentials"})
+            return httpx.Response(
+                302, headers={"location": "http://169.254.169.254/latest/meta-data/"}
+            )
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        executor = OpenApiHttpExecutor(client)
+        with pytest.raises(OpenApiHttpExecutionError) as caught:
+            await executor.execute(
+                connector_id="c",
+                operation_name="op",
+                execution={"mode": "openapi", "method": "GET", "path": "/x"},
+                payload={},
+                third_party_credentials={"api_key": "k"},
+                connection_config={"server_url": "http://api.tenant.test"},
+            )
+        assert caught.value.details.get("reason") == "link_local_address"
+        # The metadata service was never contacted.
+        assert not any("169.254" in url for url in seen)
+
+    @pytest.mark.asyncio
+    async def test_credentials_do_not_follow_a_redirect_to_another_origin(
+        self, monkeypatch
+    ):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+        received: list[httpx.Headers] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            received.append(request.headers)
+            if request.url.host == "elsewhere.test":
+                return httpx.Response(200, json={"ok": True})
+            return httpx.Response(302, headers={"location": "http://elsewhere.test/x"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        executor = OpenApiHttpExecutor(client)
+        await executor.execute(
+            connector_id="c",
+            operation_name="op",
+            execution={
+                "mode": "openapi",
+                "method": "GET",
+                "path": "/x",
+                "auth": {"type": "header", "name": "X-Api-Key"},
+            },
+            payload={},
+            third_party_credentials={"api_key": "super-secret"},
+            connection_config={"server_url": "http://api.tenant.test"},
+        )
+        assert len(received) == 2
+        # The tenant's key reached their own host, and nobody else's.
+        assert any("super-secret" in str(v) for v in received[0].values())
+        assert not any("super-secret" in str(v) for v in received[1].values())
+
+    @pytest.mark.asyncio
+    async def test_a_redirect_loop_is_cut_off(self, monkeypatch):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+        hops = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal hops
+            hops += 1
+            return httpx.Response(302, headers={"location": "http://api.tenant.test/x"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        executor = OpenApiHttpExecutor(client)
+        with pytest.raises(OpenApiHttpExecutionError) as caught:
+            await executor.execute(
+                connector_id="c",
+                operation_name="op",
+                execution={"mode": "openapi", "method": "GET", "path": "/x"},
+                payload={},
+                third_party_credentials={},
+                connection_config={"server_url": "http://api.tenant.test"},
+            )
+        assert caught.value.details.get("reason") == "too_many_redirects"
+        assert hops <= 5
+
+    @pytest.mark.asyncio
+    async def test_raw_passthrough_follows_no_redirect_at_all(self, monkeypatch):
+        from app.core.config import settings
+
+        monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+        hops = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal hops
+            hops += 1
+            return httpx.Response(302, headers={"location": "http://elsewhere.test/x"})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        executor = OpenApiHttpExecutor(client)
+        # Raw hands the redirect back rather than following it, so the other
+        # origin is never contacted -- one request, and no second hop.
+        await executor.execute(
+            connector_id="c",
+            operation_name="op",
+            execution={"mode": "raw"},
+            payload={"method": "GET", "path": "/x"},
+            third_party_credentials={},
+            connection_config={"server_url": "http://api.tenant.test"},
+        )
+        assert hops == 1

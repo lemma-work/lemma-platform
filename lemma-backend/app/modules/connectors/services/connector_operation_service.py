@@ -4,6 +4,7 @@ import base64
 from typing import Any
 from uuid import UUID
 
+
 from app.core.authorization.context import Context
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationDetail,
@@ -20,8 +21,6 @@ from app.modules.connectors.domain.connector import (
 from app.modules.connectors.domain.errors import (
     AccountResolutionError,
     ConnectorNotFoundError,
-    ConnectorDomainError,
-    OperationExecutionInfrastructureError,
     OperationNotFoundError,
 )
 from app.modules.connectors.domain.ports import (
@@ -42,6 +41,7 @@ from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecut
 __all__ = ["ConnectorOperationService", "ResolvedConnectorExecution"]
 from app.modules.connectors.services.execution.plumbing import (
     build_dispatcher,
+    execution_failures_translated,
     execution_request,
 )
 from app.modules.connectors.services.credential_freshness import (
@@ -212,16 +212,6 @@ class ConnectorOperationService:
             for key in ("access_token", "refresh_token", "connection_id")
         )
 
-    def _exception_details(self, exc: Exception) -> dict[str, Any]:
-        details: dict[str, Any] = {"error_type": type(exc).__name__}
-        status_code = getattr(exc, "status_code", None)
-        if isinstance(status_code, int):
-            details["upstream_status"] = status_code
-        code = getattr(exc, "code", None)
-        if isinstance(code, str) and len(code) <= 100:
-            details["upstream_code"] = code
-        return details
-
     def _normalize_execution_result(self, value: Any) -> Any:
         model_dump = getattr(value, "model_dump", None)
         if callable(model_dump):
@@ -319,11 +309,6 @@ class ConnectorOperationService:
         kind: str | None = None,
         auth_config_id: UUID | None = None,
     ) -> OperationDiscoverResponse:
-        total_operations = len(
-            await self._list_operation_entities(
-                connector_id, kind=kind, auth_config_id=auth_config_id
-            )
-        )
         selected_operations = await self._list_operation_entities(
             connector_id,
             kind=kind,
@@ -331,6 +316,17 @@ class ConnectorOperationService:
             limit=limit,
             auth_config_id=auth_config_id,
         )
+        # `total_operations` is the install's whole set, so a client can say
+        # "showing 10 of 340". Only a narrowed selection needs a second read to
+        # learn it -- an unfiltered, unlimited listing already *is* the total.
+        if query is None and limit is None:
+            total_operations = len(selected_operations)
+        else:
+            total_operations = len(
+                await self._list_operation_entities(
+                    connector_id, kind=kind, auth_config_id=auth_config_id
+                )
+            )
 
         items = [
             self._build_operation_summary(operation, query=query)
@@ -601,17 +597,10 @@ class ConnectorOperationService:
         connection: the gateway's connector-validation read is skipped because
         ``provider`` is supplied (the connector was validated in the resolve
         phase), and the concrete provider gateways are DB-free."""
-        try:
+        with execution_failures_translated():
             result = await self._dispatcher().execute(
                 execution_request(self._dispatcher(), resolved)
             )
-        except ConnectorDomainError:
-            raise
-        except Exception as exc:
-            raise OperationExecutionInfrastructureError(
-                "Connector provider is temporarily unavailable.",
-                details=self._exception_details(exc),
-            ) from exc
         return OperationExecutionResponse(
             result=self._normalize_execution_result(result)
         )

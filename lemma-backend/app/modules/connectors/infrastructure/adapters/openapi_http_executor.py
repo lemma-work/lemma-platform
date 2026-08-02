@@ -23,10 +23,14 @@ import httpx
 from lemma_connectors.core.results import BinaryContentResult
 
 from app.core.log.log import get_logger
+from app.core.net.url_guard import UnsafeUrlError, assert_safe_url, request_guarded
 
 logger = get_logger(__name__)
 
 # Guard against pathological in-memory payloads (no streaming by design).
+# Redirect hops an OpenAPI-described call may follow. Each one is re-validated
+# against the URL guard, so this bounds the work rather than the risk.
+_MAX_REDIRECTS = 3
 _MAX_FILE_BYTES = 100 * 1024 * 1024
 _DEFAULT_USER_AGENT = "lemma-connectors"
 _DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -155,8 +159,6 @@ def _raw_body(body: Any) -> dict[str, Any]:
 
 
 async def _assert_safe_base_url(base_url: str) -> None:
-    from app.core.net.url_guard import UnsafeUrlError, assert_safe_url
-
     try:
         await assert_safe_url(base_url)
     except UnsafeUrlError as exc:
@@ -233,10 +235,12 @@ class OpenApiHttpExecutor:
             http_method=method,
             mode=mode,
         )
-        # The shared client has redirects off globally (a tenant-supplied URL
-        # that redirects into the private network is an SSRF the install-time
-        # check cannot see), so OpenAPI-described calls opt back in per request.
-        # Raw passthrough deliberately does not.
+        # Redirects are followed by `request_guarded`, never by the client. The
+        # tenant supplies `server_url` for an `http` install, so a host they
+        # control answering `302 -> 169.254.169.254` would otherwise walk
+        # straight past the guard that only ran against the original URL --
+        # every hop is re-validated, and the account's credentials are dropped
+        # if one leaves the original origin. Raw passthrough follows none.
         timeout = (
             httpx.Timeout(
                 connect=5.0,
@@ -247,15 +251,29 @@ class OpenApiHttpExecutor:
             if deadline_seconds
             else None
         )
-        request_kwargs: dict[str, Any] = {
-            "params": params,
-            "headers": headers,
-            "follow_redirects": follow_redirects,
-            **req,
-        }
+        request_kwargs: dict[str, Any] = {**req}
         if timeout is not None:
             request_kwargs["timeout"] = timeout
-        response = await self._http().request(method, url, **request_kwargs)
+        try:
+            response = await request_guarded(
+                self._http(),
+                method,
+                url,
+                params=params,
+                headers=headers,
+                credential_header_names=auth_headers.keys(),
+                credential_param_names=auth_query.keys(),
+                follow_redirects=follow_redirects,
+                max_redirects=_MAX_REDIRECTS,
+                **request_kwargs,
+            )
+        except UnsafeUrlError as exc:
+            # A redirect walked somewhere we will not follow. Same refusal as an
+            # unsafe base URL, since it is the same check on a later hop.
+            raise OpenApiHttpExecutionError(
+                f"Refusing to follow a redirect to an unsafe target: {exc}",
+                details={"reason": exc.reason},
+            ) from exc
 
         return self._handle_response(response, operation_name, want_binary=want_binary)
 

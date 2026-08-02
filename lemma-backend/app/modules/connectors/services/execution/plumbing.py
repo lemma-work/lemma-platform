@@ -1,8 +1,13 @@
-"""Building the kind dispatcher and the request handed to it."""
+"""Building the kind dispatcher, the request handed to it, and the error
+contract on the way back out."""
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Any
+
+import httpx
 
 from app.modules.connectors.domain.connector import ConnectorKind
 from app.modules.connectors.services.execution.dispatcher import KindDispatcher
@@ -48,3 +53,46 @@ def execution_request(dispatcher: KindDispatcher, resolved: Any):
         auth_token=resolved.auth_token,
         api_url=resolved.api_url,
     )
+
+
+def _upstream_details(exc: Exception) -> dict[str, Any]:
+    details: dict[str, Any] = {"error_type": type(exc).__name__}
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        details["upstream_status"] = status_code
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and len(code) <= 100:
+        details["upstream_code"] = code
+    return details
+
+
+@contextlib.contextmanager
+def execution_failures_translated():
+    """Turn whatever escapes an executor into an honest domain error.
+
+    Transport failures are transient and say so. Anything else is a fault on
+    this side: it is still bounded here, so no traceback and no upstream
+    message reaches the caller, but it is not reported as a provider outage --
+    that invites a retry which cannot succeed, and files our own bug under
+    someone else's name.
+    """
+    from app.modules.connectors.domain.errors import (
+        ConnectorDomainError,
+        OperationExecutionError,
+        OperationExecutionInfrastructureError,
+    )
+
+    try:
+        yield
+    except ConnectorDomainError:
+        raise
+    except (httpx.HTTPError, OSError, asyncio.TimeoutError) as exc:
+        raise OperationExecutionInfrastructureError(
+            "Connector provider is temporarily unavailable.",
+            details=_upstream_details(exc),
+        ) from exc
+    except Exception as exc:
+        raise OperationExecutionError(
+            "The connector operation could not be completed.",
+            details=_upstream_details(exc),
+        ) from exc

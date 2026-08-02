@@ -12,7 +12,7 @@ from app.modules.connectors.domain.connector import (
     AuthProvider,
 )
 from app.modules.connectors.domain.errors import (
-    OperationExecutionInfrastructureError,
+    OperationExecutionError,
 )
 from app.modules.connectors.domain.connector_operation import (
     ConnectorOperationEntity,
@@ -124,39 +124,36 @@ async def test_discover_operations_uses_repository_search_for_queries():
         )
     )
     operation_repository = AsyncMock()
-    operation_repository.list_by_connector.side_effect = [
-        [
-            ConnectorOperationEntity(
-                id="gmail:messages_send",
-                connector_id="gmail",
-                name="messages_send",
-                provider_operation_name="messages_send",
-                description="Send an email message to recipients.",
-                input_schema={"type": "object"},
-                output_schema={"type": "object"},
-            ),
-            ConnectorOperationEntity(
-                id="gmail:messages_list",
-                connector_id="gmail",
-                name="messages_list",
-                provider_operation_name="messages_list",
-                description="List messages from a mailbox.",
-                input_schema={"type": "object"},
-                output_schema={"type": "object"},
-            ),
-        ],
-        [
-            ConnectorOperationEntity(
-                id="gmail:messages_send",
-                connector_id="gmail",
-                name="messages_send",
-                provider_operation_name="messages_send",
-                description="Send an email message to recipients.",
-                input_schema={"type": "object"},
-                output_schema={"type": "object"},
-            )
-        ],
-    ]
+
+    def _send() -> ConnectorOperationEntity:
+        return ConnectorOperationEntity(
+            id="gmail:messages_send",
+            connector_id="gmail",
+            name="messages_send",
+            provider_operation_name="messages_send",
+            description="Send an email message to recipients.",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+
+    def _list() -> ConnectorOperationEntity:
+        return ConnectorOperationEntity(
+            id="gmail:messages_list",
+            connector_id="gmail",
+            name="messages_list",
+            provider_operation_name="messages_list",
+            description="List messages from a mailbox.",
+            input_schema={"type": "object"},
+            output_schema={"type": "object"},
+        )
+
+    # Answer on the arguments rather than on call order: the point of this test
+    # is that a query reaches the repository's search, not the sequence the
+    # service happens to read the total and the page in.
+    async def _list_by_connector(_connector_id, *, search_query=None, limit=None):
+        return [_send()] if search_query else [_send(), _list()]
+
+    operation_repository.list_by_connector.side_effect = _list_by_connector
 
     service = ConnectorOperationService(
         connector_repository=connector_repository,
@@ -173,20 +170,12 @@ async def test_discover_operations_uses_repository_search_for_queries():
 
     assert response.returned_count == 1
     assert response.items[0].name == "messages_send"
-    assert operation_repository.list_by_connector.await_args_list[0].args == (
-        "gmail",
-    )
-    assert operation_repository.list_by_connector.await_args_list[0].kwargs == {
-        "search_query": None,
-        "limit": None,
-    }
-    assert operation_repository.list_by_connector.await_args_list[1].args == (
-        "gmail",
-    )
-    assert operation_repository.list_by_connector.await_args_list[1].kwargs == {
-        "search_query": "send an email",
-        "limit": 1,
-    }
+    calls = operation_repository.list_by_connector.await_args_list
+    # The page is read first, and the unfiltered total second.
+    assert calls[0].args == ("gmail",)
+    assert calls[0].kwargs == {"search_query": "send an email", "limit": 1}
+    assert calls[1].args == ("gmail",)
+    assert calls[1].kwargs == {"search_query": None, "limit": None}
 
 
 async def test_get_operation_details_batch_returns_all_when_names_omitted():
@@ -377,6 +366,10 @@ async def test_execute_operation_uses_provider_operation_name():
 
 
 async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
+    # An error that is not transport-shaped is a fault on our side, so it is
+    # not labelled as a provider outage -- that would invite a retry which
+    # cannot succeed. It is still bounded: no traceback reaches the caller and
+    # the upstream message is not reflected back.
     operation_repository = AsyncMock()
     operation_repository.get_by_connector_and_name.return_value = (
         ConnectorOperationEntity(
@@ -409,7 +402,7 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
         ),
     )
 
-    with pytest.raises(OperationExecutionInfrastructureError) as exc_info:
+    with pytest.raises(OperationExecutionError) as exc_info:
         await service.execute_operation(
             connector_id="slack",
             operation_name="send_message",
@@ -417,7 +410,7 @@ async def test_execute_operation_wraps_unexpected_errors_in_domain_error():
             user_id=uuid4(),
         )
 
-    assert exc_info.value.code == "OPERATION_EXECUTION_INFRA_ERROR"
+    assert exc_info.value.code == "OPERATION_EXECUTION_ERROR"
     assert exc_info.value.details == {"error_type": "RuntimeError"}
     assert "provider exploded" not in str(exc_info.value)
 

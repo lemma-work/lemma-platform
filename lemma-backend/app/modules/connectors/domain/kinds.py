@@ -13,7 +13,6 @@ session-bound.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -93,20 +92,6 @@ class KindDiscoverer(Protocol):
 
 
 @runtime_checkable
-class KindAuthenticator(Protocol):
-    """Owns the credential lifecycle for a kind."""
-
-    def refresh_due(self, credentials: dict[str, Any], *, now: datetime) -> bool:
-        """Whether the credential should be refreshed *before* the next call.
-
-        Deliberately a predicate rather than an unconditional refresh: the old
-        path refreshed on every single execution, paying a full round trip to
-        the provider before doing any actual work.
-        """
-        ...
-
-
-@runtime_checkable
 class KindExecutor(Protocol):
     """Runs one operation against the upstream."""
 
@@ -120,5 +105,9 @@ class KindPlugin:
     kind: ConnectorKind
     executor: KindExecutor
     installer: KindInstaller | None = None
+    # Refresh policy is deliberately *not* here. It was, as a per-kind
+    # `authenticator`, and nothing ever read it: the decision runs through
+    # `credential_freshness.credential_refresh_due`, which is expiry-driven and
+    # kind-independent. Two copies of one rule, one of them dead, only misleads
+    # a reader into thinking refresh is pluggable per kind.
     discoverer: KindDiscoverer | None = None
-    authenticator: KindAuthenticator | None = None

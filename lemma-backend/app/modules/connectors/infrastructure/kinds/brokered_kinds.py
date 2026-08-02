@@ -7,10 +7,8 @@ discovery: their operation sets come from the catalog.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.modules.connectors.config import connector_settings
 from app.modules.connectors.domain.auth_config import AuthConfigSource
 from app.modules.connectors.domain.connector import KindSpec, kind_to_provider
 from app.modules.connectors.domain.errors import ConnectorValidationError
@@ -18,38 +16,6 @@ from app.modules.connectors.domain.kinds import ExecutionRequest
 from app.modules.connectors.infrastructure.kinds._install_validation import (
     validate_install_config,
 )
-
-
-def _refresh_skew() -> timedelta:
-    return timedelta(seconds=connector_settings.connector_credential_refresh_skew_seconds)
-
-
-class ExpiryBasedRefresh:
-    """Refresh only when the credential is actually near expiry.
-
-    The previous path refreshed unconditionally before every execution, so each
-    operation paid a full round trip to the provider before doing any work. A
-    credential with no ``expires_at`` -- an API key, a bot token, a provider that
-    reports no expiry -- is never proactively refreshed; a 401 at execution time
-    drives the reactive path instead, which also catches server-side revocation
-    that an expiry check never would.
-    """
-
-    def refresh_due(self, credentials: dict[str, Any], *, now: datetime) -> bool:
-        expires_at = credentials.get("expires_at")
-        if expires_at is None:
-            return False
-        if isinstance(expires_at, str):
-            try:
-                expires_at = datetime.fromisoformat(expires_at)
-            except ValueError:
-                return False
-        if not isinstance(expires_at, datetime):
-            return False
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        reference = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
-        return expires_at <= reference + _refresh_skew()
 
 
 class ComposioInstaller:

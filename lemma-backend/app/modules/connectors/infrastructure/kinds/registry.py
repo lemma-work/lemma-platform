@@ -23,7 +23,6 @@ from app.modules.connectors.infrastructure.adapters.sql_executor import (
 from app.modules.connectors.infrastructure.kinds.brokered_kinds import (
     ComposioInstaller,
     ComposioKindExecutor,
-    ExpiryBasedRefresh,
     PackageInstaller,
     PackageKindExecutor,
 )
@@ -35,7 +34,6 @@ from app.modules.connectors.infrastructure.kinds.network_kinds import (
     SqlKindExecutor,
     http_installer,
     mcp_installer,
-    never_refreshes,
     sql_installer,
 )
 
@@ -100,33 +98,28 @@ def build_kind_registry(
                 kind=ConnectorKind.COMPOSIO,
                 executor=ComposioKindExecutor(composio_gateway),
                 installer=ComposioInstaller(),
-                authenticator=ExpiryBasedRefresh(),
             ),
             ConnectorKind.PACKAGE: KindPlugin(
                 kind=ConnectorKind.PACKAGE,
                 executor=PackageKindExecutor(package_gateway),
                 installer=PackageInstaller(),
-                authenticator=ExpiryBasedRefresh(),
             ),
             ConnectorKind.HTTP: KindPlugin(
                 kind=ConnectorKind.HTTP,
                 executor=HttpKindExecutor(http),
                 installer=http_installer(),
                 discoverer=OpenApiDiscoverer(),
-                authenticator=ExpiryBasedRefresh(),
             ),
             ConnectorKind.SQL: KindPlugin(
                 kind=ConnectorKind.SQL,
                 executor=SqlKindExecutor(shared_sql_executor()),
                 installer=sql_installer(),
-                authenticator=never_refreshes(),
             ),
             ConnectorKind.MCP: KindPlugin(
                 kind=ConnectorKind.MCP,
                 executor=McpKindExecutor(mcp),
                 installer=mcp_installer(),
                 discoverer=McpDiscoverer(),
-                authenticator=never_refreshes(),
             ),
         }
     )
