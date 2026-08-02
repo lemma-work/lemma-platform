@@ -35,14 +35,35 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO_ROOT / "lemma-backend/.generated/openapi.json"
 COMMITTED_SPEC = REPO_ROOT / "lemma-python/lemma_sdk/openapi_spec.json"
 
+# Run as a script, sys.path[0] is this `scripts` directory rather than the
+# backend root, so a bare `import app` falls through to whatever the editable
+# install resolves to -- another checkout, on whatever branch it happens to be
+# on. That produced a spec silently stamped with a different tree's API version.
+# Put this checkout first, and verify below that it is the one that answered.
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+sys.path.insert(0, str(BACKEND_ROOT))
+
+
+def _assert_app_is_from_this_checkout(module) -> None:
+    resolved = Path(module.__file__).resolve()
+    if BACKEND_ROOT not in resolved.parents:
+        raise SystemExit(
+            f"Refusing to render: 'app' resolved to {resolved}, which is outside "
+            f"{BACKEND_ROOT}. The generated spec would describe a different "
+            "checkout. Run with PYTHONPATH pointing at this backend root."
+        )
 
 
 def render() -> str:
     # Imported lazily so --help works without loading the whole app.
+    import app as app_package
+
+    _assert_app_is_from_this_checkout(app_package)
+
     from app.app import app
     from prepare_client_openapi import (
         DEFAULT_EXCLUDED_PREFIXES,

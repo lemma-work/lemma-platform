@@ -4,8 +4,8 @@
 /* eslint-disable */
 export type InstalledAppSummary = {
     connector_id: string;
+    kind: string;
     name: string;
-    provider: string;
     status: string;
     title?: (string | null);
 };

@@ -13,6 +13,7 @@ from app.modules.connectors.domain.account import (
     OAuthCredentials,
 )
 from app.modules.connectors.domain.connector import (
+    ConnectorKind,
     AuthScheme,
     ConnectorEntity,
     AuthProvider,
@@ -205,12 +206,12 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
         user_id=user_id,
         organization_id=ORG_ID,
         connector_id="dropbox",
-        provider=AuthProvider.COMPOSIO.value,
+        kind=ConnectorKind.COMPOSIO.value,
         config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
     )
 
     assert result.connector_id == "dropbox"
-    assert result.provider == AuthProvider.COMPOSIO
+    assert result.kind is ConnectorKind.COMPOSIO
     assert result.config_source == AuthConfigSource.SYSTEM_DEFAULT
     auth_config_repo.create.assert_awaited_once()
     uow.commit.assert_awaited_once()
@@ -321,7 +322,7 @@ async def test_create_account_enriches_identity_via_profile_operation():
     registry.get.return_value = auth_provider
 
     operation_repository = AsyncMock()
-    operation_repository.get_by_connector_provider_and_name.return_value = (
+    operation_repository.get_by_connector_kind_and_name.return_value = (
         _profile_operation("notion", "NOTION_RETRIEVE_YOUR_TOKEN_S_BOT_USER")
     )
     operation_gateway = AsyncMock()
@@ -807,7 +808,7 @@ async def test_handle_oauth_callback_enriches_slack_account_profile():
     )
 
     with patch(
-        "app.modules.connectors.services.connector_service.create_lemma_execution_client",
+        "app.modules.connectors.services.account_profile.create_lemma_execution_client",
         return_value=native_client,
     ):
         account = await service.handle_oauth_callback(
@@ -946,7 +947,7 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
         "successful": True,
     }
     operation_repository = AsyncMock()
-    operation_repository.get_by_connector_provider_and_name.return_value = (
+    operation_repository.get_by_connector_kind_and_name.return_value = (
         _profile_operation("outlook", "OUTLOOK_GET_PROFILE")
     )
 
@@ -986,8 +987,8 @@ async def test_handle_oauth_callback_populates_email_via_profile_operation():
         )
 
     assert account.email == "user@lemma.work"
-    operation_repository.get_by_connector_provider_and_name.assert_awaited_with(
-        "outlook", "COMPOSIO", "OUTLOOK_GET_PROFILE"
+    operation_repository.get_by_connector_kind_and_name.assert_awaited_with(
+        "outlook", "composio", "OUTLOOK_GET_PROFILE"
     )
     execute_kwargs = operation_gateway.execute_operation.await_args.kwargs
     assert execute_kwargs["operation_name"] == "OUTLOOK_GET_PROFILE"
@@ -1018,7 +1019,7 @@ async def test_fetch_account_profile_unwraps_composio_data_envelope():
         ],
     )
     operation_repository = AsyncMock()
-    operation_repository.get_by_connector_provider_and_name.return_value = (
+    operation_repository.get_by_connector_kind_and_name.return_value = (
         _profile_operation("asana", "ASANA_GET_CURRENT_USER")
     )
     operation_gateway = AsyncMock()
@@ -1049,7 +1050,7 @@ async def test_fetch_account_profile_does_not_unwrap_for_lemma_provider():
         ],
     )
     operation_repository = AsyncMock()
-    operation_repository.get_by_connector_provider_and_name.return_value = (
+    operation_repository.get_by_connector_kind_and_name.return_value = (
         _profile_operation("gmail", "get_profile")
     )
     operation_gateway = AsyncMock()
@@ -1095,7 +1096,7 @@ async def test_fetch_account_profile_tries_catalog_operation_names_in_order():
         ],
     )
     operation_repository = AsyncMock()
-    operation_repository.get_by_connector_provider_and_name.side_effect = [
+    operation_repository.get_by_connector_kind_and_name.side_effect = [
         None,
         _profile_operation("asana", "ASANA_GET_CURRENT_USER"),
     ]
@@ -1111,7 +1112,7 @@ async def test_fetch_account_profile_tries_catalog_operation_names_in_order():
     )
 
     assert result == {"email": "pm@acme.test"}
-    assert operation_repository.get_by_connector_provider_and_name.await_count == 2
+    assert operation_repository.get_by_connector_kind_and_name.await_count == 2
 
 
 async def test_handle_oauth_callback_surfaces_upstream_error_details():

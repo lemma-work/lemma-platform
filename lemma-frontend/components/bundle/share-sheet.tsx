@@ -358,7 +358,7 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
                                     organizationId={pod?.organization_id}
                                     podId={podId}
                                     connectorId="github"
-                                    provider="COMPOSIO"
+                                    connectorKind="composio"
                                     label="GitHub account"
                                     description="The connected account that owns and publishes the repository."
                                     required

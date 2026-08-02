@@ -149,8 +149,8 @@ def _dump_response(response: Any) -> dict[str, Any]:
 async def _resolve_account_connector_info(
     uow: SqlAlchemyUnitOfWork, account_id: UUID
 ) -> tuple[str, str] | None:
-    """Ground-truth ``(connector_id, provider)`` for an account, resolved via
-    the connectors module — never inferred from a resource's own name (e.g. a
+    """Ground-truth ``(connector_id, kind)`` for an account, resolved via the
+    connectors module — never inferred from a resource's own name (e.g. a
     surface's platform or a schedule's directory name), since that guess is
     wrong for any resource type with no platform concept of its own. Returns
     ``None`` if the account (or its auth config) no longer exists."""
@@ -163,7 +163,7 @@ async def _resolve_account_connector_info(
     auth_config = await service.auth_config_repository.get(account.auth_config_id)
     if auth_config is None:
         return None
-    return account.connector_id, auth_config.provider.value
+    return account.connector_id, auth_config.kind.value
 
 
 class BundleExporter:
@@ -428,7 +428,7 @@ class BundleExporter:
                                 f"Schedule '{schedule_name}' references account "
                                 f"{account_id}, which no longer exists."
                             )
-                        raw_schedule["connector_id"], raw_schedule["provider"] = info
+                        raw_schedule["connector_id"], raw_schedule["connector_kind"] = info
                     payload = _normalize_schedule_payload(raw_schedule)
                     payload.setdefault("name", schedule_name)
                     _write_json(dir_ / f"{schedule_name}.json", payload)
@@ -581,7 +581,7 @@ class BundleExporter:
                             f"Surface references account {account_id}, which no "
                             "longer exists."
                         )
-                    raw_surface["connector_id"], raw_surface["provider"] = info
+                    raw_surface["connector_id"], raw_surface["connector_kind"] = info
                 payload = _normalize_surface_payload(raw_surface)
                 platform = str(payload.get("platform") or "")
                 # De-dup by the surface's pod-unique name (not platform), so a pod

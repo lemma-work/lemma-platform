@@ -71,9 +71,9 @@ export const useTriggers = (options?: UseConnectorsOptions) => {
     const connectorId = options?.connectorId;
     const triggersEnabled = options?.enabled ?? true;
 
-    // Triggers are scoped to an auth config (org + app + provider). An org holds
+    // Triggers are scoped to an auth config (org + app + kind). An org holds
     // at most one auth config per app, so resolve the app's auth config name here
-    // and list triggers for it — only the auth config's provider is returned.
+    // and list triggers for it — only the auth config's kind is returned.
     const { data: authConfigs = [] } = useAuthConfigs({
         organizationId,
         limit: 100,
@@ -158,17 +158,16 @@ export const useEnableConnector = (organizationId?: string) => {
     return useMutation({
         mutationFn: async (data: {
             connectorId: string;
-            provider?: string;
+            kind?: string;
             configSource?: string;
-            credentialConfig?: Record<string, unknown> | null;
-            providerConfig?: Record<string, unknown> | null;
+            config?: Record<string, unknown> | null;
             name?: string | null;
         }) => {
             if (!organizationId) throw new Error('organizationId is required to enable an app');
             return getLemmaClient().connectors.enableApp(organizationId, data.connectorId, {
-                provider: data.provider,
+                kind: data.kind,
                 config_source: data.configSource,
-                credential_config: data.credentialConfig ?? data.providerConfig,
+                config: data.config,
                 name: data.name,
             });
         },

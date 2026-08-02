@@ -109,10 +109,10 @@ class ConnectorOperationRepository(
             return [row[0].to_entity() for row in result.all()]
         return [instance.to_entity() for instance in result.scalars().all()]
 
-    async def list_by_connector_provider(
+    async def list_by_connector_kind(
         self,
         connector_id: str,
-        provider: str,
+        kind: str,
         search_query: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> Sequence[ConnectorOperationEntity]:
@@ -121,15 +121,14 @@ class ConnectorOperationRepository(
             search_query=search_query,
             limit=None,
         )
-        provider_operations = [
+        kind_operations = [
             operation
             for operation in operations
-            if str(operation.provider) == provider
-            or getattr(operation.provider, "value", None) == provider
+            if getattr(operation.kind, "value", operation.kind) == kind
         ]
         if limit is not None:
-            return provider_operations[:limit]
-        return provider_operations
+            return kind_operations[:limit]
+        return kind_operations
 
     async def get_by_connector_and_name(
         self,
@@ -163,16 +162,16 @@ class ConnectorOperationRepository(
         instance = result.scalars().first()
         return instance.to_entity() if instance else None
 
-    async def get_by_connector_provider_and_name(
+    async def get_by_connector_kind_and_name(
         self,
         connector_id: str,
-        provider: str,
+        kind: str,
         operation_name: str,
     ) -> Optional[ConnectorOperationEntity]:
         normalized_name = operation_name.strip().lower()
         stmt = select(ConnectorOperation).where(
             ConnectorOperation.connector_id == connector_id,
-            ConnectorOperation.provider == provider,
+            ConnectorOperation.kind == kind,
             func.lower(ConnectorOperation.name) == normalized_name,
         )
         result = await self.session.execute(stmt)

@@ -2,6 +2,7 @@ from enum import Enum
 
 
 class AgentToolset(str, Enum):
+    CONNECTORS = "CONNECTORS"
     POD = "POD"
     SKILLS = "SKILLS"
     SPEECH = "SPEECH"

@@ -2,8 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { ComposioProviderCapabilityResponseSchema } from './ComposioProviderCapabilityResponseSchema.js';
-import type { LemmaProviderCapabilityResponseSchema } from './LemmaProviderCapabilityResponseSchema.js';
+import type { ConnectorKindResponseSchema } from './ConnectorKindResponseSchema.js';
 import type { OperationSummary } from './OperationSummary.js';
 /**
  * Schema for connector details including operation catalog.
@@ -14,8 +13,8 @@ export type ConnectorDetailResponseSchema = {
     icon: (string | null);
     id: string;
     is_active: boolean;
+    kinds?: Array<ConnectorKindResponseSchema>;
     operations?: Record<string, OperationSummary>;
-    provider_capabilities?: Array<(LemmaProviderCapabilityResponseSchema | ComposioProviderCapabilityResponseSchema)>;
     title?: (string | null);
     updated_at: string;
 };

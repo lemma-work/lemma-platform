@@ -37,7 +37,10 @@
         "config_schema": {
           "type": "object",
           "$schema": "http://json-schema.org/draft-04/schema#",
-          "required": ["team_id", "channel_id"],
+          "required": [
+            "team_id",
+            "channel_id"
+          ],
           "properties": {
             "team_id": {
               "type": "string"
@@ -101,7 +104,11 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "required": ["type", "block_id", "elements"],
+                    "required": [
+                      "type",
+                      "block_id",
+                      "elements"
+                    ],
                     "properties": {
                       "type": {
                         "type": "string"
@@ -113,7 +120,9 @@
                         "type": "array",
                         "items": {
                           "type": "object",
-                          "required": ["type"],
+                          "required": [
+                            "type"
+                          ],
                           "properties": {
                             "type": {
                               "type": "string"
@@ -122,7 +131,10 @@
                               "type": "array",
                               "items": {
                                 "type": "object",
-                                "required": ["type", "text"],
+                                "required": [
+                                  "type",
+                                  "text"
+                                ],
                                 "properties": {
                                   "type": {
                                     "type": "string"
@@ -153,7 +165,9 @@
                 },
                 "assistant_thread": {
                   "type": "object",
-                  "required": ["action_token"],
+                  "required": [
+                    "action_token"
+                  ],
                   "properties": {
                     "action_token": {
                       "type": "string"
@@ -230,7 +244,11 @@
         "config_schema": {
           "type": "object",
           "$schema": "http://json-schema.org/draft-04/schema#",
-          "required": ["team_id", "thread_ts", "channel_id"],
+          "required": [
+            "team_id",
+            "thread_ts",
+            "channel_id"
+          ],
           "properties": {
             "team_id": {
               "type": "string"
@@ -297,7 +315,11 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "required": ["type", "block_id", "elements"],
+                    "required": [
+                      "type",
+                      "block_id",
+                      "elements"
+                    ],
                     "properties": {
                       "type": {
                         "type": "string"
@@ -309,7 +331,9 @@
                         "type": "array",
                         "items": {
                           "type": "object",
-                          "required": ["type"],
+                          "required": [
+                            "type"
+                          ],
                           "properties": {
                             "type": {
                               "type": "string"
@@ -318,7 +342,10 @@
                               "type": "array",
                               "items": {
                                 "type": "object",
-                                "required": ["type", "text"],
+                                "required": [
+                                  "type",
+                                  "text"
+                                ],
                                 "properties": {
                                   "type": {
                                     "type": "string"
@@ -349,7 +376,9 @@
                 },
                 "assistant_thread": {
                   "type": "object",
-                  "required": ["action_token"],
+                  "required": [
+                    "action_token"
+                  ],
                   "properties": {
                     "action_token": {
                       "type": "string"
@@ -426,7 +455,10 @@
         "config_schema": {
           "type": "object",
           "$schema": "http://json-schema.org/draft-04/schema#",
-          "required": ["team_id", "channel_id"]
+          "required": [
+            "team_id",
+            "channel_id"
+          ]
         },
         "payload_schema": {
           "type": "object",
@@ -479,7 +511,11 @@
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "required": ["type", "block_id", "elements"],
+                    "required": [
+                      "type",
+                      "block_id",
+                      "elements"
+                    ],
                     "properties": {
                       "type": {
                         "type": "string"
@@ -491,7 +527,9 @@
                         "type": "array",
                         "items": {
                           "type": "object",
-                          "required": ["type"],
+                          "required": [
+                            "type"
+                          ],
                           "properties": {
                             "type": {
                               "type": "string"
@@ -500,7 +538,9 @@
                               "type": "array",
                               "items": {
                                 "type": "object",
-                                "required": ["type"],
+                                "required": [
+                                  "type"
+                                ],
                                 "properties": {
                                   "type": {
                                     "type": "string"
@@ -528,7 +568,9 @@
                 },
                 "assistant_thread": {
                   "type": "object",
-                  "required": ["action_token"],
+                  "required": [
+                    "action_token"
+                  ],
                   "properties": {
                     "action_token": {
                       "type": "string"
@@ -668,7 +710,11 @@
     "oauth2_config": {
       "authorization_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
       "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-      "default_scopes": ["openid", "profile", "email"],
+      "default_scopes": [
+        "openid",
+        "profile",
+        "email"
+      ],
       "extra_params": {
         "prompt": "consent"
       }
@@ -685,7 +731,10 @@
     "icon": null,
     "credential_schema": {
       "type": "object",
-      "required": ["access_token", "phone_number_id"],
+      "required": [
+        "access_token",
+        "phone_number_id"
+      ],
       "properties": {
         "access_token": {
           "type": "string",
@@ -729,7 +778,9 @@
     "icon": null,
     "credential_schema": {
       "type": "object",
-      "required": ["bot_token"],
+      "required": [
+        "bot_token"
+      ],
       "properties": {
         "bot_token": {
           "type": "string",
@@ -782,6 +833,247 @@
       ]
     },
     "agent_instruction": "Use Confluence to create, read, update, and manage pages and spaces. Access documentation, knowledge bases, and team wikis.",
+    "is_active": true,
+    "triggers": []
+  },
+  {
+    "name": "sql",
+    "title": "SQL Database",
+    "description": "Connect to an external SQL database (PostgreSQL) and run read-only queries.",
+    "auth_method": "API_KEY",
+    "kind": "sql",
+    "auth_config_schema": {
+      "type": "object",
+      "required": [
+        "dialect",
+        "host",
+        "database"
+      ],
+      "properties": {
+        "dialect": {
+          "type": "string",
+          "enum": [
+            "postgresql"
+          ],
+          "default": "postgresql"
+        },
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "default": 5432
+        },
+        "database": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "credential_schema": {
+      "type": "object",
+      "required": [
+        "username",
+        "password"
+      ],
+      "properties": {
+        "username": {
+          "type": "string"
+        },
+        "password": {
+          "type": "string",
+          "format": "password"
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_instruction": "Use this SQL connector to list tables, describe a table, and run read-only SELECT queries against the connected database.",
+    "is_active": true,
+    "triggers": [],
+    "static_operations": [
+      {
+        "name": "execute_query",
+        "description": "Run a read-only SELECT query against the database.",
+        "execution": {
+          "kind": "sql",
+          "op": "query"
+        },
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "query"
+          ],
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "A single read-only SELECT statement."
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "columns": {
+              "type": "array"
+            },
+            "rows": {
+              "type": "array"
+            },
+            "row_count": {
+              "type": "integer"
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      {
+        "name": "list_tables",
+        "description": "List tables in the connected database.",
+        "execution": {
+          "kind": "sql",
+          "op": "list_tables"
+        },
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "description": "Optional schema to filter by."
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array"
+            }
+          }
+        }
+      },
+      {
+        "name": "describe_table",
+        "description": "Describe a table's columns.",
+        "execution": {
+          "kind": "sql",
+          "op": "describe_table"
+        },
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "table"
+          ],
+          "properties": {
+            "table": {
+              "type": "string"
+            },
+            "schema": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "array"
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "mcp",
+    "title": "MCP Server",
+    "description": "Connect to an external MCP server; its tools become connector operations.",
+    "auth_method": "API_KEY",
+    "kind": "mcp",
+    "auth_config_schema": {
+      "type": "object",
+      "required": [
+        "server_url"
+      ],
+      "properties": {
+        "server_url": {
+          "type": "string",
+          "description": "MCP server URL (streamable HTTP)."
+        },
+        "extra_headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "credential_schema": {
+      "type": "object",
+      "properties": {
+        "bearer_token": {
+          "type": "string",
+          "format": "password",
+          "description": "Optional bearer token for the MCP server."
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_instruction": "Use this connector's operations, which are proxied from the tools of a connected MCP server.",
+    "is_active": true,
+    "triggers": []
+  },
+  {
+    "name": "openapi",
+    "title": "OpenAPI (custom API)",
+    "description": "Connect any REST API by providing its OpenAPI spec URL; operations are generated from the spec.",
+    "auth_method": "API_KEY",
+    "kind": "http",
+    "auth_config_schema": {
+      "type": "object",
+      "required": [
+        "spec_url"
+      ],
+      "properties": {
+        "spec_url": {
+          "type": "string",
+          "description": "URL of the OpenAPI JSON spec."
+        },
+        "server_url": {
+          "type": "string",
+          "description": "Override base URL (else the spec's servers[0])."
+        },
+        "default_headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "credential_schema": {
+      "type": "object",
+      "properties": {
+        "access_token": {
+          "type": "string",
+          "format": "password",
+          "description": "Optional bearer token."
+        },
+        "api_key": {
+          "type": "string",
+          "format": "password",
+          "description": "Optional API key."
+        }
+      },
+      "additionalProperties": false
+    },
+    "agent_instruction": "Use operations generated from the connected API's OpenAPI spec.",
     "is_active": true,
     "triggers": []
   }

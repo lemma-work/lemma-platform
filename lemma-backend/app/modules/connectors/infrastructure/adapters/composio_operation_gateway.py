@@ -39,15 +39,18 @@ class ComposioOperationGateway(AppOperationGatewayPort):
         from composio import Composio
 
         os.environ.setdefault("COMPOSIO_CACHE_DIR", "/tmp/composio")
-        # Enable Composio's automatic file handling so tool args that accept a
-        # file (e.g. Gmail/Outlook `attachment`) can be passed a public/signed
-        # URL and the SDK uploads + attaches it. Required for outbound email
-        # attachments; harmless for tools without file params. We only ever pass
-        # signed URLs (never local paths), so the sensitive-local-path upload
-        # surface this flag guards is not exercised.
+        # The flag governs BOTH directions, and the download half is unusable
+        # here: the SDK writes the payload to this container's local disk and
+        # substitutes the local path into the response, so the caller receives a
+        # path it cannot open for a file that accumulates on the box forever.
+        # We keep the upload half by passing signed URLs ourselves and own the
+        # download half by streaming Composio's {name, mimetype, s3url} envelope
+        # to the pod datastore.
         return Composio(
             api_key=connector_settings.composio_api_key,
-            dangerously_allow_auto_upload_download_files=True,
+            dangerously_allow_auto_upload_download_files=(
+                connector_settings.connector_composio_managed_files_enabled
+            ),
         )
 
     async def list_operations(self, connector_id: str) -> list[str]:
@@ -111,50 +114,66 @@ class ComposioOperationGateway(AppOperationGatewayPort):
             # shared thread pool and stall unrelated (CPU) offloads.
             response = await run_blocking(_execute, limiter="external_http")
         except Exception as exc:
-            raise OperationExecutionInfrastructureError(
-                f"Composio tool execution failed for '{operation_name}': {exc}",
-                details={
-                    "provider": "composio",
-                    "upstream_message": str(exc),
-                },
+            # The SDK reports some failures by *raising* rather than returning a
+            # failure envelope -- a deleted or revoked connected account comes
+            # back as a raised 404. Classifying only the returned form left those
+            # as "temporarily unavailable", so the account was never flagged for
+            # reauth and the user was never prompted to reconnect: it simply
+            # failed forever, looking like a transient outage.
+            status_code = getattr(exc, "status_code", None)
+            raise self._classify_failure(
+                operation_name,
+                status_code if isinstance(status_code, int) else None,
+                str(exc),
+                {"provider": "composio", "upstream_message": str(exc)},
             ) from exc
         if not isinstance(response, dict):
             return response
 
         if not response.get("successful", False):
             error = response.get("error") or "Unknown Composio execution error"
-            details = {
-                "provider": "composio",
-                "error": error,
-                "response": response,
-            }
-            message = f"Composio tool execution failed for '{operation_name}': {error}"
-            normalized_error = str(error).lower()
-            # Composio surfaces failures two ways: a structured token (e.g.
-            # "unauthorized") or a provider passthrough whose HTTP status lives in
-            # the response data (e.g. OpenWeather "HTTP 401"). Classify on both so
-            # a revoked/invalid credential maps to Unauthorized (triggering the
-            # account reauth flow) rather than a generic 500.
-            status_code = self._error_status_code(response)
-            if normalized_error in {"not_found", "tool_not_found"} or status_code == 404:
-                raise OperationExecutionNotFoundError(message, details=details)
-            if (
-                normalized_error in {"unauthorized", "not_authed", "invalid_auth"}
-                or status_code == 401
-            ):
-                raise OperationExecutionUnauthorizedError(message, details=details)
-            if (
-                normalized_error in {"forbidden", "missing_scope"}
-                or status_code == 403
-            ):
-                raise OperationExecutionAccessDeniedError(message, details=details)
-            if (
-                normalized_error in {"invalid_arguments", "validation_error", "bad_request"}
-                or status_code in {400, 422}
-            ):
-                raise OperationExecutionValidationError(message, details=details)
-            raise OperationExecutionInfrastructureError(message, details=details)
+            raise self._classify_failure(
+                operation_name,
+                self._error_status_code(response),
+                str(error),
+                {"provider": "composio", "error": error, "response": response},
+            )
         return response.get("data")
+
+    @staticmethod
+    def _classify_failure(
+        operation_name: str,
+        status_code: int | None,
+        error: str,
+        details: dict[str, Any],
+    ) -> Exception:
+        """Map a Composio failure onto the domain error it deserves.
+
+        Composio reports failures three ways: a structured token ("unauthorized"),
+        a provider passthrough whose status is buried in the response data
+        (OpenWeather's "HTTP 401"), or a raised SDK exception carrying an HTTP
+        status. All three land here, because the classification decides real
+        behaviour -- an Unauthorized flags the account for reauth so the user is
+        prompted to reconnect, while an Infrastructure error just retries
+        forever against a connection that is never coming back.
+        """
+        message = f"Composio tool execution failed for '{operation_name}': {error}"
+        normalized = error.lower()
+
+        def matches(tokens: set[str], *statuses: int) -> bool:
+            return normalized in tokens or (
+                status_code is not None and status_code in statuses
+            )
+
+        if matches({"not_found", "tool_not_found"}, 404) or "not found" in normalized:
+            return OperationExecutionNotFoundError(message, details=details)
+        if matches({"unauthorized", "not_authed", "invalid_auth"}, 401):
+            return OperationExecutionUnauthorizedError(message, details=details)
+        if matches({"forbidden", "missing_scope"}, 403):
+            return OperationExecutionAccessDeniedError(message, details=details)
+        if matches({"invalid_arguments", "validation_error", "bad_request"}, 400, 422):
+            return OperationExecutionValidationError(message, details=details)
+        return OperationExecutionInfrastructureError(message, details=details)
 
     @staticmethod
     def _error_status_code(response: dict[str, Any]) -> int | None:

@@ -168,7 +168,7 @@ async def build_available_surfaces(
             AvailableSurface(
                 platform=platform,
                 connector_id=binding.connector_id,
-                provider=binding.provider,
+                kind=binding.kind,
                 title=title,
                 description=description,
                 icon=icon,

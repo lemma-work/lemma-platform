@@ -1,0 +1,39 @@
+"""The plan an operation call runs, carrying no session-bound state."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+from uuid import UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedConnectorExecution:
+    """Session-free output of the connector-operation resolve phase, handed to
+    the external execute phase so the operation runs with no pooled DB connection
+    held. Carries only plain values -- never ORM/session-bound objects."""
+
+    connector_id: str
+    operation_execution_name: str
+    provider: str | None
+    third_party_credentials: dict[str, Any]
+    payload: dict[str, Any]
+    auth_token: str | None
+    api_url: str | None
+    # The install's kind selects the executor; `provider` above is the legacy
+    # view kept only while the old gateways still exist behind the composio and
+    # package plugins.
+    kind: str | None = None
+    # Non-secret per-install connection config (SQL host, MCP/OpenAPI server
+    # URL). Secrets stay in third_party_credentials.
+    connection_config: dict[str, Any] | None = None
+    # Polymorphic descriptor the kind's executor reads. None for package
+    # operations, which the vendored client describes itself.
+    execution: dict[str, Any] | None = None
+    operation_name: str | None = None
+    input_schema: dict[str, Any] | None = None
+    # Plain identifiers (never session-bound) so the execute phase can flag the
+    # account for re-auth on an unauthorized failure without re-resolving it.
+    account_id: UUID | None = None
+    account_user_id: UUID | None = None
+    organization_id: UUID | None = None

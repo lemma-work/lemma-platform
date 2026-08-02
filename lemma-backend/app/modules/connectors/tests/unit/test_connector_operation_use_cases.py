@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 from dataclasses import dataclass
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -61,8 +62,10 @@ def _fake_scopes(monkeypatch, events):
 
 
 async def test_resolve_runs_in_phase1_and_execute_runs_after_release(events):
-    resolved_sentinel = object()
-    response_sentinel = object()
+    # A stand-in for the real ResolvedConnectorExecution: the saga reads
+    # connector_id off it when deciding what to do with a file result.
+    resolved_sentinel = SimpleNamespace(connector_id="outlook")
+    response_sentinel = SimpleNamespace(result={"ok": True})
 
     class _FakeService:
         def __init__(self, uow):
@@ -152,8 +155,12 @@ async def test_unauthorized_execution_flags_account_for_reauth(events):
             account_id=account_id,
         )
 
-    # A fresh phase-2 scope opens for the flagging write after the failed call.
-    assert events.count("p2_open") == 2
+    # Three phase-2 scopes: the original call, the one retry after refreshing
+    # the credential, and the flagging write once that retry is rejected too.
+    assert events.count("p2_open") == 3
+    # The refresh was attempted before giving up -- that is what makes it safe
+    # to stop refreshing before every call.
+    connector_service.get_account_credentials.assert_awaited()
     connector_service.mark_account_reauth_required.assert_awaited_once_with(
         account_id, user_id, org_id
     )

@@ -16,15 +16,15 @@ class InstalledAppSummary:
     """
     Attributes:
         connector_id (str):
+        kind (str):
         name (str):
-        provider (str):
         status (str):
         title (None | str | Unset):
     """
 
     connector_id: str
+    kind: str
     name: str
-    provider: str
     status: str
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -32,9 +32,9 @@ class InstalledAppSummary:
     def to_dict(self) -> dict[str, Any]:
         connector_id = self.connector_id
 
-        name = self.name
+        kind = self.kind
 
-        provider = self.provider
+        name = self.name
 
         status = self.status
 
@@ -49,8 +49,8 @@ class InstalledAppSummary:
         field_dict.update(
             {
                 "connector_id": connector_id,
+                "kind": kind,
                 "name": name,
-                "provider": provider,
                 "status": status,
             }
         )
@@ -64,9 +64,9 @@ class InstalledAppSummary:
         d = dict(src_dict)
         connector_id = d.pop("connector_id")
 
-        name = d.pop("name")
+        kind = d.pop("kind")
 
-        provider = d.pop("provider")
+        name = d.pop("name")
 
         status = d.pop("status")
 
@@ -81,8 +81,8 @@ class InstalledAppSummary:
 
         installed_app_summary = cls(
             connector_id=connector_id,
+            kind=kind,
             name=name,
-            provider=provider,
             status=status,
             title=title,
         )

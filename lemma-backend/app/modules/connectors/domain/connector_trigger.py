@@ -1,8 +1,14 @@
 from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
-from pydantic import Field, BaseModel, ConfigDict
+from typing import Any, Dict, List, Optional
 
-from app.modules.connectors.domain.connector import AuthProvider
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    ConnectorKind,
+    kind_to_provider,
+    provider_to_kind,
+)
 
 
 class ConnectorTriggerEntity(BaseModel):
@@ -10,9 +16,9 @@ class ConnectorTriggerEntity(BaseModel):
 
     id: str = Field(..., description="Unique slug/name of the trigger")
     connector_id: str = Field(..., description="ID of the connector")
-    provider: AuthProvider = Field(
-        default=AuthProvider.LEMMA,
-        description="Backend provider that owns this trigger",
+    kind: ConnectorKind = Field(
+        default=ConnectorKind.PACKAGE,
+        description="Install kind that emits this trigger",
     )
     # name field is redundant if id is name-based, but could be useful for display
     event_type: str = Field(..., description="Type of the event for platform")
@@ -29,6 +35,21 @@ class ConnectorTriggerEntity(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_provider(cls, data: Any) -> Any:
+        """Accept ``provider=`` from callers not yet migrated to kinds."""
+        if not isinstance(data, dict):
+            return data
+        if data.get("kind") is None and data.get("provider") is not None:
+            data = {**data, "kind": provider_to_kind(data["provider"])}
+        return data
+
+    @property
+    def provider(self) -> AuthProvider:
+        """Deprecated alias derived from :attr:`kind`."""
+        return kind_to_provider(self.kind)
 
     @property
     def config_field_names(self) -> List[str]:

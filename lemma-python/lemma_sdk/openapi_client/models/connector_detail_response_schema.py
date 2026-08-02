@@ -11,15 +11,10 @@ from dateutil.parser import isoparse
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
-    from ..models.composio_provider_capability_response_schema import (
-        ComposioProviderCapabilityResponseSchema,
-    )
     from ..models.connector_detail_response_schema_operations import (
         ConnectorDetailResponseSchemaOperations,
     )
-    from ..models.lemma_provider_capability_response_schema import (
-        LemmaProviderCapabilityResponseSchema,
-    )
+    from ..models.connector_kind_response_schema import ConnectorKindResponseSchema
 
 
 T = TypeVar("T", bound="ConnectorDetailResponseSchema")
@@ -36,9 +31,8 @@ class ConnectorDetailResponseSchema:
         id (str):
         is_active (bool):
         updated_at (datetime.datetime):
+        kinds (list[ConnectorKindResponseSchema] | Unset):
         operations (ConnectorDetailResponseSchemaOperations | Unset):
-        provider_capabilities (list[ComposioProviderCapabilityResponseSchema | LemmaProviderCapabilityResponseSchema] |
-            Unset):
         title (None | str | Unset):
     """
 
@@ -48,22 +42,12 @@ class ConnectorDetailResponseSchema:
     id: str
     is_active: bool
     updated_at: datetime.datetime
+    kinds: list[ConnectorKindResponseSchema] | Unset = UNSET
     operations: ConnectorDetailResponseSchemaOperations | Unset = UNSET
-    provider_capabilities: (
-        list[
-            ComposioProviderCapabilityResponseSchema
-            | LemmaProviderCapabilityResponseSchema
-        ]
-        | Unset
-    ) = UNSET
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.lemma_provider_capability_response_schema import (
-            LemmaProviderCapabilityResponseSchema,
-        )
-
         created_at = self.created_at.isoformat()
 
         description: None | str
@@ -78,28 +62,16 @@ class ConnectorDetailResponseSchema:
 
         updated_at = self.updated_at.isoformat()
 
+        kinds: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.kinds, Unset):
+            kinds = []
+            for kinds_item_data in self.kinds:
+                kinds_item = kinds_item_data.to_dict()
+                kinds.append(kinds_item)
+
         operations: dict[str, Any] | Unset = UNSET
         if not isinstance(self.operations, Unset):
             operations = self.operations.to_dict()
-
-        provider_capabilities: list[dict[str, Any]] | Unset = UNSET
-        if not isinstance(self.provider_capabilities, Unset):
-            provider_capabilities = []
-            for provider_capabilities_item_data in self.provider_capabilities:
-                provider_capabilities_item: dict[str, Any]
-                if isinstance(
-                    provider_capabilities_item_data,
-                    LemmaProviderCapabilityResponseSchema,
-                ):
-                    provider_capabilities_item = (
-                        provider_capabilities_item_data.to_dict()
-                    )
-                else:
-                    provider_capabilities_item = (
-                        provider_capabilities_item_data.to_dict()
-                    )
-
-                provider_capabilities.append(provider_capabilities_item)
 
         title: None | str | Unset
         if isinstance(self.title, Unset):
@@ -119,10 +91,10 @@ class ConnectorDetailResponseSchema:
                 "updated_at": updated_at,
             }
         )
+        if kinds is not UNSET:
+            field_dict["kinds"] = kinds
         if operations is not UNSET:
             field_dict["operations"] = operations
-        if provider_capabilities is not UNSET:
-            field_dict["provider_capabilities"] = provider_capabilities
         if title is not UNSET:
             field_dict["title"] = title
 
@@ -130,15 +102,10 @@ class ConnectorDetailResponseSchema:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.composio_provider_capability_response_schema import (
-            ComposioProviderCapabilityResponseSchema,
-        )
         from ..models.connector_detail_response_schema_operations import (
             ConnectorDetailResponseSchemaOperations,
         )
-        from ..models.lemma_provider_capability_response_schema import (
-            LemmaProviderCapabilityResponseSchema,
-        )
+        from ..models.connector_kind_response_schema import ConnectorKindResponseSchema
 
         d = dict(src_dict)
         created_at = isoparse(d.pop("created_at"))
@@ -163,54 +130,21 @@ class ConnectorDetailResponseSchema:
 
         updated_at = isoparse(d.pop("updated_at"))
 
+        _kinds = d.pop("kinds", UNSET)
+        kinds: list[ConnectorKindResponseSchema] | Unset = UNSET
+        if _kinds is not UNSET:
+            kinds = []
+            for kinds_item_data in _kinds:
+                kinds_item = ConnectorKindResponseSchema.from_dict(kinds_item_data)
+
+                kinds.append(kinds_item)
+
         _operations = d.pop("operations", UNSET)
         operations: ConnectorDetailResponseSchemaOperations | Unset
         if isinstance(_operations, Unset):
             operations = UNSET
         else:
             operations = ConnectorDetailResponseSchemaOperations.from_dict(_operations)
-
-        _provider_capabilities = d.pop("provider_capabilities", UNSET)
-        provider_capabilities: (
-            list[
-                ComposioProviderCapabilityResponseSchema
-                | LemmaProviderCapabilityResponseSchema
-            ]
-            | Unset
-        ) = UNSET
-        if _provider_capabilities is not UNSET:
-            provider_capabilities = []
-            for provider_capabilities_item_data in _provider_capabilities:
-
-                def _parse_provider_capabilities_item(
-                    data: object,
-                ) -> (
-                    ComposioProviderCapabilityResponseSchema
-                    | LemmaProviderCapabilityResponseSchema
-                ):
-                    try:
-                        if not isinstance(data, dict):
-                            raise TypeError()
-                        provider_capabilities_item_type_0 = (
-                            LemmaProviderCapabilityResponseSchema.from_dict(data)
-                        )
-
-                        return provider_capabilities_item_type_0
-                    except TypeError, ValueError, AttributeError, KeyError:
-                        pass
-                    if not isinstance(data, dict):
-                        raise TypeError()
-                    provider_capabilities_item_type_1 = (
-                        ComposioProviderCapabilityResponseSchema.from_dict(data)
-                    )
-
-                    return provider_capabilities_item_type_1
-
-                provider_capabilities_item = _parse_provider_capabilities_item(
-                    provider_capabilities_item_data
-                )
-
-                provider_capabilities.append(provider_capabilities_item)
 
         def _parse_title(data: object) -> None | str | Unset:
             if data is None:
@@ -228,8 +162,8 @@ class ConnectorDetailResponseSchema:
             id=id,
             is_active=is_active,
             updated_at=updated_at,
+            kinds=kinds,
             operations=operations,
-            provider_capabilities=provider_capabilities,
             title=title,
         )
 

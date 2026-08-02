@@ -16,9 +16,9 @@ export type AccountResponseSchema = {
     email: (string | null);
     id: string;
     is_default?: boolean;
+    kind?: (string | null);
     organization_id: string;
     preferences: (Record<string, any> | null);
-    provider?: (string | null);
     provider_account_id?: (string | null);
     status: string;
     updated_at: string;

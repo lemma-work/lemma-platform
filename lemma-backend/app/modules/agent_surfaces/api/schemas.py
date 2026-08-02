@@ -348,7 +348,7 @@ class AvailableSurface(BaseModel):
 
     platform: SurfacePlatform
     connector_id: str
-    provider: str
+    kind: str
     title: str | None = None
     description: str | None = None
     icon: str | None = None

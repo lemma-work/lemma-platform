@@ -46,7 +46,7 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAuthConfigPort,
     SurfaceInstallationRepositoryPort,
 )
-from app.modules.connectors.contracts import AuthConfigSource, AuthProvider
+from app.modules.connectors.contracts import AuthConfigSource, ConnectorKind
 from app.modules.agent_surfaces.domain.setup_guides import (
     SurfacePlatformSetupGuide,
     build_surface_setup_actions,
@@ -759,7 +759,7 @@ class AgentSurfaceService(TelegramMiniAppSyncMixin):
         auth_config = await self._auth_config_port.get_auth_config(
             account.auth_config_id
         )
-        if auth_config is None or auth_config.provider != AuthProvider.COMPOSIO.value:
+        if auth_config is None or auth_config.kind != ConnectorKind.COMPOSIO.value:
             raise AgentSurfaceValidationError(
                 "Email surfaces require a Composio-backed connected account"
             )

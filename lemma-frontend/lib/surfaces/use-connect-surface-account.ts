@@ -30,11 +30,11 @@ export function useConnectSurfaceAccount(organizationId: string | undefined) {
     const connect = useCallback(
         async ({
             connectorId,
-            provider,
+            kind,
             credentials,
         }: {
             connectorId: string;
-            provider?: string;
+            kind?: string;
             credentials: Record<string, unknown>;
         }): Promise<string> => {
             if (!organizationId) {
@@ -51,7 +51,7 @@ export function useConnectSurfaceAccount(organizationId: string | undefined) {
             if (!authConfigId) {
                 const created = await enableConnector.mutateAsync({
                     connectorId,
-                    provider,
+                    kind,
                     configSource: 'SYSTEM_DEFAULT',
                 });
                 authConfigId = created.id;

@@ -41,12 +41,7 @@ class ConnectorTriggerService:
             organization_id=organization_id,
             auth_config_name=auth_config_name,
         )
-        provider = (
-            auth_config.provider.value
-            if hasattr(auth_config.provider, "value")
-            else str(auth_config.provider)
-        )
-        return auth_config, auth_config.connector_id, provider
+        return auth_config, auth_config.connector_id, auth_config.kind.value
 
     async def list_triggers_for_auth_config(
         self,
@@ -57,14 +52,14 @@ class ConnectorTriggerService:
         search_query: Optional[str] = None,
         limit: int = 100,
     ) -> list[ConnectorTriggerEntity]:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
         )
-        triggers = await self.trigger_repository.list_by_connector_provider(
+        triggers = await self.trigger_repository.list_by_connector_kind(
             connector_id,
-            provider,
+            kind,
             search_query=search_query,
             limit=limit,
         )
@@ -78,14 +73,14 @@ class ConnectorTriggerService:
         auth_config_name: str,
         trigger_name: str,
     ) -> ConnectorTriggerEntity:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        _auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
         )
-        trigger = await self.trigger_repository.get_by_connector_provider_and_name(
+        trigger = await self.trigger_repository.get_by_connector_kind_and_name(
             connector_id,
-            provider,
+            kind,
             trigger_name,
         )
         if not trigger:

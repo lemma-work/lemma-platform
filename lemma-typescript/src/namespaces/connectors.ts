@@ -10,6 +10,7 @@ import type { AccountResponseSchema } from "../openapi_client/models/AccountResp
 import type { AuthConfigCreateSchema } from "../openapi_client/models/AuthConfigCreateSchema.js";
 import type { AuthConfigListResponseSchema } from "../openapi_client/models/AuthConfigListResponseSchema.js";
 import type { AuthConfigResponseSchema } from "../openapi_client/models/AuthConfigResponseSchema.js";
+import type { AuthConfigUpdateSchema } from "../openapi_client/models/AuthConfigUpdateSchema.js";
 import type { MessageResponseSchema } from "../openapi_client/models/MessageResponseSchema.js";
 import { ConnectorsService } from "../openapi_client/services/ConnectorsService.js";
 
@@ -17,6 +18,7 @@ export type {
   AuthConfigCreateSchema,
   AuthConfigListResponseSchema,
   AuthConfigResponseSchema,
+  AuthConfigUpdateSchema,
 };
 
 type ConnectRequestInput = string | ConnectRequestInitiateSchema;
@@ -24,9 +26,8 @@ type OperationScope = {
   organizationId: string;
   authConfigName: string;
 };
-type EnableAppOptions = Omit<AuthConfigCreateSchema, "connector_id" | "credential_config"> & {
-  credential_config?: Record<string, unknown> | null;
-  provider_config?: Record<string, unknown> | null;
+type EnableAppOptions = Omit<AuthConfigCreateSchema, "connector_id" | "config"> & {
+  config?: Record<string, unknown> | null;
 };
 
 function encodePath(value: string): string {
@@ -167,6 +168,23 @@ export class ConnectorsNamespace {
         organizationId,
         authConfigName,
       )),
+    // Updates an install in place. Rotating a server URL or an OAuth app this
+    // way keeps the accounts attached to it; delete-and-recreate cascades them
+    // away. Accounts whose credentials the change invalidates are marked for
+    // reconnect, never deleted, and the response says how many.
+    update: (organizationId: string, authConfigName: string, payload: AuthConfigUpdateSchema) =>
+      this.client.request(() => ConnectorsService.connectorAuthConfigUpdate(
+        organizationId,
+        authConfigName,
+        payload,
+      )),
+    // Re-discovers an MCP or OpenAPI install's operations. The recovery path:
+    // deleting and recreating the install cascades away its accounts.
+    refreshOperations: (organizationId: string, authConfigName: string) =>
+      this.client.request(() => ConnectorsService.connectorAuthConfigRefreshOperations(
+        organizationId,
+        authConfigName,
+      )),
   };
 
   async enableApp(
@@ -180,9 +198,9 @@ export class ConnectorsNamespace {
 
     return this.authConfigs.create(organizationId, {
       connector_id: connectorId,
-      provider: options.provider,
+      kind: options.kind,
       config_source: options.config_source ?? "SYSTEM_DEFAULT",
-      credential_config: options.credential_config ?? options.provider_config,
+      config: options.config,
       name: options.name,
     });
   }

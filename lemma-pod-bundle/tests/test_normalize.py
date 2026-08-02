@@ -154,17 +154,25 @@ def test_normalize_surface_payload_carries_connector_identity():
         "platform": "slack",
         "account_id": "acct-1",
         "connector_id": "slack",
-        "provider": "COMPOSIO",
+        "connector_kind": "composio",
     }
     payload = _normalize_surface_payload(surface)
     assert payload["connector_id"] == "slack"
-    assert payload["provider"] == "COMPOSIO"
+    assert payload["connector_kind"] == "composio"
+
+
+def test_normalize_surface_payload_reads_the_pre_rename_spelling():
+    """A surface exported before `provider` became `connector_kind`."""
+    payload = _normalize_surface_payload(
+        {"platform": "slack", "connector_id": "slack", "provider": "COMPOSIO"}
+    )
+    assert payload["connector_kind"] == "COMPOSIO"
 
 
 def test_normalize_surface_payload_omits_connector_identity_when_absent():
     payload = _normalize_surface_payload({"platform": "slack"})
     assert "connector_id" not in payload
-    assert "provider" not in payload
+    assert "connector_kind" not in payload
 
 
 def test_surface_platform_from_payload_falls_back_to_resource_name():

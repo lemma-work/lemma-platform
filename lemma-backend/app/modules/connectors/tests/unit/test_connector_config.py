@@ -23,6 +23,48 @@ EXPECTED = [
         45.0,
         5.0,
     ),
+    (
+        "connector_discovery_timeout_seconds",
+        "CONNECTOR_DISCOVERY_TIMEOUT_SECONDS",
+        25.0,
+        5.0,
+    ),
+    (
+        "connector_spec_max_bytes",
+        "CONNECTOR_SPEC_MAX_BYTES",
+        8 * 1024 * 1024,
+        1024,
+    ),
+    (
+        "connector_credential_refresh_skew_seconds",
+        "CONNECTOR_CREDENTIAL_REFRESH_SKEW_SECONDS",
+        120.0,
+        30.0,
+    ),
+    (
+        "connector_sql_engine_cache_size",
+        "CONNECTOR_SQL_ENGINE_CACHE_SIZE",
+        32,
+        4,
+    ),
+    (
+        "connector_composio_managed_files_enabled",
+        "CONNECTOR_COMPOSIO_MANAGED_FILES_ENABLED",
+        False,
+        True,
+    ),
+    (
+        "connector_inline_result_max_bytes",
+        "CONNECTOR_INLINE_RESULT_MAX_BYTES",
+        1024 * 1024,
+        2048,
+    ),
+    (
+        "connector_response_max_bytes",
+        "CONNECTOR_RESPONSE_MAX_BYTES",
+        64 * 1024 * 1024,
+        4096,
+    ),
     ("connector_encryption_key", "CONNECTOR_ENCRYPTION_KEY", None, "sentinel"),
 ]
 

@@ -207,9 +207,9 @@ async def _seed_connector_operation(
             id=connector_id,
             title=f"{connector_id} title",
             description="Mock app for function e2e",
-            provider_capabilities=[
+            kinds=[
                 {
-                    "provider": "LEMMA",
+                    "kind": "package",
                     "auth_scheme": "API_KEY",
                     "system_default_available": True,
                 }
@@ -223,7 +223,7 @@ async def _seed_connector_operation(
         organization_id=organization_id,
         connector_id=connector_id,
         name=connector_id,
-        provider="LEMMA",
+        kind="package",
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
     )
@@ -2065,3 +2065,178 @@ async def test_function_execute_requires_only_execute_not_read(
     )
     assert final_run["status"] == "COMPLETED", final_run
     assert final_run["output_data"]["doubled"] == 42
+
+
+def _mcp_function_code(function_name: str, auth_config_name: str) -> str:
+    return f"""#input_type_name: AddInput
+#output_type_name: AddResult
+#function_name: {function_name}
+
+from pydantic import BaseModel
+from lemma_sdk import FunctionContext, Pod
+
+class AddInput(BaseModel):
+    a: int
+    b: int
+
+class AddResult(BaseModel):
+    total: int
+
+async def {function_name}(ctx: FunctionContext, data: AddInput) -> AddResult:
+    pod = Pod.from_env()
+    response = pod.connectors.execute(
+        "{auth_config_name}",
+        "add",
+        {{"a": data.a, "b": data.b}},
+    )
+    result = response.result
+    text = str(result)
+    digits = "".join(c for c in text if c.isdigit())
+    return AddResult(total=int(digits))"""
+
+
+@pytest.mark.asyncio
+async def test_function_runs_a_tenant_connector_operation_for_real(
+    authenticated_client,
+    test_pod,
+    fixed_test_user,
+    db_session,
+    worker,
+    monkeypatch,
+):
+    """A function calls an MCP server through `pod.connectors.execute`.
+
+    The other connector function tests patch the gateway, so they prove the
+    delegated-workload authorization path but stop short of a real call. This
+    one runs a live MCP server, installs it as a tenant connector, and has a
+    function in the pod runtime execute one of its discovered tools -- so
+    nothing between the function and the server is a stand-in.
+    """
+    import asyncio
+    import contextlib
+    import socket
+    from uuid import UUID
+
+    from fastmcp import FastMCP
+
+    from app.core.config import settings
+    from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
+    from app.modules.connectors.api.dependencies import get_connector_service
+    from app.modules.connectors.domain.auth_config import AuthConfigSource
+    from app.modules.connectors.infrastructure.models.connector import Connector
+
+    monkeypatch.setattr(settings, "connector_allow_private_network_targets", True)
+
+    server = FastMCP("function-runtime")
+
+    @server.tool
+    def add(a: int, b: int) -> int:
+        """Add two integers."""
+        return a + b
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    task = asyncio.create_task(
+        server.run_async(transport="http", host="127.0.0.1", port=port, show_banner=False)
+    )
+    for _ in range(100):
+        if task.done():
+            raise RuntimeError(f"MCP server failed to start: {task.exception()}")
+        try:
+            _, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.close()
+            await writer.wait_closed()
+            break
+        except OSError:
+            await asyncio.sleep(0.05)
+    else:
+        raise RuntimeError("MCP server did not start in time")
+
+    try:
+        suffix = uuid4().hex[:8]
+        connector_id = f"mcp_fn_{suffix}"
+        function_name = f"mcp_fn_func_{suffix}"
+
+        db_session.add(
+            Connector(
+                id=connector_id,
+                title="Function MCP",
+                description="MCP server reached from a function.",
+                kinds=[
+                    {
+                        "kind": "mcp",
+                        "auth_scheme": "API_KEY",
+                        "discovery": "mcp",
+                        "auth_config_schema": {
+                            "type": "object",
+                            "required": ["server_url"],
+                            "properties": {"server_url": {"type": "string"}},
+                            "additionalProperties": False,
+                        },
+                    }
+                ],
+                is_active=True,
+            )
+        )
+        await db_session.commit()
+
+        org_id = UUID(str(test_pod["organization_id"]))
+        user_id = UUID(str(fixed_test_user["id"]))
+        service = get_connector_service(SqlAlchemyUnitOfWork(db_session))
+        install = await service.create_auth_config(
+            user_id=user_id,
+            organization_id=org_id,
+            connector_id=connector_id,
+            config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
+            config={"server_url": f"http://127.0.0.1:{port}/mcp"},
+            name=f"mcp-fn-{suffix}",
+        )
+        await service.create_account(
+            user_id=user_id,
+            organization_id=org_id,
+            auth_config_id=install.id,
+            credentials={"api_key": "unused-by-this-server"},
+        )
+
+        function = await _create_function(
+            authenticated_client,
+            test_pod["id"],
+            {
+                "name": function_name,
+                "description": "Runs an MCP tool through the connectors SDK",
+                "code": _mcp_function_code(function_name, install.name),
+            },
+        )
+        grants = [
+            {
+                "resource_type": "function",
+                "resource_name": function["name"],
+                "permission_ids": ["function.read"],
+            },
+            {
+                "resource_type": "connector",
+                "resource_name": connector_id,
+                "permission_ids": ["connector.use"],
+            },
+        ]
+        await _replace_function_resource_grants(
+            authenticated_client, test_pod["id"], function_name, grants
+        )
+        await _replace_role_resource_grants(
+            authenticated_client, test_pod["id"], "POD_ADMIN", grants
+        )
+
+        final_run = await _run_function(
+            authenticated_client,
+            test_pod["id"],
+            function_name,
+            {"a": 17, "b": 25},
+        )
+        # 17 + 25, computed by the MCP server, reached from inside the pod
+        # runtime through the connectors SDK.
+        assert final_run["output_data"]["total"] == 42
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task

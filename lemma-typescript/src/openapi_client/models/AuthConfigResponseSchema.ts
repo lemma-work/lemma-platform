@@ -3,15 +3,16 @@
 /* tslint:disable */
 /* eslint-disable */
 export type AuthConfigResponseSchema = {
+    config?: (Record<string, any> | null);
     config_source: string;
     connector_id: string;
     created_at: string;
-    credential_config?: (Record<string, any> | null);
     id: string;
+    is_default?: boolean;
+    kind: string;
     metadata?: (Record<string, any> | null);
     name: string;
     organization_id: string;
-    provider: string;
     status: string;
     updated_at: string;
 };

@@ -102,9 +102,18 @@ def _auth_provider_registry(uow: UoWDep) -> AuthProviderRegistry:
     )
 
 
+def _auth_config_operation_repository(uow: UoWDep):
+    from app.modules.connectors.infrastructure.repositories.auth_config_operation_repository import (
+        AuthConfigOperationRepository,
+    )
+
+    return AuthConfigOperationRepository(uow.session)
+
+
 def get_connector_service(uow: UoWDep) -> ConnectorService:
     connector_repository = _connector_repository(uow)
     return ConnectorService(
+        auth_config_operation_repository=_auth_config_operation_repository(uow),
         uow=uow,
         connector_repository=connector_repository,
         auth_config_repository=_auth_config_repository(uow),
@@ -138,6 +147,7 @@ def build_connector_operation_service(
 ) -> ConnectorOperationService:
     connector_repository = _connector_repository(uow)
     return ConnectorOperationService(
+        auth_config_operation_repository=_auth_config_operation_repository(uow),
         connector_repository=connector_repository,
         operation_repository=_operation_repository(uow),
         operation_gateway=RoutingOperationGateway(
@@ -169,7 +179,16 @@ def build_connector_operation_use_cases(
     # Factory mode: the use-case opens its own short UoWs per phase (via
     # build_connector_operation_service as the per-phase builder) so no pooled
     # connection is held across the external operation call.
-    return ConnectorOperationUseCases(uow_factory, build_connector_operation_service)
+    def _pod_file_gateway(uow):
+        # Imported here rather than at module scope: connectors must not depend
+        # on datastore, and this factory is composition wiring, not module code.
+        from app.composition.connector_pod_files import DatastorePodFileGateway
+
+        return DatastorePodFileGateway(uow)
+
+    return ConnectorOperationUseCases(
+        uow_factory, build_connector_operation_service, _pod_file_gateway
+    )
 
 
 def get_connector_operation_use_cases(

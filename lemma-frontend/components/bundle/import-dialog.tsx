@@ -817,7 +817,7 @@ export function ImportDialog({
                                         organizationId={organizationId}
                                         podId={targetPodId}
                                         connectorId="github"
-                                        provider="COMPOSIO"
+                                        connectorKind="composio"
                                         label="GitHub account"
                                         description="Optional for public repositories; required for private repositories and higher rate limits."
                                         value={githubAccountId}
@@ -976,7 +976,7 @@ export function ImportDialog({
                                                         organizationId={organizationId}
                                                         podId={targetPodId}
                                                         connectorId={variable.connector}
-                                                        provider={variable.provider}
+                                                        connectorKind={variable.connector_kind}
                                                         label={variable.name}
                                                         description={variable.description}
                                                         required={variable.required}

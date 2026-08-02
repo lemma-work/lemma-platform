@@ -574,21 +574,24 @@ class _FakeConnectorService:
     """Stand-in for the connectors service the applier consults to confirm a
     supplied account matches the connector the bundle declared."""
 
-    def __init__(self, account, provider: str = "LEMMA"):
+    def __init__(self, account, kind: str = "package"):
         from types import SimpleNamespace
 
         self.account_repository = SimpleNamespace(get=self._get_account)
         self.auth_config_repository = SimpleNamespace(get=self._get_auth_config)
         self._account = account
-        self._provider = provider
+        self._kind = kind
 
     async def _get_account(self, account_id):
         return self._account
 
+    async def get_account_kind(self, account):
+        return self._kind
+
     async def _get_auth_config(self, auth_config_id):
         from types import SimpleNamespace
 
-        return SimpleNamespace(provider=SimpleNamespace(value=self._provider))
+        return SimpleNamespace(kind=SimpleNamespace(value=self._kind))
 
 
 def _patch_surface_deps(monkeypatch, surface_service, connector_service) -> None:
@@ -620,7 +623,7 @@ async def test_surface_apply_accepts_matching_connector_account(tmp_path, monkey
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "provider": "LEMMA",
+            "connector_kind": "package",
             "is_enabled": True,
         },
     )
@@ -649,7 +652,7 @@ async def test_surface_apply_rejects_wrong_connector_account(tmp_path, monkeypat
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "provider": "LEMMA",
+            "connector_kind": "package",
             "is_enabled": True,
         },
     )
@@ -676,7 +679,7 @@ async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
             "platform": "TEAMS",
             "account_id": "${teams_account}",
             "connector_id": "microsoft_teams",
-            "provider": "LEMMA",
+            "connector_kind": "package",
             "is_enabled": True,
         },
     )
@@ -687,3 +690,73 @@ async def test_surface_apply_rejects_missing_account(tmp_path, monkeypatch):
     applier = _applier(root, replacements={"teams_account": str(uuid4())})
     with pytest.raises(PodBundleDomainError, match="does not exist"):
         await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+
+
+async def test_surface_apply_rejects_an_account_of_the_wrong_kind(tmp_path, monkeypatch):
+    """One connector id can be installed more than one way.
+
+    A bundle exported against a vendored Slack package does not work against a
+    Composio Slack account -- the operation names differ -- so matching the
+    connector id alone is not enough. The bundle already carried this
+    information; until now the applier accepted it and ignored it.
+    """
+    from types import SimpleNamespace
+
+    from app.modules.pod_bundle.domain.errors import PodBundleDomainError
+
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "slack" / "slack.json",
+        {
+            "name": "slack",
+            "platform": "SLACK",
+            "account_id": "${slack_account}",
+            "connector_id": "slack",
+            "connector_kind": "package",
+            "is_enabled": True,
+        },
+    )
+    connector_account = SimpleNamespace(connector_id="slack", auth_config_id=uuid4())
+    _patch_surface_deps(
+        monkeypatch,
+        FakeSurfaceService(),
+        _FakeConnectorService(connector_account, kind="composio"),
+    )
+
+    applier = _applier(root, replacements={"slack_account": str(account)})
+    with pytest.raises(PodBundleDomainError) as caught:
+        await applier.apply_step(_step(StepKind.SURFACE, "slack"))
+    assert caught.value.code == "POD_BUNDLE_ACCOUNT_KIND_MISMATCH"
+
+
+async def test_surface_apply_accepts_a_legacy_lemma_bundle(tmp_path, monkeypatch):
+    """`LEMMA` covered every non-Composio kind, so it matches any of them.
+
+    Holding an old bundle to `package` specifically would make an MCP install
+    exported before the rename unimportable.
+    """
+    from types import SimpleNamespace
+
+    account = uuid4()
+    root = tmp_path / "bundle"
+    _write(
+        root / "surfaces" / "teams" / "teams.json",
+        {
+            "name": "teams",
+            "platform": "TEAMS",
+            "account_id": "${teams_account}",
+            "connector_id": "microsoft_teams",
+            "provider": "LEMMA",
+            "is_enabled": True,
+        },
+    )
+    surface_fake = FakeSurfaceService()
+    connector_account = SimpleNamespace(connector_id="microsoft_teams", auth_config_id=uuid4())
+    _patch_surface_deps(
+        monkeypatch, surface_fake, _FakeConnectorService(connector_account, kind="mcp")
+    )
+
+    applier = _applier(root, replacements={"teams_account": str(account)})
+    await applier.apply_step(_step(StepKind.SURFACE, "teams"))
+    assert surface_fake.created is not None

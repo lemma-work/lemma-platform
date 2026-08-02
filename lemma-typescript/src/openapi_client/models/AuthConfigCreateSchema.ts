@@ -3,9 +3,12 @@
 /* tslint:disable */
 /* eslint-disable */
 export type AuthConfigCreateSchema = {
+    config?: (Record<string, any> | null);
     config_source?: string;
     connector_id: string;
-    credential_config?: (Record<string, any> | null);
+    /**
+     * Which of the connector's kinds to install. Optional when the connector offers only one.
+     */
+    kind?: (string | null);
     name?: (string | null);
-    provider?: string;
 };

@@ -6,11 +6,14 @@ from typing import Any, TypeVar
 from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 
-T = TypeVar("T", bound="ComposioProviderCapabilityResponseSchemaAuthConfigSchemaType0")
+T = TypeVar(
+    "T",
+    bound="ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations",
+)
 
 
 @_attrs_define
-class ComposioProviderCapabilityResponseSchemaAuthConfigSchemaType0:
+class ConnectorAuthConfigRefreshOperationsResponseConnectorAuthConfigRefreshOperations:
     """ """
 
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -25,10 +28,10 @@ class ComposioProviderCapabilityResponseSchemaAuthConfigSchemaType0:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        composio_provider_capability_response_schema_auth_config_schema_type_0 = cls()
+        connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations = cls()
 
-        composio_provider_capability_response_schema_auth_config_schema_type_0.additional_properties = d
-        return composio_provider_capability_response_schema_auth_config_schema_type_0
+        connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations.additional_properties = d
+        return connector_auth_config_refresh_operations_response_connector_auth_config_refresh_operations
 
     @property
     def additional_keys(self) -> list[str]:

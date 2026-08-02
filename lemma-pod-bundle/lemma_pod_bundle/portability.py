@@ -10,11 +10,11 @@ any still-unresolved ones drop their field so the import still succeeds.
 An ``account_id`` reference is tokenized generically for *every* resource type
 (not a hardcoded per-type list): whatever JSON file under
 ``<resource_type>/<name>/*.json`` holds an ``account_id`` key must also carry
-sibling ``connector_id``/``provider`` keys (stamped by the exporter from a real
+sibling ``connector_id``/``kind`` keys (stamped by the exporter from a real
 account lookup, never inferred from the resource's own name), so the recorded
-variable always tells the importer exactly which connector + auth provider it
+variable always tells the importer exactly which connector + kind it
 needs to reconnect. A resource that has an ``account_id`` but no
-``connector_id``/``provider`` sibling is an exporter bug and fails the export
+``connector_id``/``connector_kind`` sibling is an exporter bug and fails the export
 immediately rather than producing a variable the importer can't resolve.
 """
 
@@ -56,7 +56,7 @@ def _tokenize_ref_fields(node: object, field_keys: frozenset[str], on_value) -> 
     """Recursively replace string values stored under ``field_keys`` with the
     placeholder returned by ``on_value(raw, container)`` — ``container`` is the
     dict the field was found on, so a caller can read sibling metadata (e.g.
-    ``connector_id``/``provider`` next to ``account_id``). Skips values already
+    ``connector_id``/``connector_kind`` next to ``account_id``). Skips values already
     templated."""
     changed = False
     if isinstance(node, dict):
@@ -116,7 +116,7 @@ def _assert_no_literal_account_ids(bundle_root: Path) -> None:
 
 def require_account_variable_metadata(variables: dict[str, Any] | None) -> None:
     """Raise ``ValueError`` if any declared ``type="account"`` variable is
-    missing connector/provider metadata.
+    missing connector/connector_kind metadata.
 
     An up-to-date exporter always populates both (enforced by
     :func:`_extract_portable_variables`); this is the import-side backstop that
@@ -127,10 +127,11 @@ def require_account_variable_metadata(variables: dict[str, Any] | None) -> None:
     for name, meta in (variables or {}).items():
         if str((meta or {}).get("type") or "").lower() != "account":
             continue
-        if not (meta or {}).get("connector") or not (meta or {}).get("provider"):
+        has_kind = (meta or {}).get("connector_kind") or (meta or {}).get("provider")
+        if not (meta or {}).get("connector") or not has_kind:
             raise ValueError(
                 f"Variable '{name}' is a connector account reference but is "
-                "missing connector/provider info. Re-export this bundle to "
+                "missing connector/connector_kind info. Re-export this bundle to "
                 "include it."
             )
 
@@ -175,12 +176,15 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
         owner: str, raw: str, node: dict[str, Any], resource_type: str
     ) -> str:
         connector_id = node.get("connector_id")
-        provider = node.get("provider")
-        if not connector_id or not provider:
+        # `kind` is what an install actually is; `provider` is the two-value
+        # vocabulary it replaced, still read here so bundles exported before
+        # the rename keep importing.
+        kind = node.get("connector_kind") or node.get("provider")
+        if not connector_id or not kind:
             raise ValueError(
                 f"Bundle resource '{resource_type}/{owner}' has an account_id "
-                "but no connector_id/provider metadata — every exported "
-                "account_id must carry its connector_id and provider so the "
+                "but no connector_id/connector_kind metadata — every exported "
+                "account_id must carry its connector_id and connector_kind so the "
                 "bundle stays portable and the importer can reconnect the "
                 "right connector."
             )
@@ -191,7 +195,7 @@ def _extract_portable_variables(bundle_root: Path) -> dict[str, Any]:
             {
                 "description": f"Connector account for {resource_type} '{owner}'",
                 "connector": str(connector_id),
-                "provider": str(provider),
+                "connector_kind": str(kind),
             },
         )
 

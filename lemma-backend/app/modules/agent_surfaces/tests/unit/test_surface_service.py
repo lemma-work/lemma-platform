@@ -29,7 +29,6 @@ from app.modules.agent_surfaces.domain.ports import (
     SurfaceAccountInfo,
     SurfaceAuthConfigInfo,
 )
-from app.modules.connectors.domain.connector import AuthProvider
 from app.modules.schedule.domain.schedule import ScheduleEntity, ScheduleType
 
 pytestmark = pytest.mark.asyncio
@@ -520,7 +519,7 @@ async def test_create_gmail_surface_builds_inbox_filtered_trigger():
     )
     auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
         id=auth_config_id,
-        provider=AuthProvider.COMPOSIO.value,
+        kind="composio",
         connector_id="gmail",
     )
     service = AgentSurfaceService(
@@ -591,7 +590,7 @@ async def test_create_outlook_surface_keeps_trigger_config_minimal():
     )
     auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
         id=auth_config_id,
-        provider=AuthProvider.COMPOSIO.value,
+        kind="composio",
         connector_id="outlook",
     )
     service = AgentSurfaceService(
@@ -658,7 +657,7 @@ async def test_create_outlook_surface_allows_account_without_email():
     )
     auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
         id=auth_config_id,
-        provider=AuthProvider.COMPOSIO.value,
+        kind="composio",
         connector_id="outlook",
     )
     service = AgentSurfaceService(
@@ -718,7 +717,7 @@ async def test_create_gmail_surface_requires_account_email():
     )
     auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
         id=auth_config_id,
-        provider=AuthProvider.COMPOSIO.value,
+        kind="composio",
         connector_id="gmail",
     )
     service = AgentSurfaceService(
@@ -765,7 +764,7 @@ async def test_create_gmail_surface_requires_composio_account():
     )
     auth_config_port.get_auth_config.return_value = SurfaceAuthConfigInfo(
         id=auth_config_id,
-        provider=AuthProvider.LEMMA.value,
+        kind="package",
         connector_id="gmail",
     )
     repo.create.side_effect = lambda entity: entity

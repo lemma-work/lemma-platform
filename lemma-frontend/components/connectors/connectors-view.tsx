@@ -27,11 +27,11 @@ import {
     findAuthConfigForAccount,
     getAccountStatusMeta,
     getAppLabel,
-    getPrimaryCapability,
-    getProviderCapability,
+    getPrimaryKindSpec,
+    getKindSpec,
     hasSystemDefault,
     usesDirectCredentials,
-    type ProviderCapability,
+    type ConnectorKindSpec,
 } from './connector-utils';
 
 interface ConnectorsViewProps {
@@ -156,7 +156,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
     const openCredentialDialog = (
         app: Connector,
-        capability: ProviderCapability | null,
+        capability: ConnectorKindSpec | null,
         authConfigId: string | null,
         mode: 'connect' | 'reconnect' = 'connect',
         accountId?: string,
@@ -179,7 +179,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
 
     const handleConnect = async (app: Connector) => {
         const existing = enabledConfigByAppId.get(app.id) ?? null;
-        const capability = existing ? getProviderCapability(app, existing.provider) : getPrimaryCapability(app);
+        const capability = existing ? getKindSpec(app, existing.kind) : getPrimaryKindSpec(app);
         if (!capability) {
             toast.error('This connector is not available yet');
             return;
@@ -207,7 +207,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                 }
                 authConfig = await enableConnector.mutateAsync({
                     connectorId: app.id,
-                    provider: capability.provider,
+                    kind: capability.kind,
                     configSource: 'SYSTEM_DEFAULT',
                 });
             }
@@ -227,15 +227,15 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
         try {
             const authConfig = await enableConnector.mutateAsync({
                 connectorId: app.id,
-                provider: payload.provider,
+                kind: payload.kind,
                 configSource: payload.configSource,
-                credentialConfig: payload.credentialConfig,
+                config: payload.config,
                 name: payload.name,
             });
             toast.success('Connector enabled');
             setAdvancedApp(null);
 
-            const capability = getProviderCapability(app, authConfig.provider);
+            const capability = getKindSpec(app, authConfig.kind);
             if (usesDirectCredentials(capability)) {
                 openCredentialDialog(app, capability, authConfig.id, 'connect');
                 return;
@@ -256,7 +256,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
             toast.error('Unable to reconnect this account');
             return;
         }
-        const capability = getProviderCapability(app, authConfig.provider);
+        const capability = getKindSpec(app, authConfig.kind);
 
         // Credential accounts re-link via the form (delete + recreate). OAuth accounts
         // re-run the flow on the same account_id — the backend only blocks CONNECTED.
@@ -289,7 +289,7 @@ export function ConnectorsView({ organizationId, organizationName, embedded = fa
                 }
                 const authConfig = await enableConnector.mutateAsync({
                     connectorId: target.connector.id,
-                    provider: target.capability.provider,
+                    kind: target.capability.kind,
                     configSource: 'SYSTEM_DEFAULT',
                 });
                 authConfigId = authConfig.id;

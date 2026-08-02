@@ -12,13 +12,13 @@ import type { Connector } from '@/lib/types';
 import { SchemaFields } from './schema-fields';
 import {
     getAppLabel,
-    getAuthConfigSchema,
+    getConfigSchema,
     getManagedConfigCopy,
-    getPrimaryProvider,
-    getProviderCapability,
-    getProviderDescription,
-    getProviderLabel,
-    getSupportedProviders,
+    getPrimaryKind,
+    getKindSpec,
+    getKindDescription,
+    getKindLabel,
+    getSupportedKinds,
     hasSystemDefault,
     supportsCustomConfig,
     type AuthConfigMode,
@@ -27,9 +27,9 @@ import {
 import { StepLoader } from '@/components/brand/loader';
 
 export interface AdvancedEnablePayload {
-    provider: string;
+    kind: string;
     configSource: 'SYSTEM_DEFAULT' | 'ORG_CUSTOM';
-    credentialConfig?: Record<string, unknown> | null;
+    config?: Record<string, unknown> | null;
     name?: string | null;
 }
 
@@ -44,7 +44,7 @@ export function AdvancedConfigDialog({
     onOpenChange: (open: boolean) => void;
     onEnable: (payload: AdvancedEnablePayload) => void;
 }) {
-    const [provider, setProvider] = useState<string>('LEMMA');
+    const [kind, setKind] = useState<string>('package');
     const [mode, setMode] = useState<AuthConfigMode>('MANAGED');
     const [showCustomForm, setShowCustomForm] = useState(false);
     const [values, setValues] = useState<SchemaValues>({});
@@ -52,29 +52,29 @@ export function AdvancedConfigDialog({
 
     useEffect(() => {
         if (!app) return;
-        const initialProvider = getPrimaryProvider(app);
-        const capability = getProviderCapability(app, initialProvider);
-        setProvider(initialProvider);
+        const initialKind = getPrimaryKind(app);
+        const capability = getKindSpec(app, initialKind);
+        setKind(initialKind);
         setMode(hasSystemDefault(capability) ? 'MANAGED' : 'CUSTOM');
         setShowCustomForm(!hasSystemDefault(capability) && supportsCustomConfig(capability));
-        setValues(buildSchemaFormValues(getAuthConfigSchema(capability)));
+        setValues(buildSchemaFormValues(getConfigSchema(capability)));
         setCustomName('');
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [app?.id]);
 
-    const capability = getProviderCapability(app, provider);
-    const schema = getAuthConfigSchema(capability);
+    const capability = getKindSpec(app, kind);
+    const schema = getConfigSchema(capability);
     const systemDefault = hasSystemDefault(capability);
     const customSupported = supportsCustomConfig(capability);
-    const providers = getSupportedProviders(app);
+    const kinds = getSupportedKinds(app);
 
-    const handleProviderChange = (nextProvider: string) => {
-        const nextCapability = getProviderCapability(app, nextProvider);
+    const handleKindChange = (nextKind: string) => {
+        const nextCapability = getKindSpec(app, nextKind);
         const hasDefault = hasSystemDefault(nextCapability);
-        setProvider(nextProvider);
+        setKind(nextKind);
         setMode(hasDefault ? 'MANAGED' : 'CUSTOM');
         setShowCustomForm(!hasDefault && supportsCustomConfig(nextCapability));
-        setValues(buildSchemaFormValues(getAuthConfigSchema(nextCapability)));
+        setValues(buildSchemaFormValues(getConfigSchema(nextCapability)));
         setCustomName('');
     };
 
@@ -86,10 +86,10 @@ export function AdvancedConfigDialog({
         if (!app) return;
         if (mode === 'MANAGED') {
             if (!systemDefault) {
-                toast.error('This provider does not expose managed credentials for this app');
+                toast.error('This kind does not expose managed credentials for this app');
                 return;
             }
-            onEnable({ provider, configSource: 'SYSTEM_DEFAULT' });
+            onEnable({ kind, configSource: 'SYSTEM_DEFAULT' });
             return;
         }
 
@@ -99,9 +99,9 @@ export function AdvancedConfigDialog({
             return;
         }
         onEnable({
-            provider,
+            kind,
             configSource: 'ORG_CUSTOM',
-            credentialConfig: payload.data,
+            config: payload.data,
             name: customName.trim() || null,
         });
     };
@@ -113,31 +113,31 @@ export function AdvancedConfigDialog({
                     <DialogTitle>Advanced setup</DialogTitle>
                     <DialogDescription>
                         Choose how {getAppLabel(app)} should be authorized for this organization. Most apps work with the
-                        recommended default — you only need this to use a different provider or your own credentials.
+                        recommended default — you only need this to use a different kind or your own credentials.
                     </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4 py-2">
-                    {app && providers.length > 1 ? (
+                    {app && kinds.length > 1 ? (
                         <div className="space-y-2">
-                            <Label>Provider</Label>
+                            <Label>Kind</Label>
                             <RadioGroup
-                                value={provider}
-                                onValueChange={handleProviderChange}
+                                value={kind}
+                                onValueChange={handleKindChange}
                                 className="grid gap-2 sm:grid-cols-2"
                             >
-                                {providers.map((option) => (
+                                {kinds.map((option) => (
                                     <Label
                                         key={option}
                                         className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--surface-1)] p-3 text-[var(--text-primary)]"
-                                        data-selected={provider === option}
+                                        data-selected={kind === option}
                                     >
                                         <RadioGroupItem value={option} className="mt-0.5" />
                                         <span className="grid gap-1">
                                             <span className="text-sm font-medium text-[var(--text-primary)]">
-                                                {getProviderLabel(option, getProviderCapability(app, option))}
+                                                {getKindLabel(option, getKindSpec(app, option))}
                                             </span>
                                             <span className="text-xs leading-5 text-[var(--text-secondary)]">
-                                                {getProviderDescription(option, getProviderCapability(app, option))}
+                                                {getKindDescription(option, getKindSpec(app, option))}
                                             </span>
                                         </span>
                                     </Label>
@@ -151,7 +151,7 @@ export function AdvancedConfigDialog({
                             <span className="grid gap-1">
                                 <span className="text-sm font-medium text-[var(--text-primary)]">System default</span>
                                 <span className="text-xs leading-5 text-[var(--text-secondary)]">
-                                    {getManagedConfigCopy(provider, capability)}
+                                    {getManagedConfigCopy(kind, capability)}
                                 </span>
                             </span>
                             {customSupported ? (
@@ -175,7 +175,7 @@ export function AdvancedConfigDialog({
                         </div>
                     ) : (
                         <div className="state-surface-error rounded-lg px-3 py-3 text-sm text-[var(--text-secondary)]">
-                            This provider does not have an available auth configuration yet.
+                            This kind does not have an available auth configuration yet.
                         </div>
                     )}
 
@@ -207,7 +207,7 @@ export function AdvancedConfigDialog({
                                 schema={schema}
                                 values={values}
                                 onChange={setValues}
-                                emptyMessage="No custom configuration fields are available for this provider."
+                                emptyMessage="No custom configuration fields are available for this kind."
                             />
                         </div>
                     ) : null}
