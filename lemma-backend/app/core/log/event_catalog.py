@@ -260,6 +260,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'connectors.composio_auth_provider.set_token_expiration.observed': EventSpec('debug', frozenset()),
     'connectors.connect_request_controller.state.observed': EventSpec('debug', frozenset()),
     'connectors.connector_service.auth_config_operation_discovery.failed': EventSpec('warning', frozenset({'auth_config_id', 'error_type'})),
+    'connectors.connector_service.auth_config_updated': EventSpec('info', frozenset({'accounts_marked_for_reauth', 'auth_config_id', 'operations_discovered', 'organization_id'})),
     'connectors.connector_service.credential_refresh_using_unexpired_stored.diagnostic': EventSpec('debug', frozenset({'account_id', 'error_type'})),
     'connectors.connector_service.enrich_native_account_profile_s.diagnostic': EventSpec('debug', frozenset()),
     'connectors.connector_service.enrich_slack_user_profile_s.diagnostic': EventSpec('debug', frozenset({'user_id'})),

@@ -99,7 +99,7 @@ async def test_connect_request_and_accounts_lifecycle(
             "connector_id": connector_id,
             "kind": "package",
             "config_source": "ORG_CUSTOM",
-            "credential_config": {
+            "config": {
                 "oauth2_credentials": {
                     "client_id": "client-id",
                     "client_secret": "client-secret",
@@ -110,7 +110,7 @@ async def test_connect_request_and_accounts_lifecycle(
     assert auth_config_response.status_code == 200, auth_config_response.text
     auth_config = auth_config_response.json()
     assert (
-        auth_config["credential_config"]["oauth2_credentials"]["client_secret"]
+        auth_config["config"]["oauth2_credentials"]["client_secret"]
         == "********"
     )
 
@@ -258,10 +258,10 @@ async def test_lemma_system_default_requires_configured_env_credentials(
 
     app_response = await authenticated_client.get(f"/connectors/{connector_id}")
     assert app_response.status_code == 200, app_response.text
-    lemma_capability = app_response.json()["provider_capabilities"][0]
+    lemma_capability = app_response.json()["kinds"][0]
     assert lemma_capability["system_default_available"] is False
     assert lemma_capability["supports_org_custom_oauth"] is True
-    assert lemma_capability["auth_config_schema"] == {
+    assert lemma_capability["config_schema"] == {
         "type": "object",
         "required": ["client_id", "client_secret"],
         "properties": {
@@ -295,7 +295,7 @@ async def test_lemma_system_default_requires_configured_env_credentials(
 
     app_response = await authenticated_client.get(f"/connectors/{connector_id}")
     assert app_response.status_code == 200, app_response.text
-    lemma_capability = app_response.json()["provider_capabilities"][0]
+    lemma_capability = app_response.json()["kinds"][0]
     assert lemma_capability["system_default_available"] is True
     assert lemma_capability["supports_org_custom_oauth"] is True
     assert "supports_system_default" not in lemma_capability
@@ -311,7 +311,7 @@ async def test_lemma_system_default_requires_configured_env_credentials(
         },
     )
     assert response.status_code == 200, response.text
-    assert response.json()["credential_config"] is None
+    assert response.json()["config"] is None
 
 
 @pytest.mark.asyncio
@@ -512,7 +512,7 @@ async def test_gmail_org_custom_connect_request_builds_google_authorization_url(
             "connector_id": "gmail",
             "kind": "package",
             "config_source": "ORG_CUSTOM",
-            "credential_config": {
+            "config": {
                 "oauth2_credentials": {
                     "client_id": "org-google-client-id",
                     "client_secret": "org-google-client-secret",
@@ -614,7 +614,7 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
     monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
     response = await authenticated_client.get("/connectors/gmail")
     assert response.status_code == 200, response.text
-    capability = response.json()["provider_capabilities"][0]
+    capability = response.json()["kinds"][0]
     assert capability["supports_org_custom_oauth"] is True
     assert capability["system_default_available"] is False
     # Registry endpoints/scopes are surfaced despite nothing stored on the row.
@@ -627,7 +627,7 @@ async def test_gmail_connector_api_reflects_runtime_oauth_resolution(
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "system-google-client-secret")
     response = await authenticated_client.get("/connectors/gmail")
     assert response.status_code == 200, response.text
-    capability = response.json()["provider_capabilities"][0]
+    capability = response.json()["kinds"][0]
     assert capability["system_default_available"] is True
 
 
@@ -836,7 +836,7 @@ async def test_oauth_new_account_addition_and_reauth_flows(
             "connector_id": connector_id,
             "kind": "package",
             "config_source": "ORG_CUSTOM",
-            "credential_config": {
+            "config": {
                 "oauth2_credentials": {
                     "client_id": "client-id",
                     "client_secret": "client-secret",

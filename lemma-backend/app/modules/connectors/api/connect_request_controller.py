@@ -162,7 +162,7 @@ async def oauth_callback(
         )
 
     account_response = AccountResponseSchema.model_validate(account)
-    account_response.provider = await connector_service.get_account_provider(account)
+    account_response.kind = await connector_service.get_account_kind(account)
     if wants_json:
         return JSONResponse(content=account_response.model_dump(mode="json"))
 

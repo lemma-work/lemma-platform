@@ -12,6 +12,8 @@ from app.modules.connectors.api.schemas import (
     AuthConfigCreateSchema,
     AuthConfigListResponseSchema,
     AuthConfigResponseSchema,
+    AuthConfigUpdateResponseSchema,
+    AuthConfigUpdateSchema,
     ConnectorStatusResponse,
 )
 
@@ -43,7 +45,7 @@ async def get_connector_status(
     return ConnectorStatusResponse.model_validate(data)
 
 
-def _redact_credential_config(value: dict | None) -> dict | None:
+def _redact_config(value: dict | None) -> dict | None:
     if value is None:
         return None
     redacted = dict(value)
@@ -60,10 +62,7 @@ def _redact_credential_config(value: dict | None) -> dict | None:
 
 def _response_from_entity(entity) -> AuthConfigResponseSchema:
     data = entity.model_dump(mode="json")
-    # `provider` is a computed view on `kind` now, so it is absent from the dump
-    # and has to be put back explicitly. The wire shape is unchanged.
-    data["provider"] = entity.provider.value
-    data["credential_config"] = _redact_credential_config(data.pop("config", None))
+    data["config"] = _redact_config(data.get("config"))
     return AuthConfigResponseSchema.model_validate(data)
 
 
@@ -82,9 +81,9 @@ async def create_auth_config(
         user_id=user.id,
         organization_id=organization_id,
         connector_id=data.connector_id,
-        provider=data.provider,
+        kind=data.kind,
         config_source=data.config_source,
-        provider_config=data.credential_config,
+        config=data.config,
         name=data.name,
     )
     return _response_from_entity(auth_config)
@@ -136,6 +135,46 @@ async def get_auth_config(
         auth_config_name=auth_config_name,
     )
     return _response_from_entity(auth_config)
+
+
+@router.patch(
+    "/{auth_config_name}",
+    response_model=AuthConfigUpdateResponseSchema,
+    operation_id="connector.auth_config.update",
+    summary="Update Auth Config",
+    description=(
+        "Update an install in place. Rotating an MCP server URL or an OAuth "
+        "app no longer requires deleting the install, which cascades away "
+        "every account connected to it. Accounts are never deleted here: if "
+        "the change invalidates their credentials they are marked "
+        "REAUTH_REQUIRED, and reconnecting updates them in place. `kind`, "
+        "`connector_id` and `config_source` are immutable -- changing any of "
+        "them reinterprets every stored operation and credential, so that is a "
+        "new install rather than an update."
+    ),
+    dependencies=[reject_delegated_workload("update an auth config")],
+)
+async def update_auth_config(
+    user: CurrentUser,
+    organization_id: UUID,
+    auth_config_name: str,
+    data: AuthConfigUpdateSchema,
+    connector_service: ConnectorServiceDep,
+) -> AuthConfigUpdateResponseSchema:
+    auth_config, discovered, marked = await connector_service.update_auth_config(
+        user_id=user.id,
+        organization_id=organization_id,
+        auth_config_name=auth_config_name,
+        name=data.name,
+        config=data.config,
+        status=data.status,
+        is_default=data.is_default,
+    )
+    return AuthConfigUpdateResponseSchema(
+        auth_config=_response_from_entity(auth_config),
+        operations_discovered=discovered,
+        accounts_marked_for_reauth=marked,
+    )
 
 
 @router.post(

@@ -23,11 +23,11 @@ SKILLS_DIR = (Path(__file__).parent.parent / "skills").resolve()
 # segment like `..` (or a percent-encoded separator) from walking out of the
 # skills directory and reading an arbitrary file off the server.
 _CONNECTOR_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_SKILL_PROVIDERS = frozenset({"lemma", "composio", "package", "http", "sql", "mcp"})
+_SKILL_KINDS = frozenset({"composio", "package", "http", "sql", "mcp"})
 
 
-def _resolve_skill_file(connector_id: str, provider: str | None) -> Path | None:
-    """Resolve a skill doc: provider-specific, then generic, else None.
+def _resolve_skill_file(connector_id: str, kind: str | None) -> Path | None:
+    """Resolve a skill doc: kind-specific, then generic, else None.
 
     The request never contributes to a path. Both components are validated
     against a fixed shape, and the result is then used to *select* from the
@@ -41,8 +41,8 @@ def _resolve_skill_file(connector_id: str, provider: str | None) -> Path | None:
         return None
 
     candidates = []
-    if provider and provider.lower() in _SKILL_PROVIDERS:
-        candidates.append(f"{connector_id}.{provider.lower()}.md")
+    if kind and kind.lower() in _SKILL_KINDS:
+        candidates.append(f"{connector_id}.{kind.lower()}.md")
     candidates.append(f"{connector_id}.md")
 
     try:
@@ -89,8 +89,8 @@ async def list_connectors(
     summary="Get Connector Skill",
     description=(
         "Get the skill guide markdown for a connector. "
-        "Pass `provider=lemma` or `provider=composio` to get provider-specific instructions "
-        "when the app supports both. Falls back to the generic doc if no provider-specific file exists. "
+        "Pass `kind=package` or `kind=composio` to get kind-specific instructions "
+        "when the app supports both. Falls back to the generic doc if no kind-specific file exists. "
         "Returns 404 if no skill doc has been generated yet."
     ),
 )
@@ -98,9 +98,9 @@ async def get_connector_skill(
     user: CurrentUser,
     connector_id: str,
     connector_service: ConnectorServiceDep,
-    provider: str | None = Query(default=None, description="Provider override: lemma or composio"),
+    kind: str | None = Query(default=None, description="Kind override, e.g. package or composio"),
 ) -> ConnectorSkillResponse:
-    skill_file = _resolve_skill_file(connector_id, provider)
+    skill_file = _resolve_skill_file(connector_id, kind)
     if skill_file is None:
         raise HTTPException(status_code=404, detail=f"No skill doc found for '{connector_id}'")
     markdown = skill_file.read_text(encoding="utf-8")
@@ -109,12 +109,12 @@ async def get_connector_skill(
         title = connector.title
     except Exception:
         title = None
-    effective_provider = provider or ("lemma" if f"{connector_id}.lemma.md" == skill_file.name else None)
+    effective_kind = kind or ("package" if f"{connector_id}.package.md" == skill_file.name else None)
     return ConnectorSkillResponse(
         connector_id=connector_id,
         title=title,
         markdown=markdown,
-        provider=effective_provider,
+        kind=effective_kind,
     )
 
 

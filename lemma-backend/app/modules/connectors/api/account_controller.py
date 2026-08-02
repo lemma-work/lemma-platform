@@ -23,7 +23,7 @@ router = APIRouter(
 
 async def _account_response(connector_service, account) -> AccountResponseSchema:
     response = AccountResponseSchema.model_validate(account)
-    response.provider = await connector_service.get_account_provider(account)
+    response.kind = await connector_service.get_account_kind(account)
     return response
 
 

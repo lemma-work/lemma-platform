@@ -98,18 +98,35 @@ class GuardPolicy:
         )
 
 
-def _is_disallowed_address(ip: ipaddress._BaseAddress) -> str | None:
-    """Return the reason this address is off-limits, or None if it is fine."""
-    if ip.is_loopback:
-        return "loopback_address"
+def _is_disallowed_address(
+    ip: ipaddress._BaseAddress, *, allow_private: bool = False
+) -> str | None:
+    """Return the reason this address is off-limits, or None if it is fine.
+
+    ``allow_private`` is the self-hosting escape hatch, and it is deliberately
+    narrower than "anything not public". A deployment that runs its own MCP
+    server or database on an internal network needs RFC1918, ULA and loopback.
+    It never needs 169.254.169.254, which is not a connector target at all --
+    it is the cloud metadata service, and the single most valuable thing an
+    SSRF can reach. So link-local stays denied even with the hatch open, and
+    turning it on to reach your own subnet does not also hand out credentials
+    for the instance.
+    """
     if ip.is_link_local:
-        # 169.254.0.0/16 and fe80::/10 -- the cloud metadata service lives here.
+        # 169.254.0.0/16 and fe80::/10 -- checked first because link-local also
+        # reports as private, and this rejection is not negotiable.
         return "link_local_address"
-    if ip.is_private:
-        return "private_address"
     if ip.is_multicast:
         return "multicast_address"
-    if ip.is_reserved or ip.is_unspecified:
+    if ip.is_unspecified:
+        return "reserved_address"
+    if allow_private:
+        return None
+    if ip.is_loopback:
+        return "loopback_address"
+    if ip.is_private:
+        return "private_address"
+    if ip.is_reserved:
         return "reserved_address"
     return None
 
@@ -179,12 +196,9 @@ async def assert_safe_url(url: str, *, policy: GuardPolicy | None = None) -> str
             reason="port_not_allowed",
         )
 
-    if policy.allow_private:
-        return url
-
     resolved = await _resolve_all(host, port, allow_unresolvable=policy.allow_unresolvable)
     for address in resolved:
-        reason = _is_disallowed_address(address)
+        reason = _is_disallowed_address(address, allow_private=policy.allow_private)
         if reason:
             # The address itself is not echoed back: it is infrastructure detail
             # about wherever this happens to be deployed.
@@ -250,11 +264,9 @@ async def assert_safe_host(host: str, port: int, *, policy: GuardPolicy | None =
     policy = policy or GuardPolicy.from_settings()
     if not host:
         raise UnsafeUrlError("No host supplied.", reason="missing_host")
-    if policy.allow_private:
-        return host
     resolved = await _resolve_all(host, port, allow_unresolvable=policy.allow_unresolvable)
     for address in resolved:
-        reason = _is_disallowed_address(address)
+        reason = _is_disallowed_address(address, allow_private=policy.allow_private)
         if reason:
             raise UnsafeUrlError(
                 f"Host '{host}' resolves to an address that is not routable on "

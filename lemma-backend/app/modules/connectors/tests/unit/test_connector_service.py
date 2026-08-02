@@ -13,6 +13,7 @@ from app.modules.connectors.domain.account import (
     OAuthCredentials,
 )
 from app.modules.connectors.domain.connector import (
+    ConnectorKind,
     AuthScheme,
     ConnectorEntity,
     AuthProvider,
@@ -205,12 +206,12 @@ async def test_create_composio_auth_config_allows_system_default_without_env_key
         user_id=user_id,
         organization_id=ORG_ID,
         connector_id="dropbox",
-        provider=AuthProvider.COMPOSIO.value,
+        kind=ConnectorKind.COMPOSIO.value,
         config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
     )
 
     assert result.connector_id == "dropbox"
-    assert result.provider == AuthProvider.COMPOSIO
+    assert result.kind is ConnectorKind.COMPOSIO
     assert result.config_source == AuthConfigSource.SYSTEM_DEFAULT
     auth_config_repo.create.assert_awaited_once()
     uow.commit.assert_awaited_once()

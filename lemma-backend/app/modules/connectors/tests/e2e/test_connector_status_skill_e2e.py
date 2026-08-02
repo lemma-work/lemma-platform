@@ -147,7 +147,7 @@ async def test_connector_status_shows_installed_apps(
     match = next(i for i in data["installed"] if i["connector_id"] == app_id)
     assert match["name"] == auth_config.name
     assert match["title"] == "Status Test App"
-    assert match["provider"] == "LEMMA"
+    assert match["kind"] == "package"
     assert match["status"] is not None
 
 
@@ -229,7 +229,7 @@ async def test_connector_status_dual_provider_app(
 
     match = next((i for i in data["installed"] if i["connector_id"] == app_id), None)
     assert match is not None
-    assert match["provider"] == "LEMMA"
+    assert match["kind"] == "package"
 
 
 @pytest.mark.asyncio
@@ -338,7 +338,7 @@ async def test_skill_returns_generic_file(
 
 
 @pytest.mark.asyncio
-async def test_skill_returns_provider_specific_file(
+async def test_skill_returns_kind_specific_file(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     tmp_path: Path,
@@ -351,7 +351,7 @@ async def test_skill_returns_provider_specific_file(
 
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
-    (skills_dir / f"{app_id}.lemma.md").write_text("# LEMMA Skill\nLemma instructions.", encoding="utf-8")
+    (skills_dir / f"{app_id}.package.md").write_text("# Package Skill\nPackage instructions.", encoding="utf-8")
     (skills_dir / f"{app_id}.composio.md").write_text("# Composio Skill\nComposio instructions.", encoding="utf-8")
     (skills_dir / f"{app_id}.md").write_text("# Generic Skill\nGeneric instructions.", encoding="utf-8")
 
@@ -362,22 +362,22 @@ async def test_skill_returns_provider_specific_file(
         # Request LEMMA-specific skill
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"provider": "lemma"},
+            params={"kind": "package"},
         )
         assert response.status_code == 200, response.text
         data = response.json()
-        assert "LEMMA" in data["markdown"]
-        assert data["provider"] == "lemma"
+        assert "Package" in data["markdown"]
+        assert data["kind"] == "package"
 
         # Request COMPOSIO-specific skill
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"provider": "composio"},
+            params={"kind": "composio"},
         )
         assert response.status_code == 200, response.text
         data = response.json()
         assert "Composio" in data["markdown"]
-        assert data["provider"] == "composio"
+        assert data["kind"] == "composio"
 
         # No provider → generic
         response = await authenticated_client.get(
@@ -411,7 +411,7 @@ async def test_skill_falls_back_to_generic_when_provider_specific_missing(
     ):
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"provider": "lemma"},
+            params={"kind": "package"},
         )
     assert response.status_code == 200, response.text
     data = response.json()
@@ -438,17 +438,17 @@ async def test_skill_unknown_app_returns_404(
 # Skill file resolution helper unit tests
 # ---------------------------------------------------------------------------
 
-def test_resolve_skill_file_provider_specific(tmp_path: Path):
+def test_resolve_skill_file_kind_specific(tmp_path: Path):
     """_resolve_skill_file returns provider-specific file when it exists."""
     from app.modules.connectors.api.connector_controller import _resolve_skill_file
 
-    (tmp_path / "gmail.lemma.md").write_text("lemma", encoding="utf-8")
+    (tmp_path / "gmail.package.md").write_text("package", encoding="utf-8")
     (tmp_path / "gmail.md").write_text("generic", encoding="utf-8")
 
     with patch("app.modules.connectors.api.connector_controller.SKILLS_DIR", tmp_path):
-        result = _resolve_skill_file("gmail", "lemma")
+        result = _resolve_skill_file("gmail", "package")
     assert result is not None
-    assert result.read_text() == "lemma"
+    assert result.read_text() == "package"
 
 
 def test_resolve_skill_file_falls_back_to_generic(tmp_path: Path):
@@ -468,7 +468,7 @@ def test_resolve_skill_file_returns_none_when_nothing_exists(tmp_path: Path):
     from app.modules.connectors.api.connector_controller import _resolve_skill_file
 
     with patch("app.modules.connectors.api.connector_controller.SKILLS_DIR", tmp_path):
-        result = _resolve_skill_file("gmail", "lemma")
+        result = _resolve_skill_file("gmail", "package")
     assert result is None
 
 
@@ -537,7 +537,7 @@ def test_build_skill_prompt_includes_operations():
 
 def _app_kinds_pure(app) -> list[str]:
     """Pure re-implementation of the catalog's kind listing, for testing."""
-    caps = getattr(app, "kinds", None) or getattr(app, "provider_capabilities", None) or []
+    caps = getattr(app, "kinds", None) or []
     kinds: list[str] = []
     for cap in caps:
         if isinstance(cap, dict):

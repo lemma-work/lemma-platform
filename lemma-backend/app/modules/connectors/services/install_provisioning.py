@@ -21,6 +21,7 @@ from app.modules.connectors.domain.auth_config import AuthConfigEntity, AuthConf
 from app.modules.connectors.domain.connector import ConnectorEntity, ConnectorKind
 from app.modules.connectors.domain.errors import (
     ConnectorDomainError,
+    ConnectorValidationError,
     UnsupportedAuthProviderError,
 )
 
@@ -33,6 +34,40 @@ def _registry():
     # Neither gateway is reachable from install-time work: validation and
     # discovery never execute an operation.
     return build_kind_registry(composio_gateway=None, package_gateway=None)
+
+
+def resolve_install_kind(
+    connector: ConnectorEntity, kind: str | None
+) -> ConnectorKind:
+    """Pick which of a connector's kinds this install uses.
+
+    Most connectors offer exactly one, so asking the caller to name it would be
+    ceremony; the ones that offer two (a vendored package *and* a Composio
+    toolkit for the same app) genuinely need the answer, and guessing there
+    would silently install the wrong one.
+    """
+    supported = connector.supported_kinds()
+    if kind is None:
+        if len(supported) == 1:
+            return supported[0]
+        raise ConnectorValidationError(
+            f"Connector '{connector.id}' can be installed as more than one kind; "
+            "specify which.",
+            details={
+                "reason": "ambiguous_kind",
+                "supported_kinds": [item.value for item in supported],
+            },
+        )
+    try:
+        return connector.spec_for(kind).kind
+    except ValueError as exc:
+        raise ConnectorValidationError(
+            f"Connector '{connector.id}' cannot be installed as '{kind}'.",
+            details={
+                "reason": "unsupported_kind",
+                "supported_kinds": [item.value for item in supported],
+            },
+        ) from exc
 
 
 async def org_has_install(
