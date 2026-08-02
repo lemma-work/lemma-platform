@@ -97,6 +97,13 @@ class ScheduleStartService:
         llm_output: dict | None = None,
         source_occurred_at: datetime | None = None,
     ) -> None:
+        # 0. A wake for a snoozed agent conversation. Same shape as the workflow
+        # wake below — the timer carries the wait_ref that resolves to exactly one
+        # ACTIVE wait — but it resumes a paused conversation rather than a run.
+        if payload.get("conversation_id"):
+            await self._wake_snoozed_conversation(external_ref=payload.get("wait_ref"))
+            return
+
         # 1. A wake for a specific run.
         if payload.get("workflow_run_id"):
             await self._handle_timer_fire(
@@ -261,6 +268,29 @@ class ScheduleStartService:
             payload=payload or {},
             metadata=metadata or {},
             llm_output=llm_output or {},
+        )
+
+    async def _wake_snoozed_conversation(self, *, external_ref: str | None) -> None:
+        """Resume the agent whose snooze timer just fired."""
+        if not external_ref:
+            logger.debug("workflow.schedule_start_service.snooze_wake_no_ref.observed")
+            return
+        from app.modules.agent.domain.wait import AgentWaitWakeReason
+        from app.modules.agent.infrastructure.repositories import (
+            AgentConversationWaitRepository,
+        )
+        from app.modules.agent.services.snooze_wake_service import SnoozeWakeService
+
+        wait = await AgentConversationWaitRepository(
+            self._uow
+        ).find_active_by_external_ref(external_ref)
+        if wait is None:
+            # Already woken by the reconciliation sweep, cancelled, or long gone.
+            # Duplicate and stale timer fires are no-ops by construction.
+            logger.debug("workflow.schedule_start_service.snooze_wake_stale.observed")
+            return
+        await SnoozeWakeService(self._uow).wake(
+            wait=wait, reason=AgentWaitWakeReason.TIMER
         )
 
     async def _handle_timer_fire(
