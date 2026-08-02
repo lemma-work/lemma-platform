@@ -30,6 +30,9 @@ from app.modules.connectors.services.account_resolution_service import (
     AccountResolutionService,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
+from app.modules.connectors.services.credential_freshness import (
+    resolve_execution_credentials,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,22 +259,13 @@ class ConnectorOperationService:
     async def _resolve_execution_credentials(
         self, account: Any, user_id: UUID
     ) -> dict[str, Any]:
-        stored_credentials = self._serialize_credentials(account.credentials)
-        if not self.connector_service or not self._is_oauth_account(account):
-            return stored_credentials
-
-        refreshed = await self.connector_service.get_account_credentials(
-            account.id,
+        return await resolve_execution_credentials(
+            account,
             user_id,
-            account.organization_id,
-            force_refresh=True,
+            connector_service=self.connector_service,
+            serialize=self._serialize_credentials,
+            is_oauth=self._is_oauth_account,
         )
-        refreshed_credentials = self._serialize_credentials(refreshed)
-        if "user_data" not in refreshed_credentials and stored_credentials.get(
-            "user_data"
-        ):
-            refreshed_credentials["user_data"] = stored_credentials["user_data"]
-        return refreshed_credentials
 
     def _compact_description(
         self, description: str | None, *, max_length: int = 120
@@ -495,6 +489,9 @@ class ConnectorOperationService:
             api_url=api_url,
             account_id=account_id,
             auth_config_id=auth_config.id,
+            # Already loaded by name above; re-reading it by id was a wasted
+            # round trip on every execution.
+            auth_config=auth_config,
         )
 
     async def _resolve_execution(
@@ -509,15 +506,16 @@ class ConnectorOperationService:
         api_url: str | None = None,
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
+        auth_config: Any | None = None,
     ) -> ResolvedConnectorExecution:
-        await self._get_connector(connector_id)
         kind: str | None = None
         if auth_config_id is not None:
             if self.connector_service is None:
                 raise ConnectorNotFoundError(connector_id)
-            auth_config = await self.connector_service.auth_config_repository.get(
-                auth_config_id
-            )
+            if auth_config is None:
+                auth_config = await self.connector_service.auth_config_repository.get(
+                    auth_config_id
+                )
             if auth_config is None:
                 raise ConnectorNotFoundError(str(auth_config_id))
             kind = auth_config.kind.value

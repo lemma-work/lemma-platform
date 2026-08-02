@@ -767,7 +767,11 @@ async def test_google_calendar_operation_uses_composio_account(
     assert mock_execute.call_args.kwargs["third_party_credentials"][
         "connection_id"
     ] == ("ca_nsKQ2C1X4Q4A")
-    mock_get_credentials.assert_awaited_once()
+    # The account reports no expiry, so nothing is refreshed: the stored
+    # connection id goes straight to the gateway. This used to refresh
+    # unconditionally, paying a full Composio round trip plus three reads before
+    # every single execution.
+    mock_get_credentials.assert_not_awaited()
 
 
 @pytest.mark.asyncio

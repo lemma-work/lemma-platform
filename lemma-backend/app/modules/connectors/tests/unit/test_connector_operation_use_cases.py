@@ -155,8 +155,12 @@ async def test_unauthorized_execution_flags_account_for_reauth(events):
             account_id=account_id,
         )
 
-    # A fresh phase-2 scope opens for the flagging write after the failed call.
-    assert events.count("p2_open") == 2
+    # Three phase-2 scopes: the original call, the one retry after refreshing
+    # the credential, and the flagging write once that retry is rejected too.
+    assert events.count("p2_open") == 3
+    # The refresh was attempted before giving up -- that is what makes it safe
+    # to stop refreshing before every call.
+    connector_service.get_account_credentials.assert_awaited()
     connector_service.mark_account_reauth_required.assert_awaited_once_with(
         account_id, user_id, org_id
     )
