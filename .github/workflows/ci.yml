@@ -423,6 +423,11 @@ jobs:
       - name: Build frontend (builds the SDK via prebuild)
         working-directory: lemma-frontend
         run: npm run build
+      # Reads the build above. Fails when the bytes a browser must fetch before
+      # it can paint grow past scripts/bundle-budget-baseline.json.
+      - name: Bundle budget
+        working-directory: lemma-frontend
+        run: npm run bundle:budget:ci
       - name: Verify generated SDK browser bundles are committed
         run: git diff --exit-code -- lemma-typescript/public/lemma-client.js lemma-typescript/public/lemma-ui.js
 
