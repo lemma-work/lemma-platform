@@ -60,13 +60,15 @@ operate pods. `lemma skills` installs them into the coding agent you already use
 lemma skills list                       # what's bundled
 lemma skills install                    # auto-detect Claude Code / Codex / OpenCode / Cursor and install
 lemma skills install --target claude    # or pick one explicitly
-lemma skills install --all-skills       # include browser + liteparse-documents too
+lemma skills install --all-skills       # include workspace-runtime helpers too
 ```
 
 `install` is an **upsert** — the CLI owns these skills, so an existing copy is overwritten to match
 what this `lemma-terminal` bundles (re-run it after upgrading to refresh them; identical copies report
-`unchanged`). By default it installs the curated set — `lemma-builder`, `lemma-user`, `lemma-widget` —
-at the user level so it's available across all your projects. Targets and their locations:
+`unchanged`). By default it installs every namespaced `lemma-*` product skill: pod building and
+operation, widgets, app design and QA, research, data analysis, artifact authoring, evaluations, and
+pod-skill creation. `--all-skills` additionally installs the environment-specific `browser` and
+`liteparse-documents` helpers. Targets and their locations:
 
 | Target | Location (`--scope user`) | Tool |
 |---|---|---|

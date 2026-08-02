@@ -177,7 +177,9 @@ def install_skills(
         None, "--dir", help="Install into an arbitrary directory instead of a known target."
     ),
     all_skills: bool = typer.Option(
-        False, "--all-skills", help="Include browser and liteparse-documents (workspace-runtime skills)."
+        False,
+        "--all-skills",
+        help="Install every bundled skill, including workspace-runtime helpers.",
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be written, write nothing."),
     yes: bool = typer.Option(
@@ -187,10 +189,9 @@ def install_skills(
     """Install (upsert) bundled skills into your coding agent.
 
     The CLI owns these skills, so an existing copy is overwritten to match what
-    this lemma-terminal bundles. With no SKILL names, installs the curated set
-    (lemma-builder, lemma-user, lemma-widget). With no --target/--dir,
-    auto-detects which of Claude Code, Codex, OpenCode, and Cursor are on your
-    PATH and installs to each.
+    this lemma-terminal bundles. With no SKILL names, installs the curated
+    Lemma-native set. With no --target/--dir, auto-detects which of Claude Code,
+    Codex, OpenCode, and Cursor are on your PATH and installs to each.
     """
     state = state_from_ctx(ctx)
     _validate_scope(scope)

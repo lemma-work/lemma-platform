@@ -7,6 +7,22 @@ import pytest
 from lemma_cli.cli_core import skills_bundle
 
 
+EXPECTED_SKILLS = {
+    "browser",
+    "lemma-app-design",
+    "lemma-app-qa",
+    "lemma-artifact-author",
+    "lemma-builder",
+    "lemma-data-analysis",
+    "lemma-evals",
+    "lemma-research",
+    "lemma-skill-creator",
+    "lemma-user",
+    "lemma-widget",
+    "liteparse-documents",
+}
+
+
 def _repo_skills_dir() -> Path | None:
     for parent in Path(__file__).resolve().parents:
         candidate = parent / "lemma-skills"
@@ -24,11 +40,18 @@ def test_bundled_skills_dir_resolves():
 def test_iter_bundled_skills_have_name_and_description():
     skills = skills_bundle.iter_bundled_skills()
     names = {skill.name for skill in skills}
-    assert {"lemma-builder", "lemma-user", "lemma-widget"} <= names
+    assert names == EXPECTED_SKILLS
     for skill in skills:
         assert skill.name
         assert skill.description
         assert skill.file_count >= 1
+        assert "TODO" not in skill.description
+
+
+def test_default_set_is_every_namespaced_lemma_skill():
+    assert set(skills_bundle.CURATED_SKILLS) == {
+        name for name in EXPECTED_SKILLS if name.startswith("lemma-")
+    }
 
 
 def test_curated_skills_are_bundled():

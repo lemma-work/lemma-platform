@@ -1,9 +1,9 @@
 """Locate and describe the agent skills bundled with the CLI.
 
 The published wheel ships a copy of the repo-root ``lemma-skills/`` under
-``lemma_cli/skills/`` (vendored at build time by ``scripts/sync_cli_skills.py``).
-At runtime we prefer that packaged copy; in a dev checkout where the sync has not
-run we fall back to the canonical repo source so ``lemma skills`` still works.
+``lemma_cli/skills/`` (vendored by the ``setup.py`` build hooks). At runtime we
+prefer that packaged copy; in a dev checkout where a build has not populated it
+we fall back to the canonical repo source so ``lemma skills`` still works.
 """
 from __future__ import annotations
 
@@ -12,10 +12,22 @@ from pathlib import Path
 
 import lemma_cli
 
-# The pod build/operate/widget skills that are useful inside a coding agent on a
-# dev machine. browser + liteparse-documents assume a Lemma workspace runtime, so
-# they install only when named explicitly (or with --all-skills).
-CURATED_SKILLS: tuple[str, ...] = ("lemma-builder", "lemma-user", "lemma-widget")
+# Lemma's namespaced product skills are portable across supported coding agents
+# and form the default install. Environment helpers without the ``lemma-``
+# namespace assume a provisioned workspace runtime, so they remain opt-in through
+# an explicit name or ``--all-skills``.
+CURATED_SKILLS: tuple[str, ...] = (
+    "lemma-app-design",
+    "lemma-app-qa",
+    "lemma-artifact-author",
+    "lemma-builder",
+    "lemma-data-analysis",
+    "lemma-evals",
+    "lemma-research",
+    "lemma-skill-creator",
+    "lemma-user",
+    "lemma-widget",
+)
 
 
 @dataclass(frozen=True)

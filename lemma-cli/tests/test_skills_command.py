@@ -13,6 +13,21 @@ from lemma_cli.cli_core.skills_bundle import CURATED_SKILLS
 
 runner = CliRunner()
 
+EXPECTED_SKILLS = {
+    "browser",
+    "lemma-app-design",
+    "lemma-app-qa",
+    "lemma-artifact-author",
+    "lemma-builder",
+    "lemma-data-analysis",
+    "lemma-evals",
+    "lemma-research",
+    "lemma-skill-creator",
+    "lemma-user",
+    "lemma-widget",
+    "liteparse-documents",
+}
+
 
 def _invoke(args: list[str], tmp_path: Path):
     # Point at a throwaway config so tests never touch the real ~/.lemma/config.
@@ -28,13 +43,7 @@ def test_skills_list_includes_all_bundled(tmp_path):
     result = _invoke(["--json", "skills", "list"], tmp_path)
     assert result.exit_code == 0, result.output
     names = {item["name"] for item in json.loads(result.output)["items"]}
-    assert {
-        "lemma-builder",
-        "lemma-user",
-        "lemma-widget",
-        "browser",
-        "liteparse-documents",
-    } <= names
+    assert names == EXPECTED_SKILLS
 
 
 def test_install_to_dir_copies_skill_tree(tmp_path):
@@ -45,18 +54,18 @@ def test_install_to_dir_copies_skill_tree(tmp_path):
     assert (dest / "lemma-builder" / "references").is_dir()
 
 
-def test_default_install_is_curated_trio(tmp_path):
+def test_default_install_is_curated_lemma_set(tmp_path):
     dest = tmp_path / "dest"
     result = _invoke(["skills", "install", "--dir", str(dest)], tmp_path)
     assert result.exit_code == 0, result.output
     assert _installed_dirs(dest) == set(CURATED_SKILLS)
 
 
-def test_all_skills_flag_includes_workspace_skills(tmp_path):
+def test_all_skills_flag_installs_complete_catalog(tmp_path):
     dest = tmp_path / "dest"
     result = _invoke(["skills", "install", "--dir", str(dest), "--all-skills"], tmp_path)
     assert result.exit_code == 0, result.output
-    assert {"browser", "liteparse-documents"} <= _installed_dirs(dest)
+    assert _installed_dirs(dest) == EXPECTED_SKILLS
 
 
 def test_reinstall_of_identical_is_unchanged(tmp_path):
