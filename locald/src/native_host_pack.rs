@@ -561,6 +561,13 @@ fn build(
             "NEXT_PUBLIC_LEMMA_RUNTIME_INSTANCE_ID",
             runtime_instance_id.clone(),
         ),
+        // Marks the deployment, not the client. The desktop webview announces
+        // itself with a `__LEMMA_DESKTOP__` global, but a phone on the same
+        // Wi-Fi or someone holding a public link has no such global and is
+        // still looking at a local install — this is what tells them apart from
+        // hosted Lemma, and it is what suppresses the marketing landing page
+        // for all three.
+        ("NEXT_PUBLIC_LEMMA_DEPLOYMENT", "local".to_owned()),
         ("LEMMA_LOCALD_PARENT_WATCHDOG", "1".to_owned()),
     ]);
 

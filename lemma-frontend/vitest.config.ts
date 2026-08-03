@@ -17,6 +17,10 @@ export default defineConfig({
         include: [
             'components/agents/agent-runtime-helpers.{test,spec}.ts',
             'components/auth/portal/auth/**/*.{test,spec}.ts',
+            // Step ordering for local onboarding. Named file by file, like the
+            // agent-runtime helpers above, so this stays a list of pure-logic
+            // modules rather than becoming a glob over components.
+            'components/onboarding/local-setup.{test,spec}.ts',
             'lib/**/*.{test,spec}.ts',
         ],
     },

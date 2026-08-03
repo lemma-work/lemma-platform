@@ -10,6 +10,7 @@ declare global {
       NEXT_PUBLIC_SESSION_TOKEN_DOMAIN?: string;
       NEXT_PUBLIC_APPS_DOMAIN_SUFFIX?: string;
       NEXT_PUBLIC_SUPPORT_EMAIL?: string;
+      NEXT_PUBLIC_LEMMA_DEPLOYMENT?: string;
     };
   }
 }
@@ -21,6 +22,8 @@ export interface RuntimeConfig {
   SESSION_TOKEN_DOMAIN: string;
   APPS_DOMAIN_SUFFIX: string;
   SUPPORT_EMAIL: string;
+  /** `"local"` for a Lemma Desktop installation, `"hosted"` otherwise. */
+  DEPLOYMENT: string;
 }
 
 // Public contact address shown on legal pages and support links. Override per
@@ -38,6 +41,7 @@ function getRuntimeConfig(): RuntimeConfig {
       SESSION_TOKEN_DOMAIN: process.env.NEXT_PUBLIC_SESSION_TOKEN_DOMAIN || "",
       APPS_DOMAIN_SUFFIX: process.env.NEXT_PUBLIC_APPS_DOMAIN_SUFFIX || "",
       SUPPORT_EMAIL: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL,
+      DEPLOYMENT: process.env.NEXT_PUBLIC_LEMMA_DEPLOYMENT || "hosted",
     };
   }
 
@@ -55,10 +59,25 @@ function getRuntimeConfig(): RuntimeConfig {
     SESSION_TOKEN_DOMAIN: runtimeEnv.NEXT_PUBLIC_SESSION_TOKEN_DOMAIN || process.env.NEXT_PUBLIC_SESSION_TOKEN_DOMAIN || "",
     APPS_DOMAIN_SUFFIX: runtimeEnv.NEXT_PUBLIC_APPS_DOMAIN_SUFFIX || process.env.NEXT_PUBLIC_APPS_DOMAIN_SUFFIX || "",
     SUPPORT_EMAIL: runtimeEnv.NEXT_PUBLIC_SUPPORT_EMAIL || process.env.NEXT_PUBLIC_SUPPORT_EMAIL || DEFAULT_SUPPORT_EMAIL,
+    DEPLOYMENT:
+      runtimeEnv.NEXT_PUBLIC_LEMMA_DEPLOYMENT || process.env.NEXT_PUBLIC_LEMMA_DEPLOYMENT || "hosted",
   };
 }
 
 export const config = getRuntimeConfig();
+
+/**
+ * Is this frontend served by a Lemma Desktop installation?
+ *
+ * True for every visitor to a local install — the desktop webview, a phone on
+ * the same Wi-Fi, someone holding a public link — because locald sets
+ * `NEXT_PUBLIC_LEMMA_DEPLOYMENT` on the frontend process it supervises. The
+ * `__LEMMA_DESKTOP__` global only covers the first of those, so anything that
+ * must hold for all three has to read this instead.
+ */
+export function isLocalDeployment(): boolean {
+  return config.DEPLOYMENT === "local";
+}
 
 // Helper to get site URL with trailing slash for auth redirects
 export function getSiteUrlWithSlash(): string {

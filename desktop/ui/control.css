@@ -1,8 +1,18 @@
-@font-face {
-  font-family: "Bricolage";
-  src: url("vendor/fonts/bricolage.woff2") format("woff2");
-  font-display: swap;
-}
+/*
+ * Local settings wears the product's design system.
+ *
+ * This page is a bundled webview, not part of the Next.js app, because the
+ * privileged native commands are granted only to it — the workspace runs on a
+ * remote origin and must not be able to rewrite provider endpoints, sharing, or
+ * tunnels. What that boundary does *not* justify is a second visual identity,
+ * which is what this file used to be: its own gold accent, its own paper, its
+ * own display face. Every value below is now the one `styles/tokens.css` uses,
+ * so the only thing that changes when you open Local settings is the content.
+ *
+ * The one remaining divergence is the body face. The product sets Inter; the
+ * app's CSP forbids fetching it and no Inter file is bundled here, so this asks
+ * for it and falls back to the system stack. Bundling Inter closes the gap.
+ */
 @font-face {
   font-family: "DM Mono";
   src: url("vendor/fonts/dmmono-400.woff2") format("woff2");
@@ -17,47 +27,66 @@
 
 :root {
   color-scheme: light dark;
-  --canvas: #f3f0e8;
-  --sidebar: #ebe6dc;
-  --panel: #fbfaf6;
-  --panel-raised: #ffffff;
-  --ink: #201f1b;
-  --muted: #6f6b62;
-  --faint: #928d83;
-  --border: #d9d4ca;
-  --border-strong: #c6bfb2;
-  --gold: #aa701b;
-  --gold-strong: #8f5a0c;
-  --gold-soft: #f4e6c9;
-  --green: #28745d;
-  --green-soft: #e0eee8;
-  --red: #a24135;
-  --red-soft: #f5e3df;
-  --shadow: 0 1px 1px rgba(45, 37, 25, .04), 0 10px 30px rgba(45, 37, 25, .035);
-  --sans: "Bricolage", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --body: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  /* Ink on paper. Warm neutrals throughout — never a flat grey. */
+  --canvas: #f2efe7;
+  --sidebar: #eae7dd;
+  --panel: #ffffff;
+  --panel-raised: #f7f5ef;
+  --ink: #17181a;
+  --muted: #62666b;
+  --faint: #888b90;
+
+  /* Alpha hairline rules, not opaque borders: they hold on white, on cream,
+     and on a tinted row alike. */
+  --border: rgb(13 15 18 / 0.13);
+  --border-strong: rgb(13 15 18 / 0.30);
+
+  /* `--gold` is this file's accent hook, kept as a name so the rules below did
+     not all have to be rewritten — but it now resolves to the product's one
+     loud colour, the action violet, instead of a colour only this page used. */
+  --accent-rgb: 90 63 212;
+  --gold: rgb(var(--accent-rgb));
+  --gold-strong: color-mix(in srgb, rgb(var(--accent-rgb)) 84%, black);
+  --gold-soft: #e6e0ff;
+  --green: #11743c;
+  --green-soft: #d9f5e3;
+  --red: #c22f15;
+  --red-soft: #ffe1da;
+
+  /* Elevation is paper, not glass — shadows cast in ink, sheets close to the
+     page. */
+  --shadow: 0 1px 2px rgb(13 15 18 / 0.05), 0 10px 30px rgb(13 15 18 / 0.05);
+
+  /* One family, one scale. DM Mono stays the machine-value face. */
+  --sans: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --body: var(--sans);
   --mono: "DM Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* Toasts are an inverse surface: the ink, carrying the paper as text. */
+  --toast-bg: #17181a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --canvas: #171613;
-    --sidebar: #1e1c18;
-    --panel: #22201c;
-    --panel-raised: #28251f;
-    --ink: #f0ece2;
-    --muted: #aaa398;
-    --faint: #837d73;
-    --border: #3a3730;
-    --border-strong: #514b40;
-    --gold: #d9a146;
-    --gold-strong: #edbd6c;
-    --gold-soft: #392d1c;
-    --green: #77bba1;
-    --green-soft: #20362e;
-    --red: #ed8d80;
-    --red-soft: #3e2522;
-    --shadow: 0 1px 0 rgba(255, 255, 255, .02), 0 10px 30px rgba(0, 0, 0, .16);
+    /* The same press run on darker stock. */
+    --canvas: #131311;
+    --sidebar: #100f0e;
+    --panel: #1b1b19;
+    --panel-raised: #212120;
+    --ink: #f2f0ea;
+    --muted: #a3a29c;
+    --faint: #78776f;
+    --border: rgb(245 243 237 / 0.13);
+    --border-strong: rgb(245 243 237 / 0.30);
+    --accent-rgb: 139 122 245;
+    --gold-soft: color-mix(in srgb, rgb(var(--accent-rgb)) 22%, var(--panel));
+    --green: #5fdc95;
+    --green-soft: color-mix(in srgb, #5fdc95 18%, var(--panel));
+    --red: #f08a72;
+    --red-soft: color-mix(in srgb, #f08a72 18%, var(--panel));
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.34), 0 16px 40px -12px rgb(0 0 0 / 0.60);
+    --toast-bg: #2a2a27;
   }
 }
 
@@ -138,7 +167,7 @@ nav { min-height: 0; overflow: auto; padding: 0 3px; }
   color: var(--ink);
   background: var(--panel);
   border-color: var(--border);
-  box-shadow: 0 1px 1px rgba(30, 25, 18, .03);
+  box-shadow: 0 1px 1px rgb(13 15 18 / 0.03);
 }
 .health-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--border-strong); }
 .health-dot.ok { background: var(--green); }
@@ -217,7 +246,7 @@ h1 { margin: 0; font-size: clamp(28px, 3.5vw, 38px); line-height: 1.08; letter-s
   margin-bottom: 16px;
   padding: 14px 15px;
   border: 1px solid color-mix(in srgb, var(--gold) 45%, var(--border));
-  border-radius: 11px;
+  border-radius: 14px;
   background: var(--gold-soft);
 }
 .attention-banner p { margin: 2px 0 0; color: var(--muted); }
@@ -240,7 +269,8 @@ h1 { margin: 0; font-size: clamp(28px, 3.5vw, 38px); line-height: 1.08; letter-s
 }
 .metric-card, .panel {
   border: 1px solid var(--border);
-  border-radius: 12px;
+  /* 14px cards, 8px controls — the product's two radii, not a third one. */
+  border-radius: 14px;
   background: var(--panel);
   box-shadow: var(--shadow);
 }
@@ -300,12 +330,40 @@ h1 { margin: 0; font-size: clamp(28px, 3.5vw, 38px); line-height: 1.08; letter-s
   cursor: pointer;
 }
 .btn:hover { border-color: var(--gold); }
-.btn.primary { border-color: var(--ink); color: var(--panel); background: var(--ink); }
+.btn.primary { border-color: var(--gold); color: #ffffff; background: var(--gold); }
+.btn.primary:hover { border-color: var(--gold-strong); background: var(--gold-strong); }
 .btn.danger { color: var(--red); border-color: color-mix(in srgb, var(--red) 38%, var(--border)); }
 .btn.danger.solid { color: white; border-color: var(--red); background: var(--red); }
 .btn.compact { min-height: 30px; padding: 5px 9px; font-size: 11px; }
 .btn:disabled { opacity: .48; cursor: default; }
 .button-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 17px; }
+
+/* Provider presets. Local runners first: a Lemma installed on someone's own
+   machine most likely has one of them already serving, and neither needs a key
+   or an account. */
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.preset {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 128px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  text-align: left;
+  background: var(--panel-raised);
+  cursor: pointer;
+}
+.preset:hover { border-color: var(--gold); }
+.preset.active { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.preset strong { font-size: 12px; font-weight: 600; }
+.preset span { color: var(--muted); font-size: 11px; }
 
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 18px; }
 .field { min-width: 0; }
@@ -348,9 +406,9 @@ input[type="checkbox"] { width: auto; min-height: auto; accent-color: var(--gold
   margin-top: 18px;
   padding: 11px 12px 11px 14px;
   border: 1px solid var(--border-strong);
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
-  box-shadow: 0 12px 45px rgba(34, 28, 20, .12);
+  box-shadow: 0 12px 45px rgb(13 15 18 / 0.12);
   backdrop-filter: blur(18px);
   color: var(--muted);
   font-size: 11px;
@@ -367,7 +425,7 @@ input[type="checkbox"] { width: auto; min-height: auto; accent-color: var(--gold
   min-height: 92px;
   padding: 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   color: var(--ink);
   background: var(--panel-raised);
   text-align: left;
@@ -386,7 +444,7 @@ pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
   margin-top: 14px;
   padding: 11px 12px;
   border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--border));
-  border-radius: 9px;
+  border-radius: 8px;
   color: var(--muted);
   background: var(--gold-soft);
   font-size: 11px;
@@ -394,17 +452,17 @@ pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
 .danger-warning { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, var(--border)); background: var(--red-soft); }
 .danger-warning p { margin: 3px 0 0; }
 .limitation-note { border-color: var(--border); background: var(--canvas); }
-.provider-tabs { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: var(--canvas); }
-.provider-tab { padding: 7px 10px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; cursor: pointer; }
-.provider-tab.active { color: var(--ink); background: var(--panel-raised); box-shadow: 0 1px 2px rgba(30, 25, 18, .08); }
+.provider-tabs { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); }
+.provider-tab { padding: 7px 10px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.provider-tab.active { color: var(--ink); background: var(--panel-raised); box-shadow: 0 1px 2px rgb(13 15 18 / 0.08); }
 #provider-readiness { margin-top: 14px; }
-.readiness-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--canvas); }
+.readiness-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); }
 .readiness-card p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
 .command-list { display: grid; gap: 6px; margin-top: 10px; }
 .command-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
-.command-row code { padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-raised); }
-.qr-card { display: flex; align-items: center; gap: 18px; margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel-raised); }
-.qr-card svg { display: block; width: 132px; height: 132px; border-radius: 6px; }
+.command-row code { padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-raised); }
+.qr-card { display: flex; align-items: center; gap: 18px; margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-raised); }
+.qr-card svg { display: block; width: 132px; height: 132px; border-radius: 5px; }
 .qr-card p { margin: 4px 0 0; color: var(--muted); }
 
 .config-drawer { border-top: 1px solid var(--border); }
@@ -431,13 +489,13 @@ pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
   bottom: 22px;
   max-width: min(440px, calc(100vw - 44px));
   padding: 10px 13px;
-  border-radius: 9px;
+  border-radius: 8px;
   color: white;
-  background: #25221d;
-  box-shadow: 0 15px 45px rgba(0, 0, 0, .24);
+  background: var(--toast-bg);
+  box-shadow: 0 15px 45px rgb(0 0 0 / 0.24);
   font-size: 12px;
 }
-.toast.error { background: #923d33; }
+.toast.error { background: var(--red); color: #ffffff; }
 
 .confirm-dialog {
   width: min(480px, calc(100vw - 40px));
@@ -446,11 +504,11 @@ pre { white-space: pre-wrap; margin: 0; color: var(--muted); }
   color: var(--ink);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: 0 28px 90px rgba(24, 20, 14, .28);
+  border-radius: 14px;
+  box-shadow: 0 28px 90px rgb(13 15 18 / 0.28);
 }
 .confirm-dialog::backdrop {
-  background: rgba(24, 21, 16, .52);
+  background: rgb(13 15 18 / 0.52);
   backdrop-filter: blur(4px);
 }
 .confirm-dialog h2 { margin: 12px 0 6px; font-size: 23px; }

@@ -115,7 +115,7 @@ button.agent-identity-avatar:focus-visible {
 
 /* The stored identifier, not a second title — small, monospaced, and quiet. */
 .agent-identity-slug {
-  font-family: var(--font-dm-mono), ui-monospace, monospace;
+  font-family: var(--font-mono-family);
   font-size: var(--text-xs);
   color: var(--text-tertiary);
 }
@@ -585,7 +585,7 @@ button.agent-identity-avatar:focus-visible {
 
 .agent-instructions .agent-instructions-prose h1 {
   margin: 0 0 var(--space-3);
-  font-family: var(--font-document-sans), var(--font-body-family);
+  font-family: var(--font-document-family);
   font-size: var(--text-base);
   font-weight: 600;
   letter-spacing: 0;

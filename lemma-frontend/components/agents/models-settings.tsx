@@ -15,6 +15,7 @@ import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
 import { SettingsList, SettingsRow } from '@/components/settings/settings-kit';
+import { declineAutoConnect } from '@/lib/desktop/auto-connect';
 import {
     useAgentHostHarnesses,
     useAgentHosts,
@@ -614,6 +615,10 @@ function AgentHostCard({
 
     const disconnect = async () => {
         try {
+            // Revoking is the same decision as Disconnect on the card, and has
+            // to survive a navigation for the same reason: otherwise this
+            // computer silently pairs itself back on the next page.
+            if (isThisComputer) declineAutoConnect();
             await revoke.mutateAsync(host.id);
             setConfirmDisconnect(false);
             toast.success(`${host.display_name} disconnected`);

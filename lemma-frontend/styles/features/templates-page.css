@@ -107,7 +107,7 @@
   max-width: 31rem;
   margin: 1rem 0 0;
   color: var(--import-muted);
-  font-family: var(--font-document-sans);
+  font-family: var(--font-document-family);
   font-size: var(--text-base);
   line-height: 1.65;
 }
@@ -220,7 +220,7 @@
 .templates-gallery-card-description {
   margin-top: 0.75rem;
   color: var(--import-muted);
-  font-family: var(--font-document-sans);
+  font-family: var(--font-document-family);
   font-size: var(--text-xs);
   line-height: 1.55;
 }
@@ -291,7 +291,7 @@
   max-width: 31rem;
   margin: 1.2rem 0 0;
   color: var(--import-muted);
-  font-family: var(--font-document-sans);
+  font-family: var(--font-document-family);
   font-size: var(--text-sm);
   line-height: 1.65;
 }
@@ -314,7 +314,7 @@
   background: color-mix(in srgb, var(--import-card) 90%, transparent);
   padding: var(--space-2) var(--space-2-5);
   color: var(--import-muted);
-  font-family: var(--font-document-sans);
+  font-family: var(--font-document-family);
   font-size: var(--text-xs);
   line-height: 1.5;
 }
@@ -343,7 +343,7 @@
 .templates-gallery-footer p {
   margin: 0;
   color: var(--import-muted);
-  font-family: var(--font-document-sans);
+  font-family: var(--font-document-family);
   font-size: var(--text-xs);
 }
 

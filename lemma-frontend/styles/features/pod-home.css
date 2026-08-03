@@ -5,13 +5,13 @@
     linear-gradient(145deg, color-mix(in srgb, var(--surface-1) 88%, transparent), color-mix(in srgb, var(--surface-2) 62%, transparent)),
     var(--surface-1);
   box-shadow:
-    0 18px 46px -40px rgba(0, 0, 0, 0.10),
-    inset 0 1px 0 rgba(255, 255, 255, 0.68);
+    var(--shadow-sm),
+    inset 0 1px 0 var(--row-glint);
 }
 
 .pod-page-intro-title {
   color: var(--text-primary);
-  font-family: var(--font-bricolage-grotesque, "Bricolage Grotesque"), var(--font-ibm-plex-sans, "IBM Plex Sans"), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display-family);
   font-size: var(--text-2xl);
   font-weight: 700;
   line-height: 1.12;
@@ -29,8 +29,8 @@
   border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--surface-1) 82%, transparent);
   box-shadow:
-    0 16px 42px -38px rgba(0, 0, 0, 0.10),
-    inset 0 1px 0 rgba(255, 255, 255, 0.68);
+    var(--shadow-sm),
+    inset 0 1px 0 var(--row-glint);
 }
 
 .pod-home-surface-nudge {
@@ -68,7 +68,7 @@
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--border-subtle) 70%, transparent);
   background: color-mix(in srgb, var(--surface-1) 88%, transparent);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: var(--shadow-xs);
 }
 
 .pod-home-surface-logo {
