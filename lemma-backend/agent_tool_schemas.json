@@ -407,8 +407,22 @@
         },
         "tty": {
           "default": false,
-          "description": "Set true to allocate an interactive terminal session. Required for commands that stay alive or wait for input (for example `npm run dev`, `python`, `bash`).",
+          "description": "Set true to allocate an interactive terminal session. Required for commands that stay alive or wait for input (for example `npm run dev`, `python`, `bash`). An interactive process does not survive the sandbox being paused while you are idle, so treat it as belonging to the current stretch of work.",
           "type": "boolean"
+        },
+        "cols": {
+          "default": 120,
+          "description": "Terminal width for `tty` commands. Widen it for programs that render tables or wide output.",
+          "maximum": 500,
+          "minimum": 20,
+          "type": "integer"
+        },
+        "rows": {
+          "default": 40,
+          "description": "Terminal height for `tty` commands.",
+          "maximum": 200,
+          "minimum": 5,
+          "type": "integer"
         },
         "workdir": {
           "anyOf": [
@@ -1059,16 +1073,17 @@
   {
     "tool_name": "manage_process",
     "toolset": "WORKSPACE_CLI",
-    "description": "Drive a process started by `exec_command` (interactive or long-running).\n\nOne tool, three actions:\n- `action=\"input\"` \u2014 send characters to (or just poll output from) a running\n  process. Needs `process_id`. Poll logs with `chars=\"\"`; respond to a prompt\n  with `chars=\"y\\n\"`; run another command in the same shell with\n  `chars=\"npm test\\n\"`.\n- `action=\"kill\"` \u2014 stop a process by `process_id` (servers, REPLs, watchers,\n  or anything started accidentally).\n- `action=\"list\"` \u2014 list tracked shell processes in this workspace (find dev\n  servers/REPLs before polling, stopping, or starting another).",
+    "description": "Drive a process started by `exec_command` (interactive or long-running).\n\nOne tool, three actions:\n- `action=\"input\"` \u2014 send characters to (or just poll output from) a running\n  process. Needs `process_id`. Poll logs with `chars=\"\"`; respond to a prompt\n  with `chars=\"y\\n\"`; run another command in the same shell with\n  `chars=\"npm test\\n\"`.\n- `action=\"kill\"` \u2014 stop a process by `process_id` (servers, REPLs, watchers,\n  or anything started accidentally).\n- `action=\"list\"` \u2014 list tracked shell processes in this workspace (find dev\n  servers/REPLs before polling, stopping, or starting another).\n- `action=\"resize\"` \u2014 change an interactive terminal's `cols`/`rows` when\n  output is wrapping badly or a full-screen UI is clipped, then poll with\n  `action=\"input\"`, `chars=\"\"` to read the redrawn screen.",
     "input_schema": {
       "description": "Drive a process started by `exec_command` (interactive or long-running).",
       "properties": {
         "action": {
-          "description": "'input' = send chars to (or poll output from) a running process; 'kill' = stop a process; 'list' = list tracked processes.",
+          "description": "'input' = send chars to (or poll output from) a running process; 'kill' = stop a process; 'list' = list tracked processes; 'resize' = change an interactive terminal's size.",
           "enum": [
             "input",
             "kill",
-            "list"
+            "list",
+            "resize"
           ],
           "type": "string"
         },
@@ -1082,7 +1097,7 @@
             }
           ],
           "default": null,
-          "description": "Process ID from `exec_command`. Required for 'input' and 'kill'."
+          "description": "Process ID from `exec_command`. Required for 'input', 'kill', and 'resize'."
         },
         "chars": {
           "anyOf": [
@@ -1094,7 +1109,21 @@
             }
           ],
           "default": null,
-          "description": "For action=\"input\": characters to send to stdin. Use `\"\"` to poll output without sending input. Include `\\n` to press Enter."
+          "description": "For action=\"input\": characters to send to stdin. Use `\"\"` to poll output without sending input. Include `\\n` to press Enter. Control keys are sent as characters: `\\u0003` interrupts (Ctrl-C) and `\\u0004` sends EOF (Ctrl-D) to leave a REPL."
+        },
+        "cols": {
+          "default": 120,
+          "description": "For action=\"resize\": new terminal width in columns.",
+          "maximum": 500,
+          "minimum": 20,
+          "type": "integer"
+        },
+        "rows": {
+          "default": 40,
+          "description": "For action=\"resize\": new terminal height in rows.",
+          "maximum": 200,
+          "minimum": 5,
+          "type": "integer"
         },
         "max_output_tokens": {
           "default": 10000,

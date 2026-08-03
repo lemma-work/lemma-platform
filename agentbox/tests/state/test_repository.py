@@ -1007,9 +1007,16 @@ async def test_storage_bind_conflict_fences_new_provider_and_returns_retryable_e
     assert [item.provider_id for item in provider.destroy_calls] == ["sandbox-1"]
 
 
-async def test_released_native_workspace_with_new_profile_is_retired_and_rebound(
+async def test_released_native_workspace_keeps_its_disk_across_a_new_profile(
     database: StateDatabase,
 ):
+    """A paused sandbox-native workspace is resumed, never retired, on a new digest.
+
+    Its storage *is* the sandbox, so destroying the allocation to adopt a newly
+    shipped profile would delete the user's files. The paused sandbox is
+    resumed under its original profile instead.
+    """
+
     provider = MissingNativeWorkspaceProvider(database)
     provider.ready_calls = 1
     service = SandboxLifecycleService(database, provider)
@@ -1031,26 +1038,28 @@ async def test_released_native_workspace_with_new_profile_is_retired_and_rebound
     )
 
     assert second.ready is True
-    assert second.allocation_id != first.allocation_id
+    assert second.allocation_id == first.allocation_id
+    # Only the explicit release happened; nothing destroyed the user's disk.
     assert [item.provider_id for item in provider.release_calls] == ["sandbox-1"]
-    assert [item.provider_id for item in provider.destroy_calls] == ["sandbox-1"]
+    assert provider.destroy_calls == []
+    assert len(provider.create_calls) == 1
     async with database.uow() as uow:
         storage = await uow.repository.get_workspace_storage(key)
         allocations = await uow.repository.list_allocations(key)
         await uow.commit()
     assert storage is not None
-    assert storage.provider_storage_id == "sandbox-2"
-    assert storage.bound_allocation_id == second.allocation_id
-    assert storage.content_generation == 1
-    assert [item.state for item in allocations] == [
-        AllocationState.ERROR,
-        AllocationState.ACTIVE,
-    ]
+    assert storage.provider_storage_id == "sandbox-1"
+    assert storage.bound_allocation_id == first.allocation_id
+    # The disk was never recreated, so its content generation stands still.
+    assert storage.content_generation == 0
+    assert [item.state for item in allocations] == [AllocationState.ACTIVE]
 
 
-async def test_active_native_workspace_with_new_profile_is_fenced_and_rebound(
+async def test_active_native_workspace_keeps_its_disk_across_a_new_profile(
     database: StateDatabase,
 ):
+    """A running sandbox-native workspace is left alone on a new digest."""
+
     provider = MissingNativeWorkspaceProvider(database)
     provider.ready_calls = 1
     service = SandboxLifecycleService(database, provider)
@@ -1071,20 +1080,18 @@ async def test_active_native_workspace_with_new_profile_is_fenced_and_rebound(
     )
 
     assert second.ready is True
-    assert second.allocation_id != first.allocation_id
-    assert [item.provider_id for item in provider.release_calls] == ["sandbox-1"]
-    assert [item.provider_id for item in provider.destroy_calls] == ["sandbox-1"]
+    assert second.allocation_id == first.allocation_id
+    assert provider.release_calls == []
+    assert provider.destroy_calls == []
+    assert len(provider.create_calls) == 1
     async with database.uow() as uow:
         storage = await uow.repository.get_workspace_storage(key)
         allocations = await uow.repository.list_allocations(key)
         await uow.commit()
     assert storage is not None
-    assert storage.provider_storage_id == "sandbox-2"
-    assert storage.content_generation == 1
-    assert [item.state for item in allocations] == [
-        AllocationState.ERROR,
-        AllocationState.ACTIVE,
-    ]
+    assert storage.provider_storage_id == "sandbox-1"
+    assert storage.content_generation == 0
+    assert [item.state for item in allocations] == [AllocationState.ACTIVE]
 
 
 async def test_active_sandbox_native_workspace_cannot_be_rebound(
@@ -1114,9 +1121,50 @@ async def test_active_sandbox_native_workspace_cannot_be_rebound(
     assert active.ready is True
 
 
-async def test_profile_change_replaces_and_fences_allocation(
+async def test_function_profile_change_replaces_and_fences_allocation(
     database: StateDatabase,
 ):
+    provider = FakeProvider(database)
+    service = SandboxLifecycleService(database, provider)
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+
+    first = await service.ensure(
+        key,
+        profile(fill="a"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    second = await service.ensure(
+        key,
+        profile(name="function-python-v7", fill="b"),
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+
+    assert first.allocation_epoch == 1
+    assert second.allocation_epoch == 2
+    assert first.allocation_id != second.allocation_id
+    async with database.uow() as uow:
+        allocations = await uow.repository.list_allocations(key)
+        await uow.commit()
+    assert [item.state for item in allocations] == [
+        AllocationState.DRAINING,
+        AllocationState.ACTIVE,
+    ]
+
+
+async def test_workspace_profile_change_keeps_existing_allocation_and_disk(
+    database: StateDatabase,
+):
+    """A workspace holding user files is never replaced to adopt a new digest.
+
+    Workspace storage is co-located with the allocation on sandbox-native
+    providers, so replacing the allocation would delete the user's files. The
+    workspace keeps running its existing profile until it is recreated from
+    scratch.
+    """
+
     provider = FakeProvider(database)
     service = SandboxLifecycleService(database, provider)
     key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
@@ -1135,16 +1183,17 @@ async def test_profile_change_replaces_and_fences_allocation(
         deadline_at=deadline,
     )
 
-    assert first.allocation_epoch == 1
-    assert second.allocation_epoch == 2
-    assert first.allocation_id != second.allocation_id
+    assert second.allocation_id == first.allocation_id
+    assert second.allocation_epoch == first.allocation_epoch
+    assert len(provider.create_calls) == 1
     async with database.uow() as uow:
         allocations = await uow.repository.list_allocations(key)
+        logical = await uow.repository.get_logical(key)
         await uow.commit()
-    assert [item.state for item in allocations] == [
-        AllocationState.DRAINING,
-        AllocationState.ACTIVE,
-    ]
+    assert [item.state for item in allocations] == [AllocationState.ACTIVE]
+    # The originally shipped profile stays in force for this workspace.
+    assert logical is not None
+    assert logical.profile == profile(fill="a")
 
 
 async def test_uncommitted_unit_of_work_rolls_back(database: StateDatabase):

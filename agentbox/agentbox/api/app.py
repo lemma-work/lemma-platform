@@ -31,7 +31,8 @@ from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.maintenance import SandboxMaintenanceWorker, maintenance_loop
 from agentbox.port_access import PortAccessService, PortAccessSigner
 from agentbox.persistence.uow import StateDatabase
-from agentbox.processes import ProcessExecutionService
+from agentbox.inventory import SandboxInventorySweeper, inventory_sweep_loop
+from agentbox.processes import ProcessExecutionService, process_lease_loop
 from agentbox.profiles import (
     DockerProfileArtifact,
     E2BProfileArtifact,
@@ -275,21 +276,16 @@ def _database_url() -> str:
     return f"sqlite+aiosqlite:///{settings.agentbox_state_db_path}"
 
 
-def _profiles() -> ProfileRegistry:
-    workspace_e2b = (
-        E2BProfileArtifact(
-            template_id=settings.agentbox_e2b_workspace_template,
-            build_id=settings.agentbox_e2b_workspace_build_id,
-        )
-        if settings.agentbox_e2b_workspace_template
-        and settings.agentbox_e2b_workspace_build_id
-        else None
-    )
-    workspace = SandboxProfile(
-        ref=SandboxProfileRef(
-            settings.agentbox_workspace_profile_name,
-            settings.agentbox_workspace_profile_digest,
-        ),
+def _workspace_profile(
+    *,
+    name: str,
+    digest: str,
+    image: str,
+    e2b_template: str | None,
+    e2b_build_id: str | None,
+) -> SandboxProfile:
+    return SandboxProfile(
+        ref=SandboxProfileRef(name, digest),
         workload_kind=WorkloadKind.WORKSPACE,
         # The portable ABI is semantic; every provider runs the profile-owned
         # Python 3.14 environment behind its native session implementation.
@@ -306,13 +302,40 @@ def _profiles() -> ProfileRegistry:
         ),
         allowed_roots=("/workspace", "/tmp"),
         docker=DockerProfileArtifact(
-            image=settings.agentbox_workspace_image,
+            image=image,
             command=(),
             readiness_argv=(),
             published_ports=(8080, 4848),
             runtime_port=8080,
         ),
-        e2b=workspace_e2b,
+        e2b=(
+            E2BProfileArtifact(template_id=e2b_template, build_id=e2b_build_id)
+            if e2b_template and e2b_build_id
+            else None
+        ),
+    )
+
+
+def _profiles() -> ProfileRegistry:
+    workspace = _workspace_profile(
+        name=settings.agentbox_workspace_profile_name,
+        digest=settings.agentbox_workspace_profile_digest,
+        image=settings.agentbox_workspace_image,
+        e2b_template=settings.agentbox_e2b_workspace_template,
+        e2b_build_id=settings.agentbox_e2b_workspace_build_id,
+    )
+    # Workspaces that already hold user files keep running their existing
+    # profile instead of being replaced when the digest changes, so the previous
+    # release's artifacts must stay resolvable for them.
+    retained = tuple(
+        _workspace_profile(
+            name=entry.name,
+            digest=entry.digest,
+            image=entry.image or settings.agentbox_workspace_image,
+            e2b_template=entry.e2b_template,
+            e2b_build_id=entry.e2b_build_id,
+        )
+        for entry in settings.agentbox_retained_workspace_profiles
     )
     function_e2b = (
         E2BProfileArtifact(
@@ -348,7 +371,7 @@ def _profiles() -> ProfileRegistry:
         ),
         e2b=function_e2b,
     )
-    return ProfileRegistry((workspace, function))
+    return ProfileRegistry((workspace, function, *retained))
 
 
 def _runtime_key() -> bytes:
@@ -436,6 +459,9 @@ async def lifespan(app: FastAPI):
                 workspace_timeout_seconds=(
                     settings.agentbox_e2b_workspace_timeout_seconds
                 ),
+                workspace_timeout_refresh_seconds=(
+                    settings.agentbox_e2b_workspace_timeout_refresh_seconds
+                ),
                 function_allow_out=(settings.agentbox_e2b_function_allow_out_hosts),
                 max_file_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
             ),
@@ -521,14 +547,49 @@ async def lifespan(app: FastAPI):
         ),
         name="agentbox-maintenance",
     )
+    # A running process counts as activity. Without this, idle cleanup pauses a
+    # sandbox out from under a background build or dev server at the idle
+    # threshold after the agent's last poll, and quiesce kills it.
+    app.state.process_lease_task = create_background_task(
+        process_lease_loop(
+            app.state.process_execution,
+            interval_seconds=settings.agentbox_process_lease_interval_seconds,
+            lease_seconds=settings.agentbox_process_lease_seconds,
+        ),
+        name="agentbox-process-lease",
+    )
+    # Reasons backwards from provider inventory: finds running sandboxes that
+    # durable state cannot account for, which nothing else can detect and which
+    # bill indefinitely.
+    app.state.inventory_sweeper = SandboxInventorySweeper(
+        database,
+        provider,
+        untracked_grace_seconds=(
+            settings.agentbox_inventory_untracked_grace_seconds
+        ),
+    )
+    app.state.inventory_sweep_task = create_background_task(
+        inventory_sweep_loop(
+            app.state.inventory_sweeper,
+            interval_seconds=settings.agentbox_inventory_sweep_interval_seconds,
+            operation_timeout_seconds=(
+                settings.agentbox_reconcile_operation_timeout_seconds
+            ),
+        ),
+        name="agentbox-inventory-sweep",
+    )
     try:
         yield
     finally:
         app.state.reconciliation_task.cancel()
         app.state.maintenance_task.cancel()
+        app.state.process_lease_task.cancel()
+        app.state.inventory_sweep_task.cancel()
         await asyncio.gather(
             app.state.reconciliation_task,
             app.state.maintenance_task,
+            app.state.process_lease_task,
+            app.state.inventory_sweep_task,
             return_exceptions=True,
         )
         await app.state.port_proxy_http_client.aclose()

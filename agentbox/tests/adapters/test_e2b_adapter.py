@@ -290,6 +290,7 @@ class FakeSandbox:
         self.processes: dict[int, FakeProcessInfo] = {}
         self.next_pid = 100
         self.contexts: dict[str, FakeContext] = {}
+        self.context_sequence = 0
         self.fail_context_list = False
         self.paused = False
         self.pause_keep_memory: bool | None = None
@@ -363,7 +364,11 @@ class FakeSandbox:
         return True
 
     async def create_code_context(self, *, cwd: str, **_kwargs):
-        context = FakeContext(f"context-{len(self.contexts) + 1}", cwd)
+        # Monotonic, not derived from the current count: after a removal a
+        # count-based name would collide with a live context and silently
+        # replace it, hiding exactly the kind of bug these tests look for.
+        self.context_sequence += 1
+        context = FakeContext(f"context-{self.context_sequence}", cwd)
         self.contexts[context.id] = context
         return context
 
@@ -551,6 +556,72 @@ async def test_function_port_access_extends_timeout_once_across_a_burst(
     await provider.close()
 
 
+async def test_workspace_activity_refreshes_the_provider_timeout(
+    database: StateDatabase,
+) -> None:
+    """An actively-used workspace must never be paused by E2B mid-session.
+
+    E2B's `timeout` is a continuous-runtime ceiling, not an idle timer: nothing
+    happening inside the sandbox extends it. Without a refresh on activity the
+    provider stops a busy workspace once the window elapses, which is the
+    "sandbox reset itself" failure. Cached sandbox handles never re-enter
+    `connect()`, so the refresh has to happen on the cached path too.
+    """
+
+    selected_profile = profile()
+    provider = E2BSandboxAdapter(
+        ProfileRegistry((selected_profile,)),
+        E2BAdapterConfig(
+            api_key="e2b_" + "0" * 40,
+            scope="e2b:workspace-timeout-test",
+            workspace_timeout_seconds=900,
+            workspace_timeout_refresh_seconds=60,
+        ),
+        sandbox_class=FakeSandbox,
+    )
+    lifecycle = SandboxLifecycleService(database, provider)
+    filesystem = FilesystemService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    await lifecycle.ensure(
+        key,
+        selected_profile.ref,
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    sandbox = next(iter(FakeSandbox.instances.values()))
+    baseline_calls = sandbox.timeout_calls
+
+    for index in range(3):
+        await filesystem.write(
+            key,
+            f"/workspace/activity-{index}",
+            b"busy",
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
+
+    # The sandbox starts with the configured inactivity window, and within one
+    # refresh interval a burst of activity costs no extra provider calls.
+    assert FakeSandbox.last_create_kwargs["timeout"] == 900
+    assert sandbox.timeout_calls == baseline_calls
+
+    # Once the interval has elapsed, the next operation pushes the window out.
+    provider._timeout_refreshed_at[sandbox.sandbox_id] = datetime.now(
+        timezone.utc
+    ) - timedelta(seconds=120)
+    await filesystem.write(
+        key,
+        "/workspace/activity-later",
+        b"busy",
+        expected_sha256=None,
+        deadline_at=deadline,
+    )
+    assert sandbox.timeout_calls == baseline_calls + 1
+    assert sandbox.timeout == 900
+    await provider.close()
+
+
 @pytest.fixture(autouse=True)
 def reset_fake() -> None:
     FakeSandbox.reset()
@@ -614,8 +685,12 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
     )
 
     assert created.ready is True
+    # The provider's own timeout pause must match the explicit release path:
+    # filesystem-only, so both edges of Active -> Suspended mean the same
+    # thing. The bare "pause" string would default to keep_memory=True. E2B
+    # also refuses auto-resume for filesystem-only snapshots.
     assert FakeSandbox.last_create_kwargs["lifecycle"] == {
-        "on_timeout": "pause",
+        "on_timeout": {"action": "pause", "keep_memory": False},
         "auto_resume": False,
     }
     assert released.ready is False
@@ -788,9 +863,18 @@ async def test_native_process_files_and_python_are_provider_neutral(
     assert provider.workspace_storage_kind == StorageKind.SANDBOX_NATIVE
 
 
-async def test_new_manager_clears_abandoned_e2b_python_context_before_create(
+async def test_a_new_manager_leaves_another_sessions_python_context_alone(
     database: StateDatabase,
 ) -> None:
+    """A restarted manager must not reap kernels it simply does not recognise.
+
+    One sandbox serves every conversation a user has, and a manager restart
+    forgets which context belongs to which session. Removing every unrecognised
+    context therefore destroyed other live conversations' interpreters. An
+    unowned context is instead released when the sandbox next pauses, which
+    cold-boots it.
+    """
+
     provider, _lifecycle, key, deadline, _handle = await provision(database)
     async with database.uow() as uow:
         allocation = await uow.repository.current_allocation(key)
@@ -828,4 +912,52 @@ async def test_new_manager_clears_abandoned_e2b_python_context_before_create(
         ),
     )
 
-    assert len(sandbox.contexts) == 1
+    # The other conversation's kernel survives alongside the new one.
+    assert len(sandbox.contexts) == 2
+
+
+async def test_recreating_one_session_replaces_only_its_own_interpreter(
+    database: StateDatabase,
+) -> None:
+    """Reuse of a session ID still replaces that session's own context.
+
+    This is what stops a fresh interpreter overlapping an execution still
+    running on the previous one for the same session.
+    """
+
+    provider, _lifecycle, key, deadline, _handle = await provision(database)
+    async with database.uow() as uow:
+        allocation = await uow.repository.current_allocation(key)
+        await uow.commit()
+    assert allocation is not None
+    assert allocation.provider_id is not None
+    provider_ref = ProviderAllocationRef(
+        provider_id=allocation.provider_id,
+        provider_instance_id=allocation.provider_instance_id,
+        allocation_id=allocation.allocation_id,
+        allocation_token=allocation.allocation_token,
+        key=allocation.key,
+        resource_generation=allocation.resource_generation,
+    )
+    mine = uuid4()
+    theirs = uuid4()
+
+    def request(session_id):
+        return CreatePythonSessionRequest(
+            session_id=session_id,
+            cwd="/workspace",
+            environment_keys=(),
+            deadline_at=deadline,
+        )
+
+    first = await provider.create_python_session(provider_ref, request(mine))
+    await provider.create_python_session(provider_ref, request(theirs))
+    sandbox = FakeSandbox.instances[allocation.provider_id]
+    assert len(sandbox.contexts) == 2
+
+    second = await provider.create_python_session(provider_ref, request(mine))
+
+    assert second.provider_context_id != first.provider_context_id
+    assert first.provider_context_id not in sandbox.contexts
+    # Still two: this session's replacement, and the other session's untouched.
+    assert len(sandbox.contexts) == 2

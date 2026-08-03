@@ -274,6 +274,60 @@ async def test_function_runtime_grant_allows_long_job_but_workspace_does_not(
         )
 
 
+async def test_a_lease_cannot_pin_a_function_sandbox_indefinitely(
+    database: StateDatabase,
+) -> None:
+    """A lease keeps its sandbox alive, so its horizon is a spending commitment.
+
+    Function *execution* is what should keep a sandbox warm. A caller asking
+    for a long-lived endpoint merely to cache it would otherwise hold idle
+    compute for that whole window - which is how a single invocation used to
+    keep a pod's sandbox billing for hours past the last function run.
+    """
+
+    provider = Provider(database)
+    now = datetime.now(timezone.utc)
+    lifecycle = SandboxLifecycleService(database, provider)
+    service = PortAccessService(
+        database,
+        provider,
+        PortAccessSigner(b"s" * 32),
+        public_base_url="https://agentbox.example",
+        maximum_function_lease_seconds=3600,
+    )
+    key = SandboxKey(WorkloadKind.FUNCTION, uuid4())
+    await lifecycle.ensure(
+        key,
+        SandboxProfileRef("function-python-v1", f"sha256:{'c' * 64}"),
+        admission_class=AdmissionClass.BATCH,
+        deadline_at=now + timedelta(seconds=30),
+    )
+
+    with pytest.raises(AgentBoxError, match="maximum function lease"):
+        await service.lease_function_runtime(
+            key.logical_id,
+            deadline_at=now + timedelta(seconds=30),
+            required_valid_until=now + timedelta(hours=4),
+        )
+
+    # A genuinely long invocation is still served: that is real work, not a
+    # cached endpoint holding idle compute.
+    lease = await service.lease_function_runtime(
+        key.logical_id,
+        deadline_at=now + timedelta(seconds=30),
+        required_valid_until=now + timedelta(minutes=45),
+    )
+    assert lease.expires_at >= now + timedelta(minutes=45)
+
+    async with database.uow() as uow:
+        logical = await uow.repository.get_logical(key)
+        await uow.commit()
+    assert logical is not None
+    assert logical.protected_until is not None
+    # Protection tracks the invocation, and never the 24h ceiling it used to.
+    assert logical.protected_until <= now + timedelta(hours=1)
+
+
 async def test_function_runtime_lease_returns_direct_allocation_fenced_target(
     database: StateDatabase,
 ) -> None:

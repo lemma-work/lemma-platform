@@ -515,6 +515,10 @@ class SandboxHandle:
     ready: bool
     operation_id: UUID | None
     retry_after_ms: int | None
+    # Increments whenever this workspace's durable disk is recreated, which is
+    # the only way a caller can distinguish "your files are gone" from a
+    # perfectly ordinary empty directory. None for workloads without storage.
+    storage_generation: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

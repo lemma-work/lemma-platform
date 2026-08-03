@@ -563,6 +563,8 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workflow.step.started': EventSpec('debug', frozenset({'flow_id', 'node_id', 'node_type', 'run_id'})),
     'workflow.step.suspended': EventSpec('debug', frozenset({'node_id', 'run_id', 'wait_type'})),
     'workspace.agentbox_session.python_session_delete_failed': EventSpec('debug', frozenset({'sandbox_id', 'session_id'})),
+    'workspace.agentbox_session.output_cursor_read_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
+    'workspace.agentbox_session.output_cursor_write_failed': EventSpec('debug', frozenset({'process_id', 'sandbox_id'})),
     'workspace.mime_type.unknown': EventSpec('debug', frozenset()),
     'workspace.workspace_activity_store.invalid_workspace_activity_payload_user.diagnostic': EventSpec('debug', frozenset({'user_id'})),
     'workspace.workspace_state_store.invalid_workspace_state_payload_user.diagnostic': EventSpec('debug', frozenset({'user_id'})),

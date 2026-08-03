@@ -814,6 +814,18 @@
             ],
             "title": "Retry After Ms"
           },
+          "storage_generation": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Generation"
+          },
           "workload_kind": {
             "$ref": "#/components/schemas/WorkloadKind"
           }

@@ -30,9 +30,11 @@ from app.modules.workspace.services.interfaces import ISandbox, IWorkspaceSessio
 from app.modules.workspace.services.workspace_activity_store import (
     WorkspaceActivityStore,
 )
+from app.modules.workspace.services.workspace_process_store import WorkspaceProcessStore
 from app.modules.workspace.services.workspace_state_store import WorkspaceStateStore
 _activity_store: WorkspaceActivityStore | None = None
 _state_store: WorkspaceStateStore | None = None
+_process_store: WorkspaceProcessStore | None = None
 _SANDBOX_MANAGER_HTTP_TIMEOUT_SECONDS = 300.0
 
 
@@ -50,15 +52,25 @@ def get_workspace_state_store() -> WorkspaceStateStore:
     return _state_store
 
 
+def get_workspace_process_store() -> WorkspaceProcessStore:
+    global _process_store
+    if _process_store is None:
+        _process_store = WorkspaceProcessStore()
+    return _process_store
+
+
 async def reset_workspace_store_state() -> None:
     """Close and reset global workspace redis stores (used by tests)."""
-    global _activity_store, _state_store
+    global _activity_store, _state_store, _process_store
     if _activity_store is not None:
         await _activity_store.close()
         _activity_store = None
     if _state_store is not None:
         await _state_store.close()
         _state_store = None
+    if _process_store is not None:
+        await _process_store.close()
+        _process_store = None
 
 
 class WorkspaceSandboxService:
@@ -83,11 +95,13 @@ class WorkspaceSandboxService:
         container_manager: Optional[ISandbox] = None,
         activity_store: Optional[WorkspaceActivityStore] = None,
         state_store: Optional[WorkspaceStateStore] = None,
+        process_store: Optional[WorkspaceProcessStore] = None,
     ):
         self.runtime = runtime or self._resolve_runtime()
         self.sandbox = sandbox or container_manager or self._build_sandbox()
         self.activity_store = activity_store or get_workspace_activity_store()
         self.state_store = state_store or get_workspace_state_store()
+        self.process_store = process_store or get_workspace_process_store()
 
     @staticmethod
     def _resolve_runtime() -> str:
@@ -403,6 +417,23 @@ class WorkspaceSandboxService:
                 sandbox_info=sandbox_info,
             )
 
+        # Tell this session, once, if the disk it is about to use is not the one
+        # it saw last. Without it an agent cannot distinguish a recreated
+        # workspace from an ordinary empty directory.
+        workspace_recreated = False
+        if session_id and sandbox_info.storage_generation is not None:
+            try:
+                workspace_recreated = (
+                    await self.state_store.observe_storage_generation(
+                        runtime=self.runtime,
+                        session_id=session_id,
+                        generation=sandbox_info.storage_generation,
+                    )
+                )
+            except Exception:
+                # A missing notice is far better than a failed tool call.
+                workspace_recreated = False
+
         return AgentBoxWorkspaceSession(
             client=self._get_manager_client(),
             sandbox_id=str(agentbox_sandbox_id(user_id)),
@@ -412,6 +443,8 @@ class WorkspaceSandboxService:
             auto_close=close_on_exit,
             activity_callback=_activity_callback,
             owns_client=False,
+            output_cursor_store=self.process_store,
+            workspace_recreated=workspace_recreated,
         )
 
     async def _ensure_workspace_directory(

@@ -1,6 +1,7 @@
 from typing import Any, List, Dict
 import csv
 import io
+import re
 
 from app.modules.agent.tools.workspace_entities import (
     PythonExecutionResult,
@@ -11,6 +12,55 @@ CHARACTER_LIMIT_STDOUT = 30000
 CHARACTER_LIMIT_STDERR = 10000
 CHARACTER_LIMIT_OUTPUT = 10000
 CHARACTER_LIMIT_DATASTORE_RESULT = 50000  # Approximately 10k tokens (1 token ≈ 4 chars)
+
+# CSI (colours, cursor moves), OSC (window title), and single-character escapes.
+# A PTY emits these constantly; to a model they are noise that costs tokens and
+# obscures the text it actually needs to read.
+_CSI_SEQUENCE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_OSC_SEQUENCE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_OTHER_ESCAPE = re.compile(r"\x1b[@-Z\\-_]")
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def normalize_terminal_output(text: str) -> str:
+    """Render raw PTY output as the plain text a reader would see.
+
+    Interactive programs redraw: progress bars overwrite themselves with
+    carriage returns, and escape sequences move the cursor and set colours.
+    Passed through verbatim, a single `npm install` can spend thousands of
+    tokens re-drawing one line. Collapsing each line to its final state keeps
+    what the user would actually have on screen.
+    """
+
+    if not text:
+        return text
+    cleaned = _OSC_SEQUENCE.sub("", text)
+    cleaned = _CSI_SEQUENCE.sub("", cleaned)
+    cleaned = _OTHER_ESCAPE.sub("", cleaned)
+    lines: List[str] = []
+    for line in cleaned.split("\n"):
+        # Within a line, a carriage return means "redraw from the start", so
+        # only the last segment survives - that is the final rendered state.
+        segments = line.split("\r")
+        rendered = next(
+            (segment for segment in reversed(segments) if segment.strip()),
+            segments[-1] if segments else "",
+        )
+        lines.append(_CONTROL_CHARACTERS.sub("", rendered))
+    return "\n".join(lines)
+
+
+def tail_truncate(text: str | None, limit: int) -> str | None:
+    """Keep the end of the text rather than the beginning.
+
+    For an interactive terminal the live screen is at the end: a prompt, the
+    latest error, the current progress. Head-truncating it hands the agent the
+    banner and hides the part it needs to act on.
+    """
+
+    if text is None or len(text) <= limit:
+        return text
+    return "…[earlier output truncated]…\n" + text[-limit:]
 
 
 def replace_result_if_present(

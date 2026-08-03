@@ -82,6 +82,10 @@ class SandboxHandleResponse(StrictApiModel):
     ready: bool
     operation_id: UUID | None
     retry_after_ms: int | None = Field(default=None, ge=0)
+    # Increments whenever the workspace's durable disk is recreated. Lets a
+    # caller distinguish "your files are gone" from an ordinary empty
+    # directory. Absent for workloads without durable storage.
+    storage_generation: int | None = Field(default=None, ge=0)
 
     @classmethod
     def from_domain(cls, handle: SandboxHandle) -> SandboxHandleResponse:
@@ -96,6 +100,7 @@ class SandboxHandleResponse(StrictApiModel):
             ready=handle.ready,
             operation_id=handle.operation_id,
             retry_after_ms=handle.retry_after_ms,
+            storage_generation=handle.storage_generation,
         )
 
 

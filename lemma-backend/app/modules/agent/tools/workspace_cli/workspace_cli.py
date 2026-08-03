@@ -19,12 +19,18 @@ from app.modules.agent.tools.workspace_cli.models import (
     ListProcessesRequest,
     ListProcessesResult,
     ProcessInfo,
+    ResizeTerminalRequest,
     TerminateProcessRequest,
     ViewImageRequest,
     ViewImageResponse,
     WriteStdinRequest,
 )
-from app.modules.agent.tools.workspace_cli.helper import trim_python_result
+from app.modules.agent.tools.workspace_cli.helper import (
+    CHARACTER_LIMIT_STDOUT,
+    normalize_terminal_output,
+    tail_truncate,
+    trim_python_result,
+)
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
 from app.composition.agent_workspace import (
     get_workspace_tool_runtime,
@@ -140,6 +146,104 @@ async def _get_workspace_session(
     )
 
 
+WORKSPACE_RECREATED_NOTICE = (
+    "[workspace notice] This workspace was recreated since this conversation "
+    "last used it, so files written earlier are gone. This is the one case "
+    "where an empty working directory really does mean lost work — recreate "
+    "anything you still need."
+)
+
+
+def _with_recreation_notice(text: str | None, *, recreated: bool) -> str | None:
+    """Say once, explicitly, that files were lost — never make the agent guess."""
+
+    if not recreated:
+        return text
+    return f"{WORKSPACE_RECREATED_NOTICE}\n{text or ''}"
+
+
+def _render_terminal_result(
+    result: dict[str, Any], *, tty: bool
+) -> tuple[str | None, str | None]:
+    """Make raw PTY output readable, keeping the end rather than the start."""
+
+    stdout = result.get("stdout")
+    stderr = result.get("stderr")
+    if not tty:
+        return stdout, stderr
+    return (
+        tail_truncate(normalize_terminal_output(stdout or ""), CHARACTER_LIMIT_STDOUT),
+        tail_truncate(normalize_terminal_output(stderr or ""), CHARACTER_LIMIT_STDOUT),
+    )
+
+
+async def _process_control_tool(
+    ctx: BaseAgentContext,
+    *,
+    process_id: str,
+    operation: str,
+    call,
+    completed_default: bool,
+) -> ExecCommandResult:
+    """Run a control action against an already-running process.
+
+    Terminate and resize differ only in the call they make and how they report
+    completion, so they share one guard rather than repeating the failure
+    shaping - and with it the judgement about what a half-finished control
+    action means for the caller.
+    """
+
+    try:
+        runtime = get_workspace_tool_runtime()
+        runtime_context = workspace_runtime_context(ctx)
+        resolved_session_id = (
+            await runtime.resolve_session_for_process(process_id)
+            or runtime_context.default_shell_session_id
+        )
+        workspace_session = await _get_workspace_session(
+            ctx,
+            session_id=resolved_session_id,
+            close_on_exit=False,
+        )
+        async with workspace_session:
+            result = await call(workspace_session)
+        if completed_default:
+            await runtime.clear_process_binding(process_id)
+        return ExecCommandResult(
+            success=bool(result.get("success")),
+            stdout=result.get("stdout"),
+            stderr=result.get("stderr"),
+            exit_code=result.get("exit_code"),
+            completed=bool(result.get("completed", completed_default)),
+            process_id=result.get("process_id") or process_id,
+            error=result.get("error"),
+        )
+    except Exception as exc:
+        return _workspace_tool_failure(
+            exc,
+            operation=operation,
+            completed=False,
+            process_id=process_id,
+        )
+
+
+async def resize_terminal_internal(
+    ctx: BaseAgentContext,
+    request: ResizeTerminalRequest,
+) -> ExecCommandResult:
+    return await _process_control_tool(
+        ctx,
+        process_id=request.process_id,
+        operation="resize_terminal",
+        call=lambda session: session.resize_terminal(
+            process_id=request.process_id,
+            cols=request.cols,
+            rows=request.rows,
+        ),
+        completed_default=False,
+    )
+
+
 async def exec_command_internal(
     ctx: BaseAgentContext,
     request: ExecCommandRequest,
@@ -175,6 +279,8 @@ async def exec_command_internal(
                 workdir=request.workdir,
                 yield_time_ms=effective_yield_time_ms,
                 timeout=effective_timeout,
+                cols=request.cols,
+                rows=request.rows,
             )
             completed = bool(result.get("completed", True))
             process_id = result.get("process_id")
@@ -183,10 +289,14 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
+        stdout, stderr = _render_terminal_result(result, tty=request.tty)
+        stdout = _with_recreation_notice(
+            stdout, recreated=workspace_session.workspace_recreated
+        )
         return ExecCommandResult(
             success=bool(result.get("success")),
-            stdout=result.get("stdout"),
-            stderr=result.get("stderr"),
+            stdout=stdout,
+            stderr=stderr,
             exit_code=result.get("exit_code"),
             completed=completed,
             process_id=process_id if not completed else None,
@@ -230,10 +340,13 @@ async def write_stdin_internal(
                 process_id=str(result["process_id"]),
                 session_id=workspace_session.session_id,
             )
+        # write_stdin only ever targets an interactive process, so its output is
+        # terminal output and is rendered as such.
+        stdout, stderr = _render_terminal_result(result, tty=True)
         return ExecCommandResult(
             success=bool(result.get("success")),
-            stdout=result.get("stdout"),
-            stderr=result.get("stderr"),
+            stdout=stdout,
+            stderr=stderr,
             exit_code=result.get("exit_code"),
             completed=completed,
             process_id=result.get("process_id"),
@@ -255,36 +368,13 @@ async def terminate_process_internal(
     ctx: BaseAgentContext,
     request: TerminateProcessRequest,
 ) -> ExecCommandResult:
-    try:
-        runtime = get_workspace_tool_runtime()
-        runtime_context = workspace_runtime_context(ctx)
-        resolved_session_id = (
-            await runtime.resolve_session_for_process(request.process_id)
-            or runtime_context.default_shell_session_id
-        )
-        workspace_session = await _get_workspace_session(
-            ctx,
-            session_id=resolved_session_id,
-            close_on_exit=False,
-        )
-        async with workspace_session:
-            result = await workspace_session.terminate_process(request.process_id)
-        await runtime.clear_process_binding(request.process_id)
-        return ExecCommandResult(
-            success=bool(result.get("success")),
-            stdout=result.get("stdout"),
-            stderr=result.get("stderr"),
-            exit_code=result.get("exit_code"),
-            completed=bool(result.get("completed", True)),
-            process_id=result.get("process_id"),
-            error=result.get("error"),
-        )
-    except Exception as exc:
-        return _workspace_tool_failure(
-            exc,
-            operation="terminate_process",
-            process_id=request.process_id,
-        )
+    return await _process_control_tool(
+        ctx,
+        process_id=request.process_id,
+        operation="terminate_process",
+        call=lambda session: session.terminate_process(request.process_id),
+        completed_default=True,
+    )
 
 
 async def list_processes_internal(
@@ -302,15 +392,32 @@ async def list_processes_internal(
         )
         async with workspace_session:
             processes = await workspace_session.list_processes()
+        # One sandbox serves every conversation belonging to a user, so this
+        # list spans all of them. Show only what this conversation may drive:
+        # its own processes, plus any that no conversation currently owns.
+        # Rebinding indiscriminately would let a parent agent take over the
+        # processes its own sub-agents started, since a sub-agent shares the
+        # sandbox but has its own session.
+        session_id = workspace_session.session_id
+        visible: list[dict[str, Any]] = []
         for process in processes:
-            if not process.get("completed") and workspace_session.session_id:
-                await runtime.bind_process_to_session(
-                    process_id=str(process["process_id"]),
-                    session_id=workspace_session.session_id,
-                )
+            process_id = str(process["process_id"])
+            owner = await runtime.resolve_session_for_process(process_id)
+            if owner is None:
+                # Unowned: its binding expired, or it was started outside the
+                # tool path. Claiming it here is how an agent recovers a
+                # process it can otherwise no longer address.
+                if not process.get("completed") and session_id:
+                    await runtime.bind_process_to_session(
+                        process_id=process_id,
+                        session_id=session_id,
+                    )
+                visible.append(process)
+            elif owner == session_id:
+                visible.append(process)
         return ListProcessesResult(
             success=True,
-            processes=[ProcessInfo.model_validate(process) for process in processes],
+            processes=[ProcessInfo.model_validate(process) for process in visible],
         )
     except Exception as exc:
         logger.debug(
@@ -338,7 +445,10 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
             result = await workspace_session.execute_code(
                 request.code, request.timeout_seconds
             )
-        return trim_python_result(result)
+        trimmed = trim_python_result(result)
+        if workspace_session.workspace_recreated:
+            trimmed.stdout = _with_recreation_notice(trimmed.stdout, recreated=True)
+        return trimmed
     except Exception as exc:
         return _python_workspace_tool_failure(exc, operation="execute_python")
 
@@ -498,6 +608,20 @@ async def write_stdin(
     - Run another command in the same shell: `chars="npm test\\n"`
     """
     return await write_stdin_internal(ctx, request)
+
+
+async def resize_terminal(
+    ctx: BaseAgentContext,
+    request: ResizeTerminalRequest,
+) -> ExecCommandResult:
+    """
+    Resize an interactive terminal so its program re-renders at a new size.
+
+    Use when a `tty` program's output is wrapping badly or a full-screen UI is
+    clipped — for example a wide table, `htop`, or a pager. Follow with
+    `write_stdin` (`chars=""`) to read the redrawn screen.
+    """
+    return await resize_terminal_internal(ctx, request)
 
 
 async def terminate_process(

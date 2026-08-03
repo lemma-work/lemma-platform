@@ -137,6 +137,165 @@ def _session(client: _CanonicalClient) -> AgentBoxWorkspaceSession:
     )
 
 
+class _CapacityThenSucceedClient:
+    """Rejects the first start with a retryable capacity signal, then accepts."""
+
+    def __init__(self, rejections: int = 2) -> None:
+        self.remaining_rejections = rejections
+        self.start_operation_ids: list[Any] = []
+
+    async def start_process(self, *_args: Any, **kwargs: Any) -> None:
+        self.start_operation_ids.append(kwargs["operation_id"])
+        if self.remaining_rejections > 0:
+            self.remaining_rejections -= 1
+            response = httpx.Response(
+                429,
+                request=httpx.Request("POST", "https://agentbox.test/processes"),
+            )
+            raise AgentBoxApiError(
+                response,
+                AgentBoxErrorResponse(
+                    error=AgentBoxErrorBody(
+                        code="CAPACITY_EXHAUSTED",
+                        message="manager process routing capacity is full",
+                        retry=RetryDisposition.WAIT,
+                        retry_after_ms=1,
+                    )
+                ),
+            )
+
+    async def read_process_output(
+        self, *_args: Any, **_kwargs: Any
+    ) -> ProcessOutputSnapshot:
+        return ProcessOutputSnapshot(
+            chunks=(
+                ProcessOutputChunk(
+                    sequence=1,
+                    channel=ProcessOutputChannel.STDOUT,
+                    data=b"ok\n",
+                ),
+            ),
+            next_sequence=2,
+            truncated_before_sequence=None,
+            state=ProcessState.SUCCEEDED,
+            exit_code=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_capacity_pressure_is_absorbed_instead_of_failing_the_tool_call() -> None:
+    """A WAIT signal must not become an agent-visible tool failure.
+
+    Capacity is rejected before anything is dispatched, so asking the agent to
+    retry made it the retry loop for a platform-level limit and amplified the
+    load that caused it. Retries reuse the operation ID, so the manager still
+    deduplicates.
+    """
+
+    client = _CapacityThenSucceedClient(rejections=2)
+    session = AgentBoxWorkspaceSession(
+        client=client,  # type: ignore[arg-type]
+        sandbox_id=uuid4(),
+        session_id="conversation-1",
+    )
+
+    result = await session.exec_command(cmd="echo ok", timeout=30)
+
+    assert result["success"] is True
+    assert result["stdout"] == "ok\n"
+    assert result["error"] is None
+    assert len(client.start_operation_ids) == 3
+    # One operation identity across all attempts keeps manager dedup effective.
+    assert len(set(client.start_operation_ids)) == 1
+
+
+class _ReplayTrackingClient:
+    """A client whose output buffer honours ``after_sequence``, like the manager."""
+
+    def __init__(self) -> None:
+        self.requested_after: list[int] = []
+        self._buffer = [
+            ProcessOutputChunk(
+                sequence=index,
+                channel=ProcessOutputChannel.STDOUT,
+                data=f"line-{index}\n".encode(),
+            )
+            for index in range(1, 4)
+        ]
+
+    async def start_process(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def send_process_input(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def read_process_output(
+        self, *_args: Any, **kwargs: Any
+    ) -> ProcessOutputSnapshot:
+        after = int(kwargs.get("after_sequence") or 0)
+        self.requested_after.append(after)
+        return ProcessOutputSnapshot(
+            chunks=tuple(item for item in self._buffer if item.sequence > after),
+            next_sequence=len(self._buffer) + 1,
+            truncated_before_sequence=None,
+            state=ProcessState.RUNNING,
+            exit_code=None,
+        )
+
+
+class _MemoryCursorStore:
+    def __init__(self) -> None:
+        self.cursors: dict[str, int] = {}
+
+    async def get_output_cursor(self, process_id: str) -> int:
+        return self.cursors.get(process_id, 0)
+
+    async def set_output_cursor(
+        self, *, process_id: str, sequence: int, ttl_seconds: int = 0
+    ) -> None:
+        del ttl_seconds
+        self.cursors[process_id] = sequence
+
+
+@pytest.mark.asyncio
+async def test_polling_a_process_again_does_not_replay_delivered_output() -> None:
+    """A second tool call must not re-read output the first already returned.
+
+    The session object is rebuilt per tool call, so an in-memory cursor
+    restarts at zero and every poll of a long-running or interactive process
+    re-delivers its whole retained buffer. The shared cursor store is what
+    makes the second poll resume where the first stopped.
+    """
+
+    client = _ReplayTrackingClient()
+    store = _MemoryCursorStore()
+    sandbox_id = uuid4()
+
+    def build() -> AgentBoxWorkspaceSession:
+        return AgentBoxWorkspaceSession(
+            client=client,  # type: ignore[arg-type]
+            sandbox_id=sandbox_id,
+            session_id="conversation-1",
+            output_cursor_store=store,
+        )
+
+    first = await build().exec_command(cmd="tail -f log", yield_time_ms=1)
+    process_id = first["process_id"]
+    assert process_id is not None
+    assert first["stdout"] == "line-1\nline-2\nline-3\n"
+    # The first poll of a new process starts from the beginning, and the
+    # delivered position is remembered outside this session object.
+    assert client.requested_after[0] == 0
+    assert store.cursors[process_id] == 3
+
+    # A separate tool call, and therefore a brand new session object.
+    client.requested_after.clear()
+    second = await build().write_stdin(process_id=process_id, yield_time_ms=1)
+
+    assert client.requested_after[0] == 3
+    assert second["stdout"] == ""
+
+
 @pytest.mark.asyncio
 async def test_shell_process_uses_typed_environment_and_collects_both_channels() -> (
     None

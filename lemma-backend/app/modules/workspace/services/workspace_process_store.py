@@ -23,6 +23,39 @@ class WorkspaceProcessStore:
     def _key(self, process_id: str) -> str:
         return f"{self._key_prefix}:{process_id}"
 
+    def _cursor_key(self, process_id: str) -> str:
+        return f"{self._key_prefix}:{process_id}:cursor"
+
+    async def set_output_cursor(
+        self,
+        *,
+        process_id: str,
+        sequence: int,
+        ttl_seconds: int = 60 * 30,
+    ) -> None:
+        """Remember how much of a process's output has been delivered.
+
+        The workspace session object is rebuilt on every tool call, so an
+        in-memory cursor restarts at zero and each poll re-reads the process's
+        whole retained buffer. Keeping the cursor here is what makes polling an
+        interactive process return only new output.
+        """
+
+        await self._redis.set(
+            self._cursor_key(process_id),
+            str(sequence),
+            ex=max(1, ttl_seconds),
+        )
+
+    async def get_output_cursor(self, process_id: str) -> int:
+        value = await self._redis.get(self._cursor_key(process_id))
+        if value is None:
+            return 0
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+
     async def set_session_id(
         self,
         *,
@@ -43,7 +76,7 @@ class WorkspaceProcessStore:
         return str(value)
 
     async def delete(self, process_id: str) -> None:
-        await self._redis.delete(self._key(process_id))
+        await self._redis.delete(self._key(process_id), self._cursor_key(process_id))
 
     async def close(self) -> None:
         # The client is shared process-wide; closing it here would break

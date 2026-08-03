@@ -55,6 +55,28 @@ EVENT_CATALOG: dict[str, EventSpec] = {
         "warning",
         frozenset({"allocation_count", "provider_scope"}),
     ),
+    "agentbox.process_lease.failed": EventSpec("warning", frozenset()),
+    "agentbox.inventory.sweep_failed": EventSpec("warning", frozenset()),
+    "agentbox.inventory.listing_failed": EventSpec(
+        "warning",
+        frozenset({"error_type", "provider_scope"}),
+    ),
+    "agentbox.inventory.unrecognised_sandbox_ignored": EventSpec(
+        "info",
+        frozenset({"provider_id", "provider_scope"}),
+    ),
+    "agentbox.inventory.provider_paused_active_allocation": EventSpec(
+        "warning",
+        frozenset({"provider_id", "provider_scope", "workload_kind"}),
+    ),
+    "agentbox.inventory.untracked_sandbox_destroyed": EventSpec(
+        "warning",
+        frozenset({"allocation_state", "provider_id", "provider_scope"}),
+    ),
+    "agentbox.inventory.untracked_destroy_failed": EventSpec(
+        "warning",
+        frozenset({"error_type", "provider_id", "provider_scope"}),
+    ),
     "port.proxy.upstream_failed": EventSpec(
         "error",
         frozenset({"method", "protocol", "provider"}),

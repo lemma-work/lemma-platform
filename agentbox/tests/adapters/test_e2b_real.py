@@ -15,6 +15,7 @@ from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
 from agentbox.domain import (
     AdmissionClass,
     AgentBoxError,
+    AllocationState,
     ByteRange,
     CreatePythonSessionRequest,
     EnvironmentVariable,
@@ -31,10 +32,12 @@ from agentbox.domain import (
     WorkloadKind,
 )
 from agentbox.filesystem import FilesystemService
+from agentbox.inventory import SandboxInventorySweeper
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.maintenance import SandboxMaintenanceWorker
 from agentbox.persistence.uow import StateDatabase
 from agentbox.port_access import PortAccessService, PortAccessSigner
+from agentbox.ports import ProviderMetadataEntry
 from agentbox.processes import ProcessExecutionService
 from agentbox.profiles import E2BProfileArtifact, ProfileRegistry, SandboxProfile
 from agentbox.python_sessions import PythonSessionService
@@ -101,14 +104,21 @@ def _function_profile() -> SandboxProfile:
     )
 
 
-def _adapter(registry: ProfileRegistry, *, scope: str) -> E2BSandboxAdapter:
+def _adapter(
+    registry: ProfileRegistry,
+    *,
+    scope: str,
+    workspace_timeout_seconds: int = 600,
+    workspace_timeout_refresh_seconds: int = 60,
+) -> E2BSandboxAdapter:
     return E2BSandboxAdapter(
         registry,
         E2BAdapterConfig(
             api_key=os.environ["E2B_API_KEY"],
             scope=scope,
             request_timeout_seconds=60,
-            workspace_timeout_seconds=600,
+            workspace_timeout_seconds=workspace_timeout_seconds,
+            workspace_timeout_refresh_seconds=workspace_timeout_refresh_seconds,
             function_timeout_seconds=300,
         ),
     )
@@ -548,7 +558,7 @@ async def test_real_e2b_missing_workspace_is_fenced_and_recreated(
         await database.dispose()
 
 
-async def test_real_e2b_hard_expiry_allows_fresh_workspace(
+async def test_real_e2b_expiry_recreates_but_profile_change_preserves_disk(
     tmp_path: Path,
 ) -> None:
     profile = _workspace_profile()
@@ -577,6 +587,7 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
         function_idle_seconds=0,
         batch_size=1,
     )
+    filesystem = FilesystemService(database, adapter)
     key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
     deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
     original_provider_id: str | None = None
@@ -608,6 +619,18 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
         assert fresh_provider_id is not None
         assert fresh_provider_id != original_provider_id
 
+        # Shipping a new workspace profile must never cost the user their
+        # files. E2B workspace storage is the sandbox itself, so replacing the
+        # allocation to adopt a new digest would delete everything the agent
+        # has written. The workspace keeps running its existing profile until
+        # it is recreated from scratch.
+        await filesystem.write(
+            key,
+            "/workspace/survives-profile-change",
+            b"kept",
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
         replacement = await lifecycle.ensure(
             key,
             replacement_profile.ref,
@@ -617,8 +640,16 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
         )
         replacement_provider_id = await _provider_id(database, key)
         assert replacement.ready is True
-        assert replacement_provider_id is not None
-        assert replacement_provider_id != fresh_provider_id
+        assert replacement_provider_id == fresh_provider_id
+        assert (
+            await filesystem.read(
+                key,
+                "/workspace/survives-profile-change",
+                ByteRange(offset=0, length=None),
+                deadline_at=deadline,
+            )
+            == b"kept"
+        )
         assert await lifecycle.destroy(key, deadline_at=deadline)
     finally:
         await _kill_exact(original_provider_id)
@@ -699,3 +730,398 @@ async def test_real_e2b_function_runtime_port_and_exact_destroy(
         await _kill_exact(provider_id)
         await adapter.close()
         await database.dispose()
+
+
+async def test_real_e2b_active_workspace_outlives_the_provider_timeout(
+    tmp_path: Path,
+) -> None:
+    """An actively-used workspace must never be paused by E2B mid-session.
+
+    E2B's `timeout` is a continuous-runtime ceiling, not an idle timer, so
+    without a refresh on activity the provider stops a busy workspace once the
+    window elapses. Compressed to E2B's 60s minimum so the behaviour is
+    observable in a test.
+
+    A background process is the proof: a workspace pause is filesystem-only and
+    cold-boots, so a process that is still running after more than one full
+    timeout window can only mean the sandbox was never paused.
+    """
+
+    profile = _workspace_profile()
+    adapter = _adapter(
+        ProfileRegistry((profile,)),
+        scope=f"e2b:workspace-timeout-refresh:{uuid4()}",
+        workspace_timeout_seconds=60,
+        workspace_timeout_refresh_seconds=5,
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(database, adapter)
+    processes = ProcessExecutionService(database, adapter)
+    filesystem = FilesystemService(database, adapter)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
+    provider_id: str | None = None
+
+    try:
+        handle = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        assert handle.ready is True
+        provider_id = await _provider_id(database, key)
+
+        marker = uuid4()
+        background_id = uuid4()
+        await processes.start(
+            key,
+            StartProcessRequest(
+                operation_id=background_id,
+                shell_command=f"sleep 300 # {marker}",
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=4096,
+                deadline_at=deadline,
+            ),
+        )
+
+        # Stay busy for well over one full timeout window.
+        for index in range(9):
+            await asyncio.sleep(10)
+            await filesystem.write(
+                key,
+                f"/workspace/heartbeat-{index}",
+                b"busy",
+                expected_sha256=None,
+                deadline_at=deadline,
+            )
+
+        still_running = await processes.inspect(key, background_id)
+        assert still_running.state == ProcessState.RUNNING
+        assert await _provider_id(database, key) == provider_id
+    finally:
+        provider_id = provider_id or await _provider_id(database, key)
+        await _kill_exact(provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+async def test_real_e2b_running_process_defers_idle_release(
+    tmp_path: Path,
+) -> None:
+    """Idle cleanup must not pause a sandbox out from under a running process.
+
+    Activity protection is otherwise taken only for the starting operation's
+    deadline, so a dev server or long build was released - and killed by
+    quiesce - at the idle threshold after the agent's last poll.
+    """
+
+    profile = _workspace_profile()
+    adapter = _adapter(
+        ProfileRegistry((profile,)),
+        scope=f"e2b:process-lease:{uuid4()}",
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(database, adapter)
+    processes = ProcessExecutionService(database, adapter)
+    # Idle cleanup is due immediately, so only the process lease can hold it off.
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
+    provider_id: str | None = None
+
+    try:
+        await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        provider_id = await _provider_id(database, key)
+
+        background_id = uuid4()
+        # Starting a process protects the sandbox only for its own request
+        # deadline; a short one here is exactly the case the lease exists for -
+        # a process that outlives the call that started it.
+        await processes.start(
+            key,
+            StartProcessRequest(
+                operation_id=background_id,
+                shell_command="sleep 300",
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=4096,
+                deadline_at=datetime.now(timezone.utc) + timedelta(seconds=5),
+            ),
+        )
+        assert await processes.renew_process_leases(lease_seconds=20) == 1
+
+        # Held off purely by the lease: the sandbox is otherwise long idle.
+        assert await maintenance.run_once(deadline_at=deadline) == 0
+        assert (await processes.inspect(key, background_id)).state == (
+            ProcessState.RUNNING
+        )
+
+        # Once the process is gone the lease stops being renewed, and after the
+        # outstanding protection expires idle cleanup proceeds normally. Note
+        # protection only ever extends, so this waits it out rather than
+        # shortening it.
+        await processes.terminate(
+            key, background_id, grace_seconds=0, deadline_at=deadline
+        )
+        assert await processes.renew_process_leases(lease_seconds=20) == 0
+        await asyncio.sleep(21)
+
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        async with database.uow() as uow:
+            released = await uow.repository.current_allocation(key)
+            await uow.commit()
+        assert released is not None
+        assert released.state == AllocationState.RELEASED
+    finally:
+        provider_id = provider_id or await _provider_id(database, key)
+        await _kill_exact(provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+async def test_real_e2b_storage_generation_marks_only_a_genuinely_lost_disk(
+    tmp_path: Path,
+) -> None:
+    """The generation must move only when files are actually gone.
+
+    It is the one signal that lets an agent tell a wiped workspace from an
+    ordinary empty directory, so a false positive is as harmful as no signal
+    at all: it would teach agents to distrust it.
+    """
+
+    profile = _workspace_profile()
+    adapter = _adapter(
+        ProfileRegistry((profile,)),
+        scope=f"e2b:storage-generation:{uuid4()}",
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(
+        database,
+        adapter,
+        workspace_retention_seconds=0,
+    )
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
+    original_provider_id: str | None = None
+    recreated_provider_id: str | None = None
+
+    try:
+        first = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        original_provider_id = await _provider_id(database, key)
+        assert first.storage_generation == 0
+
+        # An ordinary idle pause and resume keeps the disk, so the generation
+        # must not move: this is the case agents were misreading as a wipe.
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        resumed = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        assert resumed.storage_generation == 0
+        assert await _provider_id(database, key) == original_provider_id
+
+        # Retention expiry genuinely destroys the disk, and that must show.
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        recreated = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        recreated_provider_id = await _provider_id(database, key)
+
+        assert recreated_provider_id != original_provider_id
+        assert recreated.storage_generation == 1
+    finally:
+        await _kill_exact(original_provider_id)
+        await _kill_exact(recreated_provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+class _DestroyIgnoringAdapter:
+    """Wraps the real adapter but drops destroy calls.
+
+    Simulates the failure the sweep exists for: durable state records the
+    sandbox as destroyed, but the provider still has it running and billing.
+    """
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+    async def destroy_allocation(self, allocation, *, deadline_at) -> None:
+        del allocation, deadline_at
+
+
+async def test_real_e2b_sweep_reclaims_a_sandbox_our_state_gave_up_on(
+    tmp_path: Path,
+) -> None:
+    """A destroy that silently failed leaves compute billing forever.
+
+    Nothing retries it: durable state already believes the sandbox is gone, so
+    no other code path will ever look at it again. The sweep is the only thing
+    that notices, and it reclaims it because this deployment created it and
+    already decided it should not exist.
+    """
+
+    profile = _workspace_profile()
+    scope = f"e2b:inventory-sweep:{uuid4()}"
+    adapter = _adapter(ProfileRegistry((profile,)), scope=scope)
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    # Release and destroy are driven through an adapter that ignores destroy,
+    # so the provider keeps the sandbox while the database moves on.
+    deaf_adapter = _DestroyIgnoringAdapter(adapter)
+    lifecycle = SandboxLifecycleService(
+        database, deaf_adapter, workspace_retention_seconds=0
+    )
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
+    provider_id: str | None = None
+
+    try:
+        await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        provider_id = await _provider_id(database, key)
+        assert provider_id is not None
+
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+
+        # Durable state says gone; E2B disagrees.
+        surviving = await adapter.find_allocations(
+            (
+                ProviderMetadataEntry("managed-by", "agentbox"),
+                ProviderMetadataEntry("provider-scope", scope),
+            ),
+            deadline_at=deadline,
+        )
+        assert [item.provider_id for item in surviving] == [provider_id]
+
+        sweeper = SandboxInventorySweeper(
+            database, adapter, untracked_grace_seconds=0
+        )
+        assert await sweeper.sweep_once(deadline_at=deadline) == 1
+
+        remaining = await adapter.find_allocations(
+            (
+                ProviderMetadataEntry("managed-by", "agentbox"),
+                ProviderMetadataEntry("provider-scope", scope),
+            ),
+            deadline_at=deadline,
+        )
+        assert [item.provider_id for item in remaining] == []
+    finally:
+        await _kill_exact(provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+async def test_real_e2b_sweep_leaves_another_deployments_sandbox_alone(
+    tmp_path: Path,
+) -> None:
+    """A provider account is shared; unrecognised must never mean abandoned.
+
+    Here the sandbox is real and running, and a *different* database is asked
+    to sweep. Destroying it would be destroying another environment's live
+    workspace.
+    """
+
+    profile = _workspace_profile()
+    scope = f"e2b:inventory-foreign:{uuid4()}"
+    adapter = _adapter(ProfileRegistry((profile,)), scope=scope)
+    owning_database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'owner.db'}")
+    await owning_database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(owning_database, adapter)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
+    provider_id: str | None = None
+    other_database: StateDatabase | None = None
+
+    try:
+        await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        provider_id = await _provider_id(owning_database, key)
+        assert provider_id is not None
+
+        other_database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'other.db'}")
+        await other_database.create_schema_for_test()
+        sweeper = SandboxInventorySweeper(
+            other_database, adapter, untracked_grace_seconds=0
+        )
+        assert await sweeper.sweep_once(deadline_at=deadline) == 0
+
+        remaining = await adapter.find_allocations(
+            (
+                ProviderMetadataEntry("managed-by", "agentbox"),
+                ProviderMetadataEntry("provider-scope", scope),
+            ),
+            deadline_at=deadline,
+        )
+        assert [item.provider_id for item in remaining] == [provider_id]
+    finally:
+        if other_database is not None:
+            await other_database.dispose()
+        await _kill_exact(provider_id)
+        await adapter.close()
+        await owning_database.dispose()

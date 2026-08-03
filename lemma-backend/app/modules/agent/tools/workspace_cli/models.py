@@ -35,8 +35,25 @@ class ExecCommandRequest(BaseModel):
         description=(
             "Set true to allocate an interactive terminal session. Required for "
             "commands that stay alive or wait for input (for example `npm run dev`, "
-            "`python`, `bash`)."
+            "`python`, `bash`). An interactive process does not survive the "
+            "sandbox being paused while you are idle, so treat it as belonging "
+            "to the current stretch of work."
         ),
+    )
+    cols: int = Field(
+        default=120,
+        ge=20,
+        le=500,
+        description=(
+            "Terminal width for `tty` commands. Widen it for programs that "
+            "render tables or wide output."
+        ),
+    )
+    rows: int = Field(
+        default=40,
+        ge=5,
+        le=200,
+        description="Terminal height for `tty` commands.",
     )
     workdir: Optional[str] = Field(
         default=None,
@@ -81,7 +98,11 @@ class WriteStdinRequest(BaseModel):
         default=None,
         description=(
             'Characters to send to stdin. Use `""` to poll output without sending '
-            "input. Include `\\n` when pressing Enter is required."
+            "input. Include `\\n` when pressing Enter is required. Control keys "
+            "are sent as their characters: `\\u0003` interrupts (Ctrl-C), "
+            "`\\u0004` sends EOF (Ctrl-D) to exit a REPL, and `\\u001b[A` / "
+            "`\\u001b[B` are the up and down arrows. Prefer interrupting a stuck "
+            "process over abandoning it."
         ),
     )
     max_output_tokens: int = Field(
@@ -119,22 +140,40 @@ class ListProcessesRequest(BaseModel):
 class ManageProcessRequest(BaseModel):
     """Drive a process started by `exec_command` (interactive or long-running)."""
 
-    action: Literal["input", "kill", "list"] = Field(
+    action: Literal["input", "kill", "list", "resize"] = Field(
         description=(
             "'input' = send chars to (or poll output from) a running process; "
-            "'kill' = stop a process; 'list' = list tracked processes."
+            "'kill' = stop a process; 'list' = list tracked processes; "
+            "'resize' = change an interactive terminal's size."
         )
     )
     process_id: Optional[str] = Field(
         default=None,
-        description="Process ID from `exec_command`. Required for 'input' and 'kill'.",
+        description=(
+            "Process ID from `exec_command`. Required for 'input', 'kill', and "
+            "'resize'."
+        ),
     )
     chars: Optional[str] = Field(
         default=None,
         description=(
             'For action="input": characters to send to stdin. Use `""` to poll '
-            "output without sending input. Include `\\n` to press Enter."
+            "output without sending input. Include `\\n` to press Enter. "
+            "Control keys are sent as characters: `\\u0003` interrupts (Ctrl-C) "
+            "and `\\u0004` sends EOF (Ctrl-D) to leave a REPL."
         ),
+    )
+    cols: int = Field(
+        default=120,
+        ge=20,
+        le=500,
+        description='For action="resize": new terminal width in columns.',
+    )
+    rows: int = Field(
+        default=40,
+        ge=5,
+        le=200,
+        description='For action="resize": new terminal height in rows.',
     )
     max_output_tokens: int = Field(
         default=10000,
@@ -215,6 +254,26 @@ class ExecCommandResult(BaseToolResponse):
             "Process ID to reuse with `write_stdin` for follow-up interaction "
             "when this interactive process is still running."
         ),
+    )
+
+
+class ResizeTerminalRequest(BaseModel):
+    comment: Optional[str] = Field(
+        default=None,
+        description=WORKSPACE_TOOL_COMMENT_DESC,
+    )
+    process_id: str = Field(
+        description="Interactive process ID returned by `exec_command`."
+    )
+    cols: int = Field(
+        ge=20,
+        le=500,
+        description="New terminal width in columns.",
+    )
+    rows: int = Field(
+        ge=5,
+        le=200,
+        description="New terminal height in rows.",
     )
 
 

@@ -131,7 +131,8 @@ class E2BAdapterConfig:
     api_key: str
     scope: str
     request_timeout_seconds: float = 20
-    workspace_timeout_seconds: int = 3600
+    workspace_timeout_seconds: int = 900
+    workspace_timeout_refresh_seconds: int = 60
     function_timeout_seconds: int = 300
     function_idle_grace_seconds: int = 300
     function_timeout_refresh_seconds: int = 60
@@ -151,6 +152,13 @@ class E2BAdapterConfig:
             raise ValueError("E2B sandbox timeouts must be at least 60 seconds")
         if self.function_timeout_refresh_seconds < 1:
             raise ValueError("E2B function timeout refresh must be positive")
+        if not 1 <= self.workspace_timeout_refresh_seconds < (
+            self.workspace_timeout_seconds
+        ):
+            raise ValueError(
+                "E2B workspace timeout refresh must be positive and shorter than "
+                "the workspace timeout"
+            )
         if self.rate_limit_retry_after_ms < 1:
             raise ValueError("E2B rate limit retry delay must be positive")
         if self.max_file_transfer_bytes < 1:
@@ -283,10 +291,18 @@ class E2BSandboxAdapter:
         self._sandboxes: dict[str, E2BSandboxType] = {}
         self._processes: dict[tuple[str, str], _ProcessBuffer] = {}
         self._process_lock = asyncio.Lock()
-        self._python_contexts: dict[str, set[str]] = {}
+        # provider_id -> {session_id: context_id}. Ownership is per session so
+        # replacing one session's interpreter can never destroy another's.
+        self._python_contexts: dict[str, dict[str, str]] = {}
         self._python_context_locks: dict[str, asyncio.Lock] = {}
-        self._function_timeout_until: dict[str, datetime] = {}
-        self._function_timeout_lock = asyncio.Lock()
+        # When E2B will stop each sandbox, and when we last pushed that out.
+        # E2B's `timeout` is a continuous-runtime ceiling rather than an idle
+        # timer: nothing happening inside the sandbox extends it, so AgentBox
+        # must refresh it on activity or an actively-used workspace is paused
+        # mid-session.
+        self._timeout_until: dict[str, datetime] = {}
+        self._timeout_refreshed_at: dict[str, datetime] = {}
+        self._timeout_lock = asyncio.Lock()
 
     async def create(self, request: ProviderCreateRequest) -> ProviderCreateResult:
         artifact = self._profiles.e2b_artifact(
@@ -300,7 +316,17 @@ class E2BSandboxAdapter:
             else self._config.function_timeout_seconds
         )
         lifecycle = (
-            {"on_timeout": "pause", "auto_resume": False}
+            # Filesystem-only, matching the explicit release path: files are the
+            # durability guarantee and processes are ephemeral by design. The
+            # bare string form would default to keep_memory=True, making the
+            # provider's own stop preserve memory while our release did not -
+            # two different meanings for one state transition. E2B also refuses
+            # auto-resume for filesystem-only snapshots, so disabling it here is
+            # required rather than merely intentional.
+            {
+                "on_timeout": {"action": "pause", "keep_memory": False},
+                "auto_resume": False,
+            }
             if workspace
             else {"on_timeout": "kill", "auto_resume": False}
         )
@@ -342,10 +368,7 @@ class E2BSandboxAdapter:
             raise ProviderCreateAmbiguous(str(exc)) from exc
 
         self._sandboxes[sandbox.sandbox_id] = sandbox
-        if not workspace:
-            self._function_timeout_until[sandbox.sandbox_id] = datetime.now(
-                timezone.utc
-            ) + timedelta(seconds=timeout)
+        self._record_timeout(sandbox.sandbox_id, timeout)
         storage = (
             ProviderStorageResult(
                 provider_storage_id=sandbox.sandbox_id,
@@ -488,6 +511,7 @@ class E2BSandboxAdapter:
             self._sandboxes.pop(allocation.provider_id, None)
             self._python_contexts.pop(allocation.provider_id, None)
             self._python_context_locks.pop(allocation.provider_id, None)
+            self._forget_timeout(allocation.provider_id)
         except SandboxNotFoundException:
             return
         except Exception as exc:
@@ -508,7 +532,7 @@ class E2BSandboxAdapter:
             self._sandboxes.pop(allocation.provider_id, None)
             self._python_contexts.pop(allocation.provider_id, None)
             self._python_context_locks.pop(allocation.provider_id, None)
-            self._function_timeout_until.pop(allocation.provider_id, None)
+            self._forget_timeout(allocation.provider_id)
             await self._drop_process_buffers(allocation.provider_id)
         except SandboxNotFoundException:
             return
@@ -572,6 +596,8 @@ class E2BSandboxAdapter:
                     if workspace
                     else None
                 ),
+                allocation_token=self._inventory_token(item),
+                running=self._inventory_running(item),
             )
             for item in found
             if self._inventory_metadata_matches(item, expected)
@@ -583,6 +609,23 @@ class E2BSandboxAdapter:
         return isinstance(metadata, Mapping) and all(
             metadata.get(name) == value for name, value in expected.items()
         )
+
+    @staticmethod
+    def _inventory_token(item: Any) -> UUID | None:
+        metadata = getattr(item, "metadata", None)
+        if not isinstance(metadata, Mapping):
+            return None
+        try:
+            return UUID(str(metadata.get("allocation-token")))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _inventory_running(item: Any) -> bool | None:
+        state = getattr(item, "state", None)
+        if state is None:
+            return None
+        return str(getattr(state, "value", state)).lower() == "running"
 
     async def start_process(
         self, request: ProviderProcessStartRequest
@@ -1067,24 +1110,32 @@ class E2BSandboxAdapter:
             asyncio.Lock(),
         )
         async with context_lock:
-            owned = self._python_contexts.setdefault(allocation.provider_id, set())
+            owned = self._python_contexts.setdefault(allocation.provider_id, {})
             try:
                 existing = await sandbox.list_code_contexts()
                 existing_ids = {context.id for context in existing}
-                owned.intersection_update(existing_ids)
-                # A manager restart intentionally forgets runtime handles. Clear
-                # the abandoned provider contexts before creating a new one so
-                # an old execution cannot overlap a fresh interpreter.
-                for context in existing:
-                    if context.id not in owned:
-                        await sandbox.remove_code_context(context.id)
-                before = set(owned)
+                # Forget ownership of contexts the provider no longer has.
+                for session_key, context_id in list(owned.items()):
+                    if context_id not in existing_ids:
+                        owned.pop(session_key, None)
+                # Replace only *this* session's previous interpreter, so a new
+                # one cannot overlap an execution still running on the old.
+                # Contexts belonging to other sessions are left alone: one
+                # sandbox serves every conversation a user has, and a manager
+                # restart forgets ownership, so reaping everything unrecognised
+                # destroyed other live conversations' kernels. A context we no
+                # longer own is instead released when the sandbox next pauses,
+                # which cold-boots it.
+                stale = owned.pop(str(request.session_id), None)
+                if stale is not None and stale in existing_ids:
+                    await sandbox.remove_code_context(stale)
             except (AuthenticationException, InvalidArgumentException) as exc:
                 raise ProviderPythonSessionCreateRejected(str(exc)) from exc
             except Exception as exc:
                 raise ProviderPythonSessionCreateRejected(
                     f"could not quiesce abandoned Python contexts: {exc}"
                 ) from exc
+            before = existing_ids - {stale} if stale is not None else existing_ids
             try:
                 context = await sandbox.create_code_context(
                     cwd=request.cwd,
@@ -1100,14 +1151,14 @@ class E2BSandboxAdapter:
                         context for context in after if context.id not in before
                     ]
                     if len(created) == 1 and created[0].cwd == request.cwd:
-                        owned.add(created[0].id)
+                        owned[str(request.session_id)] = created[0].id
                         return ProviderPythonSessionCreateResult(
                             provider_context_id=created[0].id
                         )
                 except Exception:
                     pass
                 raise ProviderPythonSessionCreateAmbiguous(str(exc)) from exc
-            owned.add(context.id)
+            owned[str(request.session_id)] = context.id
             return ProviderPythonSessionCreateResult(
                 provider_context_id=context.id
             )
@@ -1227,9 +1278,11 @@ class E2BSandboxAdapter:
             removed = True
         finally:
             if removed:
-                self._python_contexts.get(allocation.provider_id, set()).discard(
-                    session.provider_context_id
-                )
+                owned = self._python_contexts.get(allocation.provider_id)
+                if owned is not None:
+                    for session_key, context_id in list(owned.items()):
+                        if context_id == session.provider_context_id:
+                            owned.pop(session_key, None)
 
     async def resolve_port_target(
         self,
@@ -1270,7 +1323,8 @@ class E2BSandboxAdapter:
         self._sandboxes.clear()
         self._python_contexts.clear()
         self._python_context_locks.clear()
-        self._function_timeout_until.clear()
+        self._timeout_until.clear()
+        self._timeout_refreshed_at.clear()
 
     async def _connect(
         self,
@@ -1278,12 +1332,18 @@ class E2BSandboxAdapter:
         *,
         deadline_at: datetime,
     ) -> E2BSandboxType:
+        workspace = allocation.key.workload_kind == WorkloadKind.WORKSPACE
         existing = self._sandboxes.get(allocation.provider_id)
         if existing is not None:
+            # A cached handle never re-enters `connect()`, so without this the
+            # provider timeout set at create is never pushed out and E2B stops
+            # the sandbox underneath an active session.
+            if workspace:
+                await self._extend_workspace_lifetime(existing, deadline_at)
             return existing
         timeout = (
             self._config.workspace_timeout_seconds
-            if allocation.key.workload_kind == WorkloadKind.WORKSPACE
+            if workspace
             else self._config.function_timeout_seconds
         )
         sandbox = await self._sandbox_class.connect(
@@ -1293,10 +1353,7 @@ class E2BSandboxAdapter:
             request_timeout=self._request_timeout(deadline_at),
         )
         self._sandboxes[allocation.provider_id] = sandbox
-        if allocation.key.workload_kind == WorkloadKind.FUNCTION:
-            self._function_timeout_until[allocation.provider_id] = datetime.now(
-                timezone.utc
-            ) + timedelta(seconds=timeout)
+        self._record_timeout(allocation.provider_id, timeout)
         return sandbox
 
     def _validate_info(
@@ -1394,12 +1451,14 @@ class E2BSandboxAdapter:
         sandbox: E2BSandboxType,
         deadline_at: datetime,
     ) -> None:
+        """Keep a function sandbox alive for one bounded invocation."""
+
         refresh = timedelta(seconds=self._config.function_timeout_refresh_seconds)
         required_until = deadline_at + timedelta(
             seconds=self._config.function_idle_grace_seconds
         )
-        async with self._function_timeout_lock:
-            known_until = self._function_timeout_until.get(sandbox.sandbox_id)
+        async with self._timeout_lock:
+            known_until = self._timeout_until.get(sandbox.sandbox_id)
             if known_until is not None and known_until >= required_until:
                 return
             target_until = required_until + refresh
@@ -1411,9 +1470,55 @@ class E2BSandboxAdapter:
                 timeout,
                 request_timeout=self._request_timeout(deadline_at),
             )
-            self._function_timeout_until[sandbox.sandbox_id] = datetime.now(
-                timezone.utc
-            ) + timedelta(seconds=timeout)
+            self._record_timeout(sandbox.sandbox_id, timeout)
+
+    async def _extend_workspace_lifetime(
+        self,
+        sandbox: E2BSandboxType,
+        deadline_at: datetime,
+    ) -> None:
+        """Turn E2B's runtime ceiling into a rolling inactivity window.
+
+        E2B stops a sandbox once its `timeout` elapses regardless of how busy it
+        is, so a workspace that is never refreshed is paused mid-session. Every
+        runtime operation pushes the window out from *now*, which makes the
+        provider's own stop an inactivity backstop that agrees with AgentBox's
+        idle release rather than racing an active session.
+
+        The refresh interval keeps this to at most one extra provider call per
+        interval instead of one per operation.
+        """
+
+        window = self._config.workspace_timeout_seconds
+        interval = timedelta(
+            seconds=self._config.workspace_timeout_refresh_seconds
+        )
+        now = datetime.now(timezone.utc)
+        async with self._timeout_lock:
+            refreshed_at = self._timeout_refreshed_at.get(sandbox.sandbox_id)
+            if refreshed_at is not None and now - refreshed_at < interval:
+                return
+            await sandbox.set_timeout(
+                window,
+                request_timeout=self._request_timeout(deadline_at),
+            )
+            self._record_timeout(sandbox.sandbox_id, window)
+
+    def _record_timeout(self, sandbox_id: str, timeout_seconds: int) -> None:
+        now = datetime.now(timezone.utc)
+        self._timeout_until[sandbox_id] = now + timedelta(seconds=timeout_seconds)
+        self._timeout_refreshed_at[sandbox_id] = now
+
+    def _forget_timeout(self, sandbox_id: str) -> None:
+        """Drop timeout tracking for a sandbox that is no longer running.
+
+        A paused or destroyed sandbox has no live provider timer, so a stale
+        entry would suppress the refresh that the next resumed incarnation
+        needs.
+        """
+
+        self._timeout_until.pop(sandbox_id, None)
+        self._timeout_refreshed_at.pop(sandbox_id, None)
 
     async def _register_process(
         self,

@@ -147,10 +147,21 @@ old directory.
   response never proves absence and the allocation token remains fenced.
 - Superseded `DRAINING` allocations are provider-finalized by exact ID before their
   admission ownership is released.
-- E2B automatic resume is disabled. Pause/resume is an explicit lifecycle event and
-  receives a new allocation epoch.
+- E2B activity-driven automatic resume is disabled, which E2B requires anyway for
+  the filesystem-only snapshots AgentBox uses. This does not make resume
+  exclusively AgentBox's to schedule: `connect()` resumes a paused sandbox
+  implicitly, so the control plane observes a resume and assigns the new
+  allocation epoch rather than gating the transition.
+- The E2B workspace timeout is refreshed on every runtime operation. E2B's
+  `timeout` is a continuous-runtime ceiling rather than an idle timer, so without
+  a refresh the provider stops a busy workspace mid-session. Refreshing makes the
+  provider's pause an inactivity backstop consistent with AgentBox idle release.
 - E2B workspace storage is sandbox-native. It is co-located with that allocation;
-  a replacement must not pretend the files were independently preserved.
+  a replacement must not pretend the files were independently preserved. This is
+  why a workspace profile change tolerates drift rather than replacing the
+  allocation — see [AgentBox](README.md) §6.
+- A workspace pause is filesystem-only. Files persist; running processes and
+  interpreter state do not, and callers must not treat them as recoverable.
 - Permanent deletion and recoverable compute release are separate operations.
 
 ## Provider evidence behind the model

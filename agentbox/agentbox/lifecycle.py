@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -88,14 +89,43 @@ class SandboxLifecycleService:
         deadline_at: datetime,
         verify_ready: bool = False,
     ) -> SandboxHandle:
-        self._check_deadline(deadline_at)
-        request_hash = self._create_request_hash(
-            key,
-            profile,
-            provider_name=self._provider.name,
-            provider_scope=self._provider.scope,
-            admission_class=admission_class,
+        return await self._with_storage_generation(
+            await self._ensure(
+                key,
+                profile,
+                admission_class=admission_class,
+                deadline_at=deadline_at,
+                verify_ready=verify_ready,
+            )
         )
+
+    async def _with_storage_generation(self, handle: SandboxHandle) -> SandboxHandle:
+        """Attach the durable disk's generation to an outgoing handle.
+
+        Callers cannot otherwise tell a workspace whose files were deleted from
+        one that is simply new, which is what makes an agent read an empty
+        directory as a wiped sandbox.
+        """
+
+        if handle.key.workload_kind != WorkloadKind.WORKSPACE:
+            return handle
+        async with self._database.uow() as uow:
+            storage = await uow.repository.get_workspace_storage(handle.key)
+            await uow.commit()
+        if storage is None:
+            return handle
+        return replace(handle, storage_generation=storage.content_generation)
+
+    async def _ensure(
+        self,
+        key: SandboxKey,
+        profile: SandboxProfileRef,
+        *,
+        admission_class: AdmissionClass,
+        deadline_at: datetime,
+        verify_ready: bool = False,
+    ) -> SandboxHandle:
+        self._check_deadline(deadline_at)
 
         # Transaction 1: durable logical resource and one allocation intent.
         decision: ProviderAdmissionDecision
@@ -107,6 +137,23 @@ class SandboxLifecycleService:
         try:
             async with self._database.uow() as uow:
                 logical = await uow.repository.ensure_logical(key, profile)
+                # `ensure_logical` is the authority on which profile is actually
+                # in force. A workspace that already owns a disk keeps its
+                # existing profile rather than being replaced to adopt a new
+                # digest, so every downstream decision - admission hash,
+                # allocation, provider create, and readiness validation - must
+                # use the effective profile, not the requested one. Passing the
+                # requested digest here would fail provider metadata validation
+                # against the existing sandbox and cascade back into the
+                # replacement this drift tolerance exists to prevent.
+                profile = logical.profile
+                request_hash = self._create_request_hash(
+                    key,
+                    profile,
+                    provider_name=self._provider.name,
+                    provider_scope=self._provider.scope,
+                    admission_class=admission_class,
+                )
                 if key.workload_kind == WorkloadKind.WORKSPACE:
                     storage = await uow.repository.ensure_workspace_storage(
                         key,
@@ -768,7 +815,7 @@ class SandboxLifecycleService:
             await uow.commit()
         if logical is None:
             return None
-        return self._handle(logical, allocation)
+        return await self._with_storage_generation(self._handle(logical, allocation))
 
     async def release(
         self,

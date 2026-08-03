@@ -10,6 +10,7 @@ import hashlib
 import hmac
 from io import BytesIO
 import tarfile
+from uuid import UUID
 
 import httpx
 
@@ -854,6 +855,10 @@ class DockerSandboxAdapter:
             ):
                 continue
             storage_id = container.labels.get("workspace-storage-id")
+            try:
+                allocation_token = UUID(container.labels["allocation-token"])
+            except (KeyError, TypeError, ValueError):
+                allocation_token = None
             matches.append(
                 ProviderInventoryAllocation(
                     provider_id=container.container_id,
@@ -866,6 +871,8 @@ class DockerSandboxAdapter:
                         if storage_id is not None
                         else None
                     ),
+                    allocation_token=allocation_token,
+                    running=container.state.lower() == "running",
                 )
             )
         return tuple(matches)
