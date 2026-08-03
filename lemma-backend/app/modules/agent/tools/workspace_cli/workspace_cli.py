@@ -177,15 +177,27 @@ def _render_terminal_result(
     )
 
 
-async def resize_terminal_internal(
+async def _process_control_tool(
     ctx: BaseAgentContext,
-    request: ResizeTerminalRequest,
+    *,
+    process_id: str,
+    operation: str,
+    call,
+    completed_default: bool,
 ) -> ExecCommandResult:
+    """Run a control action against an already-running process.
+
+    Terminate and resize differ only in the call they make and how they report
+    completion, so they share one guard rather than repeating the failure
+    shaping - and with it the judgement about what a half-finished control
+    action means for the caller.
+    """
+
     try:
         runtime = get_workspace_tool_runtime()
         runtime_context = workspace_runtime_context(ctx)
         resolved_session_id = (
-            await runtime.resolve_session_for_process(request.process_id)
+            await runtime.resolve_session_for_process(process_id)
             or runtime_context.default_shell_session_id
         )
         workspace_session = await _get_workspace_session(
@@ -194,27 +206,42 @@ async def resize_terminal_internal(
             close_on_exit=False,
         )
         async with workspace_session:
-            result = await workspace_session.resize_terminal(
-                process_id=request.process_id,
-                cols=request.cols,
-                rows=request.rows,
-            )
+            result = await call(workspace_session)
+        if completed_default:
+            await runtime.clear_process_binding(process_id)
         return ExecCommandResult(
             success=bool(result.get("success")),
             stdout=result.get("stdout"),
             stderr=result.get("stderr"),
             exit_code=result.get("exit_code"),
-            completed=False,
-            process_id=request.process_id,
+            completed=bool(result.get("completed", completed_default)),
+            process_id=result.get("process_id") or process_id,
             error=result.get("error"),
         )
     except Exception as exc:
         return _workspace_tool_failure(
             exc,
-            operation="resize_terminal",
+            operation=operation,
             completed=False,
-            process_id=request.process_id,
+            process_id=process_id,
         )
+
+
+async def resize_terminal_internal(
+    ctx: BaseAgentContext,
+    request: ResizeTerminalRequest,
+) -> ExecCommandResult:
+    return await _process_control_tool(
+        ctx,
+        process_id=request.process_id,
+        operation="resize_terminal",
+        call=lambda session: session.resize_terminal(
+            process_id=request.process_id,
+            cols=request.cols,
+            rows=request.rows,
+        ),
+        completed_default=False,
+    )
 
 
 async def exec_command_internal(
@@ -341,36 +368,13 @@ async def terminate_process_internal(
     ctx: BaseAgentContext,
     request: TerminateProcessRequest,
 ) -> ExecCommandResult:
-    try:
-        runtime = get_workspace_tool_runtime()
-        runtime_context = workspace_runtime_context(ctx)
-        resolved_session_id = (
-            await runtime.resolve_session_for_process(request.process_id)
-            or runtime_context.default_shell_session_id
-        )
-        workspace_session = await _get_workspace_session(
-            ctx,
-            session_id=resolved_session_id,
-            close_on_exit=False,
-        )
-        async with workspace_session:
-            result = await workspace_session.terminate_process(request.process_id)
-        await runtime.clear_process_binding(request.process_id)
-        return ExecCommandResult(
-            success=bool(result.get("success")),
-            stdout=result.get("stdout"),
-            stderr=result.get("stderr"),
-            exit_code=result.get("exit_code"),
-            completed=bool(result.get("completed", True)),
-            process_id=result.get("process_id"),
-            error=result.get("error"),
-        )
-    except Exception as exc:
-        return _workspace_tool_failure(
-            exc,
-            operation="terminate_process",
-            process_id=request.process_id,
-        )
+    return await _process_control_tool(
+        ctx,
+        process_id=request.process_id,
+        operation="terminate_process",
+        call=lambda session: session.terminate_process(request.process_id),
+        completed_default=True,
+    )
 
 
 async def list_processes_internal(

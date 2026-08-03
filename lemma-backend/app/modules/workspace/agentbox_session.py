@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
-import posixpath
 import time
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -22,53 +20,24 @@ from agentbox_client import (
 from agentbox_client.models import ProcessState, PythonExecutionState
 from app.core.log.log import get_logger
 from app.modules.workspace.contracts import PythonExecutionResult, ShellCommandResult
+from app.modules.workspace.session_support import (
+    OutputCursor,
+    resize_process_terminal,
+    await_python_session_ready,
+    agentbox_command_failure as _agentbox_command_failure,
+    canonical_runtime_path as _canonical_runtime_path,
+    canonical_workspace_cwd,
+    with_backpressure as _with_backpressure,
+)
 
 
 logger = get_logger(__name__)
-_RUNTIME_FILESYSTEM_ROOTS = ("/workspace", "/tmp")
 _TERMINAL_PROCESS_STATES = {
     ProcessState.SUCCEEDED,
     ProcessState.FAILED,
     ProcessState.CANCELLED,
     ProcessState.TIMED_OUT,
 }
-
-
-def _canonical_runtime_path(value: str, *, base: str = "/workspace") -> str:
-    if not value:
-        raise ValueError("workspace path must not be empty")
-    normalized = posixpath.normpath(
-        value if value.startswith("/") else posixpath.join(base, value)
-    )
-    if any(
-        normalized == root or normalized.startswith(f"{root}/")
-        for root in _RUNTIME_FILESYSTEM_ROOTS
-    ):
-        return normalized
-    raise ValueError("workspace path must remain under /workspace or /tmp")
-
-
-def canonical_workspace_cwd(value: str) -> str:
-    return _canonical_runtime_path(value)
-
-
-def _agentbox_command_failure(
-    *,
-    error: str,
-    retryable: bool,
-    process_id: str | None = None,
-    completed: bool | None = None,
-) -> dict[str, Any]:
-    hint = " Retry the same operation if it is still needed." if retryable else ""
-    return {
-        "success": False,
-        "stdout": "",
-        "stderr": "",
-        "exit_code": None,
-        "completed": not retryable if completed is None else completed,
-        "process_id": process_id,
-        "error": f"{error}{hint}",
-    }
 
 
 class AgentBoxWorkspaceSession:
@@ -106,13 +75,9 @@ class AgentBoxWorkspaceSession:
         self._owns_client = owns_client
         self._activity_callback = activity_callback
         self._python_session_observed = False
-        # This object is rebuilt on every tool call, so an in-process cursor
-        # only spans a single call. It is kept as a same-call fast path; the
-        # durable cursor lives in the shared store so a later poll of the same
-        # process resumes where the previous one stopped instead of replaying
-        # the entire retained buffer.
-        self._output_sequence: dict[UUID, int] = {}
-        self._output_cursor_store = output_cursor_store
+        self._output_cursor = OutputCursor(
+            output_cursor_store, sandbox_id=self.sandbox_id
+        )
         # True only when this session's durable disk was recreated since it last
         # ran. Callers surface it once so an agent is told its files are gone
         # rather than having to infer it from an empty directory.
@@ -128,7 +93,7 @@ class AgentBoxWorkspaceSession:
         try:
             await self._ensure_python_session(deadline)
             operation_id = uuid4()
-            result = await self._with_backpressure(
+            result = await _with_backpressure(
                 lambda: self.client.execute_python(
                     self.logical_id,
                     self.python_session_id,
@@ -207,7 +172,7 @@ class AgentBoxWorkspaceSession:
             max(1024, (max_output_tokens or 1_000_000) * 4),
         )
         try:
-            await self._with_backpressure(
+            await _with_backpressure(
                 lambda: self.client.start_process(
                     WorkloadKind.WORKSPACE,
                     self.logical_id,
@@ -329,40 +294,14 @@ class AgentBoxWorkspaceSession:
         """
 
         await self._touch_activity()
-        operation_id = UUID(process_id)
-        try:
-            await self.client.resize_process(
-                WorkloadKind.WORKSPACE,
-                self.logical_id,
-                operation_id,
-                TerminalSize(cols=cols, rows=rows),
-                deadline_at=self._deadline(30),
-            )
-        except AgentBoxApiError as exc:
-            return _agentbox_command_failure(
-                error=f"AgentBox {exc.code}: {exc}",
-                retryable=exc.retry.value != "do_not_retry",
-                process_id=process_id,
-                completed=False,
-            )
-        except (httpx.HTTPError, OSError, ValueError) as exc:
-            return _agentbox_command_failure(
-                error=(
-                    f"AgentBox terminal resize failed: {type(exc).__name__}: {exc}"
-                ),
-                retryable=True,
-                process_id=process_id,
-                completed=False,
-            )
-        return {
-            "success": True,
-            "stdout": "",
-            "stderr": "",
-            "exit_code": None,
-            "completed": False,
-            "process_id": process_id,
-            "error": None,
-        }
+        return await resize_process_terminal(
+            self.client,
+            self.logical_id,
+            process_id,
+            cols=cols,
+            rows=rows,
+            deadline_at=self._deadline(30),
+        )
 
     async def terminate_process(self, process_id: str) -> dict[str, Any]:
         await self._touch_activity()
@@ -559,35 +498,17 @@ class AgentBoxWorkspaceSession:
         await self.close()
 
     async def _ensure_python_session(self, deadline: datetime) -> None:
-        last_error: AgentBoxApiError | None = None
-        while datetime.now(timezone.utc) < deadline:
-            try:
-                await self.client.create_python_session(
-                    self.logical_id,
-                    self.python_session_id,
-                    cwd=self._cwd,
-                    environment_keys=tuple(item.name for item in self._environment),
-                    deadline_at=deadline,
-                )
-                self._python_session_observed = True
-                return
-            except AgentBoxApiError as exc:
-                last_error = exc
-                if exc.retry.value == "do_not_retry":
-                    raise
-                remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-                if remaining <= 0:
-                    break
-                delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
-                await asyncio.sleep(min(delay, remaining))
-        detail = (
-            f"; last AgentBox error was {last_error.code}: {last_error}"
-            if last_error is not None
-            else ""
-        )
-        raise TimeoutError(
-            f"Python session did not become ready before its deadline{detail}"
-        ) from last_error
+        async def create() -> None:
+            await self.client.create_python_session(
+                self.logical_id,
+                self.python_session_id,
+                cwd=self._cwd,
+                environment_keys=tuple(item.name for item in self._environment),
+                deadline_at=deadline,
+            )
+            self._python_session_observed = True
+
+        await await_python_session_ready(create, deadline)
 
     async def _collect_process(
         self,
@@ -598,7 +519,7 @@ class AgentBoxWorkspaceSession:
     ) -> dict[str, Any]:
         started = time.monotonic()
         yield_seconds = None if yield_time_ms is None else yield_time_ms / 1000
-        after_sequence = await self._load_output_cursor(operation_id)
+        after_sequence = await self._output_cursor.load(operation_id)
         initial_sequence = after_sequence
         stdout = bytearray()
         stderr = bytearray()
@@ -629,12 +550,12 @@ class AgentBoxWorkspaceSession:
                     stderr.extend(chunk.data)
                 else:
                     stdout.extend(chunk.data)
-            self._output_sequence[operation_id] = after_sequence
+            self._output_cursor.remember_locally(operation_id, after_sequence)
             if state in _TERMINAL_PROCESS_STATES:
                 break
         completed = state in _TERMINAL_PROCESS_STATES
         if after_sequence != initial_sequence:
-            await self._save_output_cursor(operation_id, after_sequence)
+            await self._output_cursor.save(operation_id, after_sequence)
         # Each poll's bytes are decoded as a unit, so a chunk boundary inside
         # one poll is handled correctly. A multi-byte character split across
         # two polls still yields one replacement character; holding the partial
@@ -653,65 +574,8 @@ class AgentBoxWorkspaceSession:
             else state.value,
         }
 
-    async def _with_backpressure(self, operation, deadline: datetime):
-        """Wait out a retryable capacity/provisioning signal instead of failing.
 
-        A WAIT disposition means the manager rejected the call before anything
-        was dispatched - the sandbox is still provisioning, or routing capacity
-        is momentarily full. Surfacing that as a tool failure asked the agent to
-        be the retry loop for a platform-level limit, which amplifies the very
-        load that caused it. The operation ID is unchanged across attempts, so
-        the manager still deduplicates if one did get through.
-        """
 
-        attempt = 0
-        while True:
-            try:
-                return await operation()
-            except AgentBoxApiError as exc:
-                remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
-                if exc.retry.value != "wait" or remaining <= 0:
-                    raise
-                delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
-                # Back off so a burst of waiting callers does not resynchronise.
-                delay = min(delay * (1.5**min(attempt, 4)), 5.0, remaining)
-                attempt += 1
-                await asyncio.sleep(delay)
-
-    async def _load_output_cursor(self, operation_id: UUID) -> int:
-        local = self._output_sequence.get(operation_id, 0)
-        if self._output_cursor_store is None:
-            return local
-        try:
-            stored = await self._output_cursor_store.get_output_cursor(
-                str(operation_id)
-            )
-        except Exception:
-            # A cursor is an optimisation, not a correctness requirement: on a
-            # store failure the poll re-reads output it has already shown,
-            # which is far better than failing the agent's tool call.
-            logger.debug(
-                "workspace.agentbox_session.output_cursor_read_failed",
-                sandbox_id=self.sandbox_id,
-                process_id=str(operation_id),
-            )
-            return local
-        return max(local, stored)
-
-    async def _save_output_cursor(self, operation_id: UUID, sequence: int) -> None:
-        if self._output_cursor_store is None:
-            return
-        try:
-            await self._output_cursor_store.set_output_cursor(
-                process_id=str(operation_id),
-                sequence=sequence,
-            )
-        except Exception:
-            logger.debug(
-                "workspace.agentbox_session.output_cursor_write_failed",
-                sandbox_id=self.sandbox_id,
-                process_id=str(operation_id),
-            )
 
     @staticmethod
     def _deadline(seconds: int | float) -> datetime:
