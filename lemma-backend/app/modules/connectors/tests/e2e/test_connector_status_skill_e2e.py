@@ -33,17 +33,17 @@ def _make_app(
     for p in providers or ["LEMMA"]:
         if p == "COMPOSIO":
             caps.append({
-                "provider": "COMPOSIO",
+                "kind": "composio",
                 "auth_scheme": "OAUTH2",
                 "toolkit_slug": app_id,
             })
         else:
-            caps.append({"provider": "LEMMA", "auth_scheme": "OAUTH2"})
+            caps.append({"kind": "package", "auth_scheme": "OAUTH2"})
     return Connector(
         id=app_id,
         title=title,
         description=f"Test connector {title}",
-        provider_capabilities=caps,
+        kinds=caps,
         is_active=True,
     )
 
@@ -53,13 +53,13 @@ async def _seed_auth_config(
     *,
     app_id: str,
     organization_id: str,
-    provider: str = "LEMMA",
+    kind: str = "package",
     name: str | None = None,
 ) -> AuthConfig:
     cfg = AuthConfig(
         organization_id=organization_id,
         connector_id=app_id,
-        provider=provider,
+        kind=kind,
         config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
         name=name or f"{app_id}-{uuid4().hex[:8]}",
     )
@@ -131,7 +131,7 @@ async def test_connector_status_shows_installed_apps(
         db_session,
         app_id=app_id,
         organization_id=org_id,
-        provider="LEMMA",
+        kind="package",
     )
     await db_session.commit()
 
@@ -147,7 +147,7 @@ async def test_connector_status_shows_installed_apps(
     match = next(i for i in data["installed"] if i["connector_id"] == app_id)
     assert match["name"] == auth_config.name
     assert match["title"] == "Status Test App"
-    assert match["provider"] == "LEMMA"
+    assert match["kind"] == "package"
     assert match["status"] is not None
 
 
@@ -217,7 +217,7 @@ async def test_connector_status_dual_provider_app(
         db_session,
         app_id=app_id,
         organization_id=org_id,
-        provider="LEMMA",
+        kind="package",
     )
     await db_session.commit()
 
@@ -229,7 +229,7 @@ async def test_connector_status_dual_provider_app(
 
     match = next((i for i in data["installed"] if i["connector_id"] == app_id), None)
     assert match is not None
-    assert match["provider"] == "LEMMA"
+    assert match["kind"] == "package"
 
 
 @pytest.mark.asyncio
@@ -338,7 +338,7 @@ async def test_skill_returns_generic_file(
 
 
 @pytest.mark.asyncio
-async def test_skill_returns_provider_specific_file(
+async def test_skill_returns_kind_specific_file(
     authenticated_client: AsyncClient,
     db_session: AsyncSession,
     tmp_path: Path,
@@ -351,7 +351,7 @@ async def test_skill_returns_provider_specific_file(
 
     skills_dir = tmp_path / "skills"
     skills_dir.mkdir()
-    (skills_dir / f"{app_id}.lemma.md").write_text("# LEMMA Skill\nLemma instructions.", encoding="utf-8")
+    (skills_dir / f"{app_id}.package.md").write_text("# Package Skill\nPackage instructions.", encoding="utf-8")
     (skills_dir / f"{app_id}.composio.md").write_text("# Composio Skill\nComposio instructions.", encoding="utf-8")
     (skills_dir / f"{app_id}.md").write_text("# Generic Skill\nGeneric instructions.", encoding="utf-8")
 
@@ -362,22 +362,22 @@ async def test_skill_returns_provider_specific_file(
         # Request LEMMA-specific skill
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"provider": "lemma"},
+            params={"kind": "package"},
         )
         assert response.status_code == 200, response.text
         data = response.json()
-        assert "LEMMA" in data["markdown"]
-        assert data["provider"] == "lemma"
+        assert "Package" in data["markdown"]
+        assert data["kind"] == "package"
 
         # Request COMPOSIO-specific skill
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"provider": "composio"},
+            params={"kind": "composio"},
         )
         assert response.status_code == 200, response.text
         data = response.json()
         assert "Composio" in data["markdown"]
-        assert data["provider"] == "composio"
+        assert data["kind"] == "composio"
 
         # No provider → generic
         response = await authenticated_client.get(
@@ -411,7 +411,7 @@ async def test_skill_falls_back_to_generic_when_provider_specific_missing(
     ):
         response = await authenticated_client.get(
             f"/connectors/{app_id}/skill",
-            params={"provider": "lemma"},
+            params={"kind": "package"},
         )
     assert response.status_code == 200, response.text
     data = response.json()
@@ -438,17 +438,17 @@ async def test_skill_unknown_app_returns_404(
 # Skill file resolution helper unit tests
 # ---------------------------------------------------------------------------
 
-def test_resolve_skill_file_provider_specific(tmp_path: Path):
+def test_resolve_skill_file_kind_specific(tmp_path: Path):
     """_resolve_skill_file returns provider-specific file when it exists."""
     from app.modules.connectors.api.connector_controller import _resolve_skill_file
 
-    (tmp_path / "gmail.lemma.md").write_text("lemma", encoding="utf-8")
+    (tmp_path / "gmail.package.md").write_text("package", encoding="utf-8")
     (tmp_path / "gmail.md").write_text("generic", encoding="utf-8")
 
     with patch("app.modules.connectors.api.connector_controller.SKILLS_DIR", tmp_path):
-        result = _resolve_skill_file("gmail", "lemma")
+        result = _resolve_skill_file("gmail", "package")
     assert result is not None
-    assert result.read_text() == "lemma"
+    assert result.read_text() == "package"
 
 
 def test_resolve_skill_file_falls_back_to_generic(tmp_path: Path):
@@ -468,7 +468,7 @@ def test_resolve_skill_file_returns_none_when_nothing_exists(tmp_path: Path):
     from app.modules.connectors.api.connector_controller import _resolve_skill_file
 
     with patch("app.modules.connectors.api.connector_controller.SKILLS_DIR", tmp_path):
-        result = _resolve_skill_file("gmail", "lemma")
+        result = _resolve_skill_file("gmail", "package")
     assert result is None
 
 
@@ -535,39 +535,37 @@ def test_build_skill_prompt_includes_operations():
     assert "Recipient" in prompt  # from input_schema description
 
 
-def _app_providers_pure(app) -> list[str]:
-    """Pure re-implementation of _app_providers for testing."""
-    caps = getattr(app, "provider_capabilities", None) or []
-    providers: list[str] = []
+def _app_kinds_pure(app) -> list[str]:
+    """Pure re-implementation of the catalog's kind listing, for testing."""
+    caps = getattr(app, "kinds", None) or []
+    kinds: list[str] = []
     for cap in caps:
         if isinstance(cap, dict):
-            p = cap.get("provider") or ""
+            value = cap.get("kind") or ""
         else:
-            p = str(getattr(cap, "provider", "") or "")
-        if p:
-            providers.append(p.lower())
-    return providers
+            value = str(getattr(cap, "kind", "") or "")
+        if value:
+            kinds.append(str(value).lower())
+    return kinds
 
 
-def test_app_providers_single():
-    """_app_providers_pure returns single provider for a LEMMA-only app."""
+def test_app_kinds_single():
+    """A connector installable only as a vendored package lists just that."""
     app = type("App", (), {
-        "provider_capabilities": [{"provider": "LEMMA", "auth_scheme": "OAUTH2"}]
+        "kinds": [{"kind": "package", "auth_scheme": "OAUTH2"}]
     })()
-    providers = _app_providers_pure(app)
-    assert providers == ["lemma"]
+    assert _app_kinds_pure(app) == ["package"]
 
 
-def test_app_providers_dual():
-    """_app_providers_pure returns both providers for a dual-provider app."""
+def test_app_kinds_dual():
+    """gmail really does ship both ways, so both must be listed."""
     app = type("App", (), {
-        "provider_capabilities": [
-            {"provider": "LEMMA", "auth_scheme": "OAUTH2"},
-            {"provider": "COMPOSIO", "auth_scheme": "OAUTH2", "toolkit_slug": "gmail"},
+        "kinds": [
+            {"kind": "package", "auth_scheme": "OAUTH2"},
+            {"kind": "composio", "auth_scheme": "OAUTH2", "toolkit_slug": "gmail"},
         ]
     })()
-    providers = _app_providers_pure(app)
-    assert set(providers) == {"lemma", "composio"}
+    assert set(_app_kinds_pure(app)) == {"package", "composio"}
 
 
 # ---------------------------------------------------------------------------
@@ -591,7 +589,7 @@ async def test_operations_filtered_by_lemma_provider(
         id=f"{app_id}:LEMMA:lemma_op",
         connector_id=app_id,
         name="lemma_op",
-        provider="LEMMA",
+        kind="package",
         provider_operation_name="LEMMA_OP",
         display_name="Lemma Operation",
         description="Lemma native op",
@@ -602,7 +600,7 @@ async def test_operations_filtered_by_lemma_provider(
         id=f"{app_id}:COMPOSIO:composio_op",
         connector_id=app_id,
         name="composio_op",
-        provider="COMPOSIO",
+        kind="composio",
         provider_operation_name="COMPOSIO_OP",
         display_name="Composio Operation",
         description="Composio op",
@@ -616,7 +614,7 @@ async def test_operations_filtered_by_lemma_provider(
         db_session,
         app_id=app_id,
         organization_id=org_id,
-        provider="LEMMA",
+        kind="package",
     )
     await db_session.commit()
 
@@ -647,7 +645,7 @@ async def test_operations_filtered_by_composio_provider(
         id=f"{app_id}:LEMMA:lemma_op",
         connector_id=app_id,
         name="lemma_op",
-        provider="LEMMA",
+        kind="package",
         provider_operation_name="LEMMA_OP",
         display_name="Lemma Operation",
         description="Lemma native op",
@@ -658,7 +656,7 @@ async def test_operations_filtered_by_composio_provider(
         id=f"{app_id}:COMPOSIO:composio_op",
         connector_id=app_id,
         name="composio_op",
-        provider="COMPOSIO",
+        kind="composio",
         provider_operation_name="COMPOSIO_OP",
         display_name="Composio Operation",
         description="Composio op",
@@ -672,7 +670,7 @@ async def test_operations_filtered_by_composio_provider(
         db_session,
         app_id=app_id,
         organization_id=org_id,
-        provider="COMPOSIO",
+        kind="composio",
     )
     await db_session.commit()
 

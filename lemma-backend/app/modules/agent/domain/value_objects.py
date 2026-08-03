@@ -72,6 +72,7 @@ class AgentToolset(str, Enum):
     POD = "POD"
     SUBAGENTS = "SUBAGENTS"
     TODO = "TODO"
+    CONNECTORS = "CONNECTORS"
     # Reserved: never persisted on Agent.toolsets. Auto-appended at run time for
     # any agent whose resolved model declares VISION capability, regardless of
     # its configured toolsets — see `agent_runner_service.py`.

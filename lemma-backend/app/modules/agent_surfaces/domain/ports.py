@@ -35,7 +35,7 @@ class SurfaceAccountPort(Protocol):
 
 class SurfaceAuthConfigInfo(BaseModel):
     id: UUID
-    provider: str
+    kind: str
     connector_id: str
     # "SYSTEM_DEFAULT" (Lemma's own OAuth app) or "ORG_CUSTOM" (org brought its
     # own app). Drives whether the org must wire up its own provider webhook.

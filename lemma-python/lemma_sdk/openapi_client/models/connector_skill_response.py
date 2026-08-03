@@ -17,13 +17,13 @@ class ConnectorSkillResponse:
     Attributes:
         connector_id (str):
         markdown (str):
-        provider (None | str | Unset):
+        kind (None | str | Unset):
         title (None | str | Unset):
     """
 
     connector_id: str
     markdown: str
-    provider: None | str | Unset = UNSET
+    kind: None | str | Unset = UNSET
     title: None | str | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -32,11 +32,11 @@ class ConnectorSkillResponse:
 
         markdown = self.markdown
 
-        provider: None | str | Unset
-        if isinstance(self.provider, Unset):
-            provider = UNSET
+        kind: None | str | Unset
+        if isinstance(self.kind, Unset):
+            kind = UNSET
         else:
-            provider = self.provider
+            kind = self.kind
 
         title: None | str | Unset
         if isinstance(self.title, Unset):
@@ -52,8 +52,8 @@ class ConnectorSkillResponse:
                 "markdown": markdown,
             }
         )
-        if provider is not UNSET:
-            field_dict["provider"] = provider
+        if kind is not UNSET:
+            field_dict["kind"] = kind
         if title is not UNSET:
             field_dict["title"] = title
 
@@ -66,14 +66,14 @@ class ConnectorSkillResponse:
 
         markdown = d.pop("markdown")
 
-        def _parse_provider(data: object) -> None | str | Unset:
+        def _parse_kind(data: object) -> None | str | Unset:
             if data is None:
                 return data
             if isinstance(data, Unset):
                 return data
             return cast(None | str | Unset, data)
 
-        provider = _parse_provider(d.pop("provider", UNSET))
+        kind = _parse_kind(d.pop("kind", UNSET))
 
         def _parse_title(data: object) -> None | str | Unset:
             if data is None:
@@ -87,7 +87,7 @@ class ConnectorSkillResponse:
         connector_skill_response = cls(
             connector_id=connector_id,
             markdown=markdown,
-            provider=provider,
+            kind=kind,
             title=title,
         )
 

@@ -21,7 +21,6 @@ IMPORTANT_KEYS = (
     "role",
     "roles",
     "email",
-    "provider",
     "path",
     "description",
     "created_at",
@@ -45,7 +44,6 @@ LIST_KEYS = (
     "role",
     "roles",
     "email",
-    "provider",
     "path",
     "id",
 )

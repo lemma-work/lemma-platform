@@ -1,6 +1,6 @@
 from datetime import datetime
 import secrets
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 from app.core.domain.uow import IUnitOfWork
@@ -21,6 +21,7 @@ from app.modules.connectors.domain.connector import (
     ConnectorEntity,
     AuthScheme,
     AuthProvider,
+    ConnectorKind,
     ComposioProviderCapability,
     LemmaProviderCapability,
     OAuth2Config,
@@ -56,9 +57,18 @@ from app.modules.connectors.domain.ports import (
 from app.modules.connectors.infrastructure.repositories.auth_config_repository import (
     AuthConfigRepository,
 )
-from app.modules.connectors.infrastructure.adapters.lemma_connector_factory import (
-    create_lemma_execution_client,
+from app.modules.connectors.services.account_profile import (
+    load_native_account_profile,
+    profile_to_dict,
 )
+from app.modules.connectors.services.install_provisioning import (
+    discover_install_operations,
+    org_has_install,
+    refresh_install_operations,
+    resolve_install_kind,
+    validate_install_config,
+)
+from app.modules.connectors.services.install_update import update_install
 from app.core.log.log import get_logger
 
 logger = get_logger(__name__)
@@ -81,6 +91,7 @@ class ConnectorService:
         system_oauth_config: SystemOAuthConfigPort,
         operation_gateway: AppOperationGatewayPort | None = None,
         operation_repository: ConnectorOperationRepositoryPort | None = None,
+        auth_config_operation_repository: Any | None = None,
     ):
         self.uow = uow
         self.connector_repository = connector_repository
@@ -93,6 +104,7 @@ class ConnectorService:
         self.system_oauth_config = system_oauth_config
         self.operation_gateway = operation_gateway
         self.operation_repository = operation_repository
+        self.auth_config_operation_repository = auth_config_operation_repository
 
     def _exception_details(self, exc: Exception) -> dict | None:
         details: dict[str, object] = {"error_type": type(exc).__name__}
@@ -105,90 +117,12 @@ class ConnectorService:
         return details
 
     async def _load_native_account_profile(
-        self,
-        connector: ConnectorEntity,
-        credentials: OAuthCredentials,
+        self, connector: ConnectorEntity, credentials: OAuthCredentials
     ) -> dict | None:
-        try:
-            connector.capability_for(AuthProvider.LEMMA)
-        except ValueError:
-            return None
-
-        if connector.id == "slack":
-            return await self._load_slack_account_profile(connector, credentials)
-
-        profile_operation_by_app = {
-            "gmail": ("users_get_profile", {"user_id": "me"}),
-            "google_drive": ("about_get", {}),
-        }
-        config = profile_operation_by_app.get(connector.id)
-        if not config:
-            return None
-
-        operation_name, payload = config
-        try:
-            client = create_lemma_execution_client(
-                connector,
-                credentials.model_dump(exclude_none=True),
-            )
-            profile = await client.execute_operation(operation_name, payload)
-            profile_dict = self._profile_to_dict(profile)
-            if profile_dict is not None:
-                return profile_dict
-        except Exception:
-            logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
-        return None
-
-    async def _load_slack_account_profile(
-        self,
-        connector: ConnectorEntity,
-        credentials: OAuthCredentials,
-    ) -> dict | None:
-        if not credentials.access_token:
-            return None
-
-        try:
-            client = create_lemma_execution_client(
-                connector,
-                credentials.model_dump(exclude_none=True),
-            )
-            auth_profile = self._profile_to_dict(
-                await client.execute_operation(
-                    "auth_test",
-                    {"token": credentials.access_token},
-                )
-            )
-            if not auth_profile:
-                return None
-
-            profile: dict = {"auth_test": auth_profile, **auth_profile}
-            user_id = self._extract_nested_value(auth_profile, "user_id")
-            if user_id:
-                try:
-                    user_info = self._profile_to_dict(
-                        await client.execute_operation(
-                            "users_info",
-                            {"token": credentials.access_token, "user": user_id},
-                        )
-                    )
-                    if user_info:
-                        profile["user_info"] = user_info
-                except Exception:
-                    logger.debug('connectors.connector_service.enrich_slack_user_profile_s.diagnostic', user_id=user_id)
-            return profile
-        except Exception:
-            logger.debug('connectors.connector_service.enrich_native_account_profile_s.diagnostic')
-        return None
+        return await load_native_account_profile(connector, credentials)
 
     def _profile_to_dict(self, profile: object) -> dict | None:
-        if isinstance(profile, dict):
-            return profile
-        if hasattr(profile, "model_dump"):
-            data = profile.model_dump(
-                exclude_none=True, exclude_unset=True, mode="json"
-            )
-            return data if isinstance(data, dict) else None
-        return None
+        return profile_to_dict(profile)
 
     def _extract_account_email(
         self,
@@ -242,7 +176,7 @@ class ConnectorService:
         credentials: OAuthCredentials,
     ) -> dict | None:
         """Fetch the account holder's own profile via the catalog-curated
-        profile operation(s) for this connector+provider, so identity fields
+        profile operation(s) for this connector+kind, so identity fields
         (email, name, workspace, ...) are populated the same way for any app
         the catalog has a profile operation for, not just a hardcoded few."""
         if self.operation_gateway is None or self.operation_repository is None:
@@ -252,10 +186,11 @@ class ConnectorService:
             capability = connector.capability_for(provider)
         except ValueError:
             return None
+        kind = connector.default_kind_for_provider(provider).value
         for operation_name in capability.profile_operation_names or ():
             operation = (
-                await self.operation_repository.get_by_connector_provider_and_name(
-                    connector_id, provider, operation_name
+                await self.operation_repository.get_by_connector_kind_and_name(
+                    connector_id, kind, operation_name
                 )
             )
             if operation is None:
@@ -416,7 +351,10 @@ class ConnectorService:
             capability = connector.capability_for(AuthProvider.LEMMA)
         except ValueError as exc:
             raise UnsupportedAuthProviderError(AuthProvider.LEMMA.value) from exc
-        if not isinstance(capability, LemmaProviderCapability):
+        # "LEMMA" means any kind we serve ourselves, which is now sql/mcp/http as
+        # well as the vendored package. Asserting the package spec specifically
+        # rejected every tenant-configured install.
+        if capability.kind is ConnectorKind.COMPOSIO:
             raise UnsupportedAuthProviderError(AuthProvider.LEMMA.value)
         return capability
 
@@ -457,7 +395,7 @@ class ConnectorService:
         connector: ConnectorEntity,
     ) -> ConnectorEntity:
         capabilities = []
-        for capability in connector.provider_capabilities:
+        for capability in connector.kinds:
             if isinstance(capability, LemmaProviderCapability):
                 has_system_default = (
                     capability.auth_scheme != AuthScheme.OAUTH2
@@ -510,58 +448,58 @@ class ConnectorService:
                 continue
             capabilities.append(capability)
 
-        return connector.model_copy(update={"provider_capabilities": capabilities})
+        # `kinds`, not `provider_capabilities`: the latter is a read-only view,
+        # so updating it here silently discarded the enrichment.
+        return connector.model_copy(update={"kinds": capabilities})
 
     def _validate_auth_config_request(
         self,
         *,
         connector: ConnectorEntity,
-        provider: AuthProvider,
+        kind: ConnectorKind,
         config_source: AuthConfigSource,
         provider_config: dict | None,
     ) -> None:
         provider_config = provider_config or {}
-        try:
-            connector.capability_for(provider)
-        except ValueError as exc:
-            raise UnsupportedAuthProviderError(provider.value) from exc
+        spec = connector.spec_for(kind)
 
-        if provider == AuthProvider.COMPOSIO:
+        if kind is ConnectorKind.COMPOSIO:
             if config_source != AuthConfigSource.SYSTEM_DEFAULT:
                 raise ConnectorValidationError(
                     "Composio auth configs only support system default credentials in v1."
                 )
             return
 
-        if provider == AuthProvider.LEMMA:
-            capability = self._lemma_capability(connector)
-            if capability.auth_scheme != AuthScheme.OAUTH2:
-                return
-            if (
-                config_source == AuthConfigSource.ORG_CUSTOM
-                and not capability.supports_org_custom_oauth
-            ):
+        # Everything below is about who issued the OAuth tokens. A kind that
+        # does not use OAuth -- sql, mcp, most http installs -- has nothing to
+        # answer here, and its config is checked by its own install schema.
+        if spec.auth_scheme != AuthScheme.OAUTH2:
+            return
+        if (
+            config_source == AuthConfigSource.ORG_CUSTOM
+            and not spec.supports_org_custom_oauth
+        ):
+            raise ConnectorValidationError(
+                f"Org custom OAuth credentials are not supported for '{connector.id}'."
+            )
+        if config_source == AuthConfigSource.SYSTEM_DEFAULT:
+            if not self.system_oauth_config.has_default_oauth_config(connector):
                 raise ConnectorValidationError(
-                    f"Org custom OAuth credentials are not supported for '{connector.id}'."
+                    "System default OAuth credentials are not configured for this app. "
+                    "Create an org custom auth config with OAuth credentials instead."
                 )
-            if config_source == AuthConfigSource.SYSTEM_DEFAULT:
-                if not self.system_oauth_config.has_default_oauth_config(connector):
-                    raise ConnectorValidationError(
-                        "System default OAuth credentials are not configured for this app. "
-                        "Create an org custom auth config with OAuth credentials instead."
-                    )
-                return
+            return
 
-            credential_config = (
-                provider_config.get("oauth2_credentials")
-                if isinstance(provider_config, dict)
-                else None
-            ) or provider_config
-            if not isinstance(credential_config, dict):
-                raise ConnectorValidationError(
-                    "Org custom Lemma OAuth configs require oauth2_credentials."
-                )
-            OAuth2CredentialConfig.model_validate(credential_config)
+        credential_config = (
+            provider_config.get("oauth2_credentials")
+            if isinstance(provider_config, dict)
+            else None
+        ) or provider_config
+        if not isinstance(credential_config, dict):
+            raise ConnectorValidationError(
+                "Org custom OAuth configs require oauth2_credentials."
+            )
+        OAuth2CredentialConfig.model_validate(credential_config)
 
     async def create_auth_config(
         self,
@@ -569,9 +507,9 @@ class ConnectorService:
         user_id: UUID,
         organization_id: UUID,
         connector_id: str,
-        provider: str,
         config_source: str,
-        provider_config: dict | None = None,
+        kind: str | None = None,
+        config: dict | None = None,
         name: str | None = None,
     ) -> AuthConfigEntity:
         await self._require_org_member(
@@ -580,38 +518,89 @@ class ConnectorService:
             allowed_roles=["ORG_OWNER", "ORG_EDITOR"],
         )
         connector = await self.get_connector(connector_id)
-        provider_enum = AuthProvider(provider)
         config_source_enum = AuthConfigSource(config_source)
-        try:
-            connector.capability_for(provider_enum)
-        except ValueError:
-            raise UnsupportedAuthProviderError(provider_enum.value)
-        provider_config = provider_config or None
+        kind = resolve_install_kind(connector, kind)
+        provider_config = config or None
         self._validate_auth_config_request(
             connector=connector,
-            provider=provider_enum,
+            kind=kind,
             config_source=config_source_enum,
             provider_config=provider_config,
         )
-        existing = await self.auth_config_repository.get_active_by_org_and_app(
-            organization_id, connector_id
+        # No single-install check: an org may hold many installs of one
+        # connector -- two Slack apps, several MCP servers. They are told apart
+        # by name, and the first one becomes the default that a bare
+        # connector_id lookup resolves to.
+        # Every kind validates its own config here, including the three whose
+        # config is entirely tenant-written. The previous validator returned
+        # early for exactly those, so `additionalProperties: false` was
+        # decorative and a server_url was never checked against anything.
+        validated_config = await validate_install_config(
+            connector=connector,
+            kind=kind,
+            config=provider_config or {},
+            config_source=config_source_enum,
         )
-        if existing:
-            raise AccountAlreadyConnectedError(connector_id)
 
         entity = AuthConfigEntity(
             organization_id=organization_id,
             connector_id=connector_id,
-            provider=provider_enum,
+            kind=kind,
             config_source=config_source_enum,
-            provider_config=provider_config,
+            # Preserve "no config" as absent rather than an empty object:
+            # validation normalizes None to {}, and the API distinguishes them.
+            config=validated_config or None,
             name=name or connector_id,
+            # First install of a connector answers a bare connector_id lookup.
+            is_default=not await org_has_install(
+                self.auth_config_repository, organization_id, connector_id
+            ),
             created_by_user_id=user_id,
             updated_by_user_id=user_id,
         )
         entity = await self.auth_config_repository.create(entity)
         await self.uow.commit()
+        await discover_install_operations(
+            entity,
+            connector,
+            repository=self.auth_config_operation_repository,
+            uow=self.uow,
+        )
         return entity
+
+    async def refresh_auth_config_operations(
+        self, *, user_id: UUID, organization_id: UUID, auth_config_name: str
+    ) -> int:
+        """Re-discover an install's operations. See ``install_provisioning``."""
+        return await refresh_install_operations(
+            self,
+            user_id=user_id,
+            organization_id=organization_id,
+            auth_config_name=auth_config_name,
+        )
+
+    async def update_auth_config(
+        self,
+        *,
+        user_id: UUID,
+        organization_id: UUID,
+        auth_config_name: str,
+        name: str | None = None,
+        config: dict | None = None,
+        status: str | None = None,
+        is_default: bool | None = None,
+    ) -> tuple[AuthConfigEntity, int, int]:
+        """Update an install in place. See ``install_update`` for the rules."""
+        return await update_install(
+            self,
+            user_id=user_id,
+            organization_id=organization_id,
+            auth_config_name=auth_config_name,
+            name=name,
+            config=config,
+            status=status,
+            is_default=is_default,
+        )
 
     async def list_auth_configs(
         self,
@@ -713,9 +702,7 @@ class ConnectorService:
                     "status": c.status.value
                     if hasattr(c.status, "value")
                     else str(c.status),
-                    "provider": c.provider.value
-                    if hasattr(c.provider, "value")
-                    else str(c.provider),
+                    "kind": c.kind.value if hasattr(c.kind, "value") else str(c.kind),
                 }
                 for c in configs
             ],
@@ -1118,13 +1105,13 @@ class ConnectorService:
             raise AccountNotFoundError(str(account_id))
         return account
 
-    async def get_account_provider(self, account: AccountEntity) -> str | None:
-        """The auth provider (``LEMMA``/``COMPOSIO``) backing an account's auth
-        config — exposed on the account response so API consumers (e.g. the CLI
-        assembling a portable pod bundle) can resolve connector + provider from
-        one account lookup instead of a second one keyed by auth config name."""
+    async def get_account_kind(self, account: AccountEntity) -> str | None:
+        """The kind of the install backing an account -- exposed on the account
+        response so API consumers (e.g. the CLI assembling a portable pod
+        bundle) can resolve connector + kind from one account lookup instead of
+        a second one keyed by auth config name."""
         auth_config = await self.auth_config_repository.get(account.auth_config_id)
-        return auth_config.provider.value if auth_config is not None else None
+        return auth_config.kind.value if auth_config is not None else None
 
     async def get_account_credentials(
         self,

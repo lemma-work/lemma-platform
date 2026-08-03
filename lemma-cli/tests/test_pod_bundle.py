@@ -1507,7 +1507,7 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
                 get=lambda account_id: {
                     "id": account_id,
                     "connector_id": "slack",
-                    "provider": "COMPOSIO",
+                    "kind": "composio",
                 }
             )
         ),
@@ -1575,9 +1575,9 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
         "account_id": "${slack_account}",
         # Ground-truth connector identity, resolved via the connectors API and
         # carried onto the variable so the importer knows exactly which
-        # connector + auth provider to reconnect.
+        # connector + kind to reconnect.
         "connector_id": "slack",
-        "provider": "COMPOSIO",
+        "connector_kind": "composio",
         "is_enabled": True,
         "config": {
             "channels": [
@@ -1593,7 +1593,7 @@ def test_export_pod_bundle_writes_normalized_surfaces(tmp_path: Path):
 
     pod_data = json.loads((tmp_path / "demo-pod" / "pod.json").read_text(encoding="utf-8"))
     assert pod_data["variables"]["slack_account"]["connector"] == "slack"
-    assert pod_data["variables"]["slack_account"]["provider"] == "COMPOSIO"
+    assert pod_data["variables"]["slack_account"]["connector_kind"] == "composio"
 
 
 def test_import_pod_bundle_upserts_surfaces_by_platform(tmp_path: Path):
@@ -2151,8 +2151,8 @@ def test_variable_applier_resolves_and_strips_unresolved(tmp_path: Path):
                 "name": "demo",
                 "variables": {
                     "approver": {"type": "pod_member"},
-                    "slack_account": {"type": "account", "connector": "slack", "provider": "COMPOSIO"},
-                    "ghost_account": {"type": "account", "connector": "jira", "provider": "LEMMA"},
+                    "slack_account": {"type": "account", "connector": "slack", "connector_kind": "composio"},
+                    "ghost_account": {"type": "account", "connector": "jira", "connector_kind": "package"},
                 },
             }
         ),

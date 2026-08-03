@@ -533,7 +533,15 @@ async def worker(e2e_settings):
             env={
                 **os.environ,
                 **system_lemma_env_overlay(),  # LEMMA_OPENAI_* from .env
-                "PYTHONPATH": ".",
+                # Prepend rather than replace: overwriting it silently drops an
+                # inherited PYTHONPATH, so a sibling package resolved from
+                # somewhere else (a git worktree checked out beside the venv)
+                # gets tested instead of the one under test, and the suite
+                # passes or fails for reasons that have nothing to do with the
+                # change.
+                "PYTHONPATH": os.pathsep.join(
+                    part for part in (".", os.environ.get("PYTHONPATH")) if part
+                ),
                 "DATABASE_URL": e2e_settings.database_url,
                 "DATASTORE_DATABASE_URL": e2e_settings.datastore_database_url,
                 "REDIS_URL": e2e_settings.redis_url,

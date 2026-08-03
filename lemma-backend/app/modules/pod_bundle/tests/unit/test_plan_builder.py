@@ -181,7 +181,7 @@ async def test_variables_classified(tmp):
                 "type": "account",
                 "source_value": "x",
                 "connector": "slack",
-                "provider": "COMPOSIO",
+                "connector_kind": "composio",
             },
             "owner": {"type": "member", "source_value": "y"},
             "region": {"type": "string", "source_value": "z"},
@@ -195,7 +195,7 @@ async def test_variables_classified(tmp):
     assert by_name["acct"].kind == "account"
     assert by_name["acct"].required is True
     assert by_name["acct"].connector == "slack"
-    assert by_name["acct"].provider == "COMPOSIO"
+    assert by_name["acct"].connector_kind == "composio"
     # A variable with no connector context leaves it None.
     assert by_name["region"].connector is None
     # Pod members auto-resolve to the importing user -> not required.
@@ -230,7 +230,7 @@ async def test_account_variable_missing_connector_is_rejected(tmp):
     root = _build_bundle(
         tmp,
         variables={
-            "acct": {"type": "account", "source_value": "x", "provider": "LEMMA"},
+            "acct": {"type": "account", "source_value": "x", "connector_kind": "package"},
         },
     )
     with pytest.raises(BundleInvalidError, match="acct"):

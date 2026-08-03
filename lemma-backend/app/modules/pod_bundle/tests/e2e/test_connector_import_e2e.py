@@ -43,8 +43,8 @@ async def test_connector_account_is_required_and_enforced(
     assert account_var["required"] is True
     # The connector is sent so the UI can prompt for the right one.
     assert account_var["connector"] == "slack"
-    # ...and the auth provider, so the UI connects/creates through the right one.
-    assert account_var["provider"] == "COMPOSIO"
+    # ...and which kind, so the importer selects an account of the same one.
+    assert account_var["connector_kind"] == "composio"
 
     # ...and there is a SURFACE step to apply.
     assert any(s["kind"] == "SURFACE" for s in plan["steps"]), plan["steps"]
@@ -61,7 +61,7 @@ async def test_schedule_connector_account_is_required_and_enforced(
     authenticated_client, test_pod, worker
 ):
     """A schedule's account_id is tokenized exactly like a surface's: the plan
-    must surface it as a required variable carrying connector + provider, and
+    must surface it as a required variable carrying connector + kind, and
     apply without it must be rejected. (Regression coverage for a bug where
     schedule account variables shipped with no connector info at all, and a
     separate bug where the applier silently dropped account_id even when
@@ -82,7 +82,7 @@ async def test_schedule_connector_account_is_required_and_enforced(
     assert account_var["kind"] == "account"
     assert account_var["required"] is True
     assert account_var["connector"] == "jira"
-    assert account_var["provider"] == "COMPOSIO"
+    assert account_var["connector_kind"] == "composio"
 
     assert any(s["kind"] == "SCHEDULE" for s in plan["steps"]), plan["steps"]
 
@@ -93,13 +93,14 @@ async def test_schedule_connector_account_is_required_and_enforced(
     assert "on_ticket_account" in apply.text
 
 
-async def test_legacy_bundle_missing_provider_fails_planning(
+async def test_bundle_missing_connector_metadata_fails_planning(
     authenticated_client, test_pod, worker
 ):
-    """A bundle built before connector/provider was mandatory on account
-    variables (or a hand-edited one) must fail plan-build with a clear
-    error instead of importing with a variable the UI/CLI can't resolve to the
-    right connector — the hard-reject decision for pre-existing bundles."""
+    """A bundle with no connector metadata at all on an account variable (or a
+    hand-edited one) must fail plan-build with a clear error instead of
+    importing with a variable the UI/CLI can't resolve to the right connector
+    — the hard-reject decision for pre-existing bundles. A bundle carrying the
+    pre-rename `provider` spelling is *not* this case and still plans."""
     pod_id = test_pod["id"]
     zip_bytes = pack_fixture_bundle("legacy_schedule_missing_provider")
 
@@ -117,3 +118,28 @@ async def test_legacy_bundle_missing_provider_fails_planning(
     body = await wait_import(authenticated_client, pod_id, import_id, until={"FAILED"})
     assert body["status"] == "FAILED"
     assert "on_ticket_account" in (body.get("error") or "")
+
+
+async def test_a_bundle_exported_before_the_kind_rename_still_plans(
+    authenticated_client, test_pod, worker
+):
+    """`provider` is the pre-rename spelling of `connector_kind`.
+
+    Bundles are a portable file format that customers keep, so the rename must
+    not turn every previously exported bundle into an unimportable file. The
+    old spelling is read and carried through as the variable's kind.
+    """
+    pod_id = test_pod["id"]
+    zip_bytes = pack_fixture_bundle("legacy_provider_schedule")
+    import_id = await start_and_plan_import(authenticated_client, pod_id, zip_bytes)
+
+    got = await authenticated_client.get(f"/pods/{pod_id}/bundle/imports/{import_id}")
+    assert got.status_code == status.HTTP_200_OK, got.text
+    plan = got.json()["plan"]
+
+    account_var = next(
+        (v for v in plan["variables"] if v["name"] == "on_ticket_account"), None
+    )
+    assert account_var is not None, plan["variables"]
+    assert account_var["connector"] == "jira"
+    assert account_var["connector_kind"] == "COMPOSIO"

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
+
 
 from app.core.authorization.context import Context
 from app.modules.connectors.api.schemas.connector_operation_schemas import (
@@ -13,12 +13,14 @@ from app.modules.connectors.api.schemas.connector_operation_schemas import (
     OperationExecutionResponse,
     OperationSummary,
 )
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    ConnectorKind,
+    kind_to_provider,
+)
 from app.modules.connectors.domain.errors import (
     AccountResolutionError,
     ConnectorNotFoundError,
-    ConnectorDomainError,
-    OperationExecutionInfrastructureError,
     OperationNotFoundError,
 )
 from app.modules.connectors.domain.ports import (
@@ -26,30 +28,25 @@ from app.modules.connectors.domain.ports import (
     ConnectorRepositoryPort,
     AppOperationGatewayPort,
 )
+from app.modules.connectors.services.operation_visibility import (
+    find_install_or_catalog_operation,
+    list_operations_for_install,
+)
 from app.modules.connectors.services.account_resolution_service import (
     AccountResolutionService,
 )
 from app.modules.connectors.services.connector_service import ConnectorService
+from app.modules.connectors.domain.execution_plan import ResolvedConnectorExecution
 
-
-@dataclass(frozen=True, slots=True)
-class ResolvedConnectorExecution:
-    """Session-free output of the connector-operation resolve phase, handed to
-    the external execute phase so the operation runs with no pooled DB connection
-    held. Carries only plain values -- never ORM/session-bound objects."""
-
-    connector_id: str
-    operation_execution_name: str
-    provider: str | None
-    third_party_credentials: dict[str, Any]
-    payload: dict[str, Any]
-    auth_token: str | None
-    api_url: str | None
-    # Plain identifiers (never session-bound) so the execute phase can flag the
-    # account for re-auth on an unauthorized failure without re-resolving it.
-    account_id: UUID | None = None
-    account_user_id: UUID | None = None
-    organization_id: UUID | None = None
+__all__ = ["ConnectorOperationService", "ResolvedConnectorExecution"]
+from app.modules.connectors.services.execution.plumbing import (
+    build_dispatcher,
+    execution_failures_translated,
+    execution_request,
+)
+from app.modules.connectors.services.credential_freshness import (
+    resolve_execution_credentials,
+)
 
 
 class ConnectorOperationService:
@@ -61,12 +58,15 @@ class ConnectorOperationService:
         operation_gateway: AppOperationGatewayPort,
         account_resolution_service: AccountResolutionService,
         connector_service: ConnectorService | None = None,
+        auth_config_operation_repository: Any | None = None,
     ):
         self.connector_repository = connector_repository
         self.operation_repository = operation_repository
         self.operation_gateway = operation_gateway
         self.account_resolution_service = account_resolution_service
         self.connector_service = connector_service
+        self.auth_config_operation_repository = auth_config_operation_repository
+        self._kind_dispatcher = None
 
     async def _get_connector(self, connector_id: str):
         connector = await self.connector_repository.get(connector_id)
@@ -78,25 +78,18 @@ class ConnectorOperationService:
         self,
         connector_id: str,
         *,
-        provider: str | None = None,
+        kind: str | None = None,
         search_query: str | None = None,
         limit: int | None = None,
+        auth_config_id: UUID | None = None,
     ) -> list[Any]:
         await self._get_connector(connector_id)
-        if provider:
-            operations = await self.operation_repository.list_by_connector_provider(
-                connector_id,
-                provider,
-                search_query=search_query,
-                limit=limit,
-            )
-        else:
-            operations = await self.operation_repository.list_by_connector(
-                connector_id,
-                search_query=search_query,
-                limit=limit,
-            )
-        return list(operations)
+        return await list_operations_for_install(
+            catalog_repository=self.operation_repository,
+            install_repository=self.auth_config_operation_repository,
+            connector_id=connector_id, kind=kind, auth_config_id=auth_config_id,
+            search_query=search_query, limit=limit,
+        )
 
     async def _resolve_auth_config_context(
         self,
@@ -112,12 +105,7 @@ class ConnectorOperationService:
             organization_id=organization_id,
             auth_config_name=auth_config_name,
         )
-        provider = (
-            auth_config.provider.value
-            if hasattr(auth_config.provider, "value")
-            else str(auth_config.provider)
-        )
-        return auth_config, auth_config.connector_id, provider
+        return auth_config, auth_config.connector_id, auth_config.kind.value
 
     def _normalize_operation_lookup_name(self, operation_name: str) -> str:
         return operation_name.strip().lower()
@@ -224,16 +212,6 @@ class ConnectorOperationService:
             for key in ("access_token", "refresh_token", "connection_id")
         )
 
-    def _exception_details(self, exc: Exception) -> dict[str, Any]:
-        details: dict[str, Any] = {"error_type": type(exc).__name__}
-        status_code = getattr(exc, "status_code", None)
-        if isinstance(status_code, int):
-            details["upstream_status"] = status_code
-        code = getattr(exc, "code", None)
-        if isinstance(code, str) and len(code) <= 100:
-            details["upstream_code"] = code
-        return details
-
     def _normalize_execution_result(self, value: Any) -> Any:
         model_dump = getattr(value, "model_dump", None)
         if callable(model_dump):
@@ -261,22 +239,13 @@ class ConnectorOperationService:
     async def _resolve_execution_credentials(
         self, account: Any, user_id: UUID
     ) -> dict[str, Any]:
-        stored_credentials = self._serialize_credentials(account.credentials)
-        if not self.connector_service or not self._is_oauth_account(account):
-            return stored_credentials
-
-        refreshed = await self.connector_service.get_account_credentials(
-            account.id,
+        return await resolve_execution_credentials(
+            account,
             user_id,
-            account.organization_id,
-            force_refresh=True,
+            connector_service=self.connector_service,
+            serialize=self._serialize_credentials,
+            is_oauth=self._is_oauth_account,
         )
-        refreshed_credentials = self._serialize_credentials(refreshed)
-        if "user_data" not in refreshed_credentials and stored_credentials.get(
-            "user_data"
-        ):
-            refreshed_credentials["user_data"] = stored_credentials["user_data"]
-        return refreshed_credentials
 
     def _compact_description(
         self, description: str | None, *, max_length: int = 120
@@ -319,7 +288,7 @@ class ConnectorOperationService:
         query: str | None = None,
         limit: int | None = None,
     ) -> OperationDiscoverResponse:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -328,7 +297,8 @@ class ConnectorOperationService:
             connector_id,
             query=query,
             limit=limit,
-            provider=provider,
+            kind=kind,
+            auth_config_id=auth_config.id,
         )
 
     async def discover_operations(
@@ -336,17 +306,27 @@ class ConnectorOperationService:
         connector_id: str,
         query: str | None = None,
         limit: int | None = None,
-        provider: str | None = None,
+        kind: str | None = None,
+        auth_config_id: UUID | None = None,
     ) -> OperationDiscoverResponse:
-        total_operations = len(
-            await self._list_operation_entities(connector_id, provider=provider)
-        )
         selected_operations = await self._list_operation_entities(
             connector_id,
-            provider=provider,
+            kind=kind,
             search_query=query,
             limit=limit,
+            auth_config_id=auth_config_id,
         )
+        # `total_operations` is the install's whole set, so a client can say
+        # "showing 10 of 340". Only a narrowed selection needs a second read to
+        # learn it -- an unfiltered, unlimited listing already *is* the total.
+        if query is None and limit is None:
+            total_operations = len(selected_operations)
+        else:
+            total_operations = len(
+                await self._list_operation_entities(
+                    connector_id, kind=kind, auth_config_id=auth_config_id
+                )
+            )
 
         items = [
             self._build_operation_summary(operation, query=query)
@@ -364,22 +344,18 @@ class ConnectorOperationService:
         self,
         connector_id: str,
         operation_name: str,
-        provider: str | None = None,
+        kind: str | None = None,
+        auth_config_id: UUID | None = None,
     ) -> OperationDetail:
         await self._get_connector(connector_id)
-        if provider:
-            operation = (
-                await self.operation_repository.get_by_connector_provider_and_name(
-                    connector_id,
-                    provider,
-                    operation_name,
-                )
-            )
-        else:
-            operation = await self.operation_repository.get_by_connector_and_name(
-                connector_id,
-                operation_name,
-            )
+        operation = await find_install_or_catalog_operation(
+            catalog_repository=self.operation_repository,
+            install_repository=self.auth_config_operation_repository,
+            connector_id=connector_id,
+            kind=kind,
+            operation_name=operation_name,
+            auth_config_id=auth_config_id,
+        )
         if not operation:
             raise OperationNotFoundError(operation_name)
         return self._build_operation_detail(operation)
@@ -392,7 +368,7 @@ class ConnectorOperationService:
         auth_config_name: str,
         operation_name: str,
     ) -> OperationDetail:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -400,18 +376,21 @@ class ConnectorOperationService:
         return await self.get_operation_details(
             connector_id,
             operation_name,
-            provider=provider,
+            kind=kind,
+            auth_config_id=auth_config.id,
         )
 
     async def get_operation_details_batch(
         self,
         connector_id: str,
         operation_names: list[str] | None = None,
-        provider: str | None = None,
+        kind: str | None = None,
+        auth_config_id: UUID | None = None,
     ) -> OperationDetailsBatchResponse:
         operations = await self._list_operation_entities(
             connector_id,
-            provider=provider,
+            kind=kind,
+            auth_config_id=auth_config_id,
         )
         operations_by_name = {
             self._normalize_operation_lookup_name(operation.name): operation
@@ -453,7 +432,7 @@ class ConnectorOperationService:
         auth_config_name: str,
         operation_names: list[str] | None = None,
     ) -> OperationDetailsBatchResponse:
-        _auth_config, connector_id, provider = await self._resolve_auth_config_context(
+        auth_config, connector_id, kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -461,7 +440,8 @@ class ConnectorOperationService:
         return await self.get_operation_details_batch(
             connector_id,
             operation_names=operation_names,
-            provider=provider,
+            kind=kind,
+            auth_config_id=auth_config.id,
         )
 
     # -- Resolve / execute split ------------------------------------------------
@@ -485,7 +465,7 @@ class ConnectorOperationService:
         api_url: str | None = None,
         account_id: UUID | None = None,
     ) -> ResolvedConnectorExecution:
-        auth_config, connector_id, _provider = await self._resolve_auth_config_context(
+        auth_config, connector_id, _kind = await self._resolve_auth_config_context(
             user_id=user_id,
             organization_id=organization_id,
             auth_config_name=auth_config_name,
@@ -500,6 +480,9 @@ class ConnectorOperationService:
             api_url=api_url,
             account_id=account_id,
             auth_config_id=auth_config.id,
+            # Already loaded by name above; re-reading it by id was a wasted
+            # round trip on every execution.
+            auth_config=auth_config,
         )
 
     async def _resolve_execution(
@@ -514,22 +497,19 @@ class ConnectorOperationService:
         api_url: str | None = None,
         account_id: UUID | None = None,
         auth_config_id: UUID | None = None,
+        auth_config: Any | None = None,
     ) -> ResolvedConnectorExecution:
-        await self._get_connector(connector_id)
-        provider: str | None = None
+        kind: str | None = None
         if auth_config_id is not None:
             if self.connector_service is None:
                 raise ConnectorNotFoundError(connector_id)
-            auth_config = await self.connector_service.auth_config_repository.get(
-                auth_config_id
-            )
+            if auth_config is None:
+                auth_config = await self.connector_service.auth_config_repository.get(
+                    auth_config_id
+                )
             if auth_config is None:
                 raise ConnectorNotFoundError(str(auth_config_id))
-            provider = (
-                auth_config.provider.value
-                if hasattr(auth_config.provider, "value")
-                else str(auth_config.provider)
-            )
+            kind = auth_config.kind.value
             account = await self.account_resolution_service.resolve_account_for_auth_config(
                 user_id=user_id,
                 connector_id=connector_id,
@@ -549,23 +529,29 @@ class ConnectorOperationService:
                     account.auth_config_id
                 )
                 if auth_config is not None:
-                    provider = (
-                        auth_config.provider.value
-                        if hasattr(auth_config.provider, "value")
-                        else str(auth_config.provider)
-                    )
+                    kind = auth_config.kind.value
 
-        if provider:
-            operation = await self.operation_repository.get_by_connector_provider_and_name(
-                connector_id,
-                provider,
-                operation_name,
+        # An install's own discovered operation wins over a catalog one of the
+        # same name: for mcp/openapi the catalog has nothing to offer, and where
+        # both exist the install describes the server actually being called.
+        operation = None
+        if auth_config_id is not None and self.auth_config_operation_repository:
+            operation = (
+                await self.auth_config_operation_repository.get_by_auth_config_and_name(
+                    auth_config_id, operation_name
+                )
             )
-        else:
-            operation = await self.operation_repository.get_by_connector_and_name(
-                connector_id,
-                operation_name,
-            )
+        if operation is None:
+            if kind:
+                operation = (
+                    await self.operation_repository.get_by_connector_kind_and_name(
+                        connector_id, kind, operation_name
+                    )
+                )
+            else:
+                operation = await self.operation_repository.get_by_connector_and_name(
+                    connector_id, operation_name
+                )
         if not operation:
             raise OperationNotFoundError(operation_name)
 
@@ -576,11 +562,20 @@ class ConnectorOperationService:
         return ResolvedConnectorExecution(
             connector_id=connector_id,
             operation_execution_name=operation.execution_name,
-            # Resolve the provider to a concrete value (the gateway already maps
-            # None -> LEMMA for routing). This guarantees the execute phase passes
-            # a non-None provider, so the gateway skips its connector-validation
-            # read and the external call holds NO DB connection.
-            provider=provider or AuthProvider.LEMMA.value,
+            # The gateway still routes on the legacy provider vocabulary, so map
+            # the install's kind back onto it. Always concrete, never None: that
+            # is what lets the gateway skip its connector-validation read so the
+            # external call holds NO DB connection.
+            provider=(
+                kind_to_provider(kind).value if kind else AuthProvider.LEMMA.value
+            ),
+            kind=kind or ConnectorKind.PACKAGE.value,
+            connection_config=(
+                getattr(auth_config, "config", None) if auth_config else None
+            ),
+            execution=getattr(operation, "execution", None),
+            operation_name=operation.name,
+            input_schema=getattr(operation, "input_schema", None),
             third_party_credentials=third_party_credentials,
             payload=payload or {},
             auth_token=auth_token,
@@ -590,6 +585,11 @@ class ConnectorOperationService:
             organization_id=getattr(account, "organization_id", None),
         )
 
+    def _dispatcher(self):
+        if self._kind_dispatcher is None:
+            self._kind_dispatcher = build_dispatcher(self.operation_gateway)
+        return self._kind_dispatcher
+
     async def execute_resolved(
         self, resolved: ResolvedConnectorExecution
     ) -> OperationExecutionResponse:
@@ -597,23 +597,10 @@ class ConnectorOperationService:
         connection: the gateway's connector-validation read is skipped because
         ``provider`` is supplied (the connector was validated in the resolve
         phase), and the concrete provider gateways are DB-free."""
-        try:
-            result = await self.operation_gateway.execute_operation(
-                connector_id=resolved.connector_id,
-                operation_name=resolved.operation_execution_name,
-                payload=resolved.payload or {},
-                third_party_credentials=resolved.third_party_credentials,
-                auth_token=resolved.auth_token,
-                api_url=resolved.api_url,
-                provider=resolved.provider,
+        with execution_failures_translated():
+            result = await self._dispatcher().execute(
+                execution_request(self._dispatcher(), resolved)
             )
-        except ConnectorDomainError:
-            raise
-        except Exception as exc:
-            raise OperationExecutionInfrastructureError(
-                "Connector provider is temporarily unavailable.",
-                details=self._exception_details(exc),
-            ) from exc
         return OperationExecutionResponse(
             result=self._normalize_execution_result(result)
         )

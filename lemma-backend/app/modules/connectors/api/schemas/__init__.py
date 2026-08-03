@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import datetime
 from enum import Enum
-from typing import Optional, Dict, Any, List, Union, Literal
+from typing import Optional, Dict, Any, List, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import AliasChoices, BaseModel, Field, ConfigDict
 
-from app.modules.connectors.domain.connector import AuthProvider, AuthScheme
+from app.modules.connectors.domain.connector import AuthScheme, ConnectorKind
 from app.modules.connectors.api.schemas.connector_operation_schemas import OperationSummary
 
 
@@ -30,34 +30,38 @@ class OAuth2DefaultsResponseSchema(BaseModel):
     refresh_token_path: str = "refresh_token"
 
 
-class LemmaProviderCapabilityResponseSchema(BaseModel):
+class ConnectorKindResponseSchema(BaseModel):
+    """One way a connector can be installed.
+
+    Flat rather than a union over the five kinds: a client's job here is to
+    decide what to put in an install's `config`, and for that `kind` plus the
+    schemas is the whole answer. The per-kind extras below are populated only
+    where they apply.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
-    provider: Literal[AuthProvider.LEMMA] = AuthProvider.LEMMA
+    kind: ConnectorKind
     auth_scheme: AuthScheme = AuthScheme.OAUTH2
     oauth2_defaults: Optional[OAuth2DefaultsResponseSchema] = None
-    auth_config_schema: Optional[Dict[str, Any]] = None
+    # Reads the domain model's `auth_config_schema` as well as its own name:
+    # `connector.get` builds its response by dumping this model and validating
+    # the result again, so a single validation alias would drop the value on
+    # the second pass.
+    config_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        validation_alias=AliasChoices("auth_config_schema", "config_schema"),
+        description="JSON Schema for an install's `config`.",
+    )
     credential_schema: Optional[Dict[str, Any]] = None
     supports_org_custom_oauth: bool = False
     system_default_available: bool = False
+    discovery: str = "none"
+    # `package` only.
     package_name: Optional[str] = None
-
-
-class ComposioProviderCapabilityResponseSchema(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    provider: Literal[AuthProvider.COMPOSIO] = AuthProvider.COMPOSIO
-    auth_scheme: AuthScheme = AuthScheme.OAUTH2
-    toolkit_slug: str
-    auth_config_schema: Optional[Dict[str, Any]] = None
-    system_default_available: bool = True
+    # `composio` only.
+    toolkit_slug: Optional[str] = None
     supports_org_custom_auth_config: bool = False
-
-
-ProviderCapabilityResponseSchema = Union[
-    LemmaProviderCapabilityResponseSchema,
-    ComposioProviderCapabilityResponseSchema,
-]
 
 
 # Connector Schemas
@@ -68,9 +72,7 @@ class ConnectorResponseSchema(BaseSchema):
     # name: str  # Name removed or optional if id is the identifier
     title: Optional[str] = None
     description: Optional[str]
-    provider_capabilities: List[ProviderCapabilityResponseSchema] = Field(
-        default_factory=list
-    )
+    kinds: List[ConnectorKindResponseSchema] = Field(default_factory=list)
     icon: Optional[str]
     is_active: bool
     created_at: datetime.datetime
@@ -132,10 +134,10 @@ class AccountResponseSchema(BaseSchema):
     allowed_scopes: Optional[List[str]]
     # Include connector info
     connector: Optional[ConnectorResponseSchema] = None
-    # Auth provider (LEMMA/COMPOSIO) backing this account's auth config. Not on
+    # The kind of the install backing this account. Not on
     # AccountEntity itself (it lives on the auth config), so the controller
-    # sets it explicitly after model_validate via ConnectorService.get_account_provider.
-    provider: Optional[str] = None
+    # sets it explicitly after model_validate via ConnectorService.get_account_kind.
+    kind: Optional[str] = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
 
@@ -164,9 +166,15 @@ class AccountCreateSchema(BaseModel):
 
 class AuthConfigCreateSchema(BaseModel):
     connector_id: str
-    provider: str = "LEMMA"
+    kind: Optional[str] = Field(
+        default=None,
+        description=(
+            "Which of the connector's kinds to install. Optional when the "
+            "connector offers only one."
+        ),
+    )
     config_source: str = "SYSTEM_DEFAULT"
-    credential_config: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None
     name: Optional[str] = None
 
 
@@ -174,14 +182,62 @@ class AuthConfigResponseSchema(BaseSchema):
     id: UUID
     organization_id: UUID
     connector_id: str
-    provider: str
+    kind: str
     config_source: str
     status: str
     name: str
-    credential_config: Optional[Dict[str, Any]] = None
+    is_default: bool = False
+    config: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
     created_at: datetime.datetime
     updated_at: datetime.datetime
+
+
+class AuthConfigUpdateSchema(BaseModel):
+    name: Optional[str] = Field(
+        default=None,
+        description=(
+            "New name for this install. Accounts follow the rename, since they "
+            "reference the install by id."
+        ),
+    )
+    config: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Replacement configuration. Re-validated against the connector's "
+            "schema, and re-checked against the network-target guard."
+        ),
+    )
+    status: Optional[str] = Field(
+        default=None, description="ACTIVE or DISABLED."
+    )
+    is_default: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Make this the install that a bare connector_id resolves to. "
+            "Demotes whichever install currently holds that role."
+        ),
+    )
+
+
+class AuthConfigUpdateResponseSchema(BaseModel):
+    auth_config: AuthConfigResponseSchema
+    operations_discovered: int = Field(
+        default=0,
+        description=(
+            "Operations re-discovered because the change altered where they "
+            "come from. Zero for a connector whose operations are static."
+        ),
+    )
+    accounts_marked_for_reauth: int = Field(
+        default=0,
+        description=(
+            "Connected accounts flagged for reconnect because the change "
+            "invalidated their stored credentials. They are never deleted: the "
+            "account keeps its id and grants, and reconnecting updates it in "
+            "place, so anything referencing it keeps working."
+        ),
+    )
 
 
 class AuthConfigListResponseSchema(BaseModel):
@@ -196,7 +252,7 @@ class AppTriggerResponseSchema(BaseSchema):
 
     id: str  # String ID (slug)
     connector_id: Optional[str]
-    provider: AuthProvider
+    kind: ConnectorKind
     # name: str # Name is likely id or part of it
     description: Optional[str]
     config_schema: Optional[Dict[str, Any]]
@@ -215,7 +271,7 @@ class AppTriggerSummaryResponseSchema(BaseSchema):
 
     id: str
     connector_id: Optional[str]
-    provider: AuthProvider
+    kind: ConnectorKind
     description: Optional[str]
     created_at: datetime.datetime
     updated_at: datetime.datetime
@@ -275,7 +331,7 @@ class InstalledAppSummary(BaseModel):
     connector_id: str
     title: Optional[str] = None
     status: str
-    provider: str
+    kind: str
 
 
 class ConnectedAccountSummary(BaseModel):
@@ -296,4 +352,4 @@ class ConnectorSkillResponse(BaseModel):
     connector_id: str
     title: Optional[str] = None
     markdown: str
-    provider: Optional[str] = None
+    kind: Optional[str] = None

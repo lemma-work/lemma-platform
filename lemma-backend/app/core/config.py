@@ -223,6 +223,32 @@ class Settings(BaseSettings):
         default=200,
         description="Maximum pooled Redis connections per process",
     )
+    outbound_http_max_connections: int = Field(
+        default=100,
+        description=(
+            "Ceiling on concurrent connections held by the shared outbound HTTP "
+            "client (connector execution, spec fetches, file downloads). Bounds "
+            "how hard one process can hammer upstreams."
+        ),
+    )
+    connector_allow_private_network_targets: bool = Field(
+        default=False,
+        description=(
+            "Permit connector installs to target loopback, private and "
+            "link-local addresses. Off by default: in a multi-tenant deployment "
+            "this is what stops an org admin pointing a connector at the cloud "
+            "metadata service or walking internal services. Self-hosted "
+            "deployments running connectors against their own network turn it on."
+        ),
+    )
+    outbound_http_max_keepalive: int = Field(
+        default=20,
+        description=(
+            "Idle connections the shared outbound client keeps warm. This is "
+            "what makes repeat calls to the same provider skip the TCP/TLS "
+            "handshake entirely."
+        ),
+    )
     desktop_auth_create_limit: int = Field(
         default=100,
         ge=0,

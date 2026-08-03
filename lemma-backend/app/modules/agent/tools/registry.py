@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from app.modules.agent.domain.value_objects import AgentToolset
+from app.modules.agent.tools.connectors.pydantic_adapter import connectors_toolset
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
@@ -41,6 +42,7 @@ _TOOLSET_BY_NAME: dict[AgentToolset, object] = {
     AgentToolset.POD: pod_toolset,
     AgentToolset.SUBAGENTS: subagents_toolset,
     AgentToolset.VIEW_IMAGE: view_image_toolset,
+    AgentToolset.CONNECTORS: connectors_toolset,
 }
 
 # Toolsets that are NOT static singletons — they are realized per-conversation as
@@ -54,6 +56,10 @@ _CAPABILITY_ONLY_TOOLSETS: frozenset[AgentToolset] = frozenset({AgentToolset.TOD
 # assembled toolset list into visible-core vs deferred-extra.
 EXTRA_TOOLSETS: tuple[AgentToolset, ...] = (
     AgentToolset.POD,
+    # An org with a couple of MCP servers installed can expose thousands of
+    # operations. Deferred so the model finds them via search_tools rather than
+    # carrying the surface in every prompt prefix.
+    AgentToolset.CONNECTORS,
     # Subagent delegation is deferred too: top-level agents discover spawn/interact/
     # query via search_tools rather than carrying them in every prompt prefix.
     # (RunToolAssembler still drops SUBAGENTS entirely for sub-agent conversations

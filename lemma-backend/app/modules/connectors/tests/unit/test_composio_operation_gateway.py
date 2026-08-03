@@ -101,3 +101,74 @@ async def test_sdk_telemetry_is_opt_in_and_context_is_restored():
     assert result == {"ok": True}
     assert seen_tracking_values == [False]
     assert allow_tracking.get() is True
+
+
+class TestRaisedSdkFailuresAreClassified:
+    """Composio reports some failures by raising, not by returning an envelope.
+
+    A deleted or revoked connected account comes back as a raised 404. That used
+    to fall through to "temporarily unavailable", so the account was never
+    flagged for reauth: the user was never prompted to reconnect and the call
+    failed forever looking like a transient outage.
+    """
+
+    @staticmethod
+    def _classify(status_code, message="boom"):
+        from app.modules.connectors.infrastructure.adapters.composio_operation_gateway import (
+            ComposioOperationGateway,
+        )
+
+        return ComposioOperationGateway._classify_failure(
+            "GOOGLEDRIVE_LIST_FILES", status_code, message, {"provider": "composio"}
+        )
+
+    def test_a_missing_connected_account_is_not_found(self):
+        from app.modules.connectors.domain.errors import (
+            OperationExecutionNotFoundError,
+        )
+
+        assert isinstance(
+            self._classify(404, "No connected account found with ID ca_x"),
+            OperationExecutionNotFoundError,
+        )
+
+    def test_a_401_flags_the_account_for_reauth(self):
+        from app.modules.connectors.domain.errors import (
+            OperationExecutionUnauthorizedError,
+        )
+
+        # This specific mapping is what drives the reconnect prompt.
+        assert isinstance(self._classify(401), OperationExecutionUnauthorizedError)
+
+    def test_a_403_is_access_denied(self):
+        from app.modules.connectors.domain.errors import (
+            OperationExecutionAccessDeniedError,
+        )
+
+        assert isinstance(self._classify(403), OperationExecutionAccessDeniedError)
+
+    @pytest.mark.parametrize("status", [400, 422])
+    def test_bad_arguments_are_validation_errors(self, status):
+        from app.modules.connectors.domain.errors import (
+            OperationExecutionValidationError,
+        )
+
+        assert isinstance(self._classify(status), OperationExecutionValidationError)
+
+    def test_an_unclassifiable_failure_stays_infrastructure(self):
+        from app.modules.connectors.domain.errors import (
+            OperationExecutionInfrastructureError,
+        )
+
+        assert isinstance(self._classify(None), OperationExecutionInfrastructureError)
+        assert isinstance(self._classify(503), OperationExecutionInfrastructureError)
+
+    def test_a_structured_token_still_classifies_without_a_status(self):
+        from app.modules.connectors.domain.errors import (
+            OperationExecutionUnauthorizedError,
+        )
+
+        # The returned-envelope form carries a token rather than an HTTP status.
+        assert isinstance(
+            self._classify(None, "unauthorized"), OperationExecutionUnauthorizedError
+        )

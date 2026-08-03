@@ -5,10 +5,15 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
 
 from app.core.domain.entity import Entity
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import (
+    AuthProvider,
+    ConnectorKind,
+    kind_to_provider,
+    provider_to_kind,
+)
 
 
 class AuthConfigStatus(str, enum.Enum):
@@ -22,15 +27,23 @@ class AuthConfigSource(str, enum.Enum):
 
 
 class AuthConfigEntity(Entity):
-    """Organization-level connector provider configuration."""
+    """One organization's install of a connector.
+
+    ``kind`` is the single runtime discriminator -- it decides which plugin
+    authenticates, discovers and executes. An org may hold many installs of the
+    same connector (two Slack apps, three MCP servers); they are told apart by
+    ``name``, and ``is_default`` picks the one that legacy callers addressing a
+    bare ``connector_id`` resolve to.
+    """
 
     organization_id: UUID
     connector_id: str
-    provider: AuthProvider = AuthProvider.LEMMA
+    kind: ConnectorKind = ConnectorKind.PACKAGE
     config_source: AuthConfigSource = AuthConfigSource.SYSTEM_DEFAULT
     status: AuthConfigStatus = AuthConfigStatus.ACTIVE
     name: str
-    provider_config: dict[str, Any] | None = None
+    is_default: bool = False
+    config: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     created_by_user_id: UUID | None = None
     updated_by_user_id: UUID | None = None
@@ -39,10 +52,38 @@ class AuthConfigEntity(Entity):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_provider_fields(cls, data: Any) -> Any:
+        """Accept the pre-kind vocabulary from callers not yet migrated.
+
+        ``provider=`` maps to ``kind`` only when ``kind`` is absent, and
+        ``LEMMA`` degrades to ``PACKAGE`` -- correct for every install that
+        existed before kinds, since http/sql/mcp did not ship. Callers that know
+        the real kind pass it explicitly and this leaves them alone.
+        """
+        if not isinstance(data, dict):
+            return data
+        if data.get("kind") is None and data.get("provider") is not None:
+            data = {**data, "kind": provider_to_kind(data["provider"])}
+        if data.get("config") is None and data.get("provider_config") is not None:
+            data = {**data, "config": data["provider_config"]}
+        return data
+
+    @property
+    def provider(self) -> AuthProvider:
+        """Deprecated alias derived from :attr:`kind`."""
+        return kind_to_provider(self.kind)
+
+    @property
+    def provider_config(self) -> dict[str, Any] | None:
+        """Deprecated alias for :attr:`config`."""
+        return self.config
+
     @property
     def uses_composio(self) -> bool:
-        return self.provider == AuthProvider.COMPOSIO
+        return self.kind is ConnectorKind.COMPOSIO
 
     @property
     def uses_native(self) -> bool:
-        return self.provider == AuthProvider.LEMMA
+        return self.kind is not ConnectorKind.COMPOSIO

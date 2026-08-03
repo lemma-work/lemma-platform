@@ -10,6 +10,8 @@ import type { AppTriggerResponseSchema } from '../models/AppTriggerResponseSchem
 import type { AuthConfigCreateSchema } from '../models/AuthConfigCreateSchema.js';
 import type { AuthConfigListResponseSchema } from '../models/AuthConfigListResponseSchema.js';
 import type { AuthConfigResponseSchema } from '../models/AuthConfigResponseSchema.js';
+import type { AuthConfigUpdateResponseSchema } from '../models/AuthConfigUpdateResponseSchema.js';
+import type { AuthConfigUpdateSchema } from '../models/AuthConfigUpdateSchema.js';
 import type { ConnectorDetailResponseSchema } from '../models/ConnectorDetailResponseSchema.js';
 import type { ConnectorListResponseSchema } from '../models/ConnectorListResponseSchema.js';
 import type { ConnectorSkillResponse } from '../models/ConnectorSkillResponse.js';
@@ -98,15 +100,15 @@ export class ConnectorsService {
     }
     /**
      * Get Connector Skill
-     * Get the skill guide markdown for a connector. Pass `provider=lemma` or `provider=composio` to get provider-specific instructions when the app supports both. Falls back to the generic doc if no provider-specific file exists. Returns 404 if no skill doc has been generated yet.
+     * Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-specific instructions when the app supports both. Falls back to the generic doc if no kind-specific file exists. Returns 404 if no skill doc has been generated yet.
      * @param connectorId
-     * @param provider Provider override: lemma or composio
+     * @param kind Kind override, e.g. package or composio
      * @returns ConnectorSkillResponse Successful Response
      * @throws ApiError
      */
     public static connectorSkillGet(
         connectorId: string,
-        provider?: (string | null),
+        kind?: (string | null),
     ): CancelablePromise<ConnectorSkillResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -115,7 +117,7 @@ export class ConnectorsService {
                 'connector_id': connectorId,
             },
             query: {
-                'provider': provider,
+                'kind': kind,
             },
             errors: {
                 422: `Validation Error`,
@@ -316,6 +318,58 @@ export class ConnectorsService {
         return __request(OpenAPI, {
             method: 'GET',
             url: '/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}',
+            path: {
+                'organization_id': organizationId,
+                'auth_config_name': authConfigName,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Update Auth Config
+     * Update an install in place. Rotating an MCP server URL or an OAuth app no longer requires deleting the install, which cascades away every account connected to it. Accounts are never deleted here: if the change invalidates their credentials they are marked REAUTH_REQUIRED, and reconnecting updates them in place. `kind`, `connector_id` and `config_source` are immutable -- changing any of them reinterprets every stored operation and credential, so that is a new install rather than an update.
+     * @param organizationId
+     * @param authConfigName
+     * @param requestBody
+     * @returns AuthConfigUpdateResponseSchema Successful Response
+     * @throws ApiError
+     */
+    public static connectorAuthConfigUpdate(
+        organizationId: string,
+        authConfigName: string,
+        requestBody: AuthConfigUpdateSchema,
+    ): CancelablePromise<AuthConfigUpdateResponseSchema> {
+        return __request(OpenAPI, {
+            method: 'PATCH',
+            url: '/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}',
+            path: {
+                'organization_id': organizationId,
+                'auth_config_name': authConfigName,
+            },
+            body: requestBody,
+            mediaType: 'application/json',
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
+     * Refresh Auth Config Operations
+     * Re-discover the operations exposed by a discovery-based install (MCP server, OpenAPI URL). Use after the upstream server changes its tools, or to retry a discovery that failed when the install was created.
+     * @param organizationId
+     * @param authConfigName
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    public static connectorAuthConfigRefreshOperations(
+        organizationId: string,
+        authConfigName: string,
+    ): CancelablePromise<Record<string, any>> {
+        return __request(OpenAPI, {
+            method: 'POST',
+            url: '/organizations/{organization_id}/connectors/auth-configs/{auth_config_name}/operations/refresh',
             path: {
                 'organization_id': organizationId,
                 'auth_config_name': authConfigName,

@@ -376,11 +376,11 @@ def _surface_upsert_body(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _resolve_account_connector_info(client: Lemma, account_id: str) -> tuple[str, str]:
-    """Ground-truth ``(connector_id, provider)`` for an account, resolved via
-    the connectors API — never inferred from a resource's own name, since that
+    """Ground-truth ``(connector_id, kind)`` for an account, resolved via the
+    connectors API — never inferred from a resource's own name, since that
     guess is wrong for any resource type with no platform concept of its own
-    (e.g. a schedule). Raises if the account (or its provider) can't be
-    resolved, since a bundle can't be tokenized without this metadata."""
+    (e.g. a schedule). Raises if the account (or its kind) can't be resolved,
+    since a bundle can't be tokenized without this metadata."""
     try:
         account = to_plain(client.connectors.accounts.get(account_id))
     except LemmaAPIError as exc:
@@ -388,14 +388,14 @@ def _resolve_account_connector_info(client: Lemma, account_id: str) -> tuple[str
             f"Could not resolve connector info for account {account_id}: {exc}"
         ) from exc
     connector_id = account.get("connector_id")
-    provider = account.get("provider")
-    if not connector_id or not provider:
+    kind = account.get("kind")
+    if not connector_id or not kind:
         raise ValueError(
-            f"Account {account_id} is missing connector_id/provider info — "
+            f"Account {account_id} is missing connector_id/kind info — "
             "upgrade the backend or lemma-sdk before exporting connector-bound "
             "resources."
         )
-    return str(connector_id), str(provider)
+    return str(connector_id), str(kind)
 
 
 def _stamp_cli_account_defaults(bundle_root: Path, variables: dict[str, Any]) -> None:
@@ -881,11 +881,11 @@ def export_pod_bundle(
             )
             account_id = full_schedule.get("account_id")
             if account_id:
-                connector_id, provider = _resolve_account_connector_info(
+                connector_id, connector_kind = _resolve_account_connector_info(
                     client, str(account_id)
                 )
                 full_schedule["connector_id"] = connector_id
-                full_schedule["provider"] = provider
+                full_schedule["connector_kind"] = connector_kind
             _write_json(
                 resource_dir / f"{schedule_name}.json",
                 _normalize_schedule_payload(full_schedule),
@@ -898,11 +898,11 @@ def export_pod_bundle(
             raw_surface = to_plain(surface)
             account_id = raw_surface.get("account_id")
             if account_id:
-                connector_id, provider = _resolve_account_connector_info(
+                connector_id, connector_kind = _resolve_account_connector_info(
                     client, str(account_id)
                 )
                 raw_surface["connector_id"] = connector_id
-                raw_surface["provider"] = provider
+                raw_surface["connector_kind"] = connector_kind
             payload = _normalize_surface_payload(raw_surface)
             platform = str(payload.get("platform") or "")
             if not platform or platform in seen_platforms:

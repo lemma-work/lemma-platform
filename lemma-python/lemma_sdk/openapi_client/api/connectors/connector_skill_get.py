@@ -14,17 +14,17 @@ from ...types import UNSET, Response, Unset
 def _get_kwargs(
     connector_id: str,
     *,
-    provider: None | str | Unset = UNSET,
+    kind: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    json_provider: None | str | Unset
-    if isinstance(provider, Unset):
-        json_provider = UNSET
+    json_kind: None | str | Unset
+    if isinstance(kind, Unset):
+        json_kind = UNSET
     else:
-        json_provider = provider
-    params["provider"] = json_provider
+        json_kind = kind
+    params["kind"] = json_kind
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -73,17 +73,17 @@ def sync_detailed(
     connector_id: str,
     *,
     client: AuthenticatedClient | Client,
-    provider: None | str | Unset = UNSET,
+    kind: None | str | Unset = UNSET,
 ) -> Response[ConnectorSkillResponse | ErrorResponse]:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `provider=lemma` or `provider=composio` to get
-    provider-specific instructions when the app supports both. Falls back to the generic doc if no
-    provider-specific file exists. Returns 404 if no skill doc has been generated yet.
+     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+    specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
+    file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        provider (None | str | Unset): Provider override: lemma or composio
+        kind (None | str | Unset): Kind override, e.g. package or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -95,7 +95,7 @@ def sync_detailed(
 
     kwargs = _get_kwargs(
         connector_id=connector_id,
-        provider=provider,
+        kind=kind,
     )
 
     response = client.get_httpx_client().request(
@@ -109,17 +109,17 @@ def sync(
     connector_id: str,
     *,
     client: AuthenticatedClient | Client,
-    provider: None | str | Unset = UNSET,
+    kind: None | str | Unset = UNSET,
 ) -> ConnectorSkillResponse | ErrorResponse | None:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `provider=lemma` or `provider=composio` to get
-    provider-specific instructions when the app supports both. Falls back to the generic doc if no
-    provider-specific file exists. Returns 404 if no skill doc has been generated yet.
+     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+    specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
+    file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        provider (None | str | Unset): Provider override: lemma or composio
+        kind (None | str | Unset): Kind override, e.g. package or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -132,7 +132,7 @@ def sync(
     return sync_detailed(
         connector_id=connector_id,
         client=client,
-        provider=provider,
+        kind=kind,
     ).parsed
 
 
@@ -140,17 +140,17 @@ async def asyncio_detailed(
     connector_id: str,
     *,
     client: AuthenticatedClient | Client,
-    provider: None | str | Unset = UNSET,
+    kind: None | str | Unset = UNSET,
 ) -> Response[ConnectorSkillResponse | ErrorResponse]:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `provider=lemma` or `provider=composio` to get
-    provider-specific instructions when the app supports both. Falls back to the generic doc if no
-    provider-specific file exists. Returns 404 if no skill doc has been generated yet.
+     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+    specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
+    file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        provider (None | str | Unset): Provider override: lemma or composio
+        kind (None | str | Unset): Kind override, e.g. package or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -162,7 +162,7 @@ async def asyncio_detailed(
 
     kwargs = _get_kwargs(
         connector_id=connector_id,
-        provider=provider,
+        kind=kind,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -174,17 +174,17 @@ async def asyncio(
     connector_id: str,
     *,
     client: AuthenticatedClient | Client,
-    provider: None | str | Unset = UNSET,
+    kind: None | str | Unset = UNSET,
 ) -> ConnectorSkillResponse | ErrorResponse | None:
     """Get Connector Skill
 
-     Get the skill guide markdown for a connector. Pass `provider=lemma` or `provider=composio` to get
-    provider-specific instructions when the app supports both. Falls back to the generic doc if no
-    provider-specific file exists. Returns 404 if no skill doc has been generated yet.
+     Get the skill guide markdown for a connector. Pass `kind=package` or `kind=composio` to get kind-
+    specific instructions when the app supports both. Falls back to the generic doc if no kind-specific
+    file exists. Returns 404 if no skill doc has been generated yet.
 
     Args:
         connector_id (str):
-        provider (None | str | Unset): Provider override: lemma or composio
+        kind (None | str | Unset): Kind override, e.g. package or composio
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -198,6 +198,6 @@ async def asyncio(
         await asyncio_detailed(
             connector_id=connector_id,
             client=client,
-            provider=provider,
+            kind=kind,
         )
     ).parsed

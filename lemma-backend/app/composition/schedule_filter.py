@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from pydantic_ai import Agent as PydanticAIAgent, UsageLimits
+from pydantic_ai.models import Model
 from pydantic_ai.output import StructuredDict
 
 from app.modules.agent.services.runtime_model_factory import (
@@ -45,6 +46,31 @@ FILTER_USAGE_LIMITS = UsageLimits(
     total_tokens_limit=36_000,
     count_tokens_before_request=True,
 )
+# Same caps, but without the pre-flight count. The limits are then enforced
+# against the usage the provider reports, so an oversized payload is refused
+# after the call rather than before it.
+FILTER_USAGE_LIMITS_WITHOUT_PRECOUNT = UsageLimits(
+    request_limit=1,
+    input_tokens_limit=32_000,
+    output_tokens_limit=4_000,
+    total_tokens_limit=36_000,
+    count_tokens_before_request=False,
+)
+
+
+def filter_usage_limits_for(model: Model) -> UsageLimits:
+    """Pick usage limits the model can actually honor.
+
+    ``count_tokens_before_request`` makes pydantic-ai call ``Model.count_tokens``
+    first, which only some providers implement — the base method raises
+    ``NotImplementedError``, and OpenAI-compatible models (the system runtime
+    used for the Fireworks profile) do not override it. Asking for the pre-count
+    there fails the whole filter, so it is requested only when the concrete
+    model actually implements it.
+    """
+    if type(model).count_tokens is Model.count_tokens:
+        return FILTER_USAGE_LIMITS_WITHOUT_PRECOUNT
+    return FILTER_USAGE_LIMITS
 
 
 class SystemModelScheduleFilter:
@@ -96,7 +122,7 @@ class SystemModelScheduleFilter:
         try:
             result = await agent.run(
                 self._user_message(event_payload),
-                usage_limits=FILTER_USAGE_LIMITS,
+                usage_limits=filter_usage_limits_for(model),
             )
         finally:
             await record_pydantic_ai_result_usage(

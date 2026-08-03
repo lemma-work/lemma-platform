@@ -147,7 +147,7 @@ async def _seed_composio_auth_config(
     auth_config = AuthConfig(
         organization_id=org_id,
         connector_id=connector_id,
-        provider=AuthProvider.COMPOSIO.value,
+        kind="composio",
         config_source=AuthConfigSource.SYSTEM_DEFAULT.value,
         name=f"{connector_id}-{uuid4().hex[:8]}",
     )

@@ -21,7 +21,7 @@ class ConnectorTrigger(StringAuditBase):
     connector_id: Mapped[str] = mapped_column(
         String(255), ForeignKey("connectors.id", ondelete="CASCADE"), nullable=False
     )
-    provider: Mapped[str] = mapped_column(String(50), default="LEMMA", nullable=False)
+    kind: Mapped[str] = mapped_column(String(50), default="package", nullable=False)
     # id serves as the name/slug
     event_type: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -41,9 +41,9 @@ class ConnectorTrigger(StringAuditBase):
 
     __table_args__ = (
         Index(
-            "ix_connector_triggers_app_provider_event",
+            "ix_connector_triggers_app_kind_event",
             "connector_id",
-            "provider",
+            "kind",
             "event_type",
             unique=True,
         ),

@@ -8,7 +8,7 @@ from attrs import define as _attrs_define
 from attrs import field as _attrs_field
 from dateutil.parser import isoparse
 
-from ..models.auth_provider import AuthProvider
+from ..models.connector_kind import ConnectorKind
 
 if TYPE_CHECKING:
     from ..models.app_trigger_response_schema_config_schema_type_0 import (
@@ -35,9 +35,9 @@ class AppTriggerResponseSchema:
         created_at (datetime.datetime):
         description (None | str):
         id (str):
+        kind (ConnectorKind): How an install authenticates, discovers and executes operations.
         payload_example (AppTriggerResponseSchemaPayloadExampleType0 | None):
         payload_schema (AppTriggerResponseSchemaPayloadSchemaType0 | None):
-        provider (AuthProvider):
         updated_at (datetime.datetime):
     """
 
@@ -46,9 +46,9 @@ class AppTriggerResponseSchema:
     created_at: datetime.datetime
     description: None | str
     id: str
+    kind: ConnectorKind
     payload_example: AppTriggerResponseSchemaPayloadExampleType0 | None
     payload_schema: AppTriggerResponseSchemaPayloadSchemaType0 | None
-    provider: AuthProvider
     updated_at: datetime.datetime
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -79,6 +79,8 @@ class AppTriggerResponseSchema:
 
         id = self.id
 
+        kind = self.kind.value
+
         payload_example: dict[str, Any] | None
         if isinstance(
             self.payload_example, AppTriggerResponseSchemaPayloadExampleType0
@@ -93,8 +95,6 @@ class AppTriggerResponseSchema:
         else:
             payload_schema = self.payload_schema
 
-        provider = self.provider.value
-
         updated_at = self.updated_at.isoformat()
 
         field_dict: dict[str, Any] = {}
@@ -106,9 +106,9 @@ class AppTriggerResponseSchema:
                 "created_at": created_at,
                 "description": description,
                 "id": id,
+                "kind": kind,
                 "payload_example": payload_example,
                 "payload_schema": payload_schema,
-                "provider": provider,
                 "updated_at": updated_at,
             }
         )
@@ -166,6 +166,8 @@ class AppTriggerResponseSchema:
 
         id = d.pop("id")
 
+        kind = ConnectorKind(d.pop("kind"))
+
         def _parse_payload_example(
             data: object,
         ) -> AppTriggerResponseSchemaPayloadExampleType0 | None:
@@ -204,8 +206,6 @@ class AppTriggerResponseSchema:
 
         payload_schema = _parse_payload_schema(d.pop("payload_schema"))
 
-        provider = AuthProvider(d.pop("provider"))
-
         updated_at = isoparse(d.pop("updated_at"))
 
         app_trigger_response_schema = cls(
@@ -214,9 +214,9 @@ class AppTriggerResponseSchema:
             created_at=created_at,
             description=description,
             id=id,
+            kind=kind,
             payload_example=payload_example,
             payload_schema=payload_schema,
-            provider=provider,
             updated_at=updated_at,
         )
 

@@ -4,7 +4,7 @@
 /* eslint-disable */
 export type ConnectorSkillResponse = {
     connector_id: string;
+    kind?: (string | null);
     markdown: string;
-    provider?: (string | null);
     title?: (string | null);
 };

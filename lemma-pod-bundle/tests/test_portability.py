@@ -35,7 +35,7 @@ def _make_bundle(tmp_path: Path) -> Path:
                 "name": "daily",
                 "account_id": "acct-456",
                 "connector_id": "jira",
-                "provider": "LEMMA",
+                "connector_kind": "package",
             }
         ),
         encoding="utf-8",
@@ -46,7 +46,7 @@ def _make_bundle(tmp_path: Path) -> Path:
                 "platform": "SLACK",
                 "account_id": "acct-789",
                 "connector_id": "slack",
-                "provider": "COMPOSIO",
+                "connector_kind": "composio",
             }
         ),
         encoding="utf-8",
@@ -63,9 +63,9 @@ def test_extract_portable_variables_rewrites_and_records(tmp_path: Path):
     assert variables["approval_assignee"]["source_value"] == "member-123"
     assert variables["daily_account"]["type"] == "account"
     assert variables["daily_account"]["connector"] == "jira"
-    assert variables["daily_account"]["provider"] == "LEMMA"
+    assert variables["daily_account"]["connector_kind"] == "package"
     assert variables["slack_account"]["connector"] == "slack"
-    assert variables["slack_account"]["provider"] == "COMPOSIO"
+    assert variables["slack_account"]["connector_kind"] == "composio"
 
     # Resource files now hold ${name} placeholders in place of the raw ids.
     workflow = json.loads((root / "workflows" / "approval" / "approval.json").read_text())
@@ -144,7 +144,7 @@ def test_extract_portable_variables_covers_any_resource_type(tmp_path: Path):
             {
                 "account_id": "acct-999",
                 "connector_id": "jira",
-                "provider": "COMPOSIO",
+                "connector_kind": "composio",
             }
         ),
         encoding="utf-8",
@@ -153,7 +153,7 @@ def test_extract_portable_variables_covers_any_resource_type(tmp_path: Path):
     variables = _extract_portable_variables(root)
 
     assert variables["on_ticket_account"]["connector"] == "jira"
-    assert variables["on_ticket_account"]["provider"] == "COMPOSIO"
+    assert variables["on_ticket_account"]["connector_kind"] == "composio"
     trigger = json.loads(
         (root / "triggers" / "on_ticket" / "on_ticket.json").read_text()
     )
@@ -161,7 +161,7 @@ def test_extract_portable_variables_covers_any_resource_type(tmp_path: Path):
 
 
 def test_extract_portable_variables_requires_connector_metadata(tmp_path: Path):
-    """An account_id with no connector_id/provider sibling is an exporter bug —
+    """An account_id with no connector_id/connector_kind sibling is an exporter bug —
     fail the export loudly instead of shipping an unresolvable variable."""
     root = tmp_path / "bundle"
     (root / "schedules" / "daily").mkdir(parents=True)
@@ -170,7 +170,7 @@ def test_extract_portable_variables_requires_connector_metadata(tmp_path: Path):
         json.dumps({"name": "daily", "account_id": "acct-456"}), encoding="utf-8"
     )
 
-    with pytest.raises(ValueError, match="connector_id/provider"):
+    with pytest.raises(ValueError, match="connector_id/connector_kind"):
         _extract_portable_variables(root)
 
 
@@ -181,7 +181,7 @@ def test_require_account_variable_metadata_accepts_complete_variables():
                 "type": "account",
                 "source_value": "acct-1",
                 "connector": "slack",
-                "provider": "COMPOSIO",
+                "connector_kind": "composio",
             },
             "app_slug": {"type": "app_slug", "source_value": "my-app"},
         }
@@ -208,7 +208,7 @@ def test_require_account_variable_metadata_rejects_missing_connector():
                 "slack_account": {
                     "type": "account",
                     "source_value": "acct-1",
-                    "provider": "COMPOSIO",
+                    "connector_kind": "composio",
                 }
             }
         )
@@ -228,3 +228,58 @@ def test_strip_unresolved_placeholders():
         "nested": {"keep": "${not a placeholder}"},
         "items": [{}, "plain"],
     }
+
+
+def test_a_tenant_kind_survives_the_round_trip(tmp_path: Path):
+    """An MCP install keeps its kind through export.
+
+    Under the old `provider` vocabulary every non-Composio install exported as
+    "LEMMA", so a bundle could not say whether an account belonged to a
+    vendored package, an MCP server or a SQL database -- and the importer had
+    no way to check it was handed the right one.
+    """
+    root = tmp_path / "bundle"
+    (root / "schedules" / "nightly").mkdir(parents=True)
+    (root / "pod.json").write_text(json.dumps({"name": "demo"}), encoding="utf-8")
+    (root / "schedules" / "nightly" / "nightly.json").write_text(
+        json.dumps(
+            {
+                "name": "nightly",
+                "account_id": "acct-1",
+                "connector_id": "mcp",
+                "connector_kind": "mcp",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    variables = _extract_portable_variables(root)
+    assert variables["nightly_account"]["connector"] == "mcp"
+    assert variables["nightly_account"]["connector_kind"] == "mcp"
+
+
+def test_a_bundle_exported_before_the_rename_still_plans(tmp_path: Path):
+    """`provider` is still accepted, so old bundles keep importing."""
+    root = tmp_path / "bundle"
+    (root / "schedules" / "legacy").mkdir(parents=True)
+    (root / "pod.json").write_text(json.dumps({"name": "demo"}), encoding="utf-8")
+    (root / "schedules" / "legacy" / "legacy.json").write_text(
+        json.dumps(
+            {
+                "name": "legacy",
+                "account_id": "acct-2",
+                "connector_id": "slack",
+                "provider": "COMPOSIO",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    variables = _extract_portable_variables(root)
+    assert variables["legacy_account"]["connector_kind"] == "COMPOSIO"
+
+
+def test_require_account_variable_metadata_accepts_a_legacy_provider():
+    require_account_variable_metadata(
+        {"acct": {"type": "account", "connector": "slack", "provider": "COMPOSIO"}}
+    )

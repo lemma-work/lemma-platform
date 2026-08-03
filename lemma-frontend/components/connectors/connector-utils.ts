@@ -1,13 +1,16 @@
 import type { Account, AuthConfig, Connector } from '@/lib/types';
 import { buildSchemaFormFields, type JsonSchemaLike } from 'lemma-sdk';
 
-export type ProviderCapability = NonNullable<Connector['provider_capabilities']>[number];
+export type ConnectorKindSpec = NonNullable<Connector['kinds']>[number];
 export type SchemaValues = Record<string, unknown>;
 export type AuthConfigMode = 'MANAGED' | 'CUSTOM';
 
-export const PROVIDER = {
-    LEMMA: 'LEMMA',
-    COMPOSIO: 'COMPOSIO',
+export const KIND = {
+    PACKAGE: 'package',
+    COMPOSIO: 'composio',
+    HTTP: 'http',
+    SQL: 'sql',
+    MCP: 'mcp',
 } as const;
 
 export const ACCOUNT_STATUS = {
@@ -22,44 +25,44 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 export const getAppLabel = (app: Connector | null | undefined) =>
     app?.title || app?.name || app?.id || 'this app';
 
-export const getProviderCapabilities = (app: Connector | null | undefined): ProviderCapability[] =>
-    (app?.provider_capabilities || []) as ProviderCapability[];
+export const getKindSpecs = (app: Connector | null | undefined): ConnectorKindSpec[] =>
+    (app?.kinds || []) as ConnectorKindSpec[];
 
-export const getSupportedProviders = (app: Connector | null | undefined): string[] => {
-    const providers = getProviderCapabilities(app)
-        .map((capability) => capability.provider)
-        .filter((provider): provider is string => typeof provider === 'string');
-    return providers.length > 0 ? providers : [PROVIDER.LEMMA];
+export const getSupportedKinds = (app: Connector | null | undefined): string[] => {
+    const kinds = getKindSpecs(app)
+        .map((capability) => String(capability.kind ?? ''))
+        .filter((kind) => kind.length > 0);
+    return kinds.length > 0 ? kinds : [KIND.PACKAGE];
 };
 
-export const getProviderCapability = (
+export const getKindSpec = (
     app: Connector | null | undefined,
-    provider: string | null | undefined,
-): ProviderCapability | null =>
-    getProviderCapabilities(app).find((capability) => capability.provider === provider) ?? null;
+    kind: string | null | undefined,
+): ConnectorKindSpec | null =>
+    getKindSpecs(app).find((capability) => capability.kind === kind) ?? null;
 
 /**
  * Composio-first: when a connector exposes a Composio capability we prefer it as
  * the default connect path. Native (Lemma) auth stays available under Advanced.
  */
-export const getPrimaryCapability = (app: Connector | null | undefined): ProviderCapability | null => {
-    const capabilities = getProviderCapabilities(app);
+export const getPrimaryKindSpec = (app: Connector | null | undefined): ConnectorKindSpec | null => {
+    const capabilities = getKindSpecs(app);
     return (
-        capabilities.find((capability) => capability.provider === PROVIDER.COMPOSIO) ??
+        capabilities.find((capability) => capability.kind === KIND.COMPOSIO) ??
         capabilities[0] ??
         null
     );
 };
 
-export const getPrimaryProvider = (app: Connector | null | undefined): string =>
-    getPrimaryCapability(app)?.provider || getSupportedProviders(app)[0] || PROVIDER.LEMMA;
+export const getPrimaryKind = (app: Connector | null | undefined): string =>
+    getPrimaryKindSpec(app)?.kind || getSupportedKinds(app)[0] || KIND.PACKAGE;
 
-export const getAuthConfigSchema = (capability: ProviderCapability | null): JsonSchemaLike | null => {
-    const schema = capability?.auth_config_schema;
+export const getConfigSchema = (capability: ConnectorKindSpec | null): JsonSchemaLike | null => {
+    const schema = capability?.config_schema;
     return isRecord(schema) ? (schema as JsonSchemaLike) : null;
 };
 
-export const usesDirectCredentials = (capability: ProviderCapability | null): boolean => {
+export const usesDirectCredentials = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
     if (capability.auth_scheme === 'API_KEY' || capability.auth_scheme === 'NOAUTH') return true;
     const direct = 'credential_schema' in capability ? capability.credential_schema : null;
@@ -71,12 +74,12 @@ export const usesDirectCredentials = (capability: ProviderCapability | null): bo
  * Native Lemma apps carry it on `credential_schema`; Composio non-OAuth toolkits
  * expose the derived initiation fields on `auth_config_schema`.
  */
-export const getCredentialSchema = (capability: ProviderCapability | null): JsonSchemaLike | null => {
+export const getCredentialSchema = (capability: ConnectorKindSpec | null): JsonSchemaLike | null => {
     if (!capability) return null;
     const direct = 'credential_schema' in capability ? capability.credential_schema : null;
     if (isRecord(direct)) return direct as JsonSchemaLike;
     if (usesDirectCredentials(capability)) {
-        return getAuthConfigSchema(capability);
+        return getConfigSchema(capability);
     }
     return null;
 };
@@ -84,12 +87,12 @@ export const getCredentialSchema = (capability: ProviderCapability | null): Json
 export const schemaHasFields = (schema: JsonSchemaLike | null): boolean =>
     buildSchemaFormFields(schema).length > 0;
 
-export const hasSystemDefault = (capability: ProviderCapability | null): boolean =>
+export const hasSystemDefault = (capability: ConnectorKindSpec | null): boolean =>
     Boolean(capability?.system_default_available);
 
-export const supportsCustomConfig = (capability: ProviderCapability | null): boolean => {
+export const supportsCustomConfig = (capability: ConnectorKindSpec | null): boolean => {
     if (!capability) return false;
-    const hasConfigFields = schemaHasFields(getAuthConfigSchema(capability));
+    const hasConfigFields = schemaHasFields(getConfigSchema(capability));
     if ('supports_org_custom_oauth' in capability) {
         return Boolean(capability.supports_org_custom_oauth && hasConfigFields);
     }
@@ -99,41 +102,41 @@ export const supportsCustomConfig = (capability: ProviderCapability | null): boo
     return hasConfigFields;
 };
 
-/** True when this connector has any Advanced (non-default provider / custom config) option worth surfacing. */
+/** True when this connector has any Advanced (non-default kind / custom config) option worth surfacing. */
 export const hasAdvancedOptions = (app: Connector | null | undefined): boolean => {
-    if (getSupportedProviders(app).length > 1) return true;
-    return getProviderCapabilities(app).some((capability) => supportsCustomConfig(capability));
+    if (getSupportedKinds(app).length > 1) return true;
+    return getKindSpecs(app).some((capability) => supportsCustomConfig(capability));
 };
 
-export const formatProviderName = (provider: string): string => {
-    if (provider === PROVIDER.LEMMA) return 'Native';
-    if (provider === PROVIDER.COMPOSIO) return 'Composio';
-    return provider
+export const formatKindName = (kind: string): string => {
+    if (kind === KIND.PACKAGE) return 'Native';
+    if (kind === KIND.COMPOSIO) return 'Composio';
+    return kind
         .toLowerCase()
         .split('_')
         .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
         .join(' ');
 };
 
-export const getProviderLabel = (provider: string, capability: ProviderCapability | null): string => {
-    if (provider === PROVIDER.COMPOSIO) return 'Composio (recommended)';
-    if (provider === PROVIDER.LEMMA && usesDirectCredentials(capability)) return 'Native credentials';
-    if (provider === PROVIDER.LEMMA) return 'Native OAuth';
-    return formatProviderName(provider);
+export const getKindLabel = (kind: string, capability: ConnectorKindSpec | null): string => {
+    if (kind === KIND.COMPOSIO) return 'Composio (recommended)';
+    if (kind === KIND.PACKAGE && usesDirectCredentials(capability)) return 'Native credentials';
+    if (kind === KIND.PACKAGE) return 'Native OAuth';
+    return formatKindName(kind);
 };
 
-export const getProviderDescription = (provider: string, capability: ProviderCapability | null): string => {
-    if (provider === PROVIDER.COMPOSIO) return 'Composio-managed auth with trigger-backed workflows. Recommended.';
+export const getKindDescription = (kind: string, capability: ConnectorKindSpec | null): string => {
+    if (kind === KIND.COMPOSIO) return 'Composio-managed auth with trigger-backed workflows. Recommended.';
     if (usesDirectCredentials(capability)) return 'Connect with credentials from this app, such as an API key or bot token.';
-    if (provider === PROVIDER.LEMMA) return 'Use OAuth with Lemma-managed or organization-managed credentials.';
-    return 'Use this provider for the connector connection.';
+    if (kind === KIND.PACKAGE) return 'Use OAuth with Lemma-managed or organization-managed credentials.';
+    return 'Use this kind for the connector connection.';
 };
 
-export const getManagedConfigCopy = (provider: string, capability: ProviderCapability | null): string => {
+export const getManagedConfigCopy = (kind: string, capability: ConnectorKindSpec | null): string => {
     if (usesDirectCredentials(capability)) return 'Use the default credential setup for this app. Account credentials are added after enabling it.';
-    if (provider === PROVIDER.COMPOSIO) return 'Composio uses the system default configuration and supports triggers.';
-    if (provider === PROVIDER.LEMMA) return 'Use the system default OAuth configuration for this app.';
-    return `Use the default ${formatProviderName(provider)} auth configuration for this app.`;
+    if (kind === KIND.COMPOSIO) return 'Composio uses the system default configuration and supports triggers.';
+    if (kind === KIND.PACKAGE) return 'Use the system default OAuth configuration for this app.';
+    return `Use the default ${formatKindName(kind)} auth configuration for this app.`;
 };
 
 export interface AccountStatusMeta {

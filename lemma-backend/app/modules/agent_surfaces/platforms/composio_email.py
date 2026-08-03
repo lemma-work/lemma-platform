@@ -26,18 +26,18 @@ from app.composition.surface_connectors import (
 )
 
 # Reserved key the surface credential resolver stamps with the account's
-# auth-config provider (COMPOSIO / LEMMA). Falls back to connection_id sniffing
-# for credential payloads produced outside the resolver.
-PROVIDER_KEY = "provider"
-_COMPOSIO_PROVIDER = "COMPOSIO"
+# auth-config kind. Falls back to connection_id sniffing for credential
+# payloads produced outside the resolver.
+KIND_KEY = "kind"
+_COMPOSIO_KIND = "composio"
 
 
 def is_composio_credentials(credentials: dict[str, Any]) -> bool:
     """True when the credentials must be used through Composio operations."""
-    provider = str(credentials.get(PROVIDER_KEY) or "").upper()
-    if provider:
-        return provider == _COMPOSIO_PROVIDER
-    # No explicit provider stamp: a connection_id only exists on Composio
+    kind = str(credentials.get(KIND_KEY) or "").lower()
+    if kind:
+        return kind == _COMPOSIO_KIND
+    # No explicit kind stamp: a connection_id only exists on Composio
     # connected accounts, so treat its presence as the signal.
     return bool(credentials.get("connection_id"))
 
@@ -60,7 +60,7 @@ async def execute_composio_operation(
         operation_name=operation_name,
         payload=payload or {},
         third_party_credentials=credentials,
-        provider=_COMPOSIO_PROVIDER,
+        provider=_COMPOSIO_KIND,
     )
 
 

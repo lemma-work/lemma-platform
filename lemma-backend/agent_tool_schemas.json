@@ -123,6 +123,33 @@
     }
   },
   {
+    "tool_name": "describe_connector_operation",
+    "toolset": "CONNECTORS",
+    "description": "Get one operation's description and input/output schemas.\n\nCall this before running an operation you have not run before -- the input\nschema is what `run_connector_operation` validates `arguments` against.",
+    "input_schema": {
+      "properties": {
+        "auth_config": {
+          "description": "Installed connector, by auth-config name.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "Operation name from search results.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "auth_config",
+        "operation"
+      ],
+      "title": "DescribeConnectorOperationRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "display_resource",
     "toolset": "USER_INTERACTION",
     "description": "Display a user-facing resource or richer interaction.\n\nPrefer this tool whenever the useful answer is more than short prose. Text is\nfor a single fact, a short explanation, or narration around a concrete surface:\n- asking a multiple-choice question: use the `ask_user` tool. For free-form\n  input, ask clearly in prose and continue from the user's next message.\n- showing several values, records, statuses, steps, comparisons, a timeline,\n  compact table, preview, or chart: render a WIDGET instead of describing the\n  structure in prose.\n- creating or updating pod resources: display the created or changed AGENT,\n  FUNCTION, WORKFLOW, APP, SCHEDULE, TABLE, or FILE instead of only saying\n  that it was created.\n- showing datastore records or resource lists: display the TABLE or resource\n  directly so the user can inspect it.\n\nUse this for every \"show this to the user\" action: pod files, datastore\ntables, agents, functions, workflows, apps, schedules, and widgets.",
@@ -685,6 +712,20 @@
         "action"
       ],
       "title": "InteractSubagentRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "list_connectors",
+    "toolset": "CONNECTORS",
+    "description": "List the connectors installed in this organization that you may use.\n\nReturns each install's `auth_config` name, which is how every other\nconnector tool addresses it.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {},
       "type": "object"
     },
     "output_schema": {
@@ -2380,6 +2421,62 @@
     }
   },
   {
+    "tool_name": "run_connector_operation",
+    "toolset": "CONNECTORS",
+    "description": "Run an operation on an installed connector.\n\n`arguments` must match the operation's input schema -- fetch it with\n`describe_connector_operation` first. A file result larger than the inline\nlimit is written to the pod datastore and returned as a reference; pass\n`output_path` to choose where it lands.",
+    "input_schema": {
+      "properties": {
+        "auth_config": {
+          "description": "Installed connector, by auth-config name.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "Operation name from search results.",
+          "type": "string"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "description": "Operation arguments, matching its input_schema.",
+          "type": "object"
+        },
+        "account_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Connected account to use; omit for the caller's own."
+        },
+        "output_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Pod path to save a file result to, e.g. /me/report.pdf."
+        }
+      },
+      "required": [
+        "auth_config",
+        "operation"
+      ],
+      "title": "RunConnectorOperationRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "say",
     "toolset": "SPEECH",
     "description": "Speak a reply: synthesize audio from text and deliver it as a voice note.\n\nUSE WHEN the user wants a spoken reply \u2014 the default reply modality is text,\nso only call this when voice is genuinely wanted (e.g. they sent a voice note\nand want one back). On a chat surface this delivers a NATIVE voice note\nautomatically (Telegram voice bubble, WhatsApp audio, Slack audio player) and\nalso saves the audio to the pod datastore; on the web app it appears as an\naudio player. The user receives and can play this audio \u2014 it IS your reply.\n\nDo NOT call display_resource afterward \u2014 say already delivers. Do NOT also\nwrite the same words as a text message: the spoken audio is the reply, and\nrestating it as text duplicates it. Add a separate text line only if it says\nsomething different (a caption, a link). Returns the pod file path of the\ngenerated audio.",
@@ -2463,6 +2560,46 @@
         }
       },
       "title": "SayResponse",
+      "type": "object"
+    }
+  },
+  {
+    "tool_name": "search_connector_operations",
+    "toolset": "CONNECTORS",
+    "description": "Find operations on an installed connector, ranked by relevance.\n\nStart here rather than guessing an operation name: an install can expose\nhundreds of operations, and the names are provider-specific.",
+    "input_schema": {
+      "properties": {
+        "auth_config": {
+          "description": "Installed connector to search, by its auth-config name.",
+          "type": "string"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Free text to rank operations by; omit to list."
+        },
+        "limit": {
+          "default": 20,
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "auth_config"
+      ],
+      "title": "SearchConnectorOperationsRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
       "type": "object"
     }
   },

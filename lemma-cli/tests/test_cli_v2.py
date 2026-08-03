@@ -1802,9 +1802,9 @@ def test_connectors_auth_config_create_uses_selected_org(monkeypatch):
         "organization_id": "org-1",
         "connector_id": "slack",
         "name": "workspace-slack",
-        "provider": "LEMMA",
+        "kind": None,
         "config_source": "SYSTEM_DEFAULT",
-        "credential_config": {
+        "config": {
             "oauth2_credentials": {"client_id": "id", "client_secret": "secret"}
         },
     }

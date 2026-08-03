@@ -45,7 +45,60 @@ class ConnectorSettings(BaseSettings):
         description=(
             "Hard timeout for a single connector operation execution. Bounds "
             "calls to external providers so a hung/slow upstream fails fast "
-            "instead of holding a DB connection (and wedging the event loop)."
+            "instead of holding a DB connection (and wedging the event loop). "
+            "Used for any kind without an entry in the per-kind overrides."
+        ),
+    )
+    connector_discovery_timeout_seconds: float = Field(
+        default=25.0,
+        description=(
+            "Hard timeout for one discovery round (MCP tool listing, OpenAPI "
+            "spec fetch). Discovery runs inside the request that creates or "
+            "refreshes an install, so without this an unresponsive server "
+            "holds the request open until the ASGI worker gives up."
+        ),
+    )
+    connector_spec_max_bytes: int = Field(
+        default=8 * 1024 * 1024,
+        description="Largest OpenAPI spec accepted from a tenant-supplied URL.",
+    )
+    connector_credential_refresh_skew_seconds: float = Field(
+        default=120.0,
+        description=(
+            "How far before expiry a credential is proactively refreshed. Only "
+            "credentials that report an expiry are refreshed at all; everything "
+            "else relies on the reactive 401 path, which also catches "
+            "server-side revocation."
+        ),
+    )
+    connector_composio_managed_files_enabled: bool = Field(
+        default=False,
+        description=(
+            "Let the Composio SDK handle files itself. Off, because the flag "
+            "governs both directions and its download half writes the payload "
+            "to this container's local disk and returns a path the caller "
+            "cannot open. Kept as a switch so a deployment can fall back if a "
+            "tool's upload shape turns out not to be covered."
+        ),
+    )
+    connector_inline_result_max_bytes: int = Field(
+        default=1024 * 1024,
+        description=(
+            "Largest binary result returned inline as base64. Anything bigger "
+            "is streamed to the pod datastore and returned as a reference, so a "
+            "large download never has to be held in memory (twice, once base64 "
+            "encoded) or serialized into a JSON response."
+        ),
+    )
+    connector_response_max_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        description="Hard ceiling on a binary result; larger is refused, not buffered.",
+    )
+    connector_sql_engine_cache_size: int = Field(
+        default=32,
+        description=(
+            "How many external SQL engines to keep pooled. Evicting disposes "
+            "the engine, so this bounds open connections to customer databases."
         ),
     )
     connector_encryption_key: Optional[str] = Field(

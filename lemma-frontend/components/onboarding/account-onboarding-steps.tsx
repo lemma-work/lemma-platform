@@ -569,8 +569,8 @@ export function ConnectStep({
     "lemma" | "provider" | null
   >(null);
 
-  const [providerKind, setProviderKind] = useState<CustomProviderKind>("openai");
-  const [providerName, setProviderName] = useState("");
+  const [providerKind, setKindKind] = useState<CustomProviderKind>("openai");
+  const [providerName, setKindName] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [modelNames, setModelNames] = useState("");
@@ -633,7 +633,7 @@ export function ConnectStep({
           onClick={() => {
             setSelectedOption("provider");
             const preset = PROVIDER_PRESETS.find((p) => p.id !== "custom");
-            if (!providerName && preset) setProviderName(preset.name);
+            if (!providerName && preset) setKindName(preset.name);
             if (!baseUrl && preset) setBaseUrl(preset.baseUrl);
           }}
           onHoverChange={(hovering) => setHoveredOption(hovering ? "provider" : null)}
@@ -660,8 +660,8 @@ export function ConnectStep({
                       key={preset.id}
                       type="button"
                       onClick={() => {
-                        setProviderKind(preset.providerKind);
-                        setProviderName(preset.name);
+                        setKindKind(preset.providerKind);
+                        setKindName(preset.name);
                         setBaseUrl(preset.baseUrl);
                       }}
                       className={cn(
@@ -683,7 +683,7 @@ export function ConnectStep({
                   key={option.kind}
                   type="button"
                   onClick={() => {
-                    setProviderKind(option.kind);
+                    setKindKind(option.kind);
                   }}
                   className={cn(
                     "agent-runtime-scope-button flex-1 rounded-md border px-3 py-2 text-sm font-medium transition",
@@ -700,7 +700,7 @@ export function ConnectStep({
               <Label className="text-[var(--text-secondary)]">Name</Label>
               <Input
                 value={providerName}
-                onChange={(e) => setProviderName(e.target.value)}
+                onChange={(e) => setKindName(e.target.value)}
                 placeholder={providerKind === "openai" ? "OpenRouter" : "Anthropic"}
               />
             </div>

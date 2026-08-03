@@ -32,17 +32,19 @@ class AuthConfigRepository(
 
     async def _to_model(self, entity: AuthConfigEntity) -> AuthConfig:
         data = entity.model_dump(exclude_unset=True)
-        data["provider_config"] = await self.encryption.encrypt_json_async(
-            entity.provider_config
-        )
+        # `provider`/`provider_config` are read-only compatibility views on the
+        # entity; the columns are `kind` and `config`. Dropped rather than
+        # renamed, because the entity has already resolved them.
+        data.pop("provider", None)
+        data.pop("provider_config", None)
+        data["kind"] = entity.kind.value
+        data["config"] = await self.encryption.encrypt_json_async(entity.config)
         data["metadata_"] = data.pop("metadata", None)
         return self.model_cls(**data)
 
     async def _to_entity(self, instance: AuthConfig) -> AuthConfigEntity:
         entity = instance.to_entity()
-        entity.provider_config = await self.encryption.decrypt_json_async(
-            entity.provider_config
-        )
+        entity.config = await self.encryption.decrypt_json_async(entity.config)
         return entity
 
     async def create(self, entity: AuthConfigEntity) -> AuthConfigEntity:
@@ -59,16 +61,15 @@ class AuthConfigRepository(
             raise ValueError(f"AuthConfig {entity.id} not found")
 
         instance.name = entity.name
-        instance.provider = entity.provider.value if hasattr(entity.provider, "value") else str(entity.provider)
+        instance.kind = entity.kind.value
         instance.config_source = (
             entity.config_source.value
             if hasattr(entity.config_source, "value")
             else str(entity.config_source)
         )
         instance.status = entity.status.value if hasattr(entity.status, "value") else str(entity.status)
-        instance.provider_config = await self.encryption.encrypt_json_async(
-            entity.provider_config
-        )
+        instance.config = await self.encryption.encrypt_json_async(entity.config)
+        instance.is_default = entity.is_default
         instance.metadata_ = entity.metadata
         instance.updated_by_user_id = entity.updated_by_user_id
         await self.session.flush()
