@@ -18,6 +18,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::DownloadEvent;
 use tauri::webview::NewWindowResponse;
 use tauri::webview::WebviewBuilder;
 use tauri::{
@@ -3284,6 +3285,12 @@ fn owned_published_app(url: &tauri::Url, api_base: &str) -> bool {
             .is_some_and(|host| host.ends_with(".apps.lemma.localhost"))
 }
 
+/// The documents a frame renders without fetching anything: the content document
+/// of an `srcdoc` iframe, and the blank document a frame starts life on.
+fn frame_content_url(url: &tauri::Url) -> bool {
+    url.scheme() == "about" && matches!(url.path(), "srcdoc" | "blank")
+}
+
 fn navigation_disposition(
     url: &tauri::Url,
     mode: &str,
@@ -3292,6 +3299,21 @@ fn navigation_disposition(
 ) -> NavigationDisposition {
     if is_desktop_browser_auth_url(url) {
         NavigationDisposition::OpenExternal
+    } else if frame_content_url(url) {
+        // This handler sees every navigation in the window, not just the top
+        // frame's: WKWebView asks its navigation delegate about subframes too,
+        // and nothing between here and it filters on isMainFrame. So an iframe
+        // rendering inline HTML arrives here as `about:srcdoc`, the scheme gate
+        // below answered Cancel, and the frame stayed blank — no error, no
+        // console entry. That was every HTML and .docx preview in the document
+        // viewer, on macOS only, because the Windows webview reports main-frame
+        // navigation alone.
+        //
+        // Admitting these two costs nothing at the top level: WebKit will not
+        // navigate a main frame to `about:srcdoc` at all, and `about:blank` is
+        // already reachable by any script the page can already run on itself.
+        // `new_window_disposition` still refuses `about:blank` popups.
+        NavigationDisposition::Allow
     } else if trusted_native_asset_url(url) {
         // Our own bundled pages, whichever origin this build serves them from.
         // Testing `scheme() == "tauri"` alone was right for a packaged app and
@@ -3338,6 +3360,32 @@ fn new_window_disposition(
     } else {
         NewWindowDisposition::Deny
     }
+}
+
+/// Where a download's bytes come from, for the purpose of trusting it. Every
+/// download the workspace triggers is an `a[download]` click on an object URL
+/// the page minted itself, which arrives as `blob:http://origin/uuid` — the
+/// creating origin is the opaque path, and it is the only part worth judging.
+fn download_source_url(url: &tauri::Url) -> Option<tauri::Url> {
+    if url.scheme() == "blob" {
+        return tauri::Url::parse(url.path()).ok();
+    }
+    Some(url.clone())
+}
+
+/// Whether to let a download proceed. Registering any policy at all is what
+/// makes downloads work: with no download handler the webview cancels the
+/// navigation outright, which is why Download buttons did nothing on macOS and
+/// said nothing about it. The destination is left as the webview computed it —
+/// the user's Downloads folder, uniquified against what is already there.
+fn download_disposition(url: &tauri::Url, mode: &str, app_base: &str, api_base: &str) -> bool {
+    let Some(source) = download_source_url(url) else {
+        return false;
+    };
+    // Held to the same test as navigating there would be, which among other
+    // things keeps `file:` and `data:` out.
+    matches!(source.scheme(), "http" | "https")
+        && navigation_disposition(&source, mode, app_base, api_base) == NavigationDisposition::Allow
 }
 
 fn open_external(url: &str) {
@@ -4141,6 +4189,16 @@ fn main() {
                         }
                         NewWindowResponse::Deny
                     }
+                })
+                .on_download({
+                    let handle = handle.clone();
+                    move |_webview, event| match event {
+                        DownloadEvent::Requested { url, .. } => {
+                            let (mode, app_base, api_base) = navigation_context(&handle);
+                            download_disposition(&url, &mode, &app_base, &api_base)
+                        }
+                        _ => true,
+                    }
                 });
 
             // Native materials. Vibrancy is only ever visible where the web
@@ -4918,6 +4976,73 @@ mod tests {
             assert_eq!(
                 navigation_disposition(&url, "local", app_base, api_base),
                 NavigationDisposition::Deny
+            );
+        }
+    }
+
+    #[test]
+    fn iframes_may_render_their_own_inline_content() {
+        let app_base = "http://app.lemma.localhost:63844";
+        let api_base = "http://app.lemma.localhost:63845";
+
+        // The document viewer previews HTML and .docx through `srcdoc`, and the
+        // navigation delegate is asked about subframes too. Denying these blanked
+        // the preview.
+        for raw_url in ["about:srcdoc", "about:blank"] {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert_eq!(
+                navigation_disposition(&url, "local", app_base, api_base),
+                NavigationDisposition::Allow
+            );
+        }
+
+        // Nothing else off the http/https path comes along for the ride.
+        for raw_url in [
+            "data:text/html,<h1>x</h1>",
+            "file:///etc/passwd",
+            "about:settings",
+            "javascript:alert(1)",
+        ] {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert_eq!(
+                navigation_disposition(&url, "local", app_base, api_base),
+                NavigationDisposition::Deny
+            );
+        }
+    }
+
+    #[test]
+    fn downloads_are_judged_by_the_origin_that_minted_them() {
+        let app_base = "http://app.lemma.localhost:63844";
+        let api_base = "http://app.lemma.localhost:63845";
+
+        // Object URLs from the workspace itself: every Download button in the app.
+        for raw_url in [
+            "blob:http://app.lemma.localhost:63844/9f1c-uuid",
+            "blob:http://app.lemma.localhost:63845/9f1c-uuid",
+            // Bundle export navigates straight to a Content-Disposition endpoint.
+            "http://app.lemma.localhost:63845/pods/demo/bundle/download",
+        ] {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert!(
+                download_disposition(&url, "local", app_base, api_base),
+                "{raw_url} should download"
+            );
+        }
+
+        for raw_url in [
+            // A loopback origin this install does not own.
+            "blob:http://app.lemma.localhost:3710/9f1c-uuid",
+            "http://127.0.0.1:3000/export.csv",
+            // Schemes that should never reach the disk by themselves.
+            "file:///etc/passwd",
+            "data:text/csv,a%2Cb",
+            "blob:not-a-url",
+        ] {
+            let url = tauri::Url::parse(raw_url).unwrap();
+            assert!(
+                !download_disposition(&url, "local", app_base, api_base),
+                "{raw_url} should not download"
             );
         }
     }
