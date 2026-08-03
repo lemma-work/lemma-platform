@@ -212,6 +212,84 @@ impl OperatorConfigStore {
         Ok(snapshot_value(config, secret_presence))
     }
 
+    /// List the models a candidate provider offers, writing nothing.
+    ///
+    /// Takes the same `ai` shape `apply` does, plus an optional `api_key`. When
+    /// no key is supplied the stored one is used, so an already-configured
+    /// provider can be re-listed without the caller handling the secret at all.
+    pub fn discover_models(&self, request: Value) -> io::Result<Vec<String>> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct DiscoverRequest {
+            ai: AiProfile,
+            #[serde(default)]
+            api_key: Option<String>,
+        }
+
+        let request: DiscoverRequest = serde_json::from_value(request)
+            .map_err(|error| invalid(format!("invalid provider probe request: {error}")))?;
+        if request.ai.protocol == "unconfigured" {
+            return Err(invalid("choose a provider protocol first"));
+        }
+        validate_ai_shape(&request.ai)?;
+
+        let install_id = self
+            .config
+            .lock()
+            .expect("operator config poisoned")
+            .install_id
+            .clone();
+        let api_key = match request.api_key {
+            Some(value) if !value.is_empty() => Some(value),
+            // An empty string is the page saying "no key", which is legitimate
+            // for a loopback provider. Absent means "use whatever is stored".
+            Some(_) => None,
+            None => self.vault.get(&install_id, "ai.api_key")?,
+        };
+        if !local_no_auth(&request.ai.base_url) && api_key.is_none() {
+            return Err(invalid("this AI provider requires an API key"));
+        }
+        self.provider_probe
+            .discover(&request.ai, api_key.as_deref())
+    }
+
+    /// Replace only the AI profile, leaving everything else exactly as it is.
+    ///
+    /// `apply` takes a whole configuration, which means any caller wanting to
+    /// change the model has to hold — and faithfully return — the sharing,
+    /// integration, and surface settings too. That is a fine contract for the
+    /// bundled settings page and a bad one to expose anywhere else: a caller
+    /// that got it wrong would silently reset unrelated configuration. This
+    /// takes the one section it is allowed to touch and merges it here.
+    pub fn set_ai(&self, request: Value) -> io::Result<Value> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SetAiRequest {
+            ai: AiProfile,
+            /// Absent leaves the stored key alone; empty clears it.
+            #[serde(default)]
+            api_key: Option<String>,
+        }
+
+        let request: SetAiRequest = serde_json::from_value(request)
+            .map_err(|error| invalid(format!("invalid AI profile request: {error}")))?;
+        let mut config = self
+            .config
+            .lock()
+            .expect("operator config poisoned")
+            .clone();
+        config.ai = request.ai;
+
+        let mut secrets = BTreeMap::new();
+        if let Some(api_key) = request.api_key {
+            secrets.insert(
+                "ai.api_key".to_string(),
+                Some(api_key).filter(|value| !value.is_empty()),
+            );
+        }
+        self.apply(ApplyOperatorConfig { config, secrets })
+    }
+
     pub fn apply(&self, mut request: ApplyOperatorConfig) -> io::Result<Value> {
         let old_config = self
             .config
@@ -363,6 +441,39 @@ impl OperatorConfigStore {
         Ok(snapshot_value(state.config, presence))
     }
 
+    /// The backend's encryption keyset, minted once and kept in the OS vault.
+    ///
+    /// The backend used to fetch this itself with `SECRET_KEY_PROVIDER=keychain`,
+    /// which cannot work in a packaged install: the packaged backend runs with
+    /// `HOME` pointed at an app-owned directory so it neither depends on nor
+    /// mutates the user's home, and macOS resolves the login keychain out of
+    /// `$HOME/Library/Keychains`. Finding none, the Security framework does not
+    /// fail quietly — it puts a modal "a keychain cannot be found to store
+    /// secret-encryption-keyset" in front of the user, and its Reset To
+    /// Defaults button fails the same way for the same reason.
+    ///
+    /// locald has no such problem: it runs as an ordinary process of the
+    /// signed-in user and already keeps `ai.api_key` here. So it fetches the
+    /// keyset and hands it over, and the material still lives in the OS vault
+    /// exactly as intended — the backend simply stops reaching for it.
+    fn secret_encryption_keyset(&self, install_id: &str) -> io::Result<String> {
+        const NAME: &str = "secret.encryption_keyset";
+        if let Some(existing) = self.vault.get(install_id, NAME)? {
+            if !existing.trim().is_empty() {
+                return Ok(existing);
+            }
+        }
+        // Same shape the backend's own keychain provider used, so an install
+        // that already has rows encrypted under a keyset it minted itself stays
+        // readable if that keyset is ever migrated in here.
+        let keyset = format!(
+            r#"[{{"kid":"lk1","key":"{}","primary":true}}]"#,
+            fernet_key()?
+        );
+        self.vault.set(install_id, NAME, &keyset)?;
+        Ok(keyset)
+    }
+
     pub fn backend_environment(&self) -> io::Result<HashMap<String, String>> {
         let config = self
             .config
@@ -370,6 +481,13 @@ impl OperatorConfigStore {
             .expect("operator config poisoned")
             .clone();
         let mut environment = HashMap::new();
+        // Applied over the host pack's own environment, so this is what decides
+        // how the backend gets its keys regardless of what the manifest says.
+        environment.insert("SECRET_KEY_PROVIDER".into(), "static".into());
+        environment.insert(
+            "SECRET_ENCRYPTION_KEYSET".into(),
+            self.secret_encryption_keyset(&config.install_id)?,
+        );
         let secret_presence = self.secret_presence(&config)?;
         environment.insert(
             "LEMMA_LOCAL_AI_READY".into(),
@@ -541,15 +659,8 @@ fn validate_config_shape(config: &OperatorConfig) -> io::Result<()> {
             "unsupported operator configuration identity or schema",
         ));
     }
-    if !matches!(
-        config.ai.protocol.as_str(),
-        "unconfigured" | "openai_compat" | "anthropic_compat"
-    ) {
-        return Err(invalid("unsupported AI provider protocol"));
-    }
+    validate_ai_shape(&config.ai)?;
     for (label, value) in [
-        ("AI base URL", &config.ai.base_url),
-        ("AI default model", &config.ai.default_model),
         ("Google client ID", &config.integrations.google_client_id),
         (
             "Microsoft client ID",
@@ -569,10 +680,27 @@ fn validate_config_shape(config: &OperatorConfig) -> io::Result<()> {
     ] {
         validate_text(label, value, 2048)?;
     }
-    for model in config.ai.models.iter().chain(&config.ai.vision_models) {
+    Ok(())
+}
+
+/// The AI half of [`validate_config_shape`], reusable on its own.
+///
+/// `discover_models` accepts a candidate profile that has never been saved, and
+/// it must be held to exactly the same rules as one that is about to be — a
+/// probe is still an outbound request built from user-supplied text.
+fn validate_ai_shape(ai: &AiProfile) -> io::Result<()> {
+    if !matches!(
+        ai.protocol.as_str(),
+        "unconfigured" | "openai_compat" | "anthropic_compat"
+    ) {
+        return Err(invalid("unsupported AI provider protocol"));
+    }
+    validate_text("AI base URL", &ai.base_url, 2048)?;
+    validate_text("AI default model", &ai.default_model, 2048)?;
+    for model in ai.models.iter().chain(&ai.vision_models) {
         validate_text("model name", model, 256)?;
     }
-    if config.ai.protocol != "unconfigured" && !valid_http_url(&config.ai.base_url) {
+    if ai.protocol != "unconfigured" && !valid_http_url(&ai.base_url) {
         return Err(invalid(
             "AI base URL must use HTTP or HTTPS without embedded credentials",
         ));
@@ -784,6 +912,18 @@ fn insert_nonempty(environment: &mut HashMap<String, String>, key: &str, value: 
     }
 }
 
+/// A Fernet key: 32 random bytes as url-safe base64, which is what the
+/// backend's `parse_keyset` expects each entry's `key` to be.
+fn fernet_key() -> io::Result<String> {
+    use base64::engine::general_purpose::URL_SAFE;
+    use base64::Engine;
+
+    let mut random = [0_u8; 32];
+    getrandom::fill(&mut random)
+        .map_err(|error| io::Error::other(format!("secure randomness failed: {error}")))?;
+    Ok(URL_SAFE.encode(random))
+}
+
 fn random_hex(bytes: usize) -> io::Result<String> {
     let mut random = vec![0_u8; bytes];
     getrandom::fill(&mut random)
@@ -900,6 +1040,92 @@ mod tests {
         ) -> io::Result<Vec<String>> {
             Ok(vec!["alpha-model".into(), "zeta-model".into()])
         }
+    }
+
+    #[test]
+    fn the_backend_is_never_asked_to_open_a_keychain_it_cannot_see() {
+        // The packaged backend runs with HOME pointed at an app-owned directory
+        // so it neither depends on nor mutates the user's home. macOS resolves
+        // the login keychain out of $HOME/Library/Keychains, so a backend told
+        // to use the keychain provider finds none — and the Security framework
+        // answers with a modal ("a keychain cannot be found to store
+        // secret-encryption-keyset") whose Reset To Defaults fails the same
+        // way. locald reads the vault instead and hands the keyset over.
+        let root = tempdir().unwrap();
+        let vault = Arc::new(MemoryVault::default());
+        let store = OperatorConfigStore::load_components(
+            root.path().join("operator.json"),
+            vault.clone(),
+            Arc::new(FixedModelProviderProbe),
+        )
+        .unwrap();
+
+        let environment = store.backend_environment().unwrap();
+        assert_eq!(
+            environment.get("SECRET_KEY_PROVIDER").map(String::as_str),
+            Some("static"),
+            "a packaged backend must never reach for the keychain itself"
+        );
+
+        let keyset = environment
+            .get("SECRET_ENCRYPTION_KEYSET")
+            .expect("the keyset travels with the provider that needs it");
+        let entries: Value = serde_json::from_str(keyset).expect("keyset is JSON");
+        assert_eq!(entries[0]["primary"], json!(true));
+        // 32 random bytes in url-safe base64 — what a Fernet key is, and what
+        // the backend's parse_keyset accepts.
+        assert_eq!(entries[0]["key"].as_str().unwrap().len(), 44);
+
+        // Minted once: rows encrypted on one run have to stay readable on the
+        // next, so a second call must return the stored keyset, not a new one.
+        assert_eq!(
+            store.backend_environment().unwrap().get("SECRET_ENCRYPTION_KEYSET"),
+            Some(keyset),
+        );
+    }
+
+    #[test]
+    fn setting_the_ai_profile_leaves_every_other_section_alone() {
+        // Onboarding is trusted with the model and nothing else. If this took a
+        // whole configuration, a caller that echoed back a stale copy would
+        // silently reset the user's sharing and integration settings.
+        let root = tempdir().unwrap();
+        let store = OperatorConfigStore::load_components(
+            root.path().join("operator.json"),
+            Arc::new(MemoryVault::default()),
+            Arc::new(FixedModelProviderProbe),
+        )
+        .unwrap();
+
+        let mut config: OperatorConfig =
+            serde_json::from_value(store.snapshot().unwrap()["config"].clone()).unwrap();
+        config.integrations.google_client_id = "google-client".into();
+        config.surfaces.teams_app_id = "teams-app".into();
+        store
+            .apply(ApplyOperatorConfig {
+                config,
+                secrets: BTreeMap::new(),
+            })
+            .unwrap();
+
+        let snapshot = store
+            .set_ai(json!({
+                "ai": {
+                    "protocol": "openai_compat",
+                    "base_url": "http://127.0.0.1:11434/v1",
+                    "default_model": "",
+                    "models": [],
+                    "vision_models": [],
+                },
+            }))
+            .unwrap();
+
+        assert_eq!(snapshot["config"]["ai"]["default_model"], "alpha-model");
+        assert_eq!(
+            snapshot["config"]["integrations"]["google_client_id"],
+            "google-client"
+        );
+        assert_eq!(snapshot["config"]["surfaces"]["teams_app_id"], "teams-app");
     }
 
     #[test]

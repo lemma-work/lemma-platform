@@ -87,17 +87,28 @@
 
       <section class="page config-page" data-page="ai">
         <article class="panel">
-          <div class="panel-heading"><div><h2>System AI profile</h2><p>The default provider used by local agents. Credentials are stored outside this page.</p></div><span class="status" id="ai-validation">Not validated</span></div>
+          <div class="panel-heading"><div><h2>System AI profile</h2><p>The default model for everyone who uses this installation, including anyone you share it with. Credentials are stored outside this page.</p></div><span class="status" id="ai-validation">Not validated</span></div>
+          <div class="preset-row" id="ai-presets">
+            <button class="preset" type="button" data-preset="ollama"><strong>Ollama</strong><span>Runs on this Mac</span></button>
+            <button class="preset" type="button" data-preset="lmstudio"><strong>LM Studio</strong><span>Runs on this Mac</span></button>
+            <button class="preset" type="button" data-preset="openai"><strong>OpenAI</strong><span>API key</span></button>
+            <button class="preset" type="button" data-preset="anthropic"><strong>Anthropic</strong><span>API key</span></button>
+            <button class="preset" type="button" data-preset="openrouter"><strong>OpenRouter</strong><span>API key</span></button>
+          </div>
           <div class="form-grid">
             <div class="field"><label for="ai-protocol">Provider protocol</label><select id="ai-protocol"><option value="unconfigured">Not configured</option><option value="openai_compat">OpenAI compatible</option><option value="anthropic_compat">Anthropic compatible</option></select></div>
             <div class="field"><label for="ai-base">Base URL</label><input id="ai-base" placeholder="https://api.openai.com/v1" /></div>
-            <div class="field"><label for="ai-model">Default model</label><input id="ai-model" placeholder="gpt-4o" /></div>
-            <div class="field"><label for="ai-models">Available models</label><input id="ai-models" placeholder="gpt-4o, gpt-4o-mini" /><span class="hint">Comma-separated; include the default.</span></div>
-            <div class="field"><label for="ai-vision">Vision-capable models</label><input id="ai-vision" placeholder="gpt-4o" /></div>
             <div class="field"><label for="ai-key">API key</label><div class="secret-wrap"><input id="ai-key" type="password" autocomplete="new-password" data-secret="ai.api_key" /><button class="secret-clear" type="button">Remove</button></div></div>
             <div class="field span-two"><label class="check"><input type="checkbox" id="ai-private-network" /> Trust this private-network endpoint</label><span class="hint">Loopback endpoints are trusted automatically; Lemma never scans your network.</span></div>
           </div>
-          <div class="button-row"><button class="btn" id="detect-ollama">Use Ollama</button><button class="btn" id="detect-lmstudio">Use LM Studio</button></div>
+          <div class="button-row"><button class="btn" id="ai-discover">Connect and list models</button></div>
+        </article>
+        <article class="panel" id="ai-model-panel" hidden>
+          <div class="panel-heading"><div><h2>Model</h2><p>Pick the default from what this provider actually offers.</p></div><span class="status" id="ai-model-count"></span></div>
+          <div class="form-grid">
+            <div class="field"><label for="ai-model">Default model</label><select id="ai-model"></select></div>
+            <div class="field"><label for="ai-vision">Vision-capable models</label><input id="ai-vision" placeholder="gpt-4o" /><span class="hint">Comma-separated; optional.</span></div>
+          </div>
         </article>
         <div class="savebar"><span>Unsaved AI provider changes</span><button class="btn primary" data-save>Validate &amp; apply</button></div>
       </section>

@@ -1,11 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "workspace-capability",
-  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants opening Local settings, and controlling this computer's Agent Host, because that page is the one surface a local and a cloud user share. Nothing here touches the local stack. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing.",
+  "description": "The signed-in Lemma workspace runs on a remote origin - the locald-served local app URL, or the hosted site - so it reaches the shell only through this capability. It grants opening Local settings, controlling this computer's Agent Host, and pointing this installation at an AI provider, because those are the surfaces a user meets during onboarding and cannot be sent to another window to complete. Provider configuration is deliberately the only operator setting here: it reaches config.set-ai, which merges that one section and cannot touch sharing, tunnels, runtime, or diagnostics. Shared LAN and public-tunnel origins are different hosts and are deliberately not listed, so a visitor's browser matches nothing.",
   "local": false,
-  "webviews": ["main"],
+  "webviews": [
+    "main"
+  ],
   "remote": {
-    "urls": ["http://app.lemma.localhost:*", "https://lemma.work"]
+    "urls": [
+      "http://app.lemma.localhost:*",
+      "https://lemma.work"
+    ]
   },
   "permissions": [
     "allow-open-control-center",
@@ -14,6 +19,8 @@
     "allow-agent-host-pair",
     "allow-agent-host-unpair",
     "allow-agent-host-refresh",
-    "allow-agent-host-open-log"
+    "allow-agent-host-open-log",
+    "allow-discover-provider-models",
+    "allow-configure-ai-provider"
   ]
 }
