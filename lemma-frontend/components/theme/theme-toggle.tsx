@@ -4,7 +4,6 @@ import { useTheme } from 'next-themes';
 import { useSyncExternalStore } from 'react';
 import { cn } from '@/lib/utils';
 import { Moon, Sun } from '@/components/ui/icons';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 interface ThemeToggleProps {
     className?: string;
@@ -23,7 +22,6 @@ export function ThemeToggle({ className, variant = 'pills' }: ThemeToggleProps) 
     const changeTheme = (theme: 'light' | 'dark') => {
         if (resolvedTheme === theme) return;
         setTheme(theme);
-        playSoundFeedback('toggle-change');
     };
 
     if (variant === 'icon') {

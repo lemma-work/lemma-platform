@@ -313,7 +313,6 @@ function PodShell({
     );
     const podDisplayName = formatDisplayName(pod.name);
     const isWorkflowRoute = pathname.startsWith(`/pod/${pod.id}/flows/`);
-    const isWorkflowRunRoute = isWorkflowRoute && pathname.includes("/runs/");
     const isWorkflowEditRoute =
         isWorkflowRoute &&
         pathname !== `/pod/${pod.id}/flows/new` &&
@@ -389,8 +388,12 @@ function PodShell({
     // Focus routes own the full surface and have their own chrome, so fullscreen
     // is no longer gated by the assistant — on focus routes the assistant yields
     // to a launcher instead of docking, so it can never double up the topbar.
+    // The flow *editor* is a canvas and genuinely owns the surface. A run is not:
+    // it is a document you read, and taking the shell away cost you the sidebar
+    // and the workspace tabs to look at one run — so it keeps the normal chrome
+    // and declares its bar through ResourceHeader like every other detail route.
     const isFullscreenSurface =
-        isWorkflowEditRoute || isWorkflowRunRoute || (!isWorkflowRoute && Boolean(topbar.fullscreen));
+        isWorkflowEditRoute || (!isWorkflowRoute && Boolean(topbar.fullscreen));
     const handleWorkspaceTabClose = useCallback((tabId: string) => {
         const fallbackTab = getWorkspaceTabAfterClose(workspaceTabs.tabs, tabId);
         workspaceTabs.closeTab(tabId);

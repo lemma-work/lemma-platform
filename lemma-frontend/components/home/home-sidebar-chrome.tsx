@@ -1,12 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import {
     ChevronDown,
     ChevronRight,
-    LogOut,
     PanelLeftClose,
     PanelLeftOpen,
     Plus,
@@ -15,13 +14,11 @@ import { Logo } from '@/components/brand/logo';
 import { HomeImportButton } from '@/components/bundle/home-import-button';
 import { LocalSettingsButton } from '@/components/desktop/local-settings-button';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
+import { AccountMenu } from '@/components/shared/account-menu';
 import { QuietEmptyState } from '@/components/shared/empty-state';
-import { ThemeToggle } from '@/components/theme/theme-toggle';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
-import { useProfile } from '@/lib/hooks/use-user';
 
 function SidebarContent({
     onNavigate,
@@ -35,9 +32,7 @@ function SidebarContent({
     setIsPodsOpen: (value: boolean | ((prev: boolean) => boolean)) => void;
 }) {
     const pathname = usePathname();
-    const router = useRouter();
     const { data: podsResponse } = useAccessiblePods();
-    const { data: profile } = useProfile();
 
     const pods = useMemo(() => podsResponse?.items || [], [podsResponse?.items]);
     const visiblePodGroups = useMemo(() => {
@@ -50,19 +45,6 @@ function SidebarContent({
         }).filter((group) => group.pods.length > 0);
     }, [podsResponse?.groups]);
     const showOrganizationLabels = podsResponse?.hasMultipleOrganizations;
-    const initials = (() => {
-        if (profile?.first_name && profile?.last_name) {
-            return `${profile.first_name[0]}${profile.last_name[0]}`;
-        }
-
-        return profile?.email?.[0]?.toUpperCase() || 'U';
-    })();
-
-    // Route to the dedicated /logout screen so the user gets immediate
-    // "Signing you out…" feedback while the session is torn down.
-    const handleLogout = () => {
-        router.push('/logout');
-    };
 
     return (
         <div className="flex h-full w-full min-h-0 flex-col overflow-hidden px-4 py-4">
@@ -154,38 +136,7 @@ function SidebarContent({
 
             <div className="-mx-4 mt-5 border-t border-[color:var(--row-border)] px-4 pt-3">
                 <LocalSettingsButton className="mb-2" />
-                <Link
-                    href="/profile"
-                    onClick={onNavigate}
-                    data-active={pathname === '/profile' ? 'true' : undefined}
-                    className="lemma-sidebar-row lemma-sidebar-row-comfy min-w-0"
-                >
-                    <Avatar className="h-9 w-9 shrink-0">
-                        <AvatarFallback className="border border-[color:var(--chip-border)] bg-[var(--chip-bg)] text-sm font-semibold text-[var(--action-primary)]">
-                            {initials}
-                        </AvatarFallback>
-                    </Avatar>
-                    <span className="min-w-0 truncate">
-                        {profile?.first_name ? `${profile.first_name} ${profile.last_name || ''}`.trim() : profile?.email || 'Profile'}
-                    </span>
-                </Link>
-
-                <div className="mt-2 border-t border-[var(--border-subtle)] pt-2">
-                    <div className="flex items-center justify-between gap-2 px-2">
-                        <ThemeToggle
-                            variant="icon"
-                            className="h-9 w-9 border border-[color:var(--button-secondary-border)] bg-[var(--button-secondary-bg)] text-[var(--button-secondary-fg)] hover:border-[var(--border-strong)] hover:bg-[var(--button-secondary-bg-hover)] hover:text-[var(--text-primary)]"
-                        />
-                        <button
-                            type="button"
-                            onClick={() => void handleLogout()}
-                            className="lemma-sidebar-row lemma-sidebar-row-comfy lemma-sidebar-row-inline"
-                        >
-                            <LogOut className="h-4 w-4" />
-                            Logout
-                        </button>
-                    </div>
-                </div>
+                <AccountMenu className="w-full" onNavigate={onNavigate} />
             </div>
         </div>
     );
@@ -249,15 +200,6 @@ function CollapsedSidebarRail({
     onSidebarOpenChange: (open: boolean) => void;
 }) {
     const pathname = usePathname();
-    const { data: profile } = useProfile();
-
-    const initials = (() => {
-        if (profile?.first_name && profile?.last_name) {
-            return `${profile.first_name[0]}${profile.last_name[0]}`;
-        }
-
-        return profile?.email?.[0]?.toUpperCase() || 'U';
-    })();
     const navItems = [
         {
             href: '/',
@@ -314,35 +256,7 @@ function CollapsedSidebarRail({
                 </div>
 
                 <div className="flex flex-col items-center gap-2">
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Link
-                                href="/profile"
-                                aria-label="Profile"
-                                data-active={pathname === '/profile' ? 'true' : undefined}
-                                className="lemma-sidebar-rail-icon"
-                            >
-                                <Avatar className="h-7 w-7 shrink-0">
-                                    <AvatarFallback className="border border-[color:var(--chip-border)] bg-[var(--chip-bg)] text-xs font-semibold text-[var(--action-primary)]">
-                                        {initials}
-                                    </AvatarFallback>
-                                </Avatar>
-                            </Link>
-                        </TooltipTrigger>
-                        <TooltipContent side="right">Profile</TooltipContent>
-                    </Tooltip>
-
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <div>
-                                <ThemeToggle
-                                    variant="icon"
-                                    className="lemma-sidebar-rail-icon"
-                                />
-                            </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="right">Toggle theme</TooltipContent>
-                    </Tooltip>
+                    <AccountMenu variant="rail" side="right" align="end" />
                 </div>
             </div>
         </TooltipProvider>

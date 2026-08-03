@@ -14,7 +14,7 @@ import { Label } from '@/components/ui/label';
 import { Switch, SwitchThumb, SwitchTrack } from '@/components/ui/switch';
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { DestructiveResourceActionItem, ResourceActionsMenu } from '@/components/shared/resource-actions-menu';
-import { SettingsList, SettingsRow } from '@/components/settings/settings-kit';
+import { SettingsList, SettingsPanel, SettingsRow, SettingsStack } from '@/components/settings/settings-kit';
 import { declineAutoConnect } from '@/lib/desktop/auto-connect';
 import {
     useAgentHostHarnesses,
@@ -94,9 +94,9 @@ export function ModelsSettings({
     };
 
     return (
-        <div className="flex flex-col gap-8">
+        <SettingsStack>
             <div className="flex items-start justify-between gap-4">
-                <p className="text-sm text-[var(--text-tertiary)]">
+                <p className="max-w-3xl text-sm leading-6 text-[var(--text-secondary)]">
                     Connect the models and local agents this workspace can use. Providers you connect here are shared
                     with everyone in the workspace; a paired computer runs its coding agents for the workspace without
                     its credentials ever leaving that machine.
@@ -134,7 +134,7 @@ export function ModelsSettings({
                 savedProfiles={codingAgents}
                 onRefresh={refreshAll}
             />
-        </div>
+        </SettingsStack>
     );
 }
 
@@ -231,18 +231,6 @@ function ProfileRowActions({
     );
 }
 
-function SectionHeader({ icon, title, hint }: { icon: React.ReactNode; title: string; hint?: string }) {
-    return (
-        <div className="mb-3">
-            <div className="flex items-center gap-2">
-                <span className="text-[var(--text-tertiary)]">{icon}</span>
-                <h2 className="text-sm font-semibold text-[var(--text-primary)]">{title}</h2>
-            </div>
-            {hint ? <p className="mt-1 text-sm text-[var(--text-tertiary)]">{hint}</p> : null}
-        </div>
-    );
-}
-
 function providerStatusLabel(profile: AgentRuntimeProfileResponse): { label: string; tone: 'ok' | 'muted' } {
     if (profile.scope === RuntimeProfileScope.SYSTEM) return { label: 'Built in', tone: 'ok' };
     const availability = runtimeAvailabilityLabel(profile);
@@ -262,12 +250,10 @@ function ProvidersSection({
     const [dialog, setDialog] = useState<ProviderDialogTarget | null>(null);
 
     return (
-        <section>
-            <SectionHeader
-                icon={<KeyRound className="size-4" />}
-                title="Providers"
-                hint="Lemma's built-in models, or connect your own OpenAI- or Anthropic-compatible key."
-            />
+        <SettingsPanel
+            title="Providers"
+            description="Lemma's built-in models, or connect your own OpenAI- or Anthropic-compatible key."
+        >
             <div className="flex flex-col gap-2">
                 <SettingsList>
                     {providers.map((profile) => {
@@ -339,7 +325,7 @@ function ProvidersSection({
                 onClose={() => setDialog(null)}
                 onSaved={onRefresh}
             />
-        </section>
+        </SettingsPanel>
     );
 }
 
@@ -358,12 +344,10 @@ function CodingAgentsSection({
     const [dialog, setDialog] = useState<HarnessDialogTarget | null>(null);
 
     return (
-        <section>
-            <SectionHeader
-                icon={<TerminalSquare className="size-4" />}
-                title="Coding agents"
-                hint="Agents you've added to the model picker. Each one runs on the computer it was added from."
-            />
+        <SettingsPanel
+            title="Coding agents"
+            description="Agents you've added to the model picker. Each one runs on the computer it was added from."
+        >
             <div className="flex flex-col gap-2">
                 {profiles.length === 0 ? (
                     <p className="text-sm text-[var(--text-tertiary)]">
@@ -420,7 +404,7 @@ function CodingAgentsSection({
                 onClose={() => setDialog(null)}
                 onSaved={onRefresh}
             />
-        </section>
+        </SettingsPanel>
     );
 }
 
@@ -472,12 +456,10 @@ function AgentHostsSection({
     };
 
     return (
-        <section>
-            <SectionHeader
-                icon={<TerminalSquare className="size-4" />}
-                title="Paired computers"
-                hint="Pair a computer once and its Agent Host runs Codex, Claude Code, and OpenCode for this workspace. Credentials never leave that machine."
-            />
+        <SettingsPanel
+            title="Paired computers"
+            description="Pair a computer once and its Agent Host runs Codex, Claude Code, and OpenCode for this workspace. Credentials never leave that machine."
+        >
             <div className="flex flex-col gap-3">
                 <ThisComputerCard
                     onHostIdChange={onHostIdChange}
@@ -538,7 +520,7 @@ function AgentHostsSection({
                     </div>
                 )}
             </div>
-        </section>
+        </SettingsPanel>
     );
 }
 

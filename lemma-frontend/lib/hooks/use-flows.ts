@@ -4,7 +4,6 @@ import { useCallback, useMemo } from 'react';
 import { useInfiniteQuery, useQueries, useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import { normalizeFlowNodeConfig } from '@/lib/utils/flow-node-config';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import type {
     Workflow,
     WorkflowCreateRequest,
@@ -60,9 +59,15 @@ export type WorkflowRunSnapshot = {
 };
 
 export const WORKFLOW_RUN_POLL_INTERVAL_MS = 2000;
+/** A form can sit unanswered for hours; 2s would be pure noise. Slow enough to
+ * cost nothing, fast enough that a colleague's approval shows up on its own. */
+export const HUMAN_WAIT_POLL_INTERVAL_MS = 15_000;
 const WORKFLOW_RUN_LIST_LIMIT = 10;
 const WORKFLOW_RUN_ACTIVE_POLL_MAX_AGE_MS = 15 * 60 * 1000;
 const WORKFLOW_RUN_WAITING_POLL_MAX_AGE_MS = 5 * 60 * 1000;
+/** Forms are answered on human time, so the window that keeps one "live" is
+ * measured in hours, not the five minutes a machine wait gets. */
+const WORKFLOW_RUN_HUMAN_WAIT_POLL_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 const TERMINAL_WORKFLOW_RUN_STATUSES = new Set(['COMPLETED', 'SUCCESS', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'CANCELED']);
 const ACTIVE_WORKFLOW_RUN_STATUSES = new Set(['PENDING', 'RUNNING', 'EXECUTING', 'IN_PROGRESS', 'PROCESSING']);
@@ -80,6 +85,13 @@ export function isSuccessfulWorkflowRunStatus(status: unknown): boolean {
     return SUCCESS_WORKFLOW_RUN_STATUSES.has(normalizeWorkflowRunStatus(status));
 }
 
+export function isHumanWaitingWorkflowRun(run?: WorkflowRun | null): boolean {
+    if (!run) return false;
+    const status = normalizeWorkflowRunStatus(run.status);
+    if (status !== 'WAITING' && status !== 'WAITING_FOR_INPUT') return false;
+    return run.active_wait?.wait_type === 'HUMAN';
+}
+
 export function shouldPollWorkflowRun(run?: WorkflowRun | null): boolean {
     if (!run) return false;
 
@@ -87,10 +99,16 @@ export function shouldPollWorkflowRun(run?: WorkflowRun | null): boolean {
     if (!status || isTerminalWorkflowRunStatus(status)) return false;
 
     if (status === 'WAITING' || status === 'WAITING_FOR_INPUT') {
-        // Human form waits only resolve when someone submits — no point polling.
         const waitType = run.active_wait?.wait_type;
-        const isWaitingOnRuntime = Boolean(waitType && waitType !== 'HUMAN');
-        return isWaitingOnRuntime && wasWorkflowRunRecentlyActive(run, WORKFLOW_RUN_WAITING_POLL_MAX_AGE_MS);
+        if (waitType === 'HUMAN') {
+            // A form wait resolves when *somebody* submits — not necessarily the
+            // person looking at this screen. Not polling at all was right for a
+            // single-player run and wrong for the multiplayer one this product
+            // is: a teammate's approval never landed here. Poll, but slowly —
+            // see HUMAN_WAIT_POLL_INTERVAL_MS.
+            return wasWorkflowRunRecentlyActive(run, WORKFLOW_RUN_HUMAN_WAIT_POLL_MAX_AGE_MS);
+        }
+        return Boolean(waitType) && wasWorkflowRunRecentlyActive(run, WORKFLOW_RUN_WAITING_POLL_MAX_AGE_MS);
     }
 
     return ACTIVE_WORKFLOW_RUN_STATUSES.has(status)
@@ -100,6 +118,7 @@ export function shouldPollWorkflowRun(run?: WorkflowRun | null): boolean {
 function getWorkflowRunPollInterval(run: WorkflowRun | null | undefined, options: WorkflowRunPollingOptions): number | false {
     if (!options.poll) return false;
     if (run && !shouldPollWorkflowRun(run)) return false;
+    if (isHumanWaitingWorkflowRun(run)) return HUMAN_WAIT_POLL_INTERVAL_MS;
     return options.pollIntervalMs ?? WORKFLOW_RUN_POLL_INTERVAL_MS;
 }
 
@@ -346,77 +365,6 @@ export const useDeleteFlow = () => {
     });
 };
 
-// Flow Runs
-export const useFlowRuns = (
-    podId: string | undefined,
-    workflowName: string | undefined,
-    options: WorkflowRunPollingOptions = {}
-) => {
-    const runsQuery = useQuery({
-        queryKey: ['flow-runs', podId, workflowName],
-        queryFn: async () => {
-            const response = await getLemmaClient(podId).workflows.runs.list(workflowName!, {
-                limit: options.limit ?? WORKFLOW_RUN_LIST_LIMIT,
-            });
-            return sortFlowRuns(
-                (response.items || []).map((item) => normalizeFlowRun(item as unknown as Record<string, unknown>))
-            );
-        },
-        enabled: options.enabled !== false && !!podId && !!workflowName,
-    });
-
-    const liveRunTargets = useMemo(() => {
-        if (!workflowName) return [];
-        return (runsQuery.data || [])
-            .filter(shouldPollWorkflowRun)
-            .map((run) => ({ workflowName, run }));
-    }, [runsQuery.data, workflowName]);
-
-    const liveRunQueries = useQueries({
-        queries: liveRunTargets.map(({ workflowName, run }) => ({
-            queryKey: ['flow-runs', podId, workflowName, run.id],
-            queryFn: async () => {
-                const response = await getLemmaClient(podId).workflows.runs.get(run.id, podId);
-                return normalizeFlowRun(response as unknown as Record<string, unknown>);
-            },
-            enabled: options.enabled !== false && options.pollWhenLive === true && !!podId && !!workflowName && !!run.id,
-            initialData: run,
-            refetchInterval: (query: { state: { data: WorkflowRun | undefined } }) => getWorkflowRunPollInterval(query.state.data, {
-                ...options,
-                poll: true,
-            }),
-        })),
-    });
-
-    const liveRunsById = useMemo(() => {
-        const map = new Map<string, WorkflowRun>();
-
-        liveRunTargets.forEach(({ run }, index) => {
-            map.set(run.id, (liveRunQueries[index]?.data as WorkflowRun | undefined) || run);
-        });
-
-        return map;
-    }, [liveRunQueries, liveRunTargets]);
-
-    const mergedRuns = useMemo(() => {
-        return sortFlowRuns((runsQuery.data || []).map((run) => liveRunsById.get(run.id) || run));
-    }, [liveRunsById, runsQuery.data]);
-
-    const refetchRuns = runsQuery.refetch;
-    const refetch = useCallback(async () => {
-        const runsResult = await refetchRuns();
-        await Promise.allSettled(liveRunQueries.map((query) => query.refetch()));
-        return runsResult;
-    }, [liveRunQueries, refetchRuns]);
-
-    return {
-        ...runsQuery,
-        data: mergedRuns,
-        isLoading: runsQuery.isLoading || liveRunQueries.some((query) => query.isLoading && !query.data),
-        isFetching: runsQuery.isFetching || liveRunQueries.some((query) => query.isFetching),
-        refetch,
-    };
-};
 
 export const useWorkflowRunWaitAssignments = (podId: string | undefined, limit = 20) => {
     return useQuery({
@@ -433,27 +381,52 @@ export const useWorkflowRunWaitAssignments = (podId: string | undefined, limit =
     });
 };
 
+/**
+ * Recent runs for a set of workflows, grouped by workflow name.
+ *
+ * This used to be `Promise.all(workflowNames.map(list))` — one request per
+ * workflow, fired on the flows index and again on pod home, so a 20-workflow
+ * pod made 20 requests before the list painted. It is now one pod-scoped
+ * request, grouped client-side; the per-run live queries below are unchanged.
+ */
 export const useWorkflowRunSnapshots = (
     podId: string | undefined,
     workflowNames: string[],
     limit = 5,
     options: WorkflowRunPollingOptions = {}
 ) => {
+    const queryClient = useQueryClient();
+    const workflowIdsKey = workflowNames.join('\u0000');
     const snapshotsQuery = useQuery({
-        queryKey: ['workflow-run-snapshots', podId, workflowNames.join('\u0000'), limit],
+        queryKey: ['workflow-run-snapshots', podId, workflowIdsKey, limit],
         queryFn: async (): Promise<WorkflowRunSnapshot[]> => {
-            const snapshots = await Promise.all(
-                workflowNames.map(async (workflowName) => {
-                    const response = await getLemmaClient(podId).workflows.runs.list(workflowName, { limit });
-                    return {
-                        workflowName,
-                        runs: sortFlowRuns(
-                            (response.items || []).map((item) => normalizeFlowRun(item as unknown as Record<string, unknown>))
-                        ),
-                    };
-                })
+            // Ask for enough rows that every workflow can plausibly fill its
+            // quota, then group. The alternative — a request each — is what
+            // this replaced.
+            const response = await getLemmaClient(podId).request<{ items?: unknown[] }>(
+                'GET',
+                `/pods/${podId}/workflow-runs`,
+                { params: { limit: Math.min(200, Math.max(limit * 4, workflowNames.length * limit)) } }
             );
-            return snapshots;
+
+            const runs = (response.items || []).map((item) => normalizeFlowRun(item as Record<string, unknown>));
+            const byWorkflowId = new Map<string, WorkflowRun[]>();
+            for (const run of runs) {
+                const bucket = byWorkflowId.get(run.workflow_id);
+                if (bucket) bucket.push(run);
+                else byWorkflowId.set(run.workflow_id, [run]);
+            }
+
+            // The endpoint keys runs by workflow id; callers ask by name. The
+            // flows query already holds the mapping, so read it rather than
+            // making a second request for it.
+            const flows = queryClient.getQueryData<Workflow[]>(['flows', podId]) || [];
+            const idByName = new Map(flows.map((flow) => [flow.name, flow.id]));
+
+            return workflowNames.map((workflowName) => ({
+                workflowName,
+                runs: sortFlowRuns(byWorkflowId.get(idByName.get(workflowName) || workflowName) || []).slice(0, limit),
+            }));
         },
         enabled: options.enabled !== false && !!podId && workflowNames.length > 0,
     });
@@ -636,59 +609,9 @@ export const useFlowRun = (
     });
 };
 
-export const useRunFlow = () => {
-    const queryClient = useQueryClient();
 
-    return useMutation({
-        // Runs take no inputs; a form-entry workflow comes back WAITING with
-        // active_wait so the form can render straight from this response.
-        mutationFn: async ({ podId, flowId }: { podId: string; flowId: string }) => {
-            const response = await getLemmaClient(podId).workflows.runs.create(flowId);
-            return normalizeFlowRun(response as unknown as Record<string, unknown>);
-        },
-        onSuccess: (run, variables) => {
-            playSoundFeedback('work-start', { onceKey: `workflow:${run.id}:started` });
-            queryClient.invalidateQueries({ queryKey: ['flow-runs', variables.podId, variables.flowId] });
-        },
-        onError: () => {
-            playSoundFeedback('work-fail');
-        },
-    });
-};
 
-export const useSubmitFlowInput = () => {
-    const queryClient = useQueryClient();
 
-    return useMutation({
-        mutationFn: async ({ podId, runId, nodeId, data }: { podId: string; flowId: string; runId: string; nodeId: string; data: Record<string, unknown> }) => {
-            const response = await getLemmaClient(podId).workflows.runs.submitForm(runId, {
-                node_id: nodeId,
-                inputs: data,
-            }, podId);
-            return normalizeFlowRun(response as unknown as Record<string, unknown>);
-        },
-        onSuccess: (_, variables) => {
-            queryClient.invalidateQueries({ queryKey: ['flow-runs', variables.podId, variables.flowId, variables.runId] });
-        },
-    });
-};
-
-// Flow Visualization Hooks
-export const useVisualizeFlow = (podId: string | undefined, flowId: string | undefined) => {
-    return useQuery({
-        queryKey: ['flows', 'visualize', podId, flowId],
-        queryFn: () => getLemmaClient(podId).workflows.visualize(flowId!),
-        enabled: !!podId && !!flowId,
-    });
-};
-
-export const useVisualizeFlowRun = (podId: string | undefined, flowId: string | undefined, runId: string | undefined) => {
-    return useQuery({
-        queryKey: ['flow-runs', 'visualize', podId, flowId, runId],
-        queryFn: () => getLemmaClient(podId).workflows.runs.visualize(runId!, podId),
-        enabled: !!podId && !!flowId && !!runId,
-    });
-};
 
 // Flow Run Management Hooks
 export const useCancelFlowRun = () => {

@@ -10,9 +10,9 @@ import { toast } from 'sonner';
 import { ProtectedRoute } from '@/components/auth/protected-route';
 import { findProfileByRuntime, resolveDefaultAgentRuntime } from '@/components/agents/agent-runtime-helpers';
 import { RuntimeModelPicker } from '@/components/lemma/assistant/model-picker';
-import { PodSettingsPanel, PodSettingsShell } from '@/components/pod/pod-settings-shell';
+import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { PodBundleSettingsPanel } from '@/components/bundle/pod-bundle-settings';
-import { SettingsChoiceList, SettingsHelpText } from '@/components/settings/settings-kit';
+import { SettingsChoiceList, SettingsHelpText, SettingsPanel, SettingsStack } from '@/components/settings/settings-kit';
 import {
     useAgentRuntimes,
     useUpdatePodDefaultAgentRuntime,
@@ -20,7 +20,7 @@ import {
 import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePod, useUpdatePod } from '@/lib/hooks/use-pods';
 import { PodJoinPolicy } from '@/lib/types';
-import { FieldRowsSkeleton } from '@/components/shared/loading';
+import { PodSettingsPanelsFill } from '@/components/pod/route-skeletons';
 
 export default function PodSettingsPage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -69,21 +69,18 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
         });
     };
 
-    if (isLoadingPod) {
-        return (
-            <div className="context-shell min-h-full bg-transparent">
-                <FieldRowsSkeleton rows={5} className="max-w-2xl" />
-            </div>
-        );
-    }
-
     return (
         <PodSettingsShell
             podId={podId}
-            title="Pod Settings"
+            title="General"
+            width="form"
         >
-            <div className="flex w-full max-w-3xl flex-col gap-5">
-            <PodSettingsPanel
+            {/* The header, the nav and the width are known before the pod is,
+                so waiting on it fills the body rather than replacing the page —
+                and it fills it with the shape that is about to arrive. */}
+            {isLoadingPod ? <PodSettingsPanelsFill panels={3} /> : (
+            <SettingsStack>
+            <SettingsPanel
                 title="Default model"
                 description="Agents without a pinned model and new conversations use this model."
                 action={manageModelsHref ? (
@@ -114,7 +111,7 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
                         the workspace. Pick another one, or restore it under Manage models.
                     </p>
                 ) : null}
-            </PodSettingsPanel>
+            </SettingsPanel>
 
             <PodJoinPolicyPanel
                 podId={podId}
@@ -128,7 +125,8 @@ function PodSettingsPageContent({ params }: { params: Promise<{ id: string }> })
                 canUpdate={canUpdatePod}
                 recipes={pod?.config?.recipes ?? []}
             />
-            </div>
+            </SettingsStack>
+            )}
         </PodSettingsShell>
     );
 }
@@ -194,7 +192,7 @@ function PodJoinPolicyPanel({
     const disabled = !canUpdate || updatePod.isPending;
 
     return (
-        <PodSettingsPanel
+        <SettingsPanel
             title="Who can join"
             description="Decide whether people can add themselves to this pod or need an invite."
         >
@@ -229,6 +227,6 @@ function PodJoinPolicyPanel({
             ) : (
                 <SettingsHelpText className="mt-3">Your role cannot change pod settings.</SettingsHelpText>
             )}
-        </PodSettingsPanel>
+        </SettingsPanel>
     );
 }

@@ -32,7 +32,6 @@ import {
     type PublishStatusResponse,
     type PublishMode,
 } from '@/lib/hooks/use-pod-bundle';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import { usePod } from '@/lib/hooks/use-pods';
 
 interface ShareSheetProps {
@@ -202,7 +201,6 @@ export function ShareSheet({ podId, podName, open, onOpenChange, canPublish = tr
         try {
             await navigator.clipboard.writeText(text);
             toast.success(`${label} copied`);
-            playSoundFeedback('action-success');
         } catch {
             toast.error('Could not copy to clipboard');
         }

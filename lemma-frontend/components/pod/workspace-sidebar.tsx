@@ -8,13 +8,11 @@ import {
     Check,
     ChevronDown,
     Home,
-    LogOut,
     PanelLeftClose,
     Plus,
     Search,
     Share2,
     Upload,
-    User,
     X,
 } from '@/components/ui/icons';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
@@ -25,9 +23,8 @@ import { LocalSettingsButton } from '@/components/desktop/local-settings-button'
 import { ShareSheet } from '@/components/bundle/share-sheet';
 import { ImportDialog } from '@/components/bundle/import-dialog';
 import { ProductIcon, type ProductIconKind } from '@/components/pod/product-icon';
+import { AccountMenu } from '@/components/shared/account-menu';
 import { ResourceIcon } from '@/components/shared/resource-icon';
-import { ThemeToggle } from '@/components/theme/theme-toggle';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -48,7 +45,6 @@ import {
 } from '@/lib/hooks/use-datastores';
 import { flowsQueryOptions } from '@/lib/hooks/use-flows';
 import { useAccessiblePods, type AccessiblePodGroup } from '@/lib/hooks/use-pods';
-import { useProfile } from '@/lib/hooks/use-user';
 import { useScopedConversations } from '@/lib/hooks/use-assistants';
 import {
     filterSidebarConversations,
@@ -190,7 +186,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const { data: podsData, isLoading: isLoadingPods } = useAccessiblePods({
         enabled: podSwitcherOpen,
     });
-    const { data: profile } = useProfile();
     const podAccess = usePodAccess(podId);
     const canUseConversations = podAccess.canAccessRoute('conversations');
     const canWriteConversations = podAccess.can('conversation.write');
@@ -240,12 +235,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
     const pods = podsData?.items || [];
     const podGroups = podsData?.groups || [];
     const showPodOrganizationLabels = podsData?.hasMultipleOrganizations;
-    const initials = profile?.first_name && profile?.last_name
-        ? `${profile.first_name[0]}${profile.last_name[0]}`
-        : profile?.email?.[0].toUpperCase() || 'U';
-    const profileDisplayName = profile?.first_name
-        ? `${profile.first_name} ${profile.last_name || ''}`.trim()
-        : profile?.email?.split('@')[0] || 'User';
     const assistantCreationCopy = assistantCreationKind ? ASSISTANT_CREATION_COPY[assistantCreationKind] : null;
 
     const canShowCreateMenu =
@@ -332,12 +321,6 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
             visible: canUseConnectors,
         },
     ].filter((place) => place.visible);
-
-    // Route to the dedicated /logout screen so the user gets immediate
-    // "Signing you out…" feedback while the session is torn down.
-    const handleLogout = () => {
-        router.push('/logout');
-    };
 
     const openConversation = (conversationId: string) => {
         router.push(`${basePath}/conversations/${encodeURIComponent(conversationId)}`);
@@ -775,58 +758,7 @@ export function WorkspaceSidebar({ podId, podName, podIconUrl, onCollapse }: Wor
                 >
                     <Logo size="xs" variant="mark-only" />
                 </Link>
-                <DropdownMenu.Root>
-                    <DropdownMenu.Trigger asChild>
-                        <button
-                            className="workspace-sidebar-trigger-button custom-focus-ring flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg px-1.5 text-left transition-colors hover:bg-[var(--surface-2)]"
-                            aria-label={`Open account menu for ${profileDisplayName}`}
-                            title={profileDisplayName}
-                        >
-                            <Avatar className="h-7 w-7 border border-[var(--border-subtle)]">
-                                <AvatarFallback className="bg-[var(--surface-2)] text-xs text-[var(--text-secondary)]">
-                                    {profile ? initials : <User className="h-4 w-4" />}
-                                </AvatarFallback>
-                            </Avatar>
-                            <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--text-primary)]">
-                                {profileDisplayName}
-                            </span>
-                        </button>
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                        <DropdownMenu.Content
-                            align="start"
-                            side="top"
-                            sideOffset={8}
-                            className="surface-panel z-50 w-56 py-1 shadow-[var(--shadow-lg)]"
-                        >
-                            <div className="px-3 py-2">
-                                <p className="truncate text-sm font-medium text-[var(--text-primary)]">
-                                    {profile?.first_name ? `${profile.first_name} ${profile.last_name || ''}`.trim() : profile?.email}
-                                </p>
-                                <p className="truncate text-xs text-[var(--text-tertiary)]">{profile?.email}</p>
-                            </div>
-                            <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
-                            <DropdownMenu.Item asChild>
-                                <Link
-                                    href="/profile"
-                                    className="lemma-menu-row px-3"
-                                >
-                                    <User className="h-4 w-4" />
-                                    Profile settings
-                                </Link>
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Separator className="my-1 h-px bg-[var(--border-subtle)]" />
-                            <DropdownMenu.Item
-                                onSelect={handleLogout}
-                                className="hover-state-error focus-state-error flex cursor-pointer items-center gap-2 px-3 py-2 text-sm text-[var(--state-error)] outline-none transition-colors"
-                            >
-                                <LogOut className="h-4 w-4" />
-                                Log out
-                            </DropdownMenu.Item>
-                        </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                </DropdownMenu.Root>
-                <ThemeToggle variant="icon" />
+                <AccountMenu podId={podId} />
             </div>
         </aside>
     );

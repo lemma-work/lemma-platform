@@ -140,9 +140,14 @@ export function ThinkingIndicator({
   //
   // A span, not a div: the tool rollup renders this inside its toggle <button>,
   // which only admits phrasing content.
+  //
+  // No horizontal padding: this line sits in the same left rail as the message
+  // text, the tool rows and the run-trace header. A 4px inset here made every
+  // live "Working · …" line hang right of its neighbours, and shifted the line
+  // back left the moment the run settled and the plain label replaced it.
   return (
     <span
-      className="lemma-assistant-thinking inline-flex h-5 items-center px-1"
+      className="lemma-assistant-thinking inline-flex h-5 items-center"
       role="status"
       aria-live="polite"
       aria-label={show ? "Generating response" : undefined}

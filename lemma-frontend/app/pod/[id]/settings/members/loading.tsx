@@ -1,6 +1,6 @@
-import { PodSettingsSkeleton } from '@/components/pod/route-skeletons';
+import { PodSettingsLedgerSkeleton } from '@/components/pod/route-skeletons';
 
-/** Members settle into rows under a form column. */
+/** Access settles into a people ledger under its view strip. */
 export default function PodMembersLoading() {
-    return <PodSettingsSkeleton rows={6} />;
+    return <PodSettingsLedgerSkeleton tabs={5} />;
 }
