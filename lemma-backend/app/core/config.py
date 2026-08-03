@@ -1101,7 +1101,11 @@ class Settings(BaseSettings):
             "Longest a workflow run may stay suspended on a single agent or "
             "function wait before the reconciliation sweep fails it. Without a "
             "ceiling a hung agent holds its run open forever, which reads as a "
-            "run that is still going rather than one that broke."
+            "run that is still going rather than one that broke. This is the "
+            "*machine* ceiling; a wait blocked on a person is multiplied by "
+            "HUMAN_WAIT_CEILING_MULTIPLIER, because someone not replying "
+            "overnight is not a hang. TIME waits and self-resolving agent waits "
+            "(a snooze) are exempt entirely."
         ),
     )
     lemma_runtime_instance_id: str = Field(

@@ -9,6 +9,7 @@ import type { WorkflowListResponse } from '../models/WorkflowListResponse.js';
 import type { WorkflowRunFormSubmitRequest } from '../models/WorkflowRunFormSubmitRequest.js';
 import type { WorkflowRunListResponse } from '../models/WorkflowRunListResponse.js';
 import type { WorkflowRunResponse } from '../models/WorkflowRunResponse.js';
+import type { WorkflowRunStatus } from '../models/WorkflowRunStatus.js';
 import type { WorkflowRunWaitAssignmentListResponse } from '../models/WorkflowRunWaitAssignmentListResponse.js';
 import type { WorkflowUpdateRequest } from '../models/WorkflowUpdateRequest.js';
 import type { CancelablePromise } from '../core/CancelablePromise.js';
@@ -28,7 +29,7 @@ export class WorkflowsService {
     public static workflowRunListForPod(
         podId: string,
         limit: number = 50,
-        status?: (Array<string> | null),
+        status?: (Array<WorkflowRunStatus> | null),
         pageToken?: (string | null),
     ): CancelablePromise<WorkflowRunListResponse> {
         return __request(OpenAPI, {

@@ -24,6 +24,20 @@ logger = get_logger(__name__)
 RECONCILE_AFTER = timedelta(minutes=10)
 RECONCILE_BATCH = 100
 
+# Agent wait reasons that resolve themselves. A whitelist on purpose: a wait
+# reason added later is subject to the ceiling until someone decides otherwise,
+# because the failure mode of guessing wrong in the other direction is a ceiling
+# that silently stops applying.
+SELF_RESOLVING_WAIT_REASONS = frozenset({"SNOOZE"})
+
+# Waits blocked on a person get their own, far larger ceiling. The machine
+# ceiling exists to catch a hang; a human ceiling can only ever catch a person
+# not answering, which is not a fault and is common — a workflow that asks a
+# question at 18:00 and kills itself at midnight is a worse outcome than one
+# that reads as still waiting. This bounds the truly abandoned without punishing
+# ordinary out-of-hours delay.
+HUMAN_WAIT_CEILING_MULTIPLIER = 12
+
 
 class RunResumeService:
     """Handles external completions (agent conversations, function runs)."""
@@ -123,7 +137,7 @@ class RunResumeService:
         """
         now = datetime.now(timezone.utc)
         cutoff = now - RECONCILE_AFTER
-        expiry_cutoff = now - timedelta(seconds=settings.workflow_wait_max_age_seconds)
+        machine_cutoff = now - timedelta(seconds=settings.workflow_wait_max_age_seconds)
         waits = await self._engine.wait_repo.list_active_older_than(
             wait_types=[
                 WorkflowRunWaitType.AGENT,
@@ -153,7 +167,7 @@ class RunResumeService:
                 # fails) keeps its run non-terminal forever, and the run reads
                 # as "still going" for the rest of time.
                 if await self._expire_overdue_wait(
-                    wait, expiry_cutoff, agent_status=agent_status
+                    wait, machine_cutoff, now=now, agent_status=agent_status
                 ):
                     acted += 1
                     continue
@@ -186,8 +200,9 @@ class RunResumeService:
     async def _expire_overdue_wait(
         self,
         wait: WorkflowRunWaitEntity,
-        expiry_cutoff: datetime,
+        machine_cutoff: datetime,
         *,
+        now: datetime,
         agent_status: dict | None = None,
     ) -> bool:
         """Fail the run when its wait has outlived the configured ceiling.
@@ -196,34 +211,50 @@ class RunResumeService:
         long as it was told to, and `_fire_time_wait_if_due` already handles a
         lost timer.
 
-        An AGENT wait is exempt whenever the agent adapter reports a
-        `wait_reason` other than a human block — an agent that will wake itself
-        is healthy, and failing its run would be a silent wrong outcome rather
-        than a visible error. An agent blocked on a *person* is not exempt: that
-        is the hang the ceiling exists to catch.
+        An AGENT wait is exempt only for `wait_reason` values on
+        `SELF_RESOLVING_WAIT_REASONS` — deliberately a whitelist, not "anything
+        that is not HUMAN". A new wait reason is subject to the ceiling until
+        someone decides it wakes itself; defaulting the other way would let a
+        reason nobody thought about silently disable the ceiling.
 
-        `get_conversation_status` reports `SNOOZE` for a conversation holding an
-        ACTIVE snooze wait, and `HUMAN` otherwise.
+        `SNOOZE` is on it: a sleeping agent wakes itself and is healthy, so
+        failing its run would be a silent wrong outcome rather than a visible
+        error. A wait blocked on a *person* is not exempt at this ceiling, but it
+        gets a much longer one — see `_expiry_cutoff_for`.
         """
         if wait.wait_type == WorkflowRunWaitType.TIME:
             return False
-        if (agent_status or {}).get("wait_reason") == "SNOOZE":
+        wait_reason = (agent_status or {}).get("wait_reason")
+        if wait_reason in SELF_RESOLVING_WAIT_REASONS:
             return False
         created_at = wait.created_at
         if created_at is None:
             return False
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
-        if created_at > expiry_cutoff:
+
+        seconds = settings.workflow_wait_max_age_seconds
+        if wait_reason == "HUMAN":
+            seconds *= HUMAN_WAIT_CEILING_MULTIPLIER
+        cutoff = (
+            machine_cutoff
+            if wait_reason != "HUMAN"
+            else now - timedelta(seconds=seconds)
+        )
+        if created_at > cutoff:
             return False
 
-        hours = settings.workflow_wait_max_age_seconds / 3600
+        hours = seconds / 3600
         logger.warning(
             "workflow.reconcile.wait_expired",
             run_id=str(wait.run_id),
             wait_id=str(wait.id),
             wait_type=wait.wait_type.value,
         )
+        # Stop the work before failing the run. `cancel_run` already does this;
+        # without it here a hung agent or function keeps burning a sandbox after
+        # the run that was waiting on it is already marked failed.
+        await self._engine.stop_underlying_work(wait)
         await self._engine.fail_internal(
             wait.wait_type,
             wait.external_ref,

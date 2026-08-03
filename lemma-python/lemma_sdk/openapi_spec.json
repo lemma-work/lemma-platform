@@ -29012,7 +29012,7 @@
               "anyOf": [
                 {
                   "items": {
-                    "type": "string"
+                    "$ref": "#/components/schemas/WorkflowRunStatus"
                   },
                   "type": "array"
                 },

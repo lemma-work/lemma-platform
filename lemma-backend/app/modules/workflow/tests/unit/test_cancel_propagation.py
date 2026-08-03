@@ -16,6 +16,7 @@ from app.modules.workflow.domain.wait import (
     WorkflowRunWaitType,
 )
 from app.modules.workflow.execution.engine import WorkflowEngine
+from app.modules.workflow.execution.underlying_work import stop_underlying_work
 
 pytestmark = pytest.mark.anyio
 
@@ -56,7 +57,12 @@ async def test_cancelling_an_agent_wait_stops_the_conversation():
     run = _run(user_id)
     wait = _wait(WorkflowRunWaitType.AGENT, str(uuid4()))
 
-    await engine._stop_underlying_work(run, wait)
+    await stop_underlying_work(
+        wait,
+        run=run,
+        agent_adapter=engine.agent_adapter,
+        function_adapter=engine.function_adapter,
+    )
 
     engine.agent_adapter.stop_conversation.assert_awaited_once()
     args = engine.agent_adapter.stop_conversation.await_args.args
@@ -70,7 +76,12 @@ async def test_cancelling_a_function_wait_cancels_the_run():
     run = _run(uuid4())
     wait = _wait(WorkflowRunWaitType.FUNCTION, str(uuid4()))
 
-    await engine._stop_underlying_work(run, wait)
+    await stop_underlying_work(
+        wait,
+        run=run,
+        agent_adapter=engine.agent_adapter,
+        function_adapter=engine.function_adapter,
+    )
 
     engine.function_adapter.cancel_run.assert_awaited_once()
     assert str(engine.function_adapter.cancel_run.await_args.args[0]) == wait.external_ref
@@ -79,7 +90,12 @@ async def test_cancelling_a_function_wait_cancels_the_run():
 
 async def test_a_human_wait_has_no_underlying_work_to_stop():
     engine = _engine()
-    await engine._stop_underlying_work(_run(uuid4()), _wait(WorkflowRunWaitType.HUMAN, None))
+    await stop_underlying_work(
+        _wait(WorkflowRunWaitType.HUMAN, None),
+        run=_run(uuid4()),
+        agent_adapter=engine.agent_adapter,
+        function_adapter=engine.function_adapter,
+    )
 
     engine.agent_adapter.stop_conversation.assert_not_awaited()
     engine.function_adapter.cancel_run.assert_not_awaited()
@@ -92,4 +108,9 @@ async def test_a_failing_stop_does_not_prevent_the_cancel():
     engine = _engine()
     engine.agent_adapter.stop_conversation = AsyncMock(side_effect=RuntimeError("gone"))
 
-    await engine._stop_underlying_work(_run(uuid4()), _wait(WorkflowRunWaitType.AGENT, str(uuid4())))
+    await stop_underlying_work(
+        _wait(WorkflowRunWaitType.AGENT, str(uuid4())),
+        run=_run(uuid4()),
+        agent_adapter=engine.agent_adapter,
+        function_adapter=engine.function_adapter,
+    )

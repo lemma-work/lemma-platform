@@ -9,6 +9,7 @@ from ... import errors
 from ...client import AuthenticatedClient, Client
 from ...models.error_response import ErrorResponse
 from ...models.workflow_run_list_response import WorkflowRunListResponse
+from ...models.workflow_run_status import WorkflowRunStatus
 from ...types import UNSET, Response, Unset
 
 
@@ -16,7 +17,7 @@ def _get_kwargs(
     pod_id: UUID,
     *,
     limit: int | Unset = 50,
-    status: list[str] | None | Unset = UNSET,
+    status: list[WorkflowRunStatus] | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> dict[str, Any]:
 
@@ -28,7 +29,10 @@ def _get_kwargs(
     if isinstance(status, Unset):
         json_status = UNSET
     elif isinstance(status, list):
-        json_status = status
+        json_status = []
+        for status_type_0_item_data in status:
+            status_type_0_item = status_type_0_item_data.value
+            json_status.append(status_type_0_item)
 
     else:
         json_status = status
@@ -89,7 +93,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    status: list[str] | None | Unset = UNSET,
+    status: list[WorkflowRunStatus] | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkflowRunListResponse]:
     """List Workflow Runs In Pod
@@ -101,7 +105,7 @@ def sync_detailed(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        status (list[str] | None | Unset):
+        status (list[WorkflowRunStatus] | None | Unset):
         page_token (None | str | Unset):
 
     Raises:
@@ -131,7 +135,7 @@ def sync(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    status: list[str] | None | Unset = UNSET,
+    status: list[WorkflowRunStatus] | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkflowRunListResponse | None:
     """List Workflow Runs In Pod
@@ -143,7 +147,7 @@ def sync(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        status (list[str] | None | Unset):
+        status (list[WorkflowRunStatus] | None | Unset):
         page_token (None | str | Unset):
 
     Raises:
@@ -168,7 +172,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    status: list[str] | None | Unset = UNSET,
+    status: list[WorkflowRunStatus] | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> Response[ErrorResponse | WorkflowRunListResponse]:
     """List Workflow Runs In Pod
@@ -180,7 +184,7 @@ async def asyncio_detailed(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        status (list[str] | None | Unset):
+        status (list[WorkflowRunStatus] | None | Unset):
         page_token (None | str | Unset):
 
     Raises:
@@ -208,7 +212,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient | Client,
     limit: int | Unset = 50,
-    status: list[str] | None | Unset = UNSET,
+    status: list[WorkflowRunStatus] | None | Unset = UNSET,
     page_token: None | str | Unset = UNSET,
 ) -> ErrorResponse | WorkflowRunListResponse | None:
     """List Workflow Runs In Pod
@@ -220,7 +224,7 @@ async def asyncio(
     Args:
         pod_id (UUID):
         limit (int | Unset):  Default: 50.
-        status (list[str] | None | Unset):
+        status (list[WorkflowRunStatus] | None | Unset):
         page_token (None | str | Unset):
 
     Raises:

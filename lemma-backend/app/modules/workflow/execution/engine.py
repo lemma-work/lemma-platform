@@ -40,6 +40,10 @@ from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.composition.workflow_agent import AgentControlAdapter
 from app.composition.workflow_function import FunctionControlAdapter
 from app.composition.workflow_scheduler import ScheduleControlAdapter
+from app.modules.workflow.execution.underlying_work import (
+    stop_underlying_work,
+    stop_underlying_work_for_wait,
+)
 from app.modules.workflow.infrastructure.run_channel import publish_run_state
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRepository,
@@ -391,7 +395,12 @@ class WorkflowEngine:
         if wait is not None:
             wait.cancel()
             await self.wait_repo.update(wait)
-            await self._stop_underlying_work(run, wait)
+            await stop_underlying_work(
+                wait,
+                run=run,
+                agent_adapter=self.agent_adapter,
+                function_adapter=self.function_adapter,
+            )
         try:
             run.cancel()
         except ValueError as exc:
@@ -513,33 +522,14 @@ class WorkflowEngine:
         except Exception:
             logger.debug("workflow.run.announce_failed", exc_info=True)
 
-    async def _stop_underlying_work(
-        self, run: WorkflowRunEntity, wait: WorkflowRunWaitEntity
-    ) -> None:
-        """Stop the work the cancelled run was waiting on.
-
-        Best effort by design: the agent or function may finish in the same
-        instant, and a cancel that fails here must still cancel the run — the
-        late completion event finds no ACTIVE wait and is dropped either way.
-        What this prevents is an agent burning tokens for an hour on an answer
-        that was discarded the moment it was asked for.
-        """
-        if wait.external_ref is None:
-            return
-        try:
-            if wait.wait_type == WorkflowRunWaitType.AGENT:
-                await self.agent_adapter.stop_conversation(
-                    UUID(wait.external_ref), run.user_id
-                )
-            elif wait.wait_type == WorkflowRunWaitType.FUNCTION:
-                await self.function_adapter.cancel_run(UUID(wait.external_ref))
-        except Exception:
-            logger.warning(
-                "workflow.cancel.underlying_work_stop_failed",
-                run_id=str(run.id),
-                wait_type=wait.wait_type.value,
-                exc_info=True,
-            )
+    async def stop_underlying_work(self, wait: WorkflowRunWaitEntity) -> None:
+        """Stop the work a wait holds, for a caller that has no run in hand."""
+        await stop_underlying_work_for_wait(
+            wait,
+            run_repo=self.run_repo,
+            agent_adapter=self.agent_adapter,
+            function_adapter=self.function_adapter,
+        )
 
     async def _persist_wait(self, run: WorkflowRunEntity, result: StepResult) -> None:
         if result.wait is None or run.status not in (

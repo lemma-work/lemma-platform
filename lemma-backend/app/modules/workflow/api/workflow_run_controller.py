@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -29,7 +30,11 @@ from app.modules.workflow.api.schemas import (
 from app.core.domain.realtime import RealtimeChannel
 from app.core.infrastructure.channels.channel_service import get_channel_service
 from app.core.log.log import get_logger
-from app.modules.workflow.domain.run import TERMINAL_STATUSES, WorkflowRunEntity
+from app.modules.workflow.domain.run import (
+    TERMINAL_STATUSES,
+    WorkflowRunEntity,
+    WorkflowRunStatus,
+)
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRunRepository,
@@ -46,6 +51,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 logger = get_logger(__name__)
+
+# Hard cap on a run page, whatever the caller asks for.
+MAX_RUN_PAGE_SIZE = 200
 
 WorkflowChannelDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 
@@ -195,7 +203,10 @@ async def list_pod_workflow_runs(
     ctx: PodContextDep,
     pod_id: UUID,
     limit: int = 50,
-    status: list[str] | None = Query(default=None),
+    # The enum, not `list[str]`: a typo'd status used to be upper-cased, matched
+    # nothing, and returned an empty page that reads exactly like "no runs".
+    # FastAPI now rejects it with 422 and names the valid values.
+    status: list[WorkflowRunStatus] | None = Query(default=None),
     page_token: str | None = None,
 ) -> WorkflowRunListResponse:
     await ctx.require(
@@ -207,15 +218,18 @@ async def list_pod_workflow_runs(
         ),
     )
     cursor = parse_uuid_page_token(page_token)
+    # Echo what was actually applied. Reporting the requested value told a client
+    # asking for 500 that it got 500.
+    effective_limit = min(limit, MAX_RUN_PAGE_SIZE)
     runs, next_cursor = await SqlAlchemyWorkflowRunRepository(uow).list_by_pod(
         pod_id,
-        limit=min(limit, 200),
+        limit=effective_limit,
         cursor=cursor,
-        statuses=[value.upper() for value in status] if status else None,
+        statuses=[value.value for value in status] if status else None,
     )
     return WorkflowRunListResponse(
         items=[WorkflowRunSummaryResponse.model_validate(run) for run in runs],
-        limit=limit,
+        limit=effective_limit,
         next_page_token=str(next_cursor) if next_cursor else None,
     )
 
@@ -245,6 +259,27 @@ async def get_run(
     return run_response_from_domain(run, active_wait)
 
 
+# How long a quiet stream waits before emitting an SSE comment frame. Nothing is
+# published between run transitions, and a run can legitimately sit for hours, so
+# without this an idle proxy closes the connection on us.
+STREAM_KEEPALIVE_SECONDS = 20.0
+
+
+async def _close_subscription(
+    subscription: object, run_id: UUID, exc: BaseException | None = None
+) -> None:
+    """Release a subscription without letting teardown mask the real outcome."""
+    try:
+        with anyio.CancelScope(shield=True):
+            await subscription.__aexit__(  # type: ignore[attr-defined]
+                type(exc) if exc else None, exc, exc.__traceback__ if exc else None
+            )
+    except Exception:
+        # The client is gone either way and the response is finished, so there is
+        # nobody to report this to and nothing left to clean up.
+        logger.debug("workflow.run.stream_teardown_failed", run_id=str(run_id))
+
+
 @router.get(
     "/{run_id}/stream",
     operation_id="workflow.run.stream",
@@ -266,20 +301,34 @@ async def stream_workflow_run(
     pod_id: UUID,
     run_id: UUID,
 ) -> StreamingResponse:
-    engine = WorkflowEngine(uow)
-    run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
-    _verify_pod(run, pod_id)
-    assert run is not None
-    active_wait = await engine.get_active_wait(run.id)
-    opening = run_response_from_domain(run, active_wait)
-    is_terminal = run.status in TERMINAL_STATUSES
-
-    # Subscribe before yielding the opening frame, so a transition landing
-    # between the two is delivered rather than lost.
+    # Subscribe *before* reading the run, and open the subscription here rather
+    # than inside the generator. Starlette does not start the generator until the
+    # response body is consumed, so opening it there leaves the snapshot-read →
+    # subscribe gap unbounded: a run that finishes inside it would send an opening
+    # frame and then nothing, never reaching a `completed` frame and never
+    # closing. Same ordering as `conversation_streaming.start_and_stream_run`.
     subscription = channel_service.subscribe([workflow_run_channel(run_id)])
+    iterator = await subscription.__aenter__()
+    try:
+        engine = WorkflowEngine(uow)
+        run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
+        _verify_pod(run, pod_id)
+        assert run is not None
+        active_wait = await engine.get_active_wait(run.id)
+        opening = run_response_from_domain(run, active_wait)
+        is_terminal = run.status in TERMINAL_STATUSES
+    except BaseException as exc:
+        await _close_subscription(subscription, run_id, exc)
+        raise
+
+    # The snapshot is a plain pydantic model now and the stream itself never
+    # touches the database. `UoWDep` is torn down only once the response
+    # completes, so without this a client watching a run that sits waiting for
+    # hours pins a pooled connection for exactly that long.
+    await uow.session.close()
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        iterator = await subscription.__aenter__()
+        pending: asyncio.Task[str | bytes] | None = None
         try:
             yield encode_run_chunk(
                 event_type="completed" if is_terminal else "run",
@@ -287,7 +336,21 @@ async def stream_workflow_run(
             )
             if is_terminal:
                 return
-            async for message in iterator:
+            while True:
+                if pending is None:
+                    # Never cancel the read itself: the channel iterator is a
+                    # generator around `queue.get()`, and throwing cancellation
+                    # into it would finalize it and end the stream. Waiting on a
+                    # retained task times out without disturbing the read.
+                    pending = asyncio.ensure_future(anext(iterator))
+                done, _ = await asyncio.wait({pending}, timeout=STREAM_KEEPALIVE_SECONDS)
+                if not done:
+                    # A comment frame. Keeps idle proxies from dropping a run
+                    # that is legitimately quiet between transitions.
+                    yield ": keepalive\n\n"
+                    continue
+                message = pending.result()
+                pending = None
                 payload = _decode_channel_message(message)
                 if payload is None:
                     continue
@@ -297,6 +360,8 @@ async def stream_workflow_run(
                 )
                 if payload.get("type") == "completed":
                     return
+        except StopAsyncIteration:
+            return
         except Exception:
             logger.error(
                 "workflow.run.stream_failed", run_id=str(run_id), exc_info=True
@@ -307,15 +372,9 @@ async def stream_workflow_run(
             )
         finally:
             with anyio.CancelScope(shield=True):
-                try:
-                    await subscription.__aexit__(None, None, None)
-                except Exception:
-                    # Teardown of an already-broken subscription. The client has
-                    # gone either way and the response is finished, so there is
-                    # nobody to report this to and nothing left to clean up.
-                    logger.debug(
-                        "workflow.run.stream_teardown_failed", run_id=str(run_id)
-                    )
+                if pending is not None:
+                    pending.cancel()
+                await _close_subscription(subscription, run_id)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
