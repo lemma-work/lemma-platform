@@ -34,8 +34,9 @@ class SnoozeRequest(BaseModel):
         description=(
             "How long to sleep. Choose it from what you are actually waiting for, "
             "not out of habit — a build that takes about eight minutes deserves "
-            "one ~500s check, not eight 60s ones. Clamped to "
-            f"[{MIN_SNOOZE_SECONDS}, {MAX_SNOOZE_SECONDS}]."
+            f"one ~500s check, not eight 60s ones. Under {MIN_SNOOZE_SECONDS}s is "
+            f"rejected, not clamped; over {MAX_SNOOZE_SECONDS}s ({MAX_SNOOZE_SECONDS // 3600}h) "
+            "is clamped down."
         )
     )
     note_to_self: str | None = Field(
