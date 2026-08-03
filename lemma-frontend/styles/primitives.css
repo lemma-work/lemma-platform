@@ -733,6 +733,7 @@
 }
 
 .lemma-product-icon {
+  position: relative;
   display: inline-flex;
   height: 1.15rem;
   width: 1.15rem;
@@ -742,6 +743,23 @@
   color: var(--text-tertiary);
   opacity: 1;
   transition: color var(--dur-base) var(--ease-out);
+}
+
+.lemma-product-icon-glyph {
+  height: 100%;
+  width: 100%;
+}
+
+/* The pointer weight sits exactly on the resting one, so thickening reads as
+   the same glyph gaining weight rather than two icons trading places. */
+.lemma-product-icon-glyph[data-layer="pointer"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+
+.lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph {
+  transition: opacity var(--dur-hover) var(--ease-out);
 }
 
 .lemma-product-icon[data-size="sm"] {
@@ -774,6 +792,32 @@
 
 .lemma-product-nav-item[data-active="true"] .lemma-product-icon {
   color: var(--text-secondary);
+}
+
+/* Icons rest one step quieter than the label beside them, then track the row
+   once it is hovered or active. Without this they held `--text-tertiary` while
+   the label lit to `--text-primary`, and the row read as half-awake. */
+.lemma-sidebar-row:hover .lemma-product-icon,
+.lemma-sidebar-row:focus-visible .lemma-product-icon,
+.lemma-sidebar-row[data-active="true"] .lemma-product-icon {
+  color: inherit;
+}
+
+/* Any control that opts an icon into the pointer layer gets the weight swap —
+   anchored on the control rather than a row class so new call sites need no
+   CSS. `data-interactive` keeps the reach narrow. */
+a:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"],
+a:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"],
+button:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"],
+button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="rest"] {
+  opacity: 0;
+}
+
+a:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"],
+a:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"],
+button:hover .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"],
+button:focus-visible .lemma-product-icon[data-interactive="true"] .lemma-product-icon-glyph[data-layer="pointer"] {
+  opacity: 1;
 }
 
 .lemma-sidebar-row {

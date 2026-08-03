@@ -20,8 +20,12 @@
   body {
     margin: 0;
     font-family: var(--font-body-family);
-    font-size: var(--text-base);
-    line-height: var(--leading-normal);
+    /* 14px/1.6, the landing's body setting. The baseline used to be 16px/1.5,
+       which is why comparable surfaces read a size looser than the page they
+       continue from — most components set text-sm explicitly, so the 16px only
+       ever showed up on the text nobody had classed. */
+    font-size: var(--text-sm);
+    line-height: 1.6;
     color: var(--text-primary);
     background: var(--bg-canvas);
     /* Theme transitions: background and color only.
@@ -111,12 +115,14 @@
     }
   }
 
-  /* Product headings stay utilitarian; Bricolage is reserved for branded display moments. */
+  /* One weight for every heading, matching the landing. Hierarchy is carried
+     by size and tracking; stepping the weight up as well double-counts it and
+     is what made headings read as shouted rather than set. */
   h1,
   h2 {
     font-family: var(--font-body-family);
-    letter-spacing: 0;
-    font-weight: 600;
+    letter-spacing: var(--tracking-tight);
+    font-weight: 500;
     color: var(--text-primary);
   }
 
@@ -125,7 +131,7 @@
   h5,
   h6 {
     font-family: var(--font-body-family);
-    letter-spacing: 0;
+    letter-spacing: var(--tracking-snug);
     font-weight: 500;
     color: var(--text-primary);
   }

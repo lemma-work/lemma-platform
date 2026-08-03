@@ -31,7 +31,14 @@ const routeTabKinds: Record<string, ProductIconKind> = {
 };
 
 function RouteTabIcon({ routeKey, active }: { routeKey: string; active: boolean }) {
-    return <ProductIcon kind={routeTabKinds[routeKey] || 'pods'} size="xs" state={active ? 'selected' : 'default'} />;
+    return (
+        <ProductIcon
+            kind={routeTabKinds[routeKey] || 'pods'}
+            size="xs"
+            state={active ? 'selected' : 'default'}
+            interactive
+        />
+    );
 }
 
 function ConversationActivity({ tab }: { tab: Extract<PodWorkspaceTab, { kind: 'conversation' }> }) {

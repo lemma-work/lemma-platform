@@ -1104,7 +1104,7 @@
   }
 
   .office-title {
-    font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, sans-serif;
+    font-family: var(--font-display-family);
     font-weight: 400;
     letter-spacing: 0;
     color: var(--text-primary);
@@ -1397,19 +1397,24 @@
      If none of these fits, the answer is a new role here — not a literal
      font-size in a feature stylesheet. The design audit enforces this. */
 
+  /* Weights across these roles are deliberately light. The landing carries
+     its whole voice on 400 and 500 and reserves 600 for dense chrome; setting
+     the same typeface 100-200 units heavier is what made the product read as
+     a different, blunter face than the page that sells it. */
   .type-eyebrow {
     color: var(--text-tertiary);
     font-size: var(--text-xs);
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: var(--tracking-wider);
     text-transform: uppercase;
   }
 
-  /* The dense-chrome eyebrow: pills, column headers, table meta. */
+  /* The dense-chrome eyebrow: pills, column headers, table meta. This one
+     keeps more weight — it is chrome, and it is set two steps smaller. */
   .type-eyebrow-sm {
     color: var(--text-tertiary);
     font-size: var(--text-2xs);
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: var(--tracking-wider);
     text-transform: uppercase;
   }
@@ -1440,7 +1445,7 @@
   .type-title {
     color: var(--text-primary);
     font-size: var(--text-md);
-    font-weight: 600;
+    font-weight: 500;
     letter-spacing: var(--tracking-snug);
     line-height: var(--leading-snug);
   }
@@ -1448,7 +1453,7 @@
   .type-page-title {
     color: var(--text-primary);
     font-size: var(--text-xl);
-    font-weight: 700;
+    font-weight: 500;
     letter-spacing: var(--tracking-tight);
     line-height: var(--leading-tight);
   }
@@ -1456,7 +1461,7 @@
   .type-display {
     color: var(--text-primary);
     font-size: var(--text-3xl);
-    font-weight: 700;
+    font-weight: 500;
     letter-spacing: var(--tracking-tight);
     line-height: var(--leading-tight);
   }
