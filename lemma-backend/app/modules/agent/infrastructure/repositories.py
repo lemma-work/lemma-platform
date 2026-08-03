@@ -1149,8 +1149,8 @@ class ConversationRepository:
 class AgentConversationWaitRepository:
     """Reads and writes for ``agent_conversation_waits``.
 
-    Deliberately narrow: create, resolve by external ref, match record events,
-    and list stale rows for the sweep. Anything richer belongs in a service —
+    Deliberately narrow: create, resolve by external ref, claim under a lock,
+    and list past-due rows for the sweep. Anything richer belongs in a service —
     this table exists to answer "what is this conversation waiting on", and a
     repository that grows opinions about *why* is how the workflow wait table
     stayed clean and this one would not.

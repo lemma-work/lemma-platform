@@ -54,8 +54,8 @@ return value and starts a **fresh run** that resumes from history — the agent 
 result as that tool's return and continues.
 
 What differs is *who resolves it*. `ask_user` and `request_approval` wait on a person, so
-they stay `WAITING` until someone answers. `snooze` resolves itself — a timer, or a record
-change — and needs nobody. Both take the same path back into the run.
+they stay `WAITING` until someone answers. `snooze` resolves itself when its timer
+elapses, and needs nobody. Both take the same path back into the run.
 
 Daemon harnesses (Codex / Claude Code / OpenCode) own their own session and **cannot
 pause mid tool-call**; there, all three return `success:false` with a message telling the

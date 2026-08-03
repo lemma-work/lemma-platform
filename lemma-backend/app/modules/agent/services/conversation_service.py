@@ -78,8 +78,8 @@ _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 # Tools that end their run by pausing rather than returning. Each persists its
 # tool call and is resolved later by synthesizing that call's return and starting
 # a fresh run that replays it. ask_user/request_approval resolve through the
-# approvals endpoint; snooze resolves on a timer or a record change, with no
-# person involved — but the resume is the same, which is why they share a list.
+# approvals endpoint; snooze resolves on a timer, with no person involved — but
+# the resume is the same, which is why they share a list.
 _PAUSING_TOOL_NAMES = ("ask_user", "request_approval", "snooze")
 
 
@@ -706,7 +706,7 @@ class ConversationService:
     # machinery grew inside the approval path. It is not approval-specific: any
     # tool that raises ``AgentInputRequired`` pauses the same way, and resumes by
     # having its return synthesized and replayed. ``snooze`` is the second caller
-    # — it resolves on a timer or a record change instead of on a person.
+    # — it resolves on a timer instead of on a person.
 
     async def append_pause_tool_return(
         self,
