@@ -76,11 +76,12 @@ const ibmPlexMono = IBM_Plex_Mono({
   preload: false,
 });
 
-// The handwritten greeting, on one landing block.
+// The handwritten greeting, on one landing block. next/font gives this family
+// no `subsets` option and so never preloads it — there is no `preload` flag to
+// set here, and none is needed.
 const playwriteTz = Playwrite_TZ({
   weight: ["300", "400"],
   variable: "--font-greeting-hand",
-  preload: false,
 });
 
 // Long-form document and legal pages.
