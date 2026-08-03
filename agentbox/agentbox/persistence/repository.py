@@ -1486,6 +1486,63 @@ class AgentBoxRepository:
         await self._session.flush()
         return self._allocation(allocation)
 
+    async def classify_inventory_tokens(
+        self, tokens: tuple[UUID, ...]
+    ) -> dict[UUID, str | None]:
+        """Map create-attempt tokens to their allocation state, or None if absent.
+
+        An allocation token is written before the provider is ever called, so a
+        provider object carrying a token with no row here was created by a state
+        AgentBox no longer has - a restored database, a changed scope, or a
+        deleted row. Either way it is billable compute nobody owns.
+        """
+
+        if not tokens:
+            return {}
+        rows = await self._session.scalars(
+            select(AllocationRow).where(AllocationRow.allocation_token.in_(tokens))
+        )
+        found = {row.allocation_token: row.state for row in rows}
+        return {token: found.get(token) for token in tokens}
+
+    async def mark_allocation_released_after_provider_pause(
+        self, allocation_id: UUID, *, now: datetime | None = None
+    ) -> bool:
+        """Record that the provider stopped an allocation we believed active.
+
+        The provider can pause a sandbox on its own timeout. Durable state then
+        reads ACTIVE with an unchanged epoch, so runtime routing keeps handing
+        out handles to processes and interpreters the pause destroyed. Marking
+        it released makes the next ensure take the normal resume path, which
+        assigns a fresh epoch and fences those handles.
+        """
+
+        timestamp = now or utc_now()
+        allocation = await self._session.get(AllocationRow, allocation_id)
+        if allocation is None or allocation.state != AllocationState.ACTIVE.value:
+            return False
+        logical = await self._select_logical(
+            SandboxKey(
+                workload_kind=WorkloadKind(allocation.workload_kind),
+                logical_id=allocation.logical_id,
+            ),
+            for_update=True,
+        )
+        if logical is None or logical.maintenance_action is not None:
+            return False
+        allocation.state = AllocationState.RELEASED.value
+        allocation.released_at = timestamp
+        allocation.updated_at = timestamp
+        await self._set_admission_state(
+            allocation, AdmissionState.RELEASED, now=timestamp
+        )
+        logical.desired_state = SandboxDesiredState.RELEASED.value
+        logical.released_at = timestamp
+        logical.protected_until = None
+        logical.updated_at = timestamp
+        await self._session.flush()
+        return True
+
     async def claim_due_maintenance(
         self,
         *,

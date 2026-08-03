@@ -596,6 +596,8 @@ class E2BSandboxAdapter:
                     if workspace
                     else None
                 ),
+                allocation_token=self._inventory_token(item),
+                running=self._inventory_running(item),
             )
             for item in found
             if self._inventory_metadata_matches(item, expected)
@@ -607,6 +609,23 @@ class E2BSandboxAdapter:
         return isinstance(metadata, Mapping) and all(
             metadata.get(name) == value for name, value in expected.items()
         )
+
+    @staticmethod
+    def _inventory_token(item: Any) -> UUID | None:
+        metadata = getattr(item, "metadata", None)
+        if not isinstance(metadata, Mapping):
+            return None
+        try:
+            return UUID(str(metadata.get("allocation-token")))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _inventory_running(item: Any) -> bool | None:
+        state = getattr(item, "state", None)
+        if state is None:
+            return None
+        return str(getattr(state, "value", state)).lower() == "running"
 
     async def start_process(
         self, request: ProviderProcessStartRequest

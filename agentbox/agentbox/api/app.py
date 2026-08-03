@@ -31,6 +31,7 @@ from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.maintenance import SandboxMaintenanceWorker, maintenance_loop
 from agentbox.port_access import PortAccessService, PortAccessSigner
 from agentbox.persistence.uow import StateDatabase
+from agentbox.inventory import SandboxInventorySweeper, inventory_sweep_loop
 from agentbox.processes import ProcessExecutionService, process_lease_loop
 from agentbox.profiles import (
     DockerProfileArtifact,
@@ -557,16 +558,38 @@ async def lifespan(app: FastAPI):
         ),
         name="agentbox-process-lease",
     )
+    # Reasons backwards from provider inventory: finds running sandboxes that
+    # durable state cannot account for, which nothing else can detect and which
+    # bill indefinitely.
+    app.state.inventory_sweeper = SandboxInventorySweeper(
+        database,
+        provider,
+        untracked_grace_seconds=(
+            settings.agentbox_inventory_untracked_grace_seconds
+        ),
+    )
+    app.state.inventory_sweep_task = create_background_task(
+        inventory_sweep_loop(
+            app.state.inventory_sweeper,
+            interval_seconds=settings.agentbox_inventory_sweep_interval_seconds,
+            operation_timeout_seconds=(
+                settings.agentbox_reconcile_operation_timeout_seconds
+            ),
+        ),
+        name="agentbox-inventory-sweep",
+    )
     try:
         yield
     finally:
         app.state.reconciliation_task.cancel()
         app.state.maintenance_task.cancel()
         app.state.process_lease_task.cancel()
+        app.state.inventory_sweep_task.cancel()
         await asyncio.gather(
             app.state.reconciliation_task,
             app.state.maintenance_task,
             app.state.process_lease_task,
+            app.state.inventory_sweep_task,
             return_exceptions=True,
         )
         await app.state.port_proxy_http_client.aclose()

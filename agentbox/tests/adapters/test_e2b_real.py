@@ -32,10 +32,12 @@ from agentbox.domain import (
     WorkloadKind,
 )
 from agentbox.filesystem import FilesystemService
+from agentbox.inventory import SandboxInventorySweeper
 from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.maintenance import SandboxMaintenanceWorker
 from agentbox.persistence.uow import StateDatabase
 from agentbox.port_access import PortAccessService, PortAccessSigner
+from agentbox.ports import ProviderMetadataEntry
 from agentbox.processes import ProcessExecutionService
 from agentbox.profiles import E2BProfileArtifact, ProfileRegistry, SandboxProfile
 from agentbox.python_sessions import PythonSessionService
@@ -975,3 +977,68 @@ async def test_real_e2b_storage_generation_marks_only_a_genuinely_lost_disk(
         await _kill_exact(recreated_provider_id)
         await adapter.close()
         await database.dispose()
+
+
+async def test_real_e2b_sweep_reclaims_a_sandbox_no_database_knows_about(
+    tmp_path: Path,
+) -> None:
+    """Compute that durable state cannot account for must still be reclaimed.
+
+    Modelled the way it actually happens: the sandbox is real and was created
+    normally, but the database that knew about it is gone - restored from an
+    older backup, recreated at cutover, or replaced by a scope rename. No other
+    code path can reach that sandbox, and E2B bills for it until something
+    destroys it.
+    """
+
+    profile = _workspace_profile()
+    scope = f"e2b:inventory-sweep:{uuid4()}"
+    adapter = _adapter(ProfileRegistry((profile,)), scope=scope)
+    original_database = StateDatabase(
+        f"sqlite+aiosqlite:///{tmp_path / 'original.db'}"
+    )
+    await original_database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(original_database, adapter)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
+    provider_id: str | None = None
+
+    try:
+        await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        provider_id = await _provider_id(original_database, key)
+        assert provider_id is not None
+
+        # The sandbox keeps running; the state that owned it does not.
+        await original_database.dispose()
+        replacement_database = StateDatabase(
+            f"sqlite+aiosqlite:///{tmp_path / 'replacement.db'}"
+        )
+        await replacement_database.create_schema_for_test()
+        sweeper = SandboxInventorySweeper(
+            replacement_database,
+            adapter,
+            untracked_grace_seconds=0,
+        )
+        try:
+            assert await sweeper.sweep_once(deadline_at=deadline) == 1
+
+            # Gone at the provider, not merely forgotten locally.
+            remaining = await adapter.find_allocations(
+                (
+                    ProviderMetadataEntry("managed-by", "agentbox"),
+                    ProviderMetadataEntry("provider-scope", scope),
+                ),
+                deadline_at=deadline,
+            )
+            assert [item.provider_id for item in remaining] == []
+        finally:
+            await replacement_database.dispose()
+    finally:
+        await _kill_exact(provider_id)
+        await adapter.close()

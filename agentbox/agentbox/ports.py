@@ -83,6 +83,14 @@ class ProviderInventoryAllocation:
     provider_id: str
     provider_instance_id: str | None
     workspace_storage: ProviderStorageResult | None = None
+    # The create-attempt token stamped into provider metadata. It is persisted
+    # before the provider is ever called, so it is the authoritative link back
+    # to durable state: a provider object carrying a token AgentBox does not
+    # recognise is billable compute nobody owns.
+    allocation_token: UUID | None = None
+    # False when the provider reports the object stopped/paused. None when the
+    # provider does not report it.
+    running: bool | None = None
 
 
 class ProviderCreateAmbiguous(RuntimeError):

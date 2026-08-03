@@ -201,6 +201,26 @@ class Settings(BaseSettings):
             "of one per runtime operation."
         ),
     )
+    agentbox_inventory_sweep_interval_seconds: float = Field(
+        default=300,
+        ge=10,
+        description=(
+            "How often to reconcile provider inventory against durable state. "
+            "Catches sandboxes nobody owns - a restored database, a renamed "
+            "scope, a deleted row - which no other code path can find and "
+            "which bill until destroyed."
+        ),
+    )
+    agentbox_inventory_untracked_grace_seconds: float = Field(
+        default=900,
+        ge=60,
+        description=(
+            "How long a provider sandbox must look unowned, across separate "
+            "sweeps, before it is destroyed. Insurance against clock skew or a "
+            "briefly misconfigured scope, because the cost of being wrong is "
+            "destroying a live user's sandbox."
+        ),
+    )
     agentbox_process_lease_seconds: float = Field(
         default=180,
         ge=10,
