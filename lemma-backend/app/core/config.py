@@ -866,14 +866,20 @@ class Settings(BaseSettings):
         ge=1,
         le=100_000,
     )
-    function_runtime_endpoint_cache_ttl_seconds: int = Field(
-        default=4 * 60 * 60,
-        ge=5 * 60,
-        le=24 * 60 * 60,
+    function_runtime_endpoint_reuse_seconds: int = Field(
+        default=60,
+        ge=5,
+        le=240,
         description=(
-            "Maximum seconds to reuse an allocation-fenced direct function-runtime "
-            "lease. The provider lease expiry can shorten this horizon; stale "
-            "allocation responses invalidate it immediately."
+            "How far ahead a function-runtime lease is requested beyond the "
+            "current invocation's own needs, so a busy pod reuses one lease "
+            "instead of paying a control-plane call per invocation. "
+            "AgentBox treats a lease as activity and keeps the sandbox alive "
+            "for the horizon it grants, so this must stay well below "
+            "AGENTBOX_FUNCTION_IDLE_SECONDS (default 300): otherwise a single "
+            "invocation keeps a pod's sandbox billing long after the last "
+            "function ran. Function execution is the activity that should keep "
+            "a sandbox warm - never the mere existence of a cached endpoint."
         ),
     )
     function_runtime_endpoint_cache_max_entries: int = Field(

@@ -137,19 +137,22 @@ async def _ensure(database: StateDatabase, provider) -> tuple[SandboxKey, UUID, 
     return key, allocation.allocation_token, allocation.provider_id
 
 
-async def test_a_sandbox_nobody_owns_is_destroyed(database: StateDatabase):
-    """The failure this exists for: compute with no durable record at all.
+async def test_a_sandbox_this_database_never_created_is_left_alone(
+    database: StateDatabase,
+):
+    """A shared provider account means unrecognised does not mean abandoned.
 
-    A restored database, a renamed provider scope, or a deleted row leaves a
-    sandbox that no other code path can reach. It bills until someone finds it
-    by hand.
+    Environments routinely share one provider account, so a token this database
+    has never seen belongs to another deployment. The database is the reliable
+    record - rows do not vanish on their own - so destroying here would delete
+    somebody else's live sandboxes.
     """
 
     provider = InventoryProvider(database)
     provider.inventory = [
         ProviderInventoryAllocation(
-            provider_id="orphan-1",
-            provider_instance_id="orphan-1",
+            provider_id="someone-elses-1",
+            provider_instance_id="someone-elses-1",
             allocation_token=uuid4(),
             running=True,
         )
@@ -159,8 +162,8 @@ async def test_a_sandbox_nobody_owns_is_destroyed(database: StateDatabase):
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30)
     )
 
-    assert swept == 1
-    assert provider.destroyed == ["orphan-1"]
+    assert swept == 0
+    assert provider.destroyed == []
 
 
 async def test_a_live_sandbox_is_never_touched(database: StateDatabase):
@@ -252,20 +255,37 @@ async def test_a_destroyed_allocation_leaves_no_provider_object_behind(
     assert provider.destroyed == [provider_id]
 
 
-async def test_an_unowned_sandbox_survives_until_its_grace_elapses(
-    database: StateDatabase,
-):
-    """Never destroy on first sight: being wrong here deletes a live sandbox."""
+async def _reclaimable(database: StateDatabase, provider) -> ProviderInventoryAllocation:
+    """Ours, already destroyed in durable state, yet still running."""
+
+    lifecycle = SandboxLifecycleService(
+        database, provider, workspace_retention_seconds=0
+    )
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    _key, token, provider_id = await _ensure(database, provider)
+    assert await maintenance.run_once(deadline_at=deadline) == 1
+    assert await maintenance.run_once(deadline_at=deadline) == 1
+    provider.destroyed.clear()
+    return ProviderInventoryAllocation(
+        provider_id=provider_id,
+        provider_instance_id=provider_id,
+        allocation_token=token,
+        running=True,
+    )
+
+
+async def test_reclaiming_waits_for_the_grace_period(database: StateDatabase):
+    """Never act on first sight: this can race a destroy already in progress."""
 
     provider = InventoryProvider(database)
-    provider.inventory = [
-        ProviderInventoryAllocation(
-            provider_id="orphan-1",
-            provider_instance_id="orphan-1",
-            allocation_token=uuid4(),
-            running=True,
-        )
-    ]
+    provider.inventory = [await _reclaimable(database, provider)]
     sweeper = _sweeper(database, provider, grace=3600)
 
     deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
@@ -357,16 +377,16 @@ async def test_resuming_after_a_provider_pause_assigns_a_fresh_epoch(
     assert resumed.allocation_epoch > before.allocation_epoch
 
 
-async def test_a_provider_object_without_a_token_is_still_reclaimed(
+async def test_a_provider_object_without_a_token_is_left_alone(
     database: StateDatabase,
 ):
-    """Objects from an older release carry no token, and still cost money."""
+    """We stamp a token on everything we create, so no token means not ours."""
 
     provider = InventoryProvider(database)
     provider.inventory = [
         ProviderInventoryAllocation(
-            provider_id="legacy-1",
-            provider_instance_id="legacy-1",
+            provider_id="foreign-1",
+            provider_instance_id="foreign-1",
             allocation_token=None,
             running=True,
         )
@@ -376,22 +396,16 @@ async def test_a_provider_object_without_a_token_is_still_reclaimed(
         deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30)
     )
 
-    assert swept == 1
-    assert provider.destroyed == ["legacy-1"]
+    assert swept == 0
+    assert provider.destroyed == []
 
 
 async def test_a_failed_destroy_is_retried_on_the_next_sweep(
     database: StateDatabase,
 ):
     provider = InventoryProvider(database)
-    provider.inventory = [
-        ProviderInventoryAllocation(
-            provider_id="orphan-1",
-            provider_instance_id="orphan-1",
-            allocation_token=uuid4(),
-            running=True,
-        )
-    ]
+    item = await _reclaimable(database, provider)
+    provider.inventory = [item]
     sweeper = _sweeper(database, provider)
     deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
 
@@ -400,7 +414,7 @@ async def test_a_failed_destroy_is_retried_on_the_next_sweep(
 
     provider.destroy_error = None
     assert await sweeper.sweep_once(deadline_at=deadline) == 1
-    assert provider.destroyed == ["orphan-1"]
+    assert provider.destroyed == [item.provider_id]
 
 
 async def test_the_sweep_asks_only_for_its_own_provider_scope(

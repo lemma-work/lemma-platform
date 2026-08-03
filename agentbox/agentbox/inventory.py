@@ -1,21 +1,28 @@
 """Reconcile provider inventory against durable state.
 
 Everything else in AgentBox reasons forwards from a durable record: an
-allocation exists, therefore a sandbox should. This module reasons backwards.
-It asks the provider what is actually running and charges anything it finds
-against durable state, because the two failure modes that cost real money are
-both invisible from the durable side:
+allocation exists, therefore a sandbox should. This module reasons backwards,
+asking the provider what is actually running, because two failure modes are
+invisible from the durable side:
 
-- a sandbox nobody owns. Its allocation row is gone - a restored database, a
-  renamed provider scope, a deleted row - so no code path will ever destroy it
-  and it bills until someone notices by hand;
+- a sandbox we already decided to destroy that is still running, because the
+  destroy failed or a manager died mid-cleanup. Nothing retries it, and it
+  bills until someone notices by hand;
 - a sandbox the provider stopped on its own. Durable state still reads ACTIVE
   with an unchanged epoch, so runtime routing keeps handing out handles to
   processes and interpreters that the pause already destroyed.
 
-The create-attempt token makes this exact rather than heuristic: it is written
-before the provider is ever called and stamped into provider metadata, so any
-object carrying a token AgentBox cannot account for is genuinely unowned.
+It reclaims **only sandboxes this deployment created and has already given up
+on**. A provider account is routinely shared between environments, so anything
+this database does not recognise belongs to somebody else and is left strictly
+alone. The database is the reliable record here - rows do not vanish on their
+own - so an unrecognised sandbox means "not ours", never "abandoned". Getting
+that backwards would delete another environment's live sandboxes, which is far
+worse than leaving stray compute for a human to find.
+
+The create-attempt token is what makes ownership decidable: it is written
+before the provider is ever called and stamped into provider metadata, so it
+ties a running object back to the exact row that authorised it.
 """
 
 from __future__ import annotations
@@ -124,7 +131,28 @@ class SandboxInventorySweeper:
         *,
         deadline_at: datetime,
     ) -> bool:
-        state = states.get(item.allocation_token) if item.allocation_token else None
+        if item.allocation_token is None:
+            # We stamp a token on everything we create, so an object without
+            # one was created by something else - another deployment sharing
+            # this provider account, or a release predating the token. Not ours
+            # to delete.
+            return False
+
+        state = states.get(item.allocation_token)
+        if state is None:
+            # The token is real but this database has never heard of it, which
+            # means another deployment created it. Provider scope is supposed
+            # to separate dev from prod, but scopes get copied and reused, and
+            # the database is the reliable record - a row does not vanish on
+            # its own. So an unrecognised token means "not ours", never
+            # "abandoned". Destroying here would delete another environment's
+            # live sandboxes.
+            logger.info(
+                "agentbox.inventory.unrecognised_sandbox_ignored",
+                provider_scope=self._provider.scope,
+                provider_id=item.provider_id,
+            )
+            return False
 
         if state in _EXPECTED_PRESENT:
             self._first_seen_untracked.pop(item.provider_id, None)
@@ -132,20 +160,19 @@ class SandboxInventorySweeper:
                 return await self._record_provider_pause(item)
             return False
 
-        # Either the token is unknown to us, or its allocation is terminal and
-        # this object should already be gone. Both are unowned compute.
+        # Ours, and durable state already says it should be gone: a destroy
+        # that failed, or a manager that died mid-cleanup. This is the only
+        # case where reclaiming is unambiguously correct.
         if not self._grace_elapsed(item.provider_id):
             return False
         return await self._destroy_untracked(item, state, deadline_at=deadline_at)
 
     def _grace_elapsed(self, provider_id: str) -> bool:
-        """Require an object to look unowned twice, spaced apart, before acting.
+        """Require an object to look reclaimable twice, spaced apart, first.
 
-        A token is committed before the provider is called, so an in-flight
-        create should never look unowned. The grace period is insurance against
-        the cases that would make that reasoning wrong - clock skew, a replica
-        lagging, a scope briefly misconfigured - because the cost of being
-        wrong is destroying a live user's sandbox.
+        An allocation can reach a terminal state moments before its own destroy
+        completes, so acting on first sight would race the normal cleanup path
+        for something that is already being handled.
         """
 
         now = datetime.now(timezone.utc)
@@ -184,9 +211,9 @@ class SandboxInventorySweeper:
         *,
         deadline_at: datetime,
     ) -> bool:
-        # An untracked object has no allocation to reference, so the exact
-        # provider ID is all the identity available - which is also all the
-        # provider needs to destroy precisely this one thing.
+        # The allocation is terminal, so its identity is gone; the exact
+        # provider ID is what remains, and it is all the provider needs to
+        # destroy precisely this one object.
         ref = ProviderAllocationRef(
             provider_id=item.provider_id,
             provider_instance_id=item.provider_instance_id,

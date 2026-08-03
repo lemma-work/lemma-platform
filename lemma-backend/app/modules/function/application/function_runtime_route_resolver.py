@@ -98,11 +98,19 @@ class FunctionRuntimeRouteResolver:
                 pod_id,
                 admission_class=admission_class,
                 deadline_at=deadline_at,
+                # Ask only for what this invocation needs, plus a short window
+                # so a busy pod reuses one lease instead of paying a
+                # control-plane call per call. Asking for a long horizon here
+                # was what kept idle function sandboxes alive: AgentBox treats
+                # a lease as activity, so a single invocation requesting a
+                # four-hour endpoint protected its sandbox for four hours and
+                # the five-minute idle destroy never fired. Function execution
+                # is the activity, so the horizon must track invocations.
                 required_valid_until=max(
                     required_valid_until,
                     self._now()
                     + timedelta(
-                        seconds=settings.function_runtime_endpoint_cache_ttl_seconds
+                        seconds=settings.function_runtime_endpoint_reuse_seconds
                     ),
                 ),
             ),

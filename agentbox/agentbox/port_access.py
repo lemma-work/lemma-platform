@@ -186,6 +186,7 @@ class PortAccessService:
         public_base_url: str,
         trusted_function_activity_seconds: float = 300,
         trusted_function_activity_refresh_seconds: float = 60,
+        maximum_function_lease_seconds: float = 60 * 60,
     ) -> None:
         if not 1 <= trusted_function_activity_seconds <= 24 * 60 * 60:
             raise ValueError(
@@ -194,6 +195,10 @@ class PortAccessService:
         if not 1 <= trusted_function_activity_refresh_seconds <= 60 * 60:
             raise ValueError(
                 "trusted function activity refresh must be in 1..3600 seconds"
+            )
+        if maximum_function_lease_seconds < trusted_function_activity_seconds:
+            raise ValueError(
+                "maximum function lease cannot be shorter than the activity lease"
             )
         self._database = database
         self._provider = provider
@@ -204,6 +209,9 @@ class PortAccessService:
         )
         self._trusted_function_activity_refresh = timedelta(
             seconds=trusted_function_activity_refresh_seconds
+        )
+        self._maximum_function_lease = timedelta(
+            seconds=maximum_function_lease_seconds
         )
 
     async def create(
@@ -345,9 +353,18 @@ class PortAccessService:
             minimum_valid_until,
             required_valid_until or minimum_valid_until,
         )
-        maximum_valid_until = now + timedelta(hours=24)
+        # A lease keeps its sandbox alive for as long as it is valid, so the
+        # horizon a caller asks for is also the bill it commits to. Bounded
+        # tightly on purpose: function *execution* is what should keep a
+        # sandbox warm, and a caller that asks for a long-lived endpoint just
+        # to cache it would otherwise pin idle compute for that entire window.
+        # Long single invocations are still served - they raise the floor
+        # legitimately, because they are real work in progress.
+        maximum_valid_until = now + self._maximum_function_lease
         if required_valid_until > maximum_valid_until:
-            raise self._invalid("required_valid_until cannot exceed 24 hours")
+            raise self._invalid(
+                "required_valid_until exceeds the maximum function lease horizon"
+            )
         lease_until = min(
             required_valid_until + self._trusted_function_activity_refresh,
             maximum_valid_until,
