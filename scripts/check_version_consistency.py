@@ -109,6 +109,14 @@ SOURCES: tuple[Source, ...] = (
         REPO_ROOT / "lemma-cli/pyproject.toml",
         re.compile(r'"lemma-sdk>=([^"]+)"'),
     ),
+    # lemma-cli/pyproject.toml reads its own version from this attribute
+    # (``version = { attr = "lemma_cli.__version__" }``), so the package version
+    # is declared here rather than there.
+    Source(
+        "lemma-cli package",
+        REPO_ROOT / "lemma-cli/lemma_cli/__init__.py",
+        re.compile(r'(?m)^__version__ = "([^"]+)"'),
+    ),
 )
 
 
