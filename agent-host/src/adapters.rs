@@ -595,7 +595,19 @@ fn executable_search_paths() -> Vec<PathBuf> {
 /// of a GUI app, so it inherits `/usr/bin:/bin:/usr/sbin:/sbin` and nothing
 /// else — never a login shell's `PATH` — and none of these are on it.
 fn home_executable_directories(home: &Path) -> Vec<PathBuf> {
-    let mut directories: Vec<PathBuf> = [
+    // The platform's own additions are a cfg-selected list rather than
+    // cfg-gated pushes. Pushing needs a `mut` binding, and on a platform that
+    // matches neither arm — Linux, which is what CI lints on — every mutation
+    // compiles out and the `mut` becomes an `unused_mut` the lint gate treats
+    // as an error. Selecting the list instead leaves nothing to be unused.
+    #[cfg(target_os = "macos")]
+    let platform: &[&str] = &["Library/pnpm"];
+    #[cfg(windows)]
+    let platform: &[&str] = &["AppData/Roaming/npm"];
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let platform: &[&str] = &[];
+
+    [
         ".local/bin",
         ".cargo/bin",
         ".volta/bin",
@@ -609,13 +621,9 @@ fn home_executable_directories(home: &Path) -> Vec<PathBuf> {
         ".codex/bin",
     ]
     .iter()
+    .chain(platform)
     .map(|relative| home.join(relative))
-    .collect();
-    #[cfg(target_os = "macos")]
-    directories.push(home.join("Library/pnpm"));
-    #[cfg(windows)]
-    directories.push(home.join("AppData/Roaming/npm"));
-    directories
+    .collect()
 }
 
 fn nvm_node_bins(home: &Path) -> Vec<PathBuf> {
