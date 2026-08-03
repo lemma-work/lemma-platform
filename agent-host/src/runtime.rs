@@ -1514,6 +1514,15 @@ fn chunk_text(payload: &JsonMap) -> String {
     }
 }
 
+/// End a run and say why, on both paths that carry a reason upstream.
+///
+/// The message goes in the terminal *event* and in the terminal *checkpoint*,
+/// because the two have different lifetimes. An event is pruned from the outbox
+/// once Lemma acknowledges it, so a run that failed an hour ago has only its
+/// checkpoint left — and that used to be written empty, which is why a dead run
+/// could be inspected afterwards and offer nothing but `FAILED` and `{}`. The
+/// checkpoint is also the path that survives Lemma never acknowledging the
+/// event at all.
 fn terminal_failure(
     journal: &Journal,
     target_id: Uuid,
@@ -1522,18 +1531,18 @@ fn terminal_failure(
     state: RunState,
     message: &str,
 ) -> anyhow::Result<()> {
-    let mut payload = JsonMap::new();
-    payload.insert("state".to_owned(), serde_json::to_value(state)?);
-    payload.insert("message".to_owned(), Value::String(message.to_owned()));
+    let mut detail = JsonMap::new();
+    detail.insert("state".to_owned(), serde_json::to_value(state)?);
+    detail.insert("message".to_owned(), Value::String(message.to_owned()));
     journal.append_event(
         target_id,
         run_id,
         lease_epoch,
         EventType::Terminal,
         None,
-        payload,
+        detail.clone(),
     )?;
-    journal.checkpoint(target_id, run_id, lease_epoch, state, &JsonMap::new())?;
+    journal.checkpoint(target_id, run_id, lease_epoch, state, &detail)?;
     Ok(())
 }
 
@@ -2109,6 +2118,62 @@ mod target_worker_tests {
             "the undeliverable run must stop being retried forever"
         );
         assert_eq!(harness.accepted().get(&healthy), Some(&1));
+    }
+
+    /// A dead run has to still be able to say why it died.
+    ///
+    /// The reason used to be written only into the terminal event, and an event
+    /// is pruned once Lemma acknowledges it. So a run inspected any later than
+    /// that offered `FAILED` and an empty detail, and its cause was gone for
+    /// good — exactly when someone is asking why the agent stopped.
+    #[tokio::test]
+    async fn a_failed_run_keeps_its_reason_once_the_terminal_event_is_acknowledged() {
+        let harness = Harness::new().await;
+        let run_id = harness.seed_run(0);
+        let reason = "the provider never answered the approved permission";
+
+        super::terminal_failure(
+            &harness.journal,
+            harness.target_id,
+            run_id,
+            1,
+            RunState::Failed,
+            reason,
+        )
+        .unwrap();
+
+        // Acknowledging is what makes the terminal event prunable, and it is
+        // also what releases the terminal checkpoint to be sent.
+        let acked_through = *harness
+            .pending(run_id)
+            .last()
+            .expect("the failure must journal a terminal event");
+        harness
+            .journal
+            .acknowledge_events(
+                harness.target_id,
+                &EventAck {
+                    run_id,
+                    lease_epoch: 1,
+                    acked_through,
+                },
+            )
+            .unwrap();
+
+        let (_, checkpoints, _) = harness
+            .journal
+            .pending_control(harness.target_id)
+            .unwrap();
+        let terminal = checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.run_id == run_id)
+            .expect("a terminal run must report a checkpoint");
+        assert_eq!(terminal.state, RunState::Failed);
+        assert_eq!(
+            terminal.detail.get("message"),
+            Some(&serde_json::json!(reason)),
+            "a dead run must still be able to say why",
+        );
     }
 
     /// An unreachable or unauthenticated target is not one run's problem, so it
