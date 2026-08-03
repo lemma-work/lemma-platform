@@ -10,6 +10,8 @@ import { ShareLinkRow } from '@/components/share/share-link-row';
 import { SocialCardPanel } from '@/components/share/social-card-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Input } from '@/components/ui/input';
 import {
     Dialog,
     DialogContent,
@@ -716,12 +718,13 @@ export function ResourceShareButton({
                             </RadioGroup>
 
                             {needsPublicConfirmation ? (
-                                <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-[color:var(--state-warning)] bg-[color:color-mix(in_srgb,var(--state-warning)_10%,transparent)] px-3 py-2.5">
-                                    <input
-                                        type="checkbox"
-                                        className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--state-warning)]"
+                                <label className="state-surface-warning flex cursor-pointer items-start gap-2.5 rounded-md px-3 py-2.5">
+                                    <Checkbox
+                                        className="mt-0.5 shrink-0"
                                         checked={hasAcknowledgedPublic}
-                                        onChange={(event) => setHasAcknowledgedPublic(event.target.checked)}
+                                        onCheckedChange={(checked) =>
+                                            setHasAcknowledgedPublic(checked === true)
+                                        }
                                     />
                                     <span className="text-xs text-[var(--text-secondary)]">
                                         This leaves your organization. Anyone with a Lemma account —
@@ -797,12 +800,12 @@ export function ResourceShareButton({
                                     that address is verified, so sharing outward
                                     no longer means adding them to the org. */}
                                 <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                                    <input
+                                    <Input
                                         type="email"
                                         value={inviteEmail}
                                         onChange={(event) => setInviteEmail(event.target.value)}
                                         placeholder="Or invite by email…"
-                                        className="h-9 min-w-0 rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-2)] px-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]"
+                                        className="h-9 min-w-0"
                                     />
                                     <Button
                                         type="button"

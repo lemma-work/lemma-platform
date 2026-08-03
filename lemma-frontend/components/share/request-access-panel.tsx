@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import type { ShareTarget } from '@/lib/share/share-link';
 
@@ -85,13 +86,13 @@ export function RequestAccessPanel({
                         Request read access to this {resourceLabel.toLowerCase()} on its own. You
                         won&apos;t be added to the pod.
                     </p>
-                    <textarea
+                    <Textarea
                         value={message}
                         onChange={(event) => setMessage(event.target.value)}
                         placeholder="Add a note (optional)"
                         rows={2}
                         maxLength={500}
-                        className="mt-3 w-full resize-none rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-2)] px-3 py-2 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]"
+                        className="mt-3 min-h-[4.5rem] resize-none"
                     />
                     <div className="mt-3 flex items-center gap-3">
                         <Button
