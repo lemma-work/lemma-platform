@@ -81,8 +81,23 @@ memory pause supports activity-driven auto-resume. A filesystem-only pause cold
 boots and cannot use auto-resume. Paused sandboxes do not expire automatically.
 See [E2B sandbox persistence](https://e2b.dev/docs/sandbox/persistence) and
 [auto-resume](https://e2b.dev/docs/sandbox/auto-resume).
-AgentBox deliberately disables automatic resume: pause/resume is an explicit,
-generation-fenced lifecycle event.
+
+AgentBox pauses workspaces filesystem-only (`keep_memory=False`) on both edges
+of the transition: its own idle release and the provider's `on_timeout`. Files
+are the durability guarantee; running processes and interpreter state are
+ephemeral by design and do not survive a pause. Because E2B refuses auto-resume
+for filesystem-only snapshots, `auto_resume` is disabled as a consequence of
+that choice rather than as an independent policy. Resume itself is not fully
+under AgentBox's control: `connect()` resumes a paused sandbox implicitly, so
+the control plane detects and records resume rather than gating it.
+
+E2B's `timeout` is a **continuous-runtime ceiling, not an idle timer** — nothing
+happening inside the sandbox extends it, and `set_timeout` resets the clock from
+the moment it is called. AgentBox therefore refreshes it on every workspace
+runtime operation, which turns it into an inactivity backstop that agrees with
+AgentBox's own idle release instead of racing an active session. E2B still
+enforces a hard maximum continuous runtime per plan (24h on Pro), so a workspace
+busy for longer is paused regardless.
 
 AgentBox removes the compensating machinery instead of making it more complex.
 Provider adapters use the provider's strongest native data plane. The public
@@ -95,7 +110,9 @@ explicit.
   Docker, Kubernetes, and E2B.
 - Make a warm workspace command a single AgentBox operation plus one provider data
   plane operation.
-- Preserve user files across workspace release on every supported provider.
+- Preserve user files across workspace release on every supported provider, and
+  across a profile update — the only routine paths that discard a workspace disk
+  are retention expiry, an explicit reset, and genuine error recovery.
 - Keep stateful Python, foreground commands, background processes, stdin, PTY,
   manager-local reconnect, files, and application ports coherent across providers.
 - Give API functions a bounded low-latency path and JOB functions a durable queued
@@ -104,8 +121,10 @@ explicit.
 - Make deadlines, capacity, unknown outcomes, and retry permission explicit.
 - Keep provider SDKs and credentials out of the Lemma backend.
 - Run the same behavioral conformance suite against real Docker and E2B
-  environments for the initial release. Kubernetes remains specified but cannot be
-  enabled until its later conformance program passes.
+  environments. Docker runs per-PR in CI; E2B runs on a schedule against a real
+  account, because it needs live credentials and published template builds.
+  Kubernetes remains specified but cannot be enabled until its later conformance
+  program passes.
 - Keep AgentBox state transitions readable behind SQLAlchemy repositories and an
   explicit unit-of-work boundary rather than embedding raw SQL in lifecycle logic.
 
@@ -251,9 +270,26 @@ Initial profiles:
   revision-declared public HTTPS destinations;
 - five-minute warm idle period followed by destruction.
 
-A profile update creates a new digest. AgentBox drains the old physical allocation
-and creates a replacement. It never mutates an active allocation into a different
-profile.
+A profile update creates a new digest. For **functions**, AgentBox drains the old
+physical allocation and creates a replacement. It never mutates an active
+allocation into a different profile.
+
+**Workspaces tolerate profile drift instead.** A workspace's durable disk is
+co-located with its allocation on sandbox-native providers, so replacing the
+allocation to adopt a new digest would delete the user's files — a routine
+deploy would wipe every workspace. While a workspace owns a disk (an `ACTIVE` or
+`RELEASED` allocation) it keeps running the profile it was created with, no
+generation fence is raised, and nothing is replaced. It adopts the newly shipped
+profile the next time it is created from scratch: retention expiry, an explicit
+user reset, or an operator-forced drain.
+
+The consequence is deliberate: a workspace may run an N-1 template until it is
+naturally recreated, so a template fix rolls out over up to the retention
+window. That is the accepted trade against destroying user work on every deploy.
+Because a workspace can outlive the current release, the previous release's
+artifacts must stay resolvable — `AGENTBOX_WORKSPACE_RETAINED_PROFILES` carries
+them into the profile registry, and dropping an entry that live workspaces still
+reference makes them unreachable.
 
 ### 6.3 Package and document tooling decision
 
