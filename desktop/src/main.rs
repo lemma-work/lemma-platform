@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use std::time::{Duration, Instant};
+use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::TrayIconBuilder;
 use tauri::webview::NewWindowResponse;
 use tauri::webview::WebviewBuilder;
@@ -45,6 +45,22 @@ const REQUIRED_LOCALD_API_REVISION: u64 = 3;
 // Legacy development builds persisted a mode before the released chooser
 // contract was stable. Require that chooser once, then retain the new choice.
 const CONNECTION_MODE_PROMPT_REVISION: u64 = 1;
+/// How long a full quit may wait for locald to close LAN/public exposure.
+///
+/// This runs on the main thread from `RunEvent::Exit`, after the webviews are
+/// gone, so every second of it is a dead window on the user's screen. The
+/// daemon is durable and owns its own cleanup; the shell asking nicely is a
+/// courtesy, not a guarantee, and it must not be able to hold the app open.
+const RELEASE_ON_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a launch may spend asking whether the last session's workspace is
+/// still serving. A miss costs this much and then falls back to the splash, so
+/// it has to stay far below what the splash path would have cost anyway.
+const RESUME_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+/// `--bg-canvas`, the frontend's paper. Any frame where the webview is not
+/// painting — navigation, hide/show, teardown — shows the window layer instead,
+/// and an unset window layer on macOS is black.
+const CANVAS_LIGHT: tauri::window::Color = tauri::window::Color(242, 239, 231, 255);
+const CANVAS_DARK: tauri::window::Color = tauri::window::Color(19, 19, 17, 255);
 
 #[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +130,9 @@ struct Shell {
     // The tray is built once, so its Agent Host entries are kept here to be
     // rewritten as status arrives.
     tray_agent_host: Mutex<Option<(MenuItem<tauri::Wry>, MenuItem<tauri::Wry>)>>,
+    /// The tray's one-line answer to "is Lemma up?", so that question does not
+    /// require opening the app to find out.
+    tray_status: Mutex<Option<MenuItem<tauri::Wry>>>,
     // locald answers asynchronously on the event stream, but the workspace page
     // calls a command and expects a value back. The latest status is kept here
     // so a caller gets an answer immediately and the next poll sees the update.
@@ -142,6 +161,7 @@ impl Shell {
             locald_connect: Mutex::new(()),
             quit_after_stop: AtomicBool::new(false),
             tray_agent_host: Mutex::new(None),
+            tray_status: Mutex::new(None),
             agent_host_status: Mutex::new(None),
         }
     }
@@ -192,6 +212,28 @@ fn install_log_path() -> PathBuf {
     runtime_install_root().join("install.log")
 }
 
+fn launch_log_path() -> PathBuf {
+    runtime_install_root().join("launch.log")
+}
+
+/// When this process started, for the launch trace to measure against.
+static LAUNCH_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+/// Record how long a launch stage took.
+///
+/// "Opens instantly" is not a claim anyone can check by feel — a resumed launch
+/// and a splash launch look the same in a screen recording once both have
+/// finished. This writes the actual milliseconds for each stage so a regression
+/// shows up as a number, and so the startup targets have evidence behind them
+/// rather than a stopwatch and an opinion.
+fn launch_trace(stage: &str) {
+    let elapsed = LAUNCH_START
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_millis();
+    append_bounded_log(&launch_log_path(), &format!("{elapsed:>6}ms {stage}"));
+}
+
 fn operation_id(prefix: &str) -> String {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -201,7 +243,14 @@ fn operation_id(prefix: &str) -> String {
 }
 
 fn append_install_log(message: &str) {
-    let path = install_log_path();
+    append_bounded_log(&install_log_path(), message);
+}
+
+/// Append one timestamped line, rotating once the file reaches its ceiling.
+///
+/// Best-effort throughout: a log that cannot be written must never be the
+/// reason an install, a launch, or a shutdown fails.
+fn append_bounded_log(path: &std::path::Path, message: &str) {
     let Some(parent) = path.parent() else {
         return;
     };
@@ -214,7 +263,7 @@ fn append_install_log(message: &str) {
     {
         let previous = path.with_extension("previous.log");
         let _ = std::fs::remove_file(&previous);
-        let _ = std::fs::rename(&path, previous);
+        let _ = std::fs::rename(path, previous);
     }
     let mut options = std::fs::OpenOptions::new();
     options.create(true).append(true);
@@ -269,6 +318,164 @@ fn read_config() -> Value {
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
         .unwrap_or_else(|| json!({}))
+}
+
+/// What the last session left running, so the next launch can go straight to it.
+///
+/// Without this every launch is identical to a cold one: splash, a `start`
+/// round trip through the daemon, then a navigation to the workspace — even
+/// when the backend and frontend never stopped serving. The recorded generation
+/// and release are what make trusting it safe; see [`resume_target_is_serving`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ResumeTarget {
+    url: String,
+    api_url: String,
+    generation: String,
+    /// The Desktop release that recorded this. A newer app must not resume it.
+    release: String,
+    route: String,
+}
+
+fn read_resume_target() -> Option<ResumeTarget> {
+    let config = read_config();
+    let saved = config.get("resumeTarget")?;
+    let text = |key: &str| saved.get(key)?.as_str().map(str::to_string);
+    let url = text("url")?;
+    let api_url = text("apiUrl")?;
+    let generation = text("generation")?;
+    let release = text("release")?;
+    // A resume target belongs to the release that wrote it.
+    //
+    // Without this, installing a new build over an old one resumes the *old*
+    // one's workspace: the previous stack is often still serving, so the probe
+    // passes, the window opens it — and then `ensure_locald` finds a daemon that
+    // does not match the new host pack, replaces it, and every service comes
+    // back on new ports. The window is left pointed at a port nothing is
+    // listening on, which is a permanently blank app.
+    if release != env!("CARGO_PKG_VERSION") {
+        return None;
+    }
+    if generation.is_empty() || !trusted_workspace_urls(&url, &api_url) {
+        return None;
+    }
+    // A route is a bonus, not a requirement: an install that has only ever
+    // reached the workspace root still resumes, it just resumes at the root.
+    let route = text("route").filter(|route| route.starts_with('/'));
+    Some(ResumeTarget {
+        url,
+        api_url,
+        generation,
+        release,
+        route: route.unwrap_or_else(|| "/".into()),
+    })
+}
+
+fn write_resume_target(url: &str, api_url: &str, generation: &str) {
+    if generation.is_empty() || !trusted_workspace_urls(url, api_url) {
+        return;
+    }
+    let _ = write_config(|config| {
+        let entry = config
+            .as_object_mut()
+            .map(|object| object.entry("resumeTarget").or_insert_with(|| json!({})));
+        if let Some(entry) = entry {
+            entry["url"] = json!(url);
+            entry["apiUrl"] = json!(api_url);
+            entry["generation"] = json!(generation);
+            entry["release"] = json!(env!("CARGO_PKG_VERSION"));
+        }
+    });
+}
+
+/// Remember where in the workspace the user was, so the next launch lands there
+/// rather than on the root route that only redirects to it.
+fn write_resume_route(route: &str) {
+    if !route.starts_with('/') {
+        return;
+    }
+    let _ = write_config(|config| {
+        if let Some(entry) = config.get_mut("resumeTarget") {
+            entry["route"] = json!(route);
+        }
+    });
+}
+
+/// Capture the workspace route the main window is currently showing.
+///
+/// Returns `None` for anything that is not the recorded workspace — the splash,
+/// the installer, a published app — because none of those are somewhere to
+/// resume to.
+fn current_workspace_route(app: &AppHandle, target: &ResumeTarget) -> Option<String> {
+    let url = app.get_webview_window("main")?.url().ok()?;
+    if !same_origin(&url, &target.url) {
+        return None;
+    }
+    let mut route = url.path().to_string();
+    if let Some(query) = url.query() {
+        route.push('?');
+        route.push_str(query);
+    }
+    Some(route)
+}
+
+/// The exact URL a resumed launch should open.
+///
+/// The recorded route, not the workspace root: the root only authenticates and
+/// then redirects to the last pod, so opening it means loading the app twice to
+/// arrive where the route would have gone directly.
+fn resume_entry_url(target: &ResumeTarget) -> String {
+    format!(
+        "{}{}",
+        target.url.trim_end_matches('/'),
+        if target.route == "/" { "" } else { &target.route }
+    )
+}
+
+/// Is the workspace this target points at still the one that is serving?
+///
+/// Matching the generation is the whole point. A 2xx alone would also be
+/// returned by an unrelated listener that took the port after a crash, or by a
+/// stale process from a previous runtime; the generation is minted per user
+/// start and handed to the backend as `LEMMA_RUNTIME_INSTANCE_ID`, so it only
+/// matches when this is literally the stack the last session left behind.
+fn resume_target_is_serving(target: &ResumeTarget) -> bool {
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(RESUME_PROBE_TIMEOUT)
+        .no_proxy()
+        .build()
+    else {
+        return false;
+    };
+    // Both halves, because the window opens the frontend and the page it loads
+    // then talks to the backend. Checking only the backend was enough to accept
+    // a resume whose frontend had gone, which lands on a blank window.
+    generation_matches(
+        &client,
+        &format!("{}/health/ready", target.api_url.trim_end_matches('/')),
+        &target.generation,
+    ) && generation_matches(
+        &client,
+        &format!("{}/runtime-config.js", target.url.trim_end_matches('/')),
+        &target.generation,
+    )
+}
+
+/// Does this endpoint answer 2xx and carry the generation we left it on?
+///
+/// The backend answers JSON with an `instance_id`; the frontend serves its
+/// generation inside `runtime-config.js`. Both are the checks locald's own
+/// health gate makes, so a substring match against the body is the same
+/// contract rather than a looser one.
+fn generation_matches(client: &reqwest::blocking::Client, url: &str, generation: &str) -> bool {
+    let Ok(response) = client.get(url).send() else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    response
+        .text()
+        .is_ok_and(|body| body.contains(generation))
 }
 
 fn write_config(update: impl FnOnce(&mut Value)) -> Result<(), String> {
@@ -1578,6 +1785,9 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                 }
             }
             "ready" => {
+                if !ui.ready {
+                    launch_trace("daemon reported ready");
+                }
                 ui.ready = true;
                 ui.running = true;
                 ui.error = false;
@@ -1593,6 +1803,13 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
                     if trusted_workspace_urls(url, api_url) {
                         ui.url = url.to_string();
                         ui.api_url = api_url.to_string();
+                        // Record what is serving, and under which generation,
+                        // so the next launch can skip straight to it.
+                        write_resume_target(
+                            url,
+                            api_url,
+                            event["runtime_generation"].as_str().unwrap_or_default(),
+                        );
                     }
                 }
                 // Stay on the splash: the user proceeds via its CTA.
@@ -1702,9 +1919,17 @@ fn handle_locald_event(app: &AppHandle, event: &Value) {
         && !snapshot.error)
         .then(|| snapshot.url.clone());
     let _ = app.emit("lemma:state", snapshot);
+    refresh_tray_status(app);
     if let Some(url) = ready_workspace_url {
-        if main_window_showing_native_splash(app) {
-            let _ = open_app_window(app, &url);
+        if main_window_needs_workspace(app, &url) {
+            // Prefer the route the last session ended on. Opening the root
+            // instead means loading the app once to authenticate and resolve
+            // the last pod, then loading it again at the pod it resolved to.
+            let target = read_resume_target()
+                .filter(|target| target.url == url)
+                .map(|target| resume_entry_url(&target))
+                .unwrap_or(url);
+            let _ = open_app_window(app, &target);
         }
     }
     if kind == "sharing.changed" {
@@ -1785,10 +2010,29 @@ fn open_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn main_window_showing_native_splash(app: &AppHandle) -> bool {
-    app.get_webview_window("main")
+/// Should a `ready` event navigate the main window to `workspace`?
+///
+/// Yes from the splash, which is the ordinary first start. Also yes from a
+/// *different* workspace origin, which is the case an optimistic resume creates:
+/// the window opened the workspace the last session left, and then the stack it
+/// was pointing at was replaced and came back on new ports. Nothing was showing
+/// the splash at that point, so the old splash-only test left the window on a
+/// dead port forever.
+///
+/// Still no from the current workspace. Product spec §3.5 is explicit that a
+/// stable workspace must not be navigated for transient component recovery, and
+/// re-navigating it would throw away whatever the user was doing.
+fn main_window_needs_workspace(app: &AppHandle, workspace: &str) -> bool {
+    let Some(url) = app
+        .get_webview_window("main")
         .and_then(|window| window.url().ok())
-        .is_some_and(|url| native_splash_url(&url))
+    else {
+        return false;
+    };
+    if native_splash_url(&url) {
+        return true;
+    }
+    !same_origin(&url, workspace)
 }
 
 /// Where a bundled page lives for the build we are actually running.
@@ -1820,6 +2064,24 @@ fn navigate_app_window(app: &AppHandle, url: &str) -> Result<(), String> {
 
 fn show_splash(app: &AppHandle) {
     let _ = open_app_window(app, &native_asset_url("index.html"));
+}
+
+/// The splash, told what it is watching.
+///
+/// It reloads as a fresh document every time, so it has no memory of why it was
+/// opened — it asks for state and, finding nothing running, assumes it is meant
+/// to start Lemma. That is right when the user opened the app and wrong when
+/// they asked it to stop: the screen said "Starting Lemma" through a shutdown,
+/// and worse, actually issued a start that raced the stop it was showing.
+///
+/// The intent rides in the query string because `show_splash` navigates, so
+/// there is no live page left to tell. `native_splash_url` matches on path, so
+/// the splash stays recognised as the splash.
+fn show_splash_with_intent(app: &AppHandle, intent: &str) {
+    let _ = open_app_window(
+        app,
+        &format!("{}?intent={intent}", native_asset_url("index.html")),
+    );
 }
 
 fn show_control_center(app: &AppHandle) -> Result<(), String> {
@@ -1969,7 +2231,7 @@ fn stop_impl(app: AppHandle, include_infra: Option<bool>) -> Result<(), String> 
     if current_mode(&app) != "local" {
         return Err("local services are not active in Lemma Cloud mode".into());
     }
-    show_splash(&app);
+    show_splash_with_intent(&app, "stop");
     ensure_locald(&app)?;
     send_local_operation(
         &app,
@@ -2079,6 +2341,7 @@ fn diagnostic_log_sources() -> Vec<(&'static str, &'static str, PathBuf)> {
                 .join("agent-host/agent-host.log"),
         ),
         ("installer", "Installer", install_log_path()),
+        ("launch", "Launch timing", launch_log_path()),
     ]
 }
 
@@ -2665,6 +2928,125 @@ fn apply_operator_config(
     )
 }
 
+/// Ask locald something and wait for its answer.
+///
+/// The shared client connection is a broadcast stream: replies arrive as events
+/// with no way to hand one back to a specific `invoke`. Commands whose *result*
+/// is the point — a model list, an applied profile — take their own short-lived
+/// connection and read until their own id comes back, so the caller gets a
+/// value and a real error message instead of having to guess from a poll.
+fn locald_request(command: Value, timeout: Duration) -> Result<Value, String> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let _ = sender.send(locald_request_blocking(command));
+    });
+    receiver
+        .recv_timeout(timeout)
+        .map_err(|_| "Lemma did not answer in time".to_string())?
+}
+
+fn locald_request_blocking(command: Value) -> Result<Value, String> {
+    let id = command
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("request needs an id")?
+        .to_owned();
+    let mut connection = connect_locald()?;
+    writeln!(connection.writer, "{command}")
+        .and_then(|_| connection.writer.flush())
+        .map_err(|error| format!("could not reach Lemma: {error}"))?;
+
+    loop {
+        let mut line = String::new();
+        let bytes = connection
+            .reader
+            .read_line(&mut line)
+            .map_err(|error| format!("could not read Lemma's answer: {error}"))?;
+        if bytes == 0 {
+            return Err("Lemma closed the connection".into());
+        }
+        if line.len() > 4 * 1024 * 1024 {
+            return Err("Lemma's answer was too large".into());
+        }
+        let Ok(event) = serde_json::from_str::<Value>(line.trim_end()) else {
+            continue;
+        };
+        if event.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+            continue;
+        }
+        match event.get("event").and_then(Value::as_str) {
+            // Acknowledgements say the work started, not that it finished.
+            Some("ack") => continue,
+            Some("error") => {
+                return Err(event
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Lemma could not complete that")
+                    .to_string())
+            }
+            Some(_) => return Ok(event),
+            None => continue,
+        }
+    }
+}
+
+/// List a candidate provider's models so the page can offer a picker.
+///
+/// Reachable from the workspace as well as Local settings: onboarding asks the
+/// same question, and the alternative was making people type model ids from
+/// memory. It reads nothing and writes nothing.
+#[tauri::command]
+fn discover_provider_models(
+    window: Webview,
+    app: AppHandle,
+    payload: Value,
+) -> Result<Value, String> {
+    require_agent_host_caller(&window, &app)?;
+    ensure_locald(&app)?;
+    let response = locald_request(
+        json!({
+            "cmd": "config.discover-models",
+            "id": operation_id("discover-models"),
+            "payload": payload,
+        }),
+        Duration::from_secs(30),
+    )?;
+    Ok(response.get("models").cloned().unwrap_or(json!([])))
+}
+
+/// Point this installation at an AI provider.
+///
+/// The one piece of operator configuration the workspace may write, and the
+/// reason is that onboarding cannot honestly ask "which model?" and then send
+/// the user to a different window to answer. Everything else the control page
+/// owns — sharing, tunnels, runtime, integrations — stays where it was: this
+/// command reaches `config.set-ai`, which merges only that section.
+///
+/// Blocking on purpose. Applying a provider validates it against the provider
+/// and restarts the backend, and both of those can fail in ways the user needs
+/// the actual message for.
+#[tauri::command]
+fn configure_ai_provider(
+    window: Webview,
+    app: AppHandle,
+    payload: Value,
+) -> Result<Value, String> {
+    require_agent_host_caller(&window, &app)?;
+    if current_mode(&app) != "local" {
+        return Err("the local AI provider is configured only on a local install".into());
+    }
+    ensure_locald(&app)?;
+    let response = locald_request(
+        json!({
+            "cmd": "config.set-ai",
+            "id": operation_id("set-ai"),
+            "payload": payload,
+        }),
+        Duration::from_secs(180),
+    )?;
+    Ok(response.get("operator").cloned().unwrap_or(json!({})))
+}
+
 #[tauri::command]
 fn sharing_action(
     window: Webview,
@@ -2983,10 +3365,67 @@ fn handle_deep_link(app: &AppHandle, url: &tauri::Url) {
     }
 }
 
+/// The user's System Settings accent, as sRGB bytes.
+///
+/// `controlAccentColor` is a catalog colour with no component accessors of its
+/// own — it has to be resolved into a real colour space before it can be read,
+/// which is what the `colorUsingColorSpace` hop is for. Returns `None` if that
+/// resolution fails, and callers fall back to systemBlue, the macOS default.
+#[cfg(target_os = "macos")]
+fn macos_accent_rgb() -> Option<(u8, u8, u8)> {
+    use objc2_app_kit::{NSColor, NSColorSpace};
+
+    let accent = NSColor::controlAccentColor();
+    let srgb = accent.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+    let to_byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Some((
+        to_byte(srgb.redComponent()),
+        to_byte(srgb.greenComponent()),
+        to_byte(srgb.blueComponent()),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_accent_rgb() -> Option<(u8, u8, u8)> {
+    None
+}
+
+/// `"90 63 212"` — the channel triple the frontend's `--accent-rgb` expects.
+///
+/// Falls back to the brand violet, which is also what the web build uses, so a
+/// machine that cannot answer looks like every other install rather than blue.
+fn accent_channel_triple() -> String {
+    let (r, g, b) = macos_accent_rgb().unwrap_or((90, 63, 212));
+    format!("{r} {g} {b}")
+}
+
+/// Opt-in until every surface that must stay opaque paints its own background.
+#[cfg(target_os = "macos")]
+fn desktop_vibrancy_enabled() -> bool {
+    std::env::var("LEMMA_DESKTOP_VIBRANCY").as_deref() == Ok("1")
+}
+
+#[cfg(not(target_os = "macos"))]
+fn desktop_vibrancy_enabled() -> bool {
+    false
+}
+
+/// Off by default: action colour is the brand violet, and letting the OS accent
+/// overwrite it would hand the product's one loud colour to a system preference.
+/// The reader stays wired up because "tint the app to my Mac" is a plausible
+/// setting to offer later — it just is not the default identity.
+fn desktop_system_accent_enabled() -> bool {
+    std::env::var("LEMMA_DESKTOP_SYSTEM_ACCENT").as_deref() == Ok("1")
+}
+
 fn desktop_context_script(mode: &str) -> String {
     let context = json!({
         "version": env!("CARGO_PKG_VERSION"),
         "mode": mode,
+        "platform": std::env::consts::OS,
+        "accentRgb": accent_channel_triple(),
+        "systemAccent": desktop_system_accent_enabled(),
+        "vibrancy": desktop_vibrancy_enabled(),
     });
     let local_auth = if mode == "local" {
         // NEXT_PUBLIC values are also rendered into the native host-pack
@@ -2996,9 +3435,26 @@ fn desktop_context_script(mode: &str) -> String {
     } else {
         ""
     };
+    // Runs before any page script, so whatever it sets is already true at first
+    // paint rather than corrected a frame later — and it runs again for every
+    // document, which is the reason none of this is a one-shot eval: local mode
+    // navigates this same window from the splash to the workspace, and an
+    // attribute written by eval would not survive that navigation.
+    //
+    // The platform attribute always goes on; the accent override and the
+    // vibrancy attribute only when their flag asked for them.
+    let bootstrap = "(function () {\
+          var d = window.__LEMMA_DESKTOP__;\
+          var root = document.documentElement;\
+          if (!d || !root) return;\
+          root.setAttribute('data-desktop-platform', d.platform);\
+          if (d.systemAccent) root.style.setProperty('--accent-rgb', d.accentRgb);\
+          if (d.vibrancy) root.setAttribute('data-desktop-vibrancy', 'macos');\
+        })();";
     format!(
-        "window.__LEMMA_DESKTOP__ = Object.freeze({});{}",
+        "window.__LEMMA_DESKTOP__ = Object.freeze({});{}{}",
         serde_json::to_string(&context).unwrap_or_else(|_| "{}".into()),
+        bootstrap,
         local_auth,
     )
 }
@@ -3050,41 +3506,261 @@ async fn login(app: AppHandle, mode: Option<String>) -> Result<(), String> {
     open_app_window(&app, &url)
 }
 
+/// Every menu action, wherever it was invoked from.
+///
+/// The app menu and the tray now name the same verbs, so routing them through
+/// one function is what keeps them from drifting into two different products'
+/// worth of behaviour.
+fn handle_menu_action(app: &AppHandle, id: &str) {
+    let app = app.clone();
+    match id {
+        "open" | "home" => {
+            let _ = open_app(app);
+        }
+        "login" => {
+            tauri::async_runtime::spawn(async move {
+                let _ = login(app, Some("signin".into())).await;
+            });
+        }
+        "back" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval("window.history.back()");
+            }
+        }
+        "forward" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval("window.history.forward()");
+            }
+        }
+        "reload" => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.eval("window.location.reload()");
+            }
+        }
+        "start" => {
+            let _ = start_impl(app);
+        }
+        "stop" => {
+            let _ = stop_impl(app, Some(false));
+        }
+        "stop-all" => {
+            let _ = stop_impl(app, Some(true));
+        }
+        "restart" => {
+            let _ = restart_impl(app);
+        }
+        "mode" => {
+            let _ = choose_connection_mode(app);
+        }
+        "autostart" => {
+            let autolaunch = app.autolaunch();
+            if autolaunch.is_enabled().unwrap_or(false) {
+                let _ = autolaunch.disable();
+            } else {
+                let _ = autolaunch.enable();
+            }
+        }
+        "control" => {
+            let _ = show_control_center(&app);
+        }
+        "control-ai" => {
+            let _ = show_control_center_page(&app, Some("ai"));
+        }
+        "control-sharing" => {
+            let _ = show_control_center_page(&app, Some("sharing"));
+        }
+        "diagnostics" => {
+            let _ = show_control_center_page(&app, Some("diagnostics"));
+        }
+        "agent-host-toggle" => {
+            let _ = toggle_agent_host_from_tray(&app);
+        }
+        "agent-host-log" => {
+            let _ = reveal_path(&agent_host_log_path());
+        }
+        "logs" => {
+            let _ = open_logs_impl();
+        }
+        "docs" => {
+            open_external(&format!("{}/docs", hosted_url().trim_end_matches('/')));
+        }
+        "devtools" => {
+            if let Some(window) = app.get_webview_window("main") {
+                window.open_devtools();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+        "quit" => {
+            app.exit(0);
+        }
+        "quit-and-stop" => {
+            if current_mode(&app) == "local" {
+                let shell: State<Shell> = app.state();
+                shell.quit_after_stop.store(true, Ordering::Release);
+                if stop_impl(app.clone(), Some(true)).is_err() {
+                    shell.quit_after_stop.store(false, Ordering::Release);
+                }
+            } else {
+                disconnect_locald(&app);
+                app.exit(0);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The macOS menu bar.
+///
+/// Until now there was none: the shipped build used Tauri's default (app name /
+/// Edit / View / Window / Help) and every Lemma verb lived in the tray, which
+/// meant no ⌘, for settings and no discoverable way to do anything without
+/// going to the menu bar extra. The names here are the product's, not the
+/// supervisor's: Stop Lemma completely, rather than the old Stop Services and
+/// Infra.
+fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let local = connection_mode() == "local";
+    let about = PredefinedMenuItem::about(
+        app,
+        Some("About Lemma"),
+        Some(
+            AboutMetadata {
+                name: Some("Lemma".into()),
+                version: Some(env!("CARGO_PKG_VERSION").into()),
+                website: Some("https://lemma.work".into()),
+                ..Default::default()
+            },
+        ),
+    )?;
+    let settings = MenuItem::with_id(app, "control", "Settings…", local, Some("CmdOrCtrl+,"))?;
+    let connection = MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?;
+
+    // Services / Hide / Hide Others / Show All are AppKit application-menu
+    // conventions. muda will happily construct them elsewhere, where they
+    // become inert rows — dead entries in a Windows menu — so they are built
+    // only where they mean something.
+    #[cfg(target_os = "macos")]
+    let platform_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = vec![
+        Box::new(PredefinedMenuItem::services(app, None)?),
+        Box::new(PredefinedMenuItem::separator(app)?),
+        Box::new(PredefinedMenuItem::hide(app, None)?),
+        Box::new(PredefinedMenuItem::hide_others(app, None)?),
+        Box::new(PredefinedMenuItem::show_all(app, None)?),
+        Box::new(PredefinedMenuItem::separator(app)?),
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let platform_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> = Vec::new();
+
+    let mut lemma_items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = Vec::new();
+    let lemma_separator = PredefinedMenuItem::separator(app)?;
+    let quit = PredefinedMenuItem::quit(app, Some("Quit Lemma"))?;
+    lemma_items.push(&about);
+    lemma_items.push(&lemma_separator);
+    lemma_items.push(&settings);
+    lemma_items.push(&connection);
+    lemma_items.push(&lemma_separator);
+    lemma_items.extend(platform_items.iter().map(|item| item.as_ref()));
+    lemma_items.push(&quit);
+
+    let lemma_menu = Submenu::with_items(app, "Lemma", true, &lemma_items)?;
+
+    let edit_menu = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(
+        app,
+        "View",
+        true,
+        &[
+            &MenuItem::with_id(app, "home", "Lemma Home", true, Some("Shift+CmdOrCtrl+H"))?,
+            &MenuItem::with_id(app, "back", "Back", true, Some("CmdOrCtrl+["))?,
+            &MenuItem::with_id(app, "forward", "Forward", true, Some("CmdOrCtrl+]"))?,
+            &MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::fullscreen(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(
+                app,
+                "devtools",
+                "Developer Tools",
+                true,
+                Some("CmdOrCtrl+Alt+I"),
+            )?,
+        ],
+    )?;
+
+    let window_menu = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+
+    // Troubleshooting lives under Help rather than at the top level because
+    // starting and stopping services is what you do when something is wrong,
+    // not part of using Lemma.
+    let help_menu = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &MenuItem::with_id(app, "docs", "Lemma Docs", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "diagnostics", "Diagnostics…", local, None::<&str>)?,
+            &MenuItem::with_id(app, "logs", "Open Logs", local, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "start", "Start Lemma", local, None::<&str>)?,
+            &MenuItem::with_id(app, "restart", "Restart Lemma", local, None::<&str>)?,
+            &MenuItem::with_id(app, "stop", "Stop Lemma", local, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "stop-all",
+                "Stop the local server",
+                local,
+                None::<&str>,
+            )?,
+        ],
+    )?;
+
+    Menu::with_items(
+        app,
+        &[
+            &lemma_menu,
+            &edit_menu,
+            &view_menu,
+            &window_menu,
+            &help_menu,
+        ],
+    )
+}
+
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let local = connection_mode() == "local";
+    // A glance and a few verbs. This menu used to carry eighteen items of
+    // supervisor vocabulary — starting and stopping named services, switching
+    // connection mode — which is a maintainer's console, not the thing you
+    // reach for from the menu bar. Everything operational moved into
+    // Troubleshoot; everything standard moved into the app menu.
+    let status_item = MenuItem::with_id(app, "tray-state", "Lemma: checking…", false, None::<&str>)?;
     let open_item = MenuItem::with_id(app, "open", "Open Lemma", true, None::<&str>)?;
     let login_item = MenuItem::with_id(app, "login", "Log In…", true, None::<&str>)?;
-    let home_item = MenuItem::with_id(app, "home", "Lemma Home", true, None::<&str>)?;
-    let back_item = MenuItem::with_id(app, "back", "Back", true, None::<&str>)?;
-    let reload_item = MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?;
-    let start_item = MenuItem::with_id(app, "start", "Start Services", true, None::<&str>)?;
-    let stop_item = MenuItem::with_id(app, "stop", "Stop Services", true, None::<&str>)?;
-    let stop_all_item = MenuItem::with_id(
-        app,
-        "stop-all",
-        "Stop Services and Infra",
-        true,
-        None::<&str>,
-    )?;
-    let restart_item = MenuItem::with_id(app, "restart", "Restart Services", true, None::<&str>)?;
-    let mode_item = MenuItem::with_id(app, "mode", "Switch Connection Mode", true, None::<&str>)?;
-    let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
-    let autostart_item = CheckMenuItem::with_id(
-        app,
-        "autostart",
-        "Start at Login",
-        true,
-        autostart_enabled,
-        None::<&str>,
-    )?;
-    let logs_item = MenuItem::with_id(app, "logs", "Open Logs", true, None::<&str>)?;
-    let devtools_item = MenuItem::with_id(
-        app,
-        "devtools",
-        "Developer Tools",
-        true,
-        Some("CmdOrCtrl+Alt+I"),
-    )?;
-    let control_item = MenuItem::with_id(app, "control", "Local settings…", true, None::<&str>)?;
+    let control_item = MenuItem::with_id(app, "control", "Local settings…", local, None::<&str>)?;
+
     // Disabled: a label, not an action. The tray is where you glance at whether
     // this computer is currently able to run coding agents.
     let agent_host_state_item = MenuItem::with_id(
@@ -3101,55 +3777,68 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let agent_host_log_item = MenuItem::with_id(
-        app,
-        "agent-host-log",
-        "Open Agent Host Log",
-        true,
-        None::<&str>,
-    )?;
     {
         let shell: State<Shell> = app.state();
         *shell.tray_agent_host.lock().unwrap() = Some((
             agent_host_state_item.clone(),
             agent_host_toggle_item.clone(),
         ));
+        *shell.tray_status.lock().unwrap() = Some(status_item.clone());
     }
-    let quit_item = MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?;
-    let quit_and_stop_item = MenuItem::with_id(
+
+    let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    let troubleshoot = Submenu::with_items(
         app,
-        "quit-and-stop",
-        "Quit and stop Lemma",
+        "Troubleshoot",
         true,
-        None::<&str>,
+        &[
+            &MenuItem::with_id(app, "start", "Start Lemma", local, None::<&str>)?,
+            &MenuItem::with_id(app, "restart", "Restart Lemma", local, None::<&str>)?,
+            &MenuItem::with_id(app, "stop", "Stop Lemma", local, None::<&str>)?,
+            &MenuItem::with_id(app, "stop-all", "Stop the local server", local, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "diagnostics", "Diagnostics…", local, None::<&str>)?,
+            &MenuItem::with_id(app, "logs", "Open Logs", local, None::<&str>)?,
+            &MenuItem::with_id(app, "agent-host-log", "Open Agent Host Log", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(
+                app,
+                "quit-and-stop",
+                "Stop the local server and quit",
+                local,
+                None::<&str>,
+            )?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "reload", "Reload", true, None::<&str>)?,
+            &MenuItem::with_id(app, "devtools", "Developer Tools", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "mode", "Connection…", true, None::<&str>)?,
+            &CheckMenuItem::with_id(
+                app,
+                "autostart",
+                "Start at Login",
+                true,
+                autostart_enabled,
+                None::<&str>,
+            )?,
+        ],
     )?;
+
     let menu = Menu::with_items(
         app,
         &[
+            &status_item,
+            &PredefinedMenuItem::separator(app)?,
             &open_item,
             &login_item,
-            &home_item,
-            &back_item,
-            &reload_item,
-            &PredefinedMenuItem::separator(app)?,
-            &start_item,
-            &stop_item,
-            &stop_all_item,
-            &restart_item,
-            &PredefinedMenuItem::separator(app)?,
-            &mode_item,
-            &autostart_item,
+            &control_item,
             &PredefinedMenuItem::separator(app)?,
             &agent_host_state_item,
             &agent_host_toggle_item,
-            &agent_host_log_item,
             &PredefinedMenuItem::separator(app)?,
-            &control_item,
-            &logs_item,
-            &devtools_item,
+            &troubleshoot,
             &PredefinedMenuItem::separator(app)?,
-            &quit_item,
-            &quit_and_stop_item,
+            &MenuItem::with_id(app, "quit", "Quit Lemma", true, None::<&str>)?,
         ],
     )?;
 
@@ -3158,90 +3847,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| {
-            let app = app.clone();
-            match event.id().as_ref() {
-                "open" => {
-                    let _ = open_app(app);
-                }
-                "login" => {
-                    tauri::async_runtime::spawn(async move {
-                        let _ = login(app, Some("signin".into())).await;
-                    });
-                }
-                "home" => {
-                    let _ = open_app(app);
-                }
-                "back" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.eval("window.history.back()");
-                    }
-                }
-                "reload" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.eval("window.location.reload()");
-                    }
-                }
-                "start" => {
-                    let _ = start_impl(app);
-                }
-                "stop" => {
-                    let _ = stop_impl(app, Some(false));
-                }
-                "stop-all" => {
-                    let _ = stop_impl(app, Some(true));
-                }
-                "restart" => {
-                    let _ = restart_impl(app);
-                }
-                "mode" => {
-                    let _ = choose_connection_mode(app);
-                }
-                "autostart" => {
-                    let autolaunch = app.autolaunch();
-                    if autolaunch.is_enabled().unwrap_or(false) {
-                        let _ = autolaunch.disable();
-                    } else {
-                        let _ = autolaunch.enable();
-                    }
-                }
-                "control" => {
-                    let _ = show_control_center(&app);
-                }
-                "agent-host-toggle" => {
-                    let _ = toggle_agent_host_from_tray(&app);
-                }
-                "agent-host-log" => {
-                    let _ = reveal_path(&agent_host_log_path());
-                }
-                "logs" => {
-                    let _ = open_logs_impl();
-                }
-                "devtools" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        window.open_devtools();
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
-                }
-                "quit" => {
-                    app.exit(0);
-                }
-                "quit-and-stop" => {
-                    if current_mode(&app) == "local" {
-                        let shell: State<Shell> = app.state();
-                        shell.quit_after_stop.store(true, Ordering::Release);
-                        if stop_impl(app.clone(), Some(true)).is_err() {
-                            shell.quit_after_stop.store(false, Ordering::Release);
-                        }
-                    } else {
-                        disconnect_locald(&app);
-                        app.exit(0);
-                    }
-                }
-                _ => {}
-            }
-        })
+        .on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()))
         .build(app)?;
     Ok(())
 }
@@ -3262,8 +3868,77 @@ fn release_before_exit() -> Result<(), String> {
         let _ = sender.send(request_desktop_release());
     });
     receiver
-        .recv_timeout(Duration::from_secs(120))
+        .recv_timeout(RELEASE_ON_EXIT_TIMEOUT)
         .map_err(|_| "timed out while stopping sharing".to_string())?
+}
+
+/// Keep the tray's status line honest about the stack.
+///
+/// The Agent Host already had a glanceable line; the stack itself did not, so
+/// "is Lemma actually up?" meant opening the app to find out. Hosted mode has
+/// no local stack to report on and says so instead of inventing a state.
+fn refresh_tray_status(app: &AppHandle) {
+    let shell: State<Shell> = app.state();
+    let label = {
+        let ui = shell.ui.lock().unwrap();
+        if ui.mode != "local" {
+            "Lemma Cloud".to_string()
+        } else if ui.error {
+            "Lemma: needs attention".to_string()
+        } else if ui.ready {
+            "Lemma: running".to_string()
+        } else if ui.running || !ui.phase.is_empty() {
+            "Lemma: starting…".to_string()
+        } else {
+            "Lemma: stopped".to_string()
+        }
+    };
+    let item = shell.tray_status.lock().unwrap().clone();
+    if let Some(item) = item {
+        let _ = item.set_text(label);
+    }
+}
+
+/// Is the workspace a resumed window is showing still the one locald reports?
+///
+/// Read from the shell's own state rather than by probing, because by this point
+/// `ensure_locald` has told us what the daemon actually has. An empty URL means
+/// the reconcile has not published one yet, which is not evidence against the
+/// window and must not pull a working workspace out from under the user.
+fn resume_still_serving(app: &AppHandle, resumed_url: &str) -> bool {
+    let shell: State<Shell> = app.state();
+    let ui = shell.ui.lock().unwrap();
+    ui.url.is_empty() || ui.url == resumed_url
+}
+
+/// Persist the route the main window is on, if it is on the workspace at all.
+fn remember_workspace_route(app: &AppHandle) {
+    let Some(target) = read_resume_target() else {
+        return;
+    };
+    if let Some(route) = current_workspace_route(app, &target) {
+        write_resume_route(&route);
+    }
+}
+
+/// Take every window off screen before a blocking shutdown step runs.
+///
+/// `RunEvent::Exit` is handed to us on the main thread with the webviews
+/// already torn down, so anything slow after this point is a frozen window the
+/// user is still looking at. Hiding first means the app disappears when the
+/// user asked it to and the cleanup finishes out of sight.
+fn hide_windows_for_exit(app: &AppHandle) {
+    for window in app.webview_windows().values() {
+        let _ = window.hide();
+    }
+}
+
+/// The window layer's colour for an appearance.
+fn canvas_color(theme: tauri::Theme) -> tauri::window::Color {
+    match theme {
+        tauri::Theme::Dark => CANVAS_DARK,
+        _ => CANVAS_LIGHT,
+    }
 }
 
 fn request_desktop_release() -> Result<(), String> {
@@ -3315,7 +3990,9 @@ fn request_desktop_release() -> Result<(), String> {
 }
 
 fn main() {
+    LAUNCH_START.get_or_init(Instant::now);
     let mode = connection_mode();
+    launch_trace(&format!("process start, mode={mode}"));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -3360,6 +4037,8 @@ fn main() {
             agent_host_refresh,
             agent_host_open_log,
             apply_operator_config,
+            discover_provider_models,
+            configure_ai_provider,
             sharing_action,
             close_local_settings,
             open_developer_tools
@@ -3385,17 +4064,53 @@ fn main() {
                 app.add_capability(capability)?;
             }
 
+            // Optimistic resume. Everything the daemon does on a warm launch is
+            // reconciliation of a stack that never stopped, so the splash and
+            // the navigation that follows it are pure latency. Ask the recorded
+            // workspace whether it is still serving, and if it answers with the
+            // generation we left it on, open it directly.
+            //
+            // Failure is cheap and total: a miss costs RESUME_PROBE_TIMEOUT and
+            // lands on exactly the splash path this replaced.
+            let resume = (mode == "local")
+                .then(read_resume_target)
+                .flatten()
+                // Parsed before the probe, not after: this comes out of a
+                // user-writable config file, and a launch that panicked on a
+                // hand-edited route would be a far worse failure than a slow
+                // one. An unparseable target simply is not a resume.
+                .filter(|target| resume_entry_url(target).parse::<tauri::Url>().is_ok())
+                .filter(resume_target_is_serving);
+            launch_trace(if mode != "local" {
+                "resume: skipped (hosted)"
+            } else if resume.is_some() {
+                "resume: hit, opening the workspace directly"
+            } else {
+                "resume: miss, falling back to the splash"
+            });
+
             let initial_url = if mode == "hosted" {
                 WebviewUrl::External(hosted_url().parse().expect("valid hosted url"))
+            } else if let Some(target) = resume.as_ref() {
+                // Parseability was established by the filter above.
+                WebviewUrl::External(
+                    resume_entry_url(target)
+                        .parse()
+                        .expect("resume targets are parsed before they are accepted"),
+                )
             } else {
                 WebviewUrl::App("index.html".into())
             };
 
-            let main = WebviewWindowBuilder::new(app, "main", initial_url)
+            let main_builder = WebviewWindowBuilder::new(app, "main", initial_url)
                 .title("Lemma")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(980.0, 680.0)
                 .devtools(true)
+                // Corrected to the real appearance immediately after build.
+                // Light is the safer guess to start from: a white flash reads
+                // as a page loading, a black one reads as a broken app.
+                .background_color(CANVAS_LIGHT)
                 .initialization_script(desktop_context_script(&mode))
                 .on_navigation({
                     let handle = handle.clone();
@@ -3426,21 +4141,145 @@ fn main() {
                         }
                         NewWindowResponse::Deny
                     }
-                })
-                .build()?;
+                });
+
+            // Native materials. Vibrancy is only ever visible where the web
+            // content declines to paint, so the window has to be transparent
+            // for any of it to show — which also means every surface that
+            // *should* stay opaque has to say so itself. That sweep is not
+            // done, so this stays behind a flag: without it the app composites
+            // exactly as it did before, and with it the [data-desktop-vibrancy]
+            // rules in styles/tokens.css open up the shell rail.
+            #[cfg(target_os = "macos")]
+            let main_builder = if desktop_vibrancy_enabled() {
+                main_builder.transparent(true)
+            } else {
+                main_builder
+            };
+
+            let main = main_builder.build()?;
+
+            // The builder had to guess an appearance before the window existed.
+            // Now that it does, ask it, and keep asking: a window whose layer
+            // stays light while the page goes dark flashes white on every
+            // navigation, which is the same bug with the colours swapped.
+            if let Ok(theme) = main.theme() {
+                let _ = main.set_background_color(Some(canvas_color(theme)));
+            }
+            main.on_window_event({
+                let window = main.clone();
+                move |event| {
+                    if let tauri::WindowEvent::ThemeChanged(theme) = event {
+                        let _ = window.set_background_color(Some(canvas_color(*theme)));
+                    }
+                }
+            });
+
+            #[cfg(target_os = "macos")]
+            if desktop_vibrancy_enabled() {
+                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+
+                // Sidebar is the material AppKit itself uses behind source
+                // lists, which is what the pod shell rail is.
+                // The attribute itself rides in the initialization script, so it
+                // is already set on this document and on every document the
+                // window navigates to afterwards. Only the failure path needs
+                // to say anything here, and it takes the attribute back off so
+                // the page is not styled for a material that is not there.
+                if let Err(error) = apply_vibrancy(
+                    &main,
+                    NSVisualEffectMaterial::Sidebar,
+                    Some(NSVisualEffectState::FollowsWindowActiveState),
+                    None,
+                ) {
+                    eprintln!("lemma: could not apply window vibrancy: {error}");
+                    let _ = main.eval(
+                        "document.documentElement.removeAttribute('data-desktop-vibrancy')",
+                    );
+                }
+            }
+
+            // Only relevant when the OS accent is driving the palette. The
+            // accent is read once at launch, so it would otherwise go stale the
+            // moment the user changes it in System Settings; re-reading on focus
+            // catches exactly that — they leave to change it and come back.
+            if desktop_system_accent_enabled() {
+                main.on_window_event({
+                    let window = main.clone();
+                    move |event| {
+                        if matches!(
+                            event,
+                            tauri::WindowEvent::Focused(true) | tauri::WindowEvent::ThemeChanged(_)
+                        ) {
+                            let _ = window.eval(&format!(
+                                "document.documentElement.style.setProperty('--accent-rgb','{}')",
+                                accent_channel_triple(),
+                            ));
+                        }
+                    }
+                });
+            }
 
             main.show()?;
             main.set_focus()?;
+            launch_trace("window shown");
             if std::env::var("LEMMA_DESKTOP_DEVTOOLS").as_deref() == Ok("1") {
                 main.open_devtools();
             }
 
+            app.set_menu(build_app_menu(&handle)?)?;
+            app.on_menu_event(|app, event| handle_menu_action(app, event.id().as_ref()));
+
             build_tray(&handle)?;
+            refresh_tray_status(&handle);
 
             // Local mode: connect to the durable daemon immediately so splash
             // has a live event stream the moment it loads.
             if connection_mode() == "local" {
-                if let Err(error) = ensure_locald(&handle) {
+                if let Some(target) = resume.clone() {
+                    // The workspace is already on screen and already answering.
+                    // Seed the state the shell would otherwise learn from the
+                    // `ready` event — Local settings, the tray, and the
+                    // navigation ACL all read `ui.url` — then reconcile with the
+                    // daemon on a worker, because nothing below this point is
+                    // allowed to hold up a window the user can already see.
+                    {
+                        let shell: State<Shell> = handle.state();
+                        let mut ui = shell.ui.lock().unwrap();
+                        ui.url = target.url.clone();
+                        ui.api_url = target.api_url.clone();
+                        ui.running = true;
+                        ui.ready = true;
+                    }
+                    let handle = handle.clone();
+                    let resumed_url = target.url.clone();
+                    std::thread::spawn(move || {
+                        if let Err(error) = ensure_locald(&handle) {
+                            eprintln!("[desktop-resume] {error}");
+                            // The stack is serving but the daemon is not
+                            // reachable, so the shell cannot supervise it. Say
+                            // so on the splash rather than leaving a workspace
+                            // that silently has no controls behind it.
+                            show_splash(&handle);
+                            return;
+                        }
+                        if let Err(error) = start_impl(handle.clone()) {
+                            eprintln!("[desktop-resume] {error}");
+                            show_splash(&handle);
+                            return;
+                        }
+                        // Connecting can itself invalidate what the window is
+                        // showing: a daemon that does not match this release is
+                        // replaced, and everything comes back on new ports. The
+                        // `ready` that follows will navigate there, but until it
+                        // arrives the window is pointed at a port nothing is
+                        // listening on — so hand it the splash, which is what
+                        // reports the restart it is waiting for.
+                        if !resume_still_serving(&handle, &resumed_url) {
+                            show_splash(&handle);
+                        }
+                    });
+                } else if let Err(error) = ensure_locald(&handle) {
                     let shell: State<Shell> = handle.state();
                     let snapshot = {
                         let mut ui = shell.ui.lock().unwrap();
@@ -3469,7 +4308,11 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // Hide to tray; services keep running.
+                // Hide to tray; services keep running. Record where the user
+                // was on the way out — closing the window is the most common
+                // way a session ends, and it is the last chance to read the
+                // route off a live webview.
+                remember_workspace_route(window.app_handle());
                 api.prevent_close();
                 let _ = window.hide();
             }
@@ -3490,6 +4333,11 @@ fn main() {
                 }
             }
             tauri::RunEvent::Exit => {
+                // Read the route before anything is torn down or hidden.
+                remember_workspace_route(app);
+                // Off screen first: everything below blocks this thread, and a
+                // visible window with no live webview behind it renders black.
+                hide_windows_for_exit(app);
                 if current_mode(app) == "local" {
                     if let Err(error) = release_before_exit() {
                         eprintln!("[desktop-release-exit] {error}");
@@ -3616,12 +4464,23 @@ mod tests {
         // The workspace is a remote origin to Tauri - locald serves it over
         // http, and the hosted build loads lemma.work - so without this
         // capability its Local settings button is silently rejected by the ACL.
-        // It gets Local settings and this computer's Agent Host, and nothing
-        // that touches the local stack.
+        //
+        // What it may reach is deliberately short: Local settings, this
+        // computer's Agent Host, and the AI provider. The last one was added
+        // because onboarding cannot honestly ask "which model?" and then send
+        // the user to a different window for the answer — and it is safe to add
+        // precisely because `configure_ai_provider` reaches `config.set-ai`,
+        // which merges that one section. `allow-apply-operator-config`, which
+        // would let the same page rewrite sharing and surfaces, stays out.
         let workspace = granted("workspace");
         assert!(workspace.contains(&"allow-open-control-center".to_string()));
         assert!(workspace.iter().all(|permission| {
-            permission == "allow-open-control-center" || permission.starts_with("allow-agent-host-")
+            matches!(
+                permission.as_str(),
+                "allow-open-control-center"
+                    | "allow-discover-provider-models"
+                    | "allow-configure-ai-provider"
+            ) || permission.starts_with("allow-agent-host-")
         }));
         for forbidden in [
             "allow-apply-operator-config",
@@ -3719,6 +4578,213 @@ mod tests {
             "an override must not reach further than the shipped capability",
         );
         assert_eq!(capability["local"], json!(false));
+    }
+
+    #[test]
+    fn local_settings_declares_no_palette_of_its_own() {
+        // Local settings is a separate webview for a security reason — the
+        // privileged commands are granted only to it — but that never justified
+        // a second visual identity, which is what this file had: its own gold
+        // accent, its own paper, its own display face. Colours now live in one
+        // token block at the top and every rule reads from it, so this catches
+        // the next raw hex before it becomes a third design system.
+        let css = include_str!("../ui/control.css");
+        let rules = css
+            .split_once("* { box-sizing: border-box; }")
+            .expect("control.css starts with a token block then its rules")
+            .1;
+
+        let mut stray: Vec<&str> = Vec::new();
+        for (index, _) in rules.match_indices('#') {
+            let literal: String = rules[index..]
+                .chars()
+                .take_while(|character| character.is_ascii_hexdigit() || *character == '#')
+                .collect();
+            // A CSS id selector is not a colour; a colour is 3, 4, 6, or 8
+            // hex digits and nothing else.
+            if matches!(literal.len(), 4 | 5 | 7 | 9) && literal != "#ffffff" {
+                stray.push(&rules[index..index + literal.len()]);
+            }
+        }
+        assert!(
+            stray.is_empty(),
+            "control.css rules must read colours from the token block, found: {stray:?}"
+        );
+
+        // And the tokens themselves must be the product's, not a parallel set.
+        assert!(css.contains("--accent-rgb: 90 63 212"), "light accent is the action violet");
+        assert!(css.contains("--accent-rgb: 139 122 245"), "dark accent is the action violet");
+        assert!(css.contains("--canvas: #f2efe7"), "light canvas is the product's paper");
+        assert!(!css.contains("Bricolage"), "the page no longer carries its own display face");
+    }
+
+    #[test]
+    fn the_menu_bar_speaks_the_products_language() {
+        // There was no app menu at all before this: the shipped build used
+        // Tauri's default, so there was no Cmd-, and every Lemma verb was in
+        // the tray. The tray in turn read as a supervisor console.
+        // Scoped to the two menu builders rather than the whole file, because
+        // a test that scans its own source matches the very strings it is
+        // asserting are gone.
+        let source = include_str!("main.rs");
+        let menus = {
+            let start = source
+                .find("fn build_app_menu")
+                .expect("the app menu builder exists");
+            let end = source.find("fn disconnect_locald").expect("tray builder ends");
+            &source[start..end]
+        };
+
+        assert!(menus.contains("\"Settings…\", local, Some(\"CmdOrCtrl+,\")"));
+        assert!(menus.contains("\"Connection…\""));
+
+        // Quit is one command. Stopping the local server is a different thing —
+        // it releases the VM's memory and ends schedules — so it lives in
+        // Troubleshoot rather than sitting next to Quit as a second way to
+        // leave, where it read as the obvious "quit properly" choice.
+        let lemma_menu = &menus[..menus.find("let edit_menu").expect("app menu order")];
+        assert!(
+            !lemma_menu.contains("quit-and-stop"),
+            "the application menu offers exactly one Quit",
+        );
+        assert!(menus.contains("\"Stop the local server\""));
+        assert!(menus.contains("\"Stop the local server and quit\""));
+
+        // The operator vocabulary this replaced must not come back.
+        for retired in ["Stop Services and Infra", "Switch Connection Mode", "Start Services"] {
+            assert!(
+                !menus.contains(retired),
+                "{retired:?} is supervisor vocabulary, not a product menu item"
+            );
+        }
+    }
+
+    #[test]
+    fn a_full_quit_cannot_hold_a_dead_window_on_screen() {
+        // release_before_exit runs on the main thread from RunEvent::Exit,
+        // after the webviews are torn down, so this timeout is literally how
+        // long an unresponsive black window can stay in front of the user. It
+        // was two minutes.
+        assert!(
+            RELEASE_ON_EXIT_TIMEOUT <= Duration::from_secs(5),
+            "a quit may not block the main thread for {RELEASE_ON_EXIT_TIMEOUT:?}"
+        );
+    }
+
+    #[test]
+    fn the_window_layer_is_painted_in_both_appearances() {
+        // Whatever the webview is not painting, this is. Neither may be the
+        // macOS default of nothing, which composites black.
+        assert_eq!(canvas_color(tauri::Theme::Dark), CANVAS_DARK);
+        assert_eq!(canvas_color(tauri::Theme::Light), CANVAS_LIGHT);
+    }
+
+    #[test]
+    fn a_resume_opens_the_recorded_route_rather_than_the_workspace_root() {
+        // Opening the root means loading the app once to authenticate and
+        // resolve the last pod, then loading it again at the pod it resolved
+        // to. The recorded route skips the first of those.
+        let target = ResumeTarget {
+            url: "http://app.lemma.localhost:49180".into(),
+            api_url: "http://app.lemma.localhost:49181".into(),
+            generation: "abc123".into(),
+            release: env!("CARGO_PKG_VERSION").into(),
+            route: "/pod/42/conversations/7".into(),
+        };
+        assert_eq!(
+            resume_entry_url(&target),
+            "http://app.lemma.localhost:49180/pod/42/conversations/7"
+        );
+
+        // An install that has only ever seen the root still resumes; it just
+        // resumes at the root, without a doubled slash.
+        let root = ResumeTarget {
+            route: "/".into(),
+            ..target
+        };
+        assert_eq!(resume_entry_url(&root), "http://app.lemma.localhost:49180");
+    }
+
+    #[test]
+    fn a_resume_target_from_another_release_is_refused() {
+        // The failure this prevents: installing a new build over an old one,
+        // whose stack is often still serving. The probe passes, the window
+        // opens the old workspace, and then ensure_locald replaces the
+        // mismatched daemon and brings everything back on new ports — leaving
+        // the window on a dead port with nothing to navigate it away.
+        let saved = |release: &str| {
+            json!({
+                "url": "http://app.lemma.localhost:49180",
+                "apiUrl": "http://app.lemma.localhost:49181",
+                "generation": "abc123",
+                "release": release,
+                "route": "/",
+            })
+        };
+        let accepted = |entry: &Value| {
+            entry["release"].as_str() == Some(env!("CARGO_PKG_VERSION"))
+                && !entry["generation"].as_str().unwrap_or_default().is_empty()
+        };
+
+        assert!(accepted(&saved(env!("CARGO_PKG_VERSION"))));
+        assert!(!accepted(&saved("0.6.9")));
+        // A target written before releases were recorded has no claim either.
+        assert!(!accepted(&json!({
+            "url": "http://app.lemma.localhost:49180",
+            "apiUrl": "http://app.lemma.localhost:49181",
+            "generation": "abc123",
+            "route": "/",
+        })));
+    }
+
+    #[test]
+    fn a_ready_event_rescues_a_window_left_on_a_stale_workspace() {
+        // Three cases, and the middle one is the bug: the window is showing a
+        // workspace, just not this one. The old test was "is it the splash?",
+        // which answered no and left it there.
+        let splash = tauri::Url::parse(&native_asset_url("index.html")).unwrap();
+        let current = tauri::Url::parse("http://app.lemma.localhost:49180/pod/7").unwrap();
+        let stale = tauri::Url::parse("http://app.lemma.localhost:57919/pod/7").unwrap();
+        let workspace = "http://app.lemma.localhost:49180";
+
+        let needs = |url: &tauri::Url| native_splash_url(url) || !same_origin(url, workspace);
+
+        assert!(needs(&splash), "the ordinary first start");
+        assert!(needs(&stale), "a resume whose stack was replaced under it");
+        assert!(
+            !needs(&current),
+            "a stable workspace must never be navigated for a transient event",
+        );
+    }
+
+    #[test]
+    fn a_resume_target_is_only_trusted_with_a_generation_and_workspace_origins() {
+        // The generation is what separates "our stack is still serving" from
+        // "something is listening on that port". Without it, a resume would
+        // hand the window to whatever answered.
+        let saved = |generation: &str, url: &str| {
+            json!({
+                "resumeTarget": {
+                    "url": url,
+                    "apiUrl": "http://app.lemma.localhost:49181",
+                    "generation": generation,
+                    "route": "/",
+                }
+            })
+        };
+        let parse = |value: Value| -> bool {
+            let entry = &value["resumeTarget"];
+            let generation = entry["generation"].as_str().unwrap_or_default();
+            !generation.is_empty()
+                && trusted_workspace_urls(
+                    entry["url"].as_str().unwrap_or_default(),
+                    entry["apiUrl"].as_str().unwrap_or_default(),
+                )
+        };
+
+        assert!(parse(saved("abc123", "http://app.lemma.localhost:49180")));
+        assert!(!parse(saved("", "http://app.lemma.localhost:49180")));
+        assert!(!parse(saved("abc123", "https://evil.example.com")));
     }
 
     #[test]
@@ -4013,12 +5079,29 @@ mod tests {
         // ordinary OpenAI-compatible endpoints the user already runs, so they
         // only prefill the provider form and never give Lemma a model process
         // of its own to install, supervise, or free memory for.
-        assert!(html.contains("id=\"detect-ollama\""));
-        assert!(html.contains("id=\"detect-lmstudio\""));
+        assert!(html.contains("data-preset=\"ollama\""));
+        assert!(html.contains("data-preset=\"lmstudio\""));
         assert!(script.contains("http://127.0.0.1:11434/v1"));
         assert!(script.contains("http://127.0.0.1:1234/v1"));
         assert!(!script.contains("local_ai_action"));
         assert!(!html.contains("data-page=\"models\""));
+    }
+
+    #[test]
+    fn the_default_model_is_chosen_from_the_providers_own_list() {
+        let html = include_str!("../ui/control.html");
+        let script = include_str!("../ui/control.js");
+
+        // Typing a model id from memory was the old contract and the reason a
+        // correct provider could still be applied with a model it does not
+        // serve. The default is now a <select> populated by the probe, and the
+        // free-text list it replaced must not come back.
+        assert!(html.contains("<select id=\"ai-model\">"));
+        assert!(!html.contains("id=\"ai-models\""));
+        // The probe answers the press that made it, rather than broadcasting to
+        // whichever page happens to be listening.
+        assert!(script.contains("const models = await invoke(\"discover_provider_models\""));
+        assert!(!script.contains("config.models"));
     }
 
     #[test]
@@ -4228,5 +5311,18 @@ mod tests {
 
         assert!(local.contains("AUTH_EMAIL_VERIFICATION_REQUIRED: \"false\""));
         assert!(!hosted.contains("AUTH_EMAIL_VERIFICATION_REQUIRED"));
+    }
+
+    #[test]
+    fn native_material_attributes_survive_navigation() {
+        // Local mode navigates the main window from the splash to the
+        // workspace. Anything set by a one-shot eval is gone by then, so both
+        // attributes have to be written by the initialization script, which
+        // Tauri re-runs for every document.
+        let script = desktop_context_script("local");
+
+        assert!(script.contains("setAttribute('data-desktop-platform', d.platform)"));
+        assert!(script.contains("if (d.vibrancy) root.setAttribute('data-desktop-vibrancy'"));
+        assert!(script.contains("if (d.systemAccent) root.style.setProperty('--accent-rgb'"));
     }
 }
