@@ -40,3 +40,14 @@ async def schedule_snooze_wake(
         replace_existing=True,
     )
     return timer_id
+
+
+async def cancel_snooze_wake(timer_id: str) -> None:
+    """Drop the timer for a snooze that will never be resumed.
+
+    Best effort by design: ``remove_job`` already treats a missing job as
+    success, and the wait row is the real guard — a fired timer resolves through
+    ``find_active_by_external_ref``, which ignores anything not ACTIVE. Removing
+    the job just stops the scheduler doing pointless work.
+    """
+    await SchedulerAPIClient().remove_job(UUID(timer_id))

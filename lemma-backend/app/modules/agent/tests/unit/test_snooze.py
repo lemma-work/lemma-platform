@@ -286,3 +286,223 @@ async def test_snooze_wake_adapter_calls_the_scheduler_with_a_real_signature(mon
     assert call["payload"]["conversation_id"] == str(conversation_id)
     assert call["payload"]["wait_ref"] == str(timer_id)
     assert call["payload"]["source"] == "agent_snooze"
+
+
+# -- the sweep: grace period, isolation, and the attempt cap --------------------
+
+
+@pytest.fixture
+def sweep(monkeypatch):
+    """Drive SnoozeReconcileService with in-memory units of work."""
+    from app.modules.agent.services import snooze_reconcile_service as svc
+
+    state = SimpleNamespace(listed=[], attempts={}, abandoned=[], woke=[], cutoffs=[])
+
+    class _FakeRepo:
+        def __init__(self, uow):
+            pass
+
+        async def list_active_due(self, *, due_before, limit):
+            state.cutoffs.append(due_before)
+            return list(state.listed)
+
+        async def record_wake_attempt(self, wait_id):
+            state.attempts[wait_id] = state.attempts.get(wait_id, 0) + 1
+            return state.attempts[wait_id]
+
+        async def claim(self, wait_id):
+            return next((w for w in state.listed if w.id == wait_id), None)
+
+        async def update(self, wait):
+            if wait.status is AgentWaitStatus.FAILED:
+                state.abandoned.append(wait)
+            return wait
+
+    class _FakeUow:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            pass
+
+    monkeypatch.setattr(svc, "AgentConversationWaitRepository", _FakeRepo)
+    monkeypatch.setattr(svc, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow())
+    monkeypatch.setattr(svc, "async_session_maker", object())
+    state.service = svc.SnoozeReconcileService()
+    state.module = svc
+    return state
+
+
+@pytest.mark.asyncio
+async def test_sweep_leaves_a_grace_period_before_calling_a_timer_lost(sweep):
+    """Without it the 5-minute sweep races the real timer on every snooze.
+
+    Every healthy wait would then be woken by the backstop and logged as a lost
+    timer at WARNING — alert noise that hides the failure it exists to report.
+    """
+    before = datetime.now(timezone.utc)
+    await sweep.service.reconcile_due_waits()
+    after = datetime.now(timezone.utc)
+
+    # The sweep asks for waits overdue by a full grace period, never merely due.
+    (cutoff,) = sweep.cutoffs
+    grace = sweep.module.RECONCILE_AFTER
+    assert before - grace <= cutoff <= after - grace
+    # And it matches the workflow sweep it claims to mirror.
+    from app.modules.workflow.services.run_resume_service import RECONCILE_AFTER
+
+    assert sweep.module.RECONCILE_AFTER == RECONCILE_AFTER
+
+
+@pytest.mark.asyncio
+async def test_sweep_abandons_a_wait_whose_wake_never_succeeds(sweep, monkeypatch):
+    """The poison pill: without a cap this retries every 5 minutes forever."""
+
+    class _AlwaysFails:
+        def __init__(self, uow):
+            pass
+
+        async def wake(self, *, wait, reason):
+            raise RuntimeError("wake is broken")
+
+    monkeypatch.setattr(sweep.module, "SnoozeWakeService", _AlwaysFails)
+    wait = _wait(scheduled_at=datetime.now(timezone.utc))
+    sweep.listed = [wait]
+
+    for _ in range(sweep.module.MAX_WAKE_ATTEMPTS):
+        assert await sweep.service.reconcile_due_waits() == 0
+        assert not sweep.abandoned  # still retrying
+
+    await sweep.service.reconcile_due_waits()
+    (abandoned,) = sweep.abandoned
+    assert abandoned.status is AgentWaitStatus.FAILED
+    assert "wake failed" in abandoned.spec["abandoned_because"]
+
+
+@pytest.mark.asyncio
+async def test_sweep_counts_an_attempt_before_making_it(sweep, monkeypatch):
+    """The counter must survive the rollback of the wake it is counting.
+
+    Bumped inside the failing transaction it would roll back with it, and the
+    cap would never be reached.
+    """
+    order: list[str] = []
+
+    class _Recording:
+        def __init__(self, uow):
+            pass
+
+        async def wake(self, *, wait, reason):
+            order.append("wake")
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(sweep.module, "SnoozeWakeService", _Recording)
+    original = sweep.service._count_attempt
+
+    async def _spy(wait):
+        order.append("count")
+        return await original(wait)
+
+    monkeypatch.setattr(sweep.service, "_count_attempt", _spy)
+    sweep.listed = [_wait(scheduled_at=datetime.now(timezone.utc))]
+
+    await sweep.service.reconcile_due_waits()
+    assert order == ["count", "wake"]
+
+
+@pytest.mark.asyncio
+async def test_one_bad_wait_does_not_stop_the_rest_of_the_batch(sweep, monkeypatch):
+    """Each wait gets its own session, so a rollback is contained."""
+    bad, good = _wait(), _wait()
+
+    class _FailsTheFirst:
+        def __init__(self, uow):
+            pass
+
+        async def wake(self, *, wait, reason):
+            if wait.id == bad.id:
+                raise RuntimeError("boom")
+            sweep.woke.append(wait.id)
+            return True
+
+    monkeypatch.setattr(sweep.module, "SnoozeWakeService", _FailsTheFirst)
+    sweep.listed = [bad, good]
+
+    assert await sweep.service.reconcile_due_waits() == 1
+    assert sweep.woke == [good.id]
+
+
+# -- Stop, on a sleeping agent -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_the_wait_drops_the_timer_and_does_not_resume(monkeypatch):
+    """Stop on a snoozed conversation used to do nothing at all.
+
+    ``stop_conversation`` only acted when there was an active run, and a snoozed
+    turn has none by construction — the run ended cleanly when the tool paused
+    it. So Stop returned success, the conversation stayed WAITING, and the timer
+    still fired later and resumed the agent the user had just stopped.
+    """
+    from app.modules.agent.services import conversation_service as cs
+
+    wait = _wait(external_ref=str(uuid4()), spec={"note_to_self": "post it"})
+    removed: list[str] = []
+    appended: list[dict] = []
+    resumed: list[str] = []
+    statuses: list[object] = []
+
+    class _Waits:
+        def __init__(self, uow):
+            pass
+
+        async def find_active_for_conversation(self, conversation_id):
+            return wait
+
+        async def update(self, updated):
+            return updated
+
+    class _Conversations:
+        async def set_conversation_status(self, *, conversation_id, status):
+            statuses.append(status)
+
+    async def _fake_cancel(timer_id):
+        removed.append(timer_id)
+
+    monkeypatch.setattr(cs, "AgentConversationWaitRepository", _Waits)
+    monkeypatch.setattr(cs, "cancel_snooze_wake", _fake_cancel)
+
+    service = cs.ConversationService.__new__(cs.ConversationService)
+    service.uow = None
+    service.conversation_repository = _Conversations()
+
+    async def _append(**kwargs):
+        appended.append(kwargs)
+        return True
+
+    async def _resume(**kwargs):
+        resumed.append("resumed")
+
+    monkeypatch.setattr(service, "append_pause_tool_return", _append)
+    monkeypatch.setattr(service, "start_resume_run_if_ready", _resume)
+
+    conversation = SimpleNamespace(id=wait.conversation_id, status=None)
+    await service._cancel_active_snooze(conversation=conversation)
+
+    assert wait.status is AgentWaitStatus.CANCELLED
+    assert removed == [wait.external_ref]
+    assert statuses == [cs.ConversationStatus.STOPPED]
+    assert conversation.status is cs.ConversationStatus.STOPPED
+
+    # The paused call still gets a return: a tool call with no return is dropped
+    # when history is rebuilt, and the model would see a turn ending mid-thought.
+    (call,) = appended
+    assert call["tool_call_id"] == wait.tool_call_id
+    assert call["tool_result"]["woke_because"] == "CANCELLED"
+    assert call["tool_result"]["success"] is False
+
+    # But the agent must not wake. That is the whole point of Stop.
+    assert resumed == []

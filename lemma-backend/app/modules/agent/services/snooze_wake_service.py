@@ -8,7 +8,6 @@ lock is what makes a duplicate wake a no-op rather than a second run.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from app.core.authorization.context import Context
@@ -24,7 +23,10 @@ from app.modules.agent.infrastructure.repositories import ConversationRepository
 from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
-from app.modules.agent.tools.snooze.models import SnoozeResponse
+from app.modules.agent.tools.snooze.models import (
+    build_snooze_result,
+    elapsed_seconds,
+)
 
 logger = get_logger(__name__)
 
@@ -103,32 +105,11 @@ class SnoozeWakeService:
         reason: AgentWaitWakeReason,
     ) -> dict:
         spec = wait.spec or {}
-        started_raw = spec.get("started_at")
-        slept = 0
-        if isinstance(started_raw, str):
-            try:
-                started = datetime.fromisoformat(started_raw)
-                if started.tzinfo is None:
-                    started = started.replace(tzinfo=timezone.utc)
-                slept = max(
-                    0, int((datetime.now(timezone.utc) - started).total_seconds())
-                )
-            except ValueError:
-                logger.debug("agent.snooze.bad_started_at", wait_id=str(wait.id))
-        message = {
-            AgentWaitWakeReason.TIMER: (
-                "Your time elapsed. That is all this means — check whatever you "
-                "were waiting for before acting as though it happened."
-            ),
-            AgentWaitWakeReason.CANCELLED: "The wait was cancelled.",
-        }[reason]
-        return SnoozeResponse(
-            success=reason is not AgentWaitWakeReason.CANCELLED,
+        return build_snooze_result(
             woke_because=reason.value,
-            slept_seconds=slept,
+            slept_seconds=elapsed_seconds(spec.get("started_at")),
             note_to_self=spec.get("note_to_self"),
-            message=message,
-        ).model_dump(mode="json")
+        )
 
     async def _context_for(self, user_id: UUID, pod_id: UUID) -> Context:
         return await create_authorization_data_service(self.uow).build_user_context(

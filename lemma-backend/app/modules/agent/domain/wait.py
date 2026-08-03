@@ -40,6 +40,10 @@ class AgentWaitStatus(str, Enum):
     ACTIVE = "ACTIVE"
     COMPLETED = "COMPLETED"
     CANCELLED = "CANCELLED"
+    # Terminal, and the only one nobody asked for: the wake kept raising. Without
+    # it a wait whose wake can never succeed stays ACTIVE and past-due forever,
+    # and the sweep retries it every five minutes for the life of the deployment.
+    FAILED = "FAILED"
 
 
 class AgentWaitWakeReason(str, Enum):
@@ -62,6 +66,9 @@ class AgentConversationWaitEntity(AggregateRoot):
 
     external_ref: str | None = None
     scheduled_at: datetime | None = None
+    # Sweep bookkeeping. Incremented in its own transaction *before* each retry,
+    # so it survives the rollback of the attempt it is counting.
+    wake_attempts: int = 0
 
     # The snooze request verbatim, plus whatever the wake recorded.
     spec: dict[str, Any] = Field(default_factory=dict)
@@ -75,4 +82,16 @@ class AgentConversationWaitEntity(AggregateRoot):
     def cancel(self) -> None:
         self.status = AgentWaitStatus.CANCELLED
         self.spec = {**self.spec, "woke_because": AgentWaitWakeReason.CANCELLED.value}
+        self.completed_at = datetime.now(timezone.utc)
+
+    def abandon(self, error: str) -> None:
+        """Give up after too many failed wakes. The conversation stays WAITING.
+
+        Deliberately not a wake: we could not synthesize a tool return, so there
+        is nothing truthful to hand the model. The row records why, and the error
+        log is the operator's signal — a stuck conversation is bad, but a hot
+        retry loop that hides it is worse.
+        """
+        self.status = AgentWaitStatus.FAILED
+        self.spec = {**self.spec, "abandoned_because": error}
         self.completed_at = datetime.now(timezone.utc)

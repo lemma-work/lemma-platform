@@ -102,9 +102,10 @@ already taken by *waiting for you*.
 agent_conversation_waits
   conversation_id, agent_run_id, tool_call_id, pod_id
   wait_type      TIME          -- one member today; see Decisions
-  status         ACTIVE | COMPLETED | CANCELLED
+  status         ACTIVE | COMPLETED | CANCELLED | FAILED
   external_ref   the scheduler timer id
   scheduled_at
+  wake_attempts  sweep retries, counted outside the transaction they guard
   spec           the snooze request, verbatim
   created_at, completed_at
 ```
@@ -178,11 +179,21 @@ Reuse the wait-until plumbing unchanged: `schedule_once_job` with
 beside the existing `workflow_run_id` one. APScheduler's `SQLAlchemyJobStore`
 already survives restarts. This is the proven path; the risk here is near zero.
 
-A cron sweep fires any ACTIVE wait already past `scheduled_at`, self-healing a
-lost scheduler event — modelled directly on
+A cron sweep self-heals a lost scheduler event, modelled directly on
 [`reconcile_stale_waits`](../../lemma-backend/app/modules/workflow/services/run_resume_service.py).
-Racing the primary timer is harmless: every wake claims the row under a lock, so
-the second one is a no-op.
+Three details keep it a backstop rather than a second wake path:
+
+* It fires a wait only once it is overdue by `RECONCILE_AFTER` (10 minutes, the
+  workflow sweep's value). Sweeping at `scheduled_at` would race the real timer
+  on *every* snooze, and every healthy wait would log "lost timer" at WARNING.
+  Racing is still harmless when it happens — each wake claims the row under a
+  lock — but it should be the exception, not the norm.
+* Each wait gets its own session. A wake that raises rolls its session back, and
+  a shared one would leave the rest of the batch on a broken transaction.
+* `wake_attempts` caps the retries. It is incremented and committed *before* the
+  attempt it counts, so it survives that attempt's rollback; past
+  `MAX_WAKE_ATTEMPTS` the wait goes `FAILED` and is left alone. Without it a wait
+  whose wake can never succeed is retried every five minutes forever.
 
 ### The shared resume primitive
 
@@ -213,14 +224,15 @@ refactor covered by existing tests.
 | `ask_user` fails fast on email surfaces because pausing strands the run | Snooze self-resolves, so it is legitimate there — the guard must not be copied | **Do not copy** `platform_is_email`. Surface renders "snoozed", not "waiting for you" |
 | A snoozing sub-agent blocks its parent's tool call while the parent is mid-run | Parent hits its own limits waiting on a child that is deliberately asleep | **Disallow in sub-agent conversations.** `RunToolAssembler` already drops toolsets for sub-agents |
 | Each wake replays full history | A snooze loop is a token bonfire | Min-duration floor, max snoozes per conversation, wake counted in usage |
-| A timer event gets lost | Zombie wait | Sweep modelled on [`reconcile_stale_waits`](../../lemma-backend/app/modules/workflow/services/run_resume_service.py): fire any ACTIVE wait past `scheduled_at` |
+| A timer event gets lost | Zombie wait | Sweep modelled on [`reconcile_stale_waits`](../../lemma-backend/app/modules/workflow/services/run_resume_service.py): fire any ACTIVE wait overdue by `RECONCILE_AFTER` |
+| A wake raises every time it is tried | Sweep retries it every 5 minutes forever, hiding the failure in log noise | `wake_attempts`, counted outside the transaction it guards; the wait goes `FAILED` past the cap and an error names it |
 
 ## Phasing
 
 | Phase | Scope | Risk |
 | --- | --- | --- |
 | 0 | Extract `resume_conversation_from_pause`; migrate the approval path onto it | Low — refactor under existing tests |
-| 1 | `agent_conversation_waits` (migration `0011`, revises `0010_proactive_messaging`) · `snooze(seconds=…)` · timer wake · sweep | Low — no ceiling exists on `main` to interact with |
+| 1 | `agent_conversation_waits` (migration `0012`, revises `0011_connectors_kinds`) · `snooze(seconds=…)` · timer wake · sweep | Low — no ceiling exists on `main` to interact with |
 | 2 | Conversation-list state, remote harnesses | — |
 
 Phase 1 is small precisely because Phase 0 does the structural work.
@@ -302,7 +314,13 @@ one without modification. What it would need to bring with it is the part that
 was cut: a matcher on the datastore stream, and a pre-suspend check to close the
 race between deciding to wait and committing the row.
 
-**Cancelling a snooze from the UI.** Needs the interrupt path described under
-Decisions. `AgentWaitStatus.CANCELLED` and the `CANCELLED` wake reason exist and
-are reachable (a wake against a deleted conversation takes that path), so the
-contract is already in place for it.
+**Cancelling a snooze from the UI.** Done. Stop on a snoozed conversation
+cancels the wait, deletes the scheduler timer, and moves the conversation to
+`STOPPED`. It deliberately does *not* resume: Stop means the agent does not wake.
+The `CANCELLED` tool return is still written, because a tool call with no return
+is dropped when history is rebuilt and the model would see a turn that ends
+mid-thought.
+
+Stop previously did nothing at all here — it only acted when there was an active
+run, and a snoozed turn has none by construction, so the call succeeded, the
+conversation stayed `WAITING`, and the timer still fired later.

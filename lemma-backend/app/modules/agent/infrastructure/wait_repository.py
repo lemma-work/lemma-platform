@@ -49,6 +49,7 @@ class AgentConversationWaitRepository:
             status=wait.status.value,
             external_ref=wait.external_ref,
             scheduled_at=wait.scheduled_at,
+            wake_attempts=wait.wake_attempts,
             spec=dict(wait.spec or {}),
         )
         self.session.add(model)
@@ -104,22 +105,40 @@ class AgentConversationWaitRepository:
         model.status = wait.status.value
         model.spec = dict(wait.spec or {})
         model.completed_at = wait.completed_at
+        model.wake_attempts = wait.wake_attempts
         await self.session.flush()
         return model.to_entity()
 
-    async def list_active_due(
-        self, *, now: datetime, limit: int = 100
-    ) -> list[AgentConversationWaitEntity]:
-        """ACTIVE waits whose timer has already passed.
+    async def record_wake_attempt(self, wait_id: UUID) -> int:
+        """Increment the attempt counter and return the new value.
 
-        Feeds the sweep that self-heals a lost scheduler event. A wait
-        legitimately scheduled into the future is left alone.
+        Called in a transaction of its own, *before* the wake it counts — a wake
+        that raises rolls back everything it touched, so a counter bumped inside
+        it would roll back too and the wait would retry forever.
+        """
+        model = await self.session.get(AgentConversationWaitModel, wait_id)
+        if model is None:
+            return 0
+        model.wake_attempts = (model.wake_attempts or 0) + 1
+        await self.session.flush()
+        return model.wake_attempts
+
+    async def list_active_due(
+        self, *, due_before: datetime, limit: int = 100
+    ) -> list[AgentConversationWaitEntity]:
+        """ACTIVE waits already overdue by the caller's grace period.
+
+        Feeds the sweep that self-heals a lost scheduler event, so ``due_before``
+        is deliberately in the past: a wait that merely reached ``scheduled_at``
+        is being woken by its own timer right now, and sweeping it there would
+        race the wake it is supposed to be a backstop for. A wait legitimately
+        scheduled into the future is left alone either way.
         """
         stmt = (
             select(AgentConversationWaitModel)
             .where(
                 AgentConversationWaitModel.status == AgentWaitStatus.ACTIVE.value,
-                AgentConversationWaitModel.scheduled_at <= now,
+                AgentConversationWaitModel.scheduled_at <= due_before,
             )
             .order_by(AgentConversationWaitModel.created_at)
             .limit(limit)

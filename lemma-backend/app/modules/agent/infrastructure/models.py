@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -536,8 +537,11 @@ class AgentConversationWaitModel(UUIDAuditBase):
 
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    wake_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
-    spec: Mapped[dict] = mapped_column(JSONB, default=dict)
+    # Nullable to match the migration: `create` always writes a dict, but a row
+    # inserted by hand or by a future backfill must not need one.
+    spec: Mapped[dict | None] = mapped_column(JSONB, default=dict)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     def to_entity(self):
@@ -557,6 +561,7 @@ class AgentConversationWaitModel(UUIDAuditBase):
             status=AgentWaitStatus(self.status),
             external_ref=self.external_ref,
             scheduled_at=self.scheduled_at,
+            wake_attempts=self.wake_attempts,
             spec=dict(self.spec or {}),
             completed_at=self.completed_at,
             created_at=self.created_at,

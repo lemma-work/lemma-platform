@@ -201,17 +201,17 @@ async def reconcile_agent_snoozes():
     """Wake snoozed conversations whose scheduler event was lost.
 
     Unlike an agent or function wait there is no external system to poll — a
-    timer only has to elapse — so a past-due wait is simply fired here. Waking is
-    idempotent (the wake claims the row under a lock), which makes a duplicate
-    with the primary timer harmless.
+    timer only has to elapse — so a wait overdue by more than the sweep's grace
+    period is simply fired here. Waking is idempotent (the wake claims the row
+    under a lock), which makes a duplicate with the primary timer harmless.
     """
     from app.modules.agent.services.snooze_reconcile_service import (
         SnoozeReconcileService,
     )
 
-    worker_ctx: AppWorkerContext = streaq_worker.context
-    async with worker_ctx.uow() as uow:
-        await SnoozeReconcileService(uow).reconcile_due_waits()
+    # Opens a session per step itself: one wait's failed wake must not roll back
+    # the transaction the rest of the batch is running in.
+    await SnoozeReconcileService().reconcile_due_waits()
 
 
 # --- Schedule Integration ---

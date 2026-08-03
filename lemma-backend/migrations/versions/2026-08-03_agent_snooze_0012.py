@@ -64,6 +64,14 @@ def upgrade() -> None:
         # The scheduler timer that will end this wait.
         sa.Column("external_ref", sa.String(), nullable=True),
         sa.Column("scheduled_at", sa.DateTime(timezone=True), nullable=True),
+        # Bumped in its own transaction before each sweep retry, so a wake that
+        # rolls back still counts against the cap that eventually abandons it.
+        sa.Column(
+            "wake_attempts",
+            sa.Integer(),
+            nullable=False,
+            server_default="0",
+        ),
         sa.Column("spec", JSONB, nullable=True),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(

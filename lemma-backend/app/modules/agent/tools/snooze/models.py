@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -63,3 +64,45 @@ class SnoozeResponse(BaseToolResponse):
     # Set when a runtime cannot pause. Mirrors ask_user's contract so the model
     # gets guidance instead of a dead end.
     interaction_fallback: bool = False
+
+
+# The two messages the model can wake to. TIMER leans on what it does *not* say:
+# the failure this exists to prevent is an agent reading "I woke up" as "the
+# thing I was waiting for happened".
+_WAKE_MESSAGES = {
+    "TIMER": (
+        "Your time elapsed. That is all this means — check whatever you "
+        "were waiting for before acting as though it happened."
+    ),
+    "CANCELLED": (
+        "This wait was cancelled and your turn was stopped. You did not sleep "
+        "the full duration and nothing you were waiting for is known to have "
+        "happened."
+    ),
+}
+
+
+def build_snooze_result(
+    *, woke_because: str, slept_seconds: int, note_to_self: str | None
+) -> dict:
+    """The tool return replayed for a resolved snooze, whatever resolved it."""
+    return SnoozeResponse(
+        success=woke_because != "CANCELLED",
+        woke_because=woke_because,
+        slept_seconds=slept_seconds,
+        note_to_self=note_to_self,
+        message=_WAKE_MESSAGES[woke_because],
+    ).model_dump(mode="json")
+
+
+def elapsed_seconds(started_at: object) -> int:
+    """Seconds since a spec's ISO ``started_at``; 0 when it is unusable."""
+    if not isinstance(started_at, str):
+        return 0
+    try:
+        started = datetime.fromisoformat(started_at)
+    except ValueError:
+        return 0
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - started).total_seconds()))

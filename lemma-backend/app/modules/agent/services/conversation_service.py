@@ -72,9 +72,17 @@ from app.modules.agent.services.workspace_location import new_workspace_cwd, res
 from app.modules.pod.contracts import PodConfig
 from app.composition.agent_pod import create_agent_pod_repository
 from app.composition.agent_usage import UsageLimitExceededError, UsageService
+from app.composition.agent_snooze_scheduler import cancel_snooze_wake
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
 from app.modules.agent.services.pause_resume import (
     PAUSING_TOOL_NAMES,
     PauseResumeMixin,
+)
+from app.modules.agent.tools.snooze.models import (
+    build_snooze_result,
+    elapsed_seconds,
 )
 
 _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
@@ -1299,7 +1307,55 @@ class ConversationService(PauseResumeMixin):
                 ]
             )
             await self.uow.commit()
+            return conversation
+
+        # No active run, but the conversation may still be suspended. A snoozed
+        # turn has *no* run by construction — it ended cleanly when the tool
+        # paused it — so without this, Stop silently did nothing and the timer
+        # still fired later.
+        await self._cancel_active_snooze(conversation=conversation)
         return conversation
+
+    @property
+    def wait_repository(self) -> AgentConversationWaitRepository:
+        # Built on demand rather than in __init__: the repository binds a session
+        # eagerly, and plenty of callers construct this service without a real
+        # unit of work to exercise paths that never touch the database.
+        return AgentConversationWaitRepository(self.uow)
+
+    async def _cancel_active_snooze(self, *, conversation: Conversation) -> None:
+        """Stop a sleeping agent for good: drop the timer, never resume.
+
+        The CANCELLED tool return is still written, so the paused call is not
+        left dangling in history — a tool call with no return is dropped when
+        history is rebuilt, and the model would see a turn that ends mid-thought.
+        What is deliberately skipped is ``start_resume_run_if_ready``: Stop means
+        the agent does not wake.
+        """
+        wait = await self.wait_repository.find_active_for_conversation(conversation.id)
+        if wait is None:
+            return
+
+        wait.cancel()
+        await self.wait_repository.update(wait)
+        await self.conversation_repository.set_conversation_status(
+            conversation_id=conversation.id,
+            status=ConversationStatus.STOPPED,
+        )
+        conversation.status = ConversationStatus.STOPPED
+        await self.append_pause_tool_return(
+            conversation=conversation,
+            paused_run_id=wait.agent_run_id,
+            tool_call_id=wait.tool_call_id,
+            tool_name="snooze",
+            tool_result=build_snooze_result(
+                woke_because="CANCELLED",
+                slept_seconds=elapsed_seconds((wait.spec or {}).get("started_at")),
+                note_to_self=(wait.spec or {}).get("note_to_self"),
+            ),
+        )
+        if wait.external_ref:
+            await cancel_snooze_wake(wait.external_ref)
 
     async def _get_or_create_conversation_for_message(
         self,
