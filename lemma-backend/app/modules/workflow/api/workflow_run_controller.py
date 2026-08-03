@@ -1,17 +1,25 @@
+import asyncio
+import json
+from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
-from fastapi.responses import HTMLResponse
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
 from app.core.api.dependencies import CurrentUser, UoWDep
 from app.core.api.pagination import parse_uuid_page_token
+from app.core.authorization.context import ResourceRef, ResourceType
 from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.permissions import Permissions
 from app.composition.workflow_pod import PodMemberRepository
 from app.modules.workflow.api.schemas import (
     WorkflowRunFormSubmitRequest,
+    WorkflowRunListResponse,
     WorkflowRunResponse,
     WorkflowRunSummaryResponse,
     WorkflowRunWaitAssignment,
@@ -19,16 +27,35 @@ from app.modules.workflow.api.schemas import (
     WorkflowRunWaitResponse,
     run_response_from_domain,
 )
-from app.modules.workflow.domain.run import WorkflowRunEntity
+from app.core.domain.realtime import RealtimeChannel
+from app.core.infrastructure.channels.channel_service import get_channel_service
+from app.core.log.log import get_logger
+from app.modules.workflow.domain.run import (
+    TERMINAL_STATUSES,
+    WorkflowRunEntity,
+    WorkflowRunStatus,
+)
 from app.modules.workflow.execution.engine import WorkflowEngine
 from app.modules.workflow.infrastructure.repositories import (
+    SqlAlchemyWorkflowRunRepository,
     SqlAlchemyWorkflowRunWaitRepository,
+)
+from app.modules.workflow.infrastructure.run_channel import (
+    encode_run_chunk,
+    workflow_run_channel,
 )
 from app.modules.workflow.services.workflow_service import WorkflowService
 
 # Setup templates (Adjust path relative to this file location)
 BASE_DIR = Path(__file__).resolve().parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+logger = get_logger(__name__)
+
+# Hard cap on a run page, whatever the caller asks for.
+MAX_RUN_PAGE_SIZE = 200
+
+WorkflowChannelDep = Annotated[RealtimeChannel, Depends(get_channel_service)]
 
 router = APIRouter(prefix="/pods/{pod_id}/workflow-runs", tags=["workflows"])
 
@@ -160,6 +187,54 @@ async def list_waiting_runs_assigned_to_me(
 
 
 @router.get(
+    "",
+    response_model=WorkflowRunListResponse,
+    operation_id="workflow.run.list_for_pod",
+    summary="List Workflow Runs In Pod",
+    description=(
+        "Recent runs across every workflow in the pod, newest first. Exists so "
+        "an index that wants 'what has been happening here' makes one request "
+        "instead of one per workflow. Filter with `status` (repeatable)."
+    ),
+)
+async def list_pod_workflow_runs(
+    uow: UoWDep,
+    user: CurrentUser,
+    ctx: PodContextDep,
+    pod_id: UUID,
+    limit: int = 50,
+    # The enum, not `list[str]`: a typo'd status used to be upper-cased, matched
+    # nothing, and returned an empty page that reads exactly like "no runs".
+    # FastAPI now rejects it with 422 and names the valid values.
+    status: list[WorkflowRunStatus] | None = Query(default=None),
+    page_token: str | None = None,
+) -> WorkflowRunListResponse:
+    await ctx.require(
+        Permissions.WORKFLOW_READ,
+        ResourceRef(
+            resource_type=ResourceType.POD,
+            resource_id=pod_id,
+            pod_id=pod_id,
+        ),
+    )
+    cursor = parse_uuid_page_token(page_token)
+    # Echo what was actually applied. Reporting the requested value told a client
+    # asking for 500 that it got 500.
+    effective_limit = min(limit, MAX_RUN_PAGE_SIZE)
+    runs, next_cursor = await SqlAlchemyWorkflowRunRepository(uow).list_by_pod(
+        pod_id,
+        limit=effective_limit,
+        cursor=cursor,
+        statuses=[value.value for value in status] if status else None,
+    )
+    return WorkflowRunListResponse(
+        items=[WorkflowRunSummaryResponse.model_validate(run) for run in runs],
+        limit=effective_limit,
+        next_page_token=str(next_cursor) if next_cursor else None,
+    )
+
+
+@router.get(
     "/{run_id}",
     response_model=WorkflowRunResponse,
     operation_id="workflow.run.get",
@@ -182,6 +257,134 @@ async def get_run(
     assert run is not None
     active_wait = await engine.get_active_wait(run.id)
     return run_response_from_domain(run, active_wait)
+
+
+# How long a quiet stream waits before emitting an SSE comment frame. Nothing is
+# published between run transitions, and a run can legitimately sit for hours, so
+# without this an idle proxy closes the connection on us.
+STREAM_KEEPALIVE_SECONDS = 20.0
+
+
+async def _close_subscription(
+    subscription: object, run_id: UUID, exc: BaseException | None = None
+) -> None:
+    """Release a subscription without letting teardown mask the real outcome."""
+    try:
+        with anyio.CancelScope(shield=True):
+            await subscription.__aexit__(  # type: ignore[attr-defined]
+                type(exc) if exc else None, exc, exc.__traceback__ if exc else None
+            )
+    except Exception:
+        # The client is gone either way and the response is finished, so there is
+        # nobody to report this to and nothing left to clean up.
+        logger.debug("workflow.run.stream_teardown_failed", run_id=str(run_id))
+
+
+@router.get(
+    "/{run_id}/stream",
+    operation_id="workflow.run.stream",
+    summary="Stream Workflow Run",
+    description=(
+        "Server-sent events carrying the run's state as it advances. The first "
+        "frame is the current run, so a client needs no separate GET; each "
+        "later frame is the whole run again rather than a diff, which makes "
+        "reconnecting a matter of replacing state. A `completed` frame is sent "
+        "when the run reaches a terminal status, after which the stream closes. "
+        "Polling remains a valid fallback."
+    ),
+)
+async def stream_workflow_run(
+    uow: UoWDep,
+    user: CurrentUser,
+    ctx: PodContextDep,
+    channel_service: WorkflowChannelDep,
+    pod_id: UUID,
+    run_id: UUID,
+) -> StreamingResponse:
+    # Subscribe *before* reading the run, and open the subscription here rather
+    # than inside the generator. Starlette does not start the generator until the
+    # response body is consumed, so opening it there leaves the snapshot-read →
+    # subscribe gap unbounded: a run that finishes inside it would send an opening
+    # frame and then nothing, never reaching a `completed` frame and never
+    # closing. Same ordering as `conversation_streaming.start_and_stream_run`.
+    subscription = channel_service.subscribe([workflow_run_channel(run_id)])
+    iterator = await subscription.__aenter__()
+    try:
+        engine = WorkflowEngine(uow)
+        run = await engine.get_run(run_id, requester_user_id=user.id, ctx=ctx)
+        _verify_pod(run, pod_id)
+        assert run is not None
+        active_wait = await engine.get_active_wait(run.id)
+        opening = run_response_from_domain(run, active_wait)
+        is_terminal = run.status in TERMINAL_STATUSES
+    except BaseException as exc:
+        await _close_subscription(subscription, run_id, exc)
+        raise
+
+    # The snapshot is a plain pydantic model now and the stream itself never
+    # touches the database. `UoWDep` is torn down only once the response
+    # completes, so without this a client watching a run that sits waiting for
+    # hours pins a pooled connection for exactly that long.
+    await uow.session.close()
+
+    async def event_generator() -> AsyncGenerator[str, None]:
+        pending: asyncio.Task[str | bytes] | None = None
+        try:
+            yield encode_run_chunk(
+                event_type="completed" if is_terminal else "run",
+                data=opening.model_dump(mode="json"),
+            )
+            if is_terminal:
+                return
+            while True:
+                if pending is None:
+                    # Never cancel the read itself: the channel iterator is a
+                    # generator around `queue.get()`, and throwing cancellation
+                    # into it would finalize it and end the stream. Waiting on a
+                    # retained task times out without disturbing the read.
+                    pending = asyncio.ensure_future(anext(iterator))
+                done, _ = await asyncio.wait({pending}, timeout=STREAM_KEEPALIVE_SECONDS)
+                if not done:
+                    # A comment frame. Keeps idle proxies from dropping a run
+                    # that is legitimately quiet between transitions.
+                    yield ": keepalive\n\n"
+                    continue
+                message = pending.result()
+                pending = None
+                payload = _decode_channel_message(message)
+                if payload is None:
+                    continue
+                yield encode_run_chunk(
+                    event_type=str(payload.get("type") or "run"),
+                    data=payload.get("data"),
+                )
+                if payload.get("type") == "completed":
+                    return
+        except StopAsyncIteration:
+            return
+        except Exception:
+            logger.error(
+                "workflow.run.stream_failed", run_id=str(run_id), exc_info=True
+            )
+            yield encode_run_chunk(
+                event_type="error",
+                data="Realtime stream interrupted. Reconnect to continue.",
+            )
+        finally:
+            with anyio.CancelScope(shield=True):
+                if pending is not None:
+                    pending.cancel()
+                await _close_subscription(subscription, run_id)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+def _decode_channel_message(message: object) -> dict | None:
+    try:
+        payload = json.loads(message) if isinstance(message, (str, bytes)) else message
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 @router.get(

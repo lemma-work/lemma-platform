@@ -18,6 +18,7 @@ from app.core.authorization.context import (
     ResourceRef,
     ResourceType,
     ResourceVisibility,
+    normalize_resource_visibility,
 )
 from app.core.authorization.cache import (
     RoleSnapshot,
@@ -1044,6 +1045,9 @@ class Authorizer:
             and permission_id in owner_actions_for_resource(hydrated.resource_type)
         ):
             return AuthorizationDecision(True, "RESOURCE_OWNER", permission_id, hydrated)
+        visibility_decision = self._visibility_read_decision(ctx, permission_id, hydrated)
+        if visibility_decision is not None:
+            return visibility_decision
         if not ctx.has_permission(permission_id):
             grant_decision = await self._resource_grant_decision(
                 ctx,
@@ -1258,6 +1262,43 @@ class Authorizer:
         return AuthorizationDecision(False, "UNSUPPORTED_VISIBILITY", permission_id, resource)
 
     @staticmethod
+    def _is_read_permission(permission_id: str) -> bool:
+        return permission_id.endswith(".read")
+
+    def _visibility_read_decision(
+        self,
+        ctx: Context,
+        permission_id: str,
+        resource: ResourceRef,
+    ) -> AuthorizationDecision | None:
+        """Allow a read the resource's own visibility already permits.
+
+        Visibility above POD is a property of the resource, not of the viewer's
+        role, so it must be evaluated before the pod-permission gate below. It
+        used to sit *after* that gate, which made PUBLIC unreachable: a non-member
+        holds no pod permissions, failed the gate, and was denied before the
+        PUBLIC branch ever ran. The level changed nothing for members (who match
+        POD anyway) and granted nothing to anyone else — while ANONYMOUS, checked
+        earlier in ``authorize``, did get through. Signed-out beat signed-in.
+
+        Deliberately narrow: reads only, humans only. Write-shaped actions and
+        every workload actor fall through to the paths they already took, so
+        flipping a resource to PUBLIC can never widen what an agent or function
+        may do, nor let anyone edit what they can now read.
+        """
+        if ctx.actor_type != ActorType.USER or ctx.user_id is None:
+            return None
+        if not self._is_read_permission(permission_id):
+            return None
+        if resource.pod_id is not None and resource.pod_id != ctx.pod_id:
+            return None
+
+        visibility = resource.visibility or ResourceVisibility.POD
+        if visibility == ResourceVisibility.PUBLIC:
+            return AuthorizationDecision(True, "PUBLIC_RESOURCE", permission_id, resource)
+        return None
+
+    @staticmethod
     def _is_pod_scoped_permission(permission_id: str) -> bool:
         definition = PERMISSION_BY_ID.get(permission_id)
         return definition is not None and definition.scope == PermissionScope.POD
@@ -1343,6 +1384,16 @@ class Authorizer:
             group_ids = set((await self.session.execute(stmt)).scalars().all())
             visible_ids = group_ids if visible_ids is None else visible_ids & group_ids
         return frozenset(visible_ids or set())
+
+    async def hydrate_resource_ref(self, resource: ResourceRef) -> ResourceRef:
+        """Fill in visibility / owner / path for a bare ``ResourceRef``.
+
+        ``resolve_resource_ref`` returns only the identity triple; ``authorize``
+        hydrates internally. Callers that need to *report* on a resource rather
+        than just authorize it (the share preview) need the same fields, and
+        should not reach into the private helper to get them.
+        """
+        return await self._hydrate_resource(resource)
 
     async def _is_public_read(self, permission_id: str, resource: ResourceRef) -> bool:
         if not permission_id.endswith(".read"):
@@ -1702,14 +1753,8 @@ class Authorizer:
 
     @staticmethod
     def _normalize_visibility(value: str | None) -> ResourceVisibility:
-        if value is None:
-            return ResourceVisibility.POD
-        normalized = str(value).upper()
-        if normalized in {"PUBLIC"}:
-            return ResourceVisibility.PUBLIC
-        if normalized in {"PERSONAL", "PRIVATE", "OWNER"}:
-            return ResourceVisibility.PERSONAL
-        if normalized in {"RESTRICTED"}:
-            return ResourceVisibility.RESTRICTED
-        return ResourceVisibility.POD
+        # An unreadable value falls back to POD here (rather than raising) so a
+        # malformed row degrades to pod-scoped — the safe direction — instead of
+        # 500ing the whole request.
+        return normalize_resource_visibility(value) or ResourceVisibility.POD
 

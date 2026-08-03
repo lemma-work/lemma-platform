@@ -1,8 +1,8 @@
 {
   "broad_catches": {
-    "agent:count": 54,
+    "agent:count": 55,
     "agent:max": 5,
-    "agent:total": 71,
+    "agent:total": 72,
     "agent_surfaces:count": 106,
     "agent_surfaces:max": 5,
     "agent_surfaces:total": 128,
@@ -39,9 +39,9 @@
     "usage:count": 1,
     "usage:max": 1,
     "usage:total": 1,
-    "workflow:count": 5,
+    "workflow:count": 10,
     "workflow:max": 2,
-    "workflow:total": 6,
+    "workflow:total": 12,
     "workspace:count": 9,
     "workspace:max": 2,
     "workspace:total": 10
@@ -74,9 +74,9 @@
     "usage:count": 1,
     "usage:max": 18,
     "usage:total": 18,
-    "workflow:count": 2,
+    "workflow:count": 3,
     "workflow:max": 42,
-    "workflow:total": 59,
+    "workflow:total": 77,
     "workspace:count": 1,
     "workspace:max": 29,
     "workspace:total": 29
@@ -202,6 +202,7 @@
     "app/modules/schedule/services/schedule_service.py": 673,
     "app/modules/test_support/e2e_base.py": 687,
     "app/modules/test_support/perf/test_list_api_latency_benchmark.py": 630,
-    "app/modules/usage/services/usage_service.py": 765
+    "app/modules/usage/services/usage_service.py": 765,
+    "app/modules/workflow/execution/engine.py": 611
   }
 }

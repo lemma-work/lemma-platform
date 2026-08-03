@@ -105,6 +105,7 @@ class RunStepper:
                     step,
                     outcome.output or None,
                     human_wait=outcome.wait.wait_type == WorkflowRunWaitType.HUMAN,
+                    external_ref=outcome.wait.external_ref,
                 )
                 logger.debug(
                     "workflow.step.suspended",

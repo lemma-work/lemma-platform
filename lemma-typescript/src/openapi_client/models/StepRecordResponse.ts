@@ -6,6 +6,7 @@ import type { StepStatus } from './StepStatus.js';
 export type StepRecordResponse = {
     completed_at?: (string | null);
     error?: (string | null);
+    external_ref?: (string | null);
     node_id: string;
     output_data?: null;
     started_at: string;

@@ -25,12 +25,11 @@ import { DestructiveConfirmationDialog } from '@/components/shared/destructive-c
 import { ResourceShareButton, ResourceVisibilityBadge, type ResourceVisibilityValue } from '@/components/shared/resource-visibility';
 import { usePodTopbar } from '@/components/pod/pod-topbar-context';
 import { resourceAllows } from '@/lib/authz/resource-actions';
+import { isPersonalPath } from '@/lib/files/doc-sections';
 import { FileIndexStatusBadge } from '@/components/documents/file-index-status-badge';
 import { MarkdownAttachmentControl, canAttachDocumentMarkdown } from '@/components/documents/markdown-attachment-control';
 import { useDatastoreFile, useDeleteDatastoreFile } from '@/lib/hooks/use-datastores';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
-import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 import {
     getDocumentPreviewType,
     getOfficePreviewKind,
@@ -560,7 +559,6 @@ export function DocumentViewer({
             });
             setOriginalContent(docContent);
             toast.success('File saved');
-            playSoundFeedback('action-success');
         } catch {
             toast.error('Failed to save file');
         }
@@ -571,6 +569,15 @@ export function DocumentViewer({
     const isTextSourceMode = !canToggleTextView || textViewMode === 'source';
     const textModeToggleLabel = textViewMode === 'preview' ? 'Source' : 'Preview';
     const documentVisibility = doc?.visibility || 'POD';
+    /**
+     * Address the document by id rather than by the path in the address bar.
+     * `/me/…` is an alias for whoever is reading, so a path-shaped link resolves
+     * to the *recipient's* own file — a 404, or silently the wrong document when
+     * the names happen to match.
+     */
+    const documentShareUrl = typeof window === 'undefined' || !doc?.id
+        ? undefined
+        : `${window.location.origin}${window.location.pathname}?fileId=${encodeURIComponent(doc.id)}`;
 
     const handleShareVisibilityChange = useCallback(async (visibility: ResourceVisibilityValue) => {
         if (!doc) return;
@@ -588,7 +595,6 @@ export function DocumentViewer({
             if (isTextEditable) {
                 await navigator.clipboard.writeText(docContent);
                 toast.success('Content copied');
-                playSoundFeedback('action-success');
                 return;
             }
 
@@ -606,7 +612,6 @@ export function DocumentViewer({
                 new ClipboardItem({ [fileBlob.type || 'application/octet-stream']: fileBlob }),
             ]);
             toast.success('Content copied');
-            playSoundFeedback('action-success');
         } catch {
             toast.error('Could not copy content');
         }
@@ -667,7 +672,11 @@ export function DocumentViewer({
                 </TooltipTrigger>
                 <TooltipContent>Copy content</TooltipContent>
             </Tooltip>
-            {canWriteDocument ? (
+            {/* Personal files promote instead of sharing: `/me` is an alias for
+                whoever is reading, so they have no address that means the same
+                thing to anyone else. The promote action arrives via
+                `extraActions` from the space around this viewer. */}
+            {canWriteDocument && !isPersonalPath(documentPath) ? (
                 <ResourceShareButton
                     value={documentVisibility}
                     podId={podId}
@@ -675,12 +684,7 @@ export function DocumentViewer({
                     resourceId={documentPath}
                     resourceLabel="files"
                     resourceName={doc?.name || documentPath}
-                    shareUrl={typeof window === 'undefined'
-                        ? undefined
-                        : buildResourceShareUrl(
-                            `${window.location.pathname}${window.location.search}${window.location.hash}`,
-                            window.location.origin,
-                        ) ?? undefined}
+                    shareUrl={documentShareUrl}
                     onChange={handleShareVisibilityChange}
                     disabled={!doc}
                     trigger={({ openShare, disabled }) => (
@@ -760,6 +764,7 @@ export function DocumentViewer({
         datastoreName,
         doc,
         documentPath,
+        documentShareUrl,
         documentVisibility,
         extraActions,
         previewType,

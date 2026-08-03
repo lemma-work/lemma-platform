@@ -2388,6 +2388,7 @@
           "SUBAGENTS",
           "TODO",
           "CONNECTORS",
+          "SNOOZE",
           "VIEW_IMAGE"
         ],
         "title": "AgentToolset",
@@ -10888,6 +10889,79 @@
         "title": "ResourceAccessResponse",
         "type": "object"
       },
+      "ResourcePreviewResponse": {
+        "description": "What a shared link may disclose about its target.\n\nReturned only when the viewer can actually read the resource, so every field\nhere is something they could already see by opening it.",
+        "properties": {
+          "allowed_actions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "pod_id": {
+            "format": "uuid",
+            "title": "Pod Id",
+            "type": "string"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
+          "resource_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Name"
+          },
+          "resource_type": {
+            "$ref": "#/components/schemas/ResourceType"
+          },
+          "visibility": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibility"
+          }
+        },
+        "required": [
+          "resource_type",
+          "pod_id"
+        ],
+        "title": "ResourcePreviewResponse",
+        "type": "object"
+      },
       "ResourceType": {
         "enum": [
           "organization",
@@ -11706,6 +11780,17 @@
               }
             ],
             "title": "Error"
+          },
+          "external_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Ref"
           },
           "node_id": {
             "title": "Node Id",
@@ -24108,6 +24193,67 @@
         }
       }
     },
+    "/pods/{pod_id}/datastore/files/{file_id}": {
+      "get": {
+        "description": "Read one file by its id.\n\nFiles were addressable only by path, which forced share links to carry one \u2014\nand a personal path is the alias ``/me``, resolved against *whoever is\nasking*. A link to ``/me/notes.md`` therefore pointed at the recipient's own\nfile: a 404 that reads as \"deleted\", or, on a name collision, silently the\nwrong document. An id means the same file for everyone, and survives renames\nand moves besides.",
+        "operationId": "file.get_by_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "File Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get File by ID",
+        "tags": [
+          "files"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "file",
+          "result": "entity",
+          "verb": "get_by_id"
+        }
+      }
+    },
     "/pods/{pod_id}/datastore/query": {
       "post": {
         "description": "Execute a read-only SQL query inside the datastore schema. Joins, aggregates, subqueries, and cross-table reads are allowed, including across RLS-enabled tables \u2014 rows of RLS tables are scoped to the caller by default (pod admins included). Pass `mode=admin` to read every member's rows, which requires permission to administer each referenced RLS table. Only a single read-only statement is permitted; mutating statements and cross-schema references are rejected.",
@@ -26997,6 +27143,98 @@
         }
       }
     },
+    "/pods/{pod_id}/resources/{resource_type}/preview": {
+      "get": {
+        "description": "Describe a shared resource, addressed by id or by name.\n\nBoth, because the two live in different worlds: agents, apps and tables are\nlinked by name, while a document's \"name\" is its stored path \u2014 which a\nrecipient does not have, since the link they were sent carries an id\nprecisely so it does not depend on a path.",
+        "operationId": "pod.resource.preview",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resource_type",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ResourceType"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourcePreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview a Shared Resource",
+        "tags": [
+          "Pod Resource Preview"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "pod.resource",
+          "result": "entity",
+          "verb": "preview"
+        }
+      }
+    },
     "/pods/{pod_id}/resources/{resource_type}/{resource_name}/access": {
       "get": {
         "operationId": "pod.resource_access.get",
@@ -28967,6 +29205,102 @@
         }
       }
     },
+    "/pods/{pod_id}/workflow-runs": {
+      "get": {
+        "description": "Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable).",
+        "operationId": "workflow.run.list_for_pod",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowRunStatus"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Workflow Runs In Pod",
+        "tags": [
+          "workflows"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "workflow.run",
+          "result": "entity",
+          "verb": "list_for_pod"
+        }
+      }
+    },
     "/pods/{pod_id}/workflow-runs/waiting/assigned-to-me": {
       "get": {
         "description": "The current user's approval queue: active form waits assigned to them, with the owning run.",
@@ -29240,6 +29574,65 @@
           "resource": "workflow.run.form",
           "result": "entity",
           "verb": "submit"
+        }
+      }
+    },
+    "/pods/{pod_id}/workflow-runs/{run_id}/stream": {
+      "get": {
+        "description": "Server-sent events carrying the run's state as it advances. The first frame is the current run, so a client needs no separate GET; each later frame is the whole run again rather than a diff, which makes reconnecting a matter of replacing state. A `completed` frame is sent when the run reaches a terminal status, after which the stream closes. Polling remains a valid fallback.",
+        "operationId": "workflow.run.stream",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Workflow Run",
+        "tags": [
+          "workflows"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workflow.run",
+          "result": "entity",
+          "verb": "stream"
         }
       }
     },

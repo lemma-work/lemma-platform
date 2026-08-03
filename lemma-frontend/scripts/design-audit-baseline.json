@@ -1,8 +1,8 @@
 {
   "informational": {
-    "rawButtonElements": 29,
+    "rawButtonElements": 31,
     "rawSwitchButtonElements": 0,
-    "rawFieldElements": 2,
+    "rawFieldElements": 3,
     "inlineEditableFieldElements": 3,
     "cardSkinOverrides": 0,
     "buttonSkinOverrides": 0,
@@ -11,7 +11,7 @@
     "hoverOnlyDisplayReveal": 0,
     "fixedWidthsWiderThanPhones": 0,
     "pageBodyRepeatsResourceName": 0,
-    "rawFontSizeDeclaration": 1,
+    "rawFontSizeDeclaration": 2,
     "rawRadiusDeclaration": 0,
     "rawSpacingDeclaration": 0,
     "multiplePrimaryButtons": 20

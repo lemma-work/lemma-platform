@@ -14,6 +14,7 @@ from ..openapi_client.api.files import (
     file_download,
     file_folder_create,
     file_get,
+    file_get_by_id,
     file_list,
     file_markdown_attach,
     file_markdown_detach,
@@ -45,6 +46,16 @@ class PodFiles(BoundResource):
 
     def get(self, path: str) -> FileDetailResponse:
         return self._call(file_get, self._pod_uuid(), path=path)
+
+    def get_by_id(self, file_id: str) -> FileDetailResponse:
+        """Read a file by id.
+
+        Prefer this over :meth:`get` for anything stored or shared. A path is
+        not stable: ``/me/...`` is an alias resolved against whoever is asking,
+        so the same path names a different file for a different caller, and any
+        path breaks on rename.
+        """
+        return self._call(file_get_by_id, self._pod_uuid(), file_id)
 
     def get_url(self, path: str) -> FileUrlResponse:
         """URLs for a file.

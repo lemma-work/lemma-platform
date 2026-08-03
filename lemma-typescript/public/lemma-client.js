@@ -12122,6 +12122,34 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Get File by ID
+     * Read one file by its id.
+     *
+     * Files were addressable only by path, which forced share links to carry one —
+     * and a personal path is the alias ``/me``, resolved against *whoever is
+     * asking*. A link to ``/me/notes.md`` therefore pointed at the recipient's own
+     * file: a 404 that reads as "deleted", or, on a name collision, silently the
+     * wrong document. An id means the same file for everyone, and survives renames
+     * and moves besides.
+     * @param podId
+     * @param fileId
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static fileGetById(podId, fileId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/files/{file_id}",
+        path: {
+          "pod_id": podId,
+          "file_id": fileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/files.ts
@@ -12232,6 +12260,17 @@ var LemmaClient = (() => {
     }
     get(path) {
       return this.client.request(() => FilesService.fileGet(this.podId(), path));
+    }
+    /**
+     * Read a file by id.
+     *
+     * Prefer this over {@link get} for anything that outlives the current view —
+     * a share link, a bookmark, a stored reference. A path is not stable: `/me/…`
+     * is an alias resolved against *whoever is asking*, so the same path is a
+     * different file for a different person, and any path breaks on rename.
+     */
+    getById(fileId) {
+      return this.client.request(() => FilesService.fileGetById(this.podId(), fileId));
     }
     /**
      * URLs for a file: a short-lived download `url` plus a permanent
@@ -15267,11 +15306,65 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/PodResourcePreviewService.ts
+  var PodResourcePreviewService = class {
+    /**
+     * Preview a Shared Resource
+     * Describe a shared resource, addressed by id or by name.
+     *
+     * Both, because the two live in different worlds: agents, apps and tables are
+     * linked by name, while a document's "name" is its stored path — which a
+     * recipient does not have, since the link they were sent carries an id
+     * precisely so it does not depend on a path.
+     * @param podId
+     * @param resourceType
+     * @param name
+     * @param id
+     * @returns ResourcePreviewResponse Successful Response
+     * @throws ApiError
+     */
+    static podResourcePreview(podId, resourceType, name, id) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/resources/{resource_type}/preview",
+        path: {
+          "pod_id": podId,
+          "resource_type": resourceType
+        },
+        query: {
+          "name": name,
+          "id": id
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
   // src/namespaces/resource-access.ts
   var ResourceAccessNamespace = class {
     constructor(client, podId) {
       __publicField(this, "client", client);
       __publicField(this, "podId", podId);
+    }
+    /**
+     * Ask whether a shared resource is readable, and what it is.
+     *
+     * The one call here that does not need pod membership — it is what a link
+     * recipient asks before anything is rendered. Rejects with 404 both when the
+     * resource does not exist and when it is not theirs to see, so it cannot be
+     * used to discover what a pod contains.
+     */
+    preview(resourceType, target, podId) {
+      return this.client.request(
+        () => PodResourcePreviewService.podResourcePreview(
+          podId != null ? podId : this.podId(),
+          resourceType,
+          target.name,
+          target.id
+        )
+      );
     }
     get(resourceType, resourceName, podId) {
       return this.client.request(
@@ -15785,6 +15878,33 @@ var LemmaClient = (() => {
   // src/openapi_client/services/WorkflowsService.ts
   var WorkflowsService = class {
     /**
+     * List Workflow Runs In Pod
+     * Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable).
+     * @param podId
+     * @param limit
+     * @param status
+     * @param pageToken
+     * @returns WorkflowRunListResponse Successful Response
+     * @throws ApiError
+     */
+    static workflowRunListForPod(podId, limit = 50, status, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/workflow-runs",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "limit": limit,
+          "status": status,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Workflow Runs Waiting For Current User
      * The current user's approval queue: active form waits assigned to them, with the owning run.
      * @param podId
@@ -15870,6 +15990,27 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Stream Workflow Run
+     * Server-sent events carrying the run's state as it advances. The first frame is the current run, so a client needs no separate GET; each later frame is the whole run again rather than a diff, which makes reconnecting a matter of replacing state. A `completed` frame is sent when the run reaches a terminal status, after which the stream closes. Polling remains a valid fallback.
+     * @param podId
+     * @param runId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static workflowRunStream(podId, runId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/workflow-runs/{run_id}/stream",
+        path: {
+          "pod_id": podId,
+          "run_id": runId
+        },
         errors: {
           422: `Validation Error`
         }

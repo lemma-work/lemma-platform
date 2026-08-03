@@ -128,6 +128,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/datastore/files/download` | `file.download` | Download File |
 | GET | `/pods/{pod_id}/datastore/files/tree` | `file.tree` | Get Directory Tree |
 | GET | `/pods/{pod_id}/datastore/files/url` | `file.url` | Get a short-lived URL for a file |
+| GET | `/pods/{pod_id}/datastore/files/{file_id}` | `file.get_by_id` | Get File by ID |
 | GET | `/pods/{pod_id}/datastore/tables` | `table.list` | List Tables |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}` | `table.get` | Get Table |
 | GET | `/pods/{pod_id}/datastore/tables/{table_name}/records` | `record.list` | List Records |
@@ -213,6 +214,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.get` | Get Pod Member |
 | GET | `/pods/{pod_id}/permissions/catalog` | `pod.permissions.catalog` | Get Pod Permission Catalog |
 | GET | `/pods/{pod_id}/permissions/me` | `pod.permissions.me` | Get My Pod Permissions |
+| GET | `/pods/{pod_id}/resources/{resource_type}/preview` | `pod.resource.preview` | Preview a Shared Resource |
 | GET | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access` | `pod.resource_access.get` | Get Resource Access |
 | GET | `/pods/{pod_id}/roles` | `pod.roles.list` | List Pod Roles |
 | GET | `/pods/{pod_id}/roles/{role_name}/permissions` | `pod.role.permissions.get` | Get Pod Role Permissions |
@@ -273,8 +275,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/workflows/{workflow_name}` | `workflow.delete` | Delete Workflow |
+| GET | `/pods/{pod_id}/workflow-runs` | `workflow.run.list_for_pod` | List Workflow Runs In Pod |
 | GET | `/pods/{pod_id}/workflow-runs/waiting/assigned-to-me` | `workflow.run.waiting_assigned_to_me` | List Workflow Runs Waiting For Current User |
 | GET | `/pods/{pod_id}/workflow-runs/{run_id}` | `workflow.run.get` | Get Workflow Run |
+| GET | `/pods/{pod_id}/workflow-runs/{run_id}/stream` | `workflow.run.stream` | Stream Workflow Run |
 | GET | `/pods/{pod_id}/workflow-runs/{run_id}/visualize` | `workflow.run.visualize` | Visualize Workflow Run |
 | GET | `/pods/{pod_id}/workflows` | `workflow.list` | List Workflows |
 | GET | `/pods/{pod_id}/workflows/{workflow_name}` | `workflow.get` | Get Workflow |

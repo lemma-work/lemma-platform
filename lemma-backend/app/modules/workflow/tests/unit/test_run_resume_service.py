@@ -1,5 +1,6 @@
 """RunResumeService failure transitions for machine waits."""
 
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -28,6 +29,10 @@ class FakeEngine:
     def __init__(self):
         self.uow = None
         self.failures: list[dict] = []
+        self.stopped: list[object] = []
+
+    async def stop_underlying_work(self, wait):
+        self.stopped.append(wait)
 
     async def fail_internal(self, wait_type, external_ref, error, output=None):
         self.failures.append(
@@ -175,4 +180,179 @@ async def test_resume_for_function_run_no_active_wait_is_noop():
 
     assert handled is False
     assert engine.resumed == []
+    assert engine.failures == []
+
+
+async def test_overdue_agent_wait_is_expired_rather_than_left_running():
+    """A wait past the configured ceiling fails the run.
+
+    Before this, an agent that hung rather than failed kept its run
+    non-terminal forever: `_apply_agent_status` leaves RUNNING conversations
+    alone by design, so nothing ever moved the run off "still going".
+    """
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-overdue")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+    )
+
+    assert handled is True
+    assert len(engine.failures) == 1
+    assert engine.failures[0]["external_ref"] == "conversation-overdue"
+    assert "did not finish within" in engine.failures[0]["error"]
+
+
+async def test_overdue_agent_wait_is_left_alone_while_the_agent_is_snoozed():
+    """A snoozed agent is healthy and wakes itself, so the ceiling must not fire.
+
+    Without this, an agent that snoozes longer than
+    ``workflow_wait_max_age_seconds`` fails the *workflow* while nothing is
+    actually wrong — a silent wrong outcome rather than a visible error. An agent
+    blocked on a person stays subject to the ceiling; that is the hang it exists
+    to catch.
+    """
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-snoozed")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+        agent_status={"status": "WAITING", "wait_reason": "SNOOZE"},
+    )
+
+    assert handled is False
+    assert engine.failures == []
+
+
+async def test_a_human_blocked_wait_gets_a_much_larger_ceiling():
+    """A person not answering overnight is not a hang.
+
+    The machine ceiling catches work that stopped making progress. Applied to a
+    wait on a person it only ever catches someone being asleep — a workflow that
+    asks a question at 18:00 and kills itself at midnight is a worse outcome than
+    one that reads as still waiting.
+    """
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-blocked")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+        agent_status={"status": "WAITING", "wait_reason": "HUMAN"},
+    )
+
+    assert handled is False
+    assert engine.failures == []
+
+
+async def test_a_human_blocked_wait_still_expires_eventually():
+    """Larger, not absent — a truly abandoned wait is still bounded."""
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-abandoned")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(days=30)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+        agent_status={"status": "WAITING", "wait_reason": "HUMAN"},
+    )
+
+    assert handled is True
+    assert len(engine.failures) == 1
+
+
+async def test_an_unknown_wait_reason_is_not_exempt():
+    """The exemption is a whitelist, not "anything that is not HUMAN".
+
+    A wait reason added later must stay subject to the ceiling until someone
+    decides it wakes itself; the other default lets a reason nobody thought
+    about silently disable the ceiling.
+    """
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-unknown-reason")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+        agent_status={"status": "WAITING", "wait_reason": "SOMETHING_NEW"},
+    )
+
+    assert handled is True
+
+
+async def test_expiry_stops_the_work_it_is_failing_the_run_for():
+    """Cancel already stops the agent/function; expiry must too.
+
+    Otherwise a run is marked failed for hanging while the agent it was waiting
+    on keeps burning a sandbox — the exact cost the ceiling exists to end.
+    """
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.AGENT, "conversation-overdue")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(hours=48)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+    )
+
+    assert handled is True
+    assert engine.stopped == [wait]
+
+
+async def test_wait_within_the_ceiling_is_left_alone():
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.FUNCTION, "run-recent")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+    )
+
+    assert handled is False
+    assert engine.failures == []
+
+
+async def test_time_waits_are_exempt_from_the_ceiling():
+    """A wait-until node is supposed to sit for as long as it was told to."""
+    engine = FakeEngine()
+    service = RunResumeService(engine)
+
+    wait = _wait(WorkflowRunWaitType.TIME, "timer-1")
+    wait.created_at = datetime.now(timezone.utc) - timedelta(days=30)
+
+    handled = await service._expire_overdue_wait(
+        wait,
+        datetime.now(timezone.utc) - timedelta(hours=6),
+        now=datetime.now(timezone.utc),
+    )
+
+    assert handled is False
     assert engine.failures == []

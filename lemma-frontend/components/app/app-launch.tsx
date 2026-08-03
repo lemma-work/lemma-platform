@@ -15,7 +15,6 @@ import { appIndexQueryKey } from '@/lib/hooks/use-app';
 import { buildAppThemeMessage } from '@/lib/app/app-theme';
 import { resolveWidgetTheme } from '@/lib/assistant/widget-theme';
 import { buildResourceShareUrl } from '@/lib/assistant/conversation-presentation';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 interface AppFrameProps {
     podId: string;
@@ -74,7 +73,6 @@ export function AppFrame({
         try {
             await navigator.clipboard.writeText(url);
             toast.success('App link copied');
-            playSoundFeedback('action-success');
         } catch {
             toast.error('Could not copy the app link');
         }
@@ -215,7 +213,6 @@ export function AppFrame({
                     onError={() => {
                         setFrameLoaded(false);
                         setFrameFailed(true);
-                        playSoundFeedback('load-failure');
                     }}
                 />
             </div>

@@ -490,6 +490,7 @@ class StepRecordResponse(BaseModel):
     completed_at: datetime | None = None
     output_data: Any | None = None
     error: str | None = None
+    external_ref: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

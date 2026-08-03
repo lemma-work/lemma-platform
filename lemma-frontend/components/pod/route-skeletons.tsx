@@ -138,17 +138,66 @@ export function PodEditorSkeleton() {
     );
 }
 
-/** Settings pages — labelled fields in a narrow column. */
-export function PodSettingsSkeleton({ rows = 5 }: { rows?: number }) {
+/**
+ * Settings bodies, without the shell around them.
+ *
+ * A settings page that is still fetching its pod keeps its header, its nav and
+ * its width, and fills only the part it does not know yet — so these are the
+ * shape the *body* settles into. `PodSettingsShell` is still mounted around
+ * them. The `*Skeleton` exports below wrap the same fills for `loading.tsx`,
+ * where there is no shell yet to sit inside.
+ */
+export function PodSettingsPanelsFill({ panels = 3 }: { panels?: number }) {
     return (
-        <div className="context-shell min-h-full bg-transparent" role="status" aria-label="Loading">
-            <div className="flex w-full max-w-3xl flex-col gap-5">
-                {Array.from({ length: rows }).map((_, index) => (
-                    <div key={index} className="space-y-2">
-                        <Skeleton className="h-3 w-24" />
+        <div className="settings-stack" role="status" aria-label="Loading">
+            {Array.from({ length: panels }).map((_, index) => (
+                <div key={index} className="resource-panel overflow-hidden rounded-lg border border-[var(--card-border-subtle)] bg-[var(--card-bg)] shadow-[var(--card-shadow)]">
+                    <div className="border-b border-[var(--card-border-subtle)] px-4 py-3">
+                        <Skeleton className="h-3.5 w-32" />
+                        <Skeleton className="mt-2 h-3 w-64" />
+                    </div>
+                    <div className="space-y-2 px-4 py-4">
+                        <Skeleton shape="block" className="h-9 w-full" />
                         <Skeleton shape="block" className="h-9 w-full" />
                     </div>
-                ))}
+                </div>
+            ))}
+        </div>
+    );
+}
+
+/** Access and Automation settle into a ledger under a count strip, not a form. */
+export function PodSettingsLedgerFill({ tabs = 4, rows = 6 }: { tabs?: number; rows?: number }) {
+    return (
+        <div role="status" aria-label="Loading">
+            <MetricStripPlaceholder tabs={tabs} />
+            <ListSkeleton rows={rows} />
+        </div>
+    );
+}
+
+/**
+ * The same two fills at route level, for `loading.tsx`.
+ *
+ * They carry the width the shell would have given them (`max-w-6xl`), because a
+ * skeleton at one width handing over to content at another is the load being
+ * visible twice — which is what all four settings tabs used to do.
+ */
+export function PodSettingsSkeleton({ panels = 3 }: { panels?: number }) {
+    return (
+        <div className="resource-index-shell context-shell min-h-full bg-transparent">
+            <div className="w-full max-w-6xl">
+                <PodSettingsPanelsFill panels={panels} />
+            </div>
+        </div>
+    );
+}
+
+export function PodSettingsLedgerSkeleton({ tabs = 4, rows = 6 }: { tabs?: number; rows?: number }) {
+    return (
+        <div className="resource-index-shell context-shell min-h-full bg-transparent">
+            <div className="w-full max-w-6xl">
+                <PodSettingsLedgerFill tabs={tabs} rows={rows} />
             </div>
         </div>
     );

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from app.core.authorization.context import ResourceVisibility
+from app.core.authorization.context import (
+    ResourceVisibility,
+    normalize_resource_visibility,
+)
 from app.core.file_types import get_content_type
 from app.modules.datastore.domain.errors import (
     DatastoreAccessDeniedError,
@@ -95,15 +98,13 @@ class PathResolver:
     ) -> str:
         if visibility is None:
             return self._default_visibility_for_path(path, requester_user_id)
-        raw = visibility.value if isinstance(visibility, ResourceVisibility) else str(visibility)
-        try:
-            normalized = ResourceVisibility(raw.upper())
-        except ValueError as exc:
+        normalized = normalize_resource_visibility(visibility)
+        if normalized is None:
             allowed = [v.value for v in ResourceVisibility]
             raise DatastoreValidationError(
                 f"Unsupported file visibility '{visibility}'. Allowed values: {', '.join(allowed)}",
                 details={"value": visibility, "allowed_values": allowed},
-            ) from exc
+            )
         return normalized.value
 
     def _personal_root_path(self, requester_user_id: UUID) -> str:

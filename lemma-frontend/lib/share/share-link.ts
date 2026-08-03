@@ -142,6 +142,86 @@ export function resolveShareDestination(
     return search ? `${path}?${search}` : path;
 }
 
+/** What a share link points at, in the vocabulary the backend authorizes in. */
+export interface ShareTarget {
+    podId: string;
+    resourceType: ShareResourceType;
+    /** Set for documents, which links address by id so they survive a rename. */
+    resourceId?: string;
+    /** Set for everything else, whose public identifier is its name or path. */
+    resourceName?: string;
+}
+
+const RESOURCE_TYPE_BY_KIND: Record<ShareKind, ShareResourceType | null> = {
+    agent: 'agent',
+    app: 'app',
+    workflow: 'workflow',
+    function: 'function',
+    table: 'datastore_table',
+    document: 'document',
+    folder: 'folder',
+    schedule: 'schedule',
+    // A whole pod is not a shareable resource — there is nothing to preview and
+    // nothing to grant. Pod links keep the request-access path.
+    pod: null,
+};
+
+/**
+ * Where a resource's identity lives for each kind.
+ *
+ * Some kinds keep it in the path (`/agents/support-triage`), others in the
+ * query (`?tab=orders`), because that is how the workspace routes them. The
+ * table is here rather than inferred so a route change is a one-line fix in one
+ * place instead of a silently broken share link.
+ */
+const NAME_QUERY_KEY_BY_KIND: Partial<Record<ShareKind, string>> = {
+    folder: 'folder',
+    table: 'tab',
+    app: 'page',
+};
+
+function firstQueryValue(value: string | string[] | undefined): string | undefined {
+    const candidate = Array.isArray(value) ? value[0] : value;
+    return candidate?.trim() || undefined;
+}
+
+/**
+ * Resolve what a share link points at, so a viewer who is not a pod member can
+ * ask whether they may read it.
+ *
+ * Returns null when the link carries no addressable resource — a pod link, or a
+ * malformed path — in which case there is nothing to preview.
+ */
+export function resolveShareTarget(
+    kind: ShareKind,
+    segments: string[] | undefined,
+    query: Record<string, string | string[] | undefined> = {},
+): ShareTarget | null {
+    const parts = (segments ?? []).filter(Boolean);
+    if (parts[0] !== 'pod' || !parts[1]) return null;
+    const podId = parts[1];
+    const resourceType = RESOURCE_TYPE_BY_KIND[kind];
+    if (!resourceType) return null;
+
+    if (kind === 'document') {
+        const resourceId = firstQueryValue(query.fileId);
+        if (resourceId) return { podId, resourceType, resourceId };
+        // Links minted before documents were addressed by id. They still work
+        // for a pod file; a `/me/…` one never resolved for anyone else anyway.
+        const resourceName = firstQueryValue(query.file);
+        return resourceName ? { podId, resourceType, resourceName } : null;
+    }
+
+    const queryKey = NAME_QUERY_KEY_BY_KIND[kind];
+    const resourceName = queryKey
+        ? firstQueryValue(query[queryKey])
+        : parts.length > 3
+            ? decodeURIComponent(parts[parts.length - 1])
+            : undefined;
+
+    return resourceName ? { podId, resourceType, resourceName } : null;
+}
+
 /**
  * The name to print on the card.
  *
@@ -156,8 +236,13 @@ export function resolveShareName(input: {
     const explicit = input.name?.replace(/\s+/g, ' ').trim();
     if (explicit) return explicit.slice(0, 120);
 
-    // Apps and tables keep their identity in the query rather than the path.
-    for (const key of ['page', 'table', 'file', 'folder']) {
+    // Apps, tables and folders keep their identity in the query rather than the
+    // path. Read the keys off the same table `resolveShareTarget` addresses by,
+    // so the two cannot drift — they already had, on `tab` vs `table`, which
+    // left every table link falling back to its URL slug for a display name.
+    // `file` is appended for legacy path-shaped document links; `fileId` is
+    // deliberately absent, being an id rather than anything worth printing.
+    for (const key of [...Object.values(NAME_QUERY_KEY_BY_KIND), 'file']) {
         const value = input.query?.[key];
         const candidate = Array.isArray(value) ? value[0] : value;
         if (candidate) return prettifySlug(candidate);

@@ -40,6 +40,11 @@ from app.modules.workflow.execution.stepper import RunStepper, StepResult
 from app.composition.workflow_agent import AgentControlAdapter
 from app.composition.workflow_function import FunctionControlAdapter
 from app.composition.workflow_scheduler import ScheduleControlAdapter
+from app.modules.workflow.execution.underlying_work import (
+    stop_underlying_work,
+    stop_underlying_work_for_wait,
+)
+from app.modules.workflow.infrastructure.run_channel import publish_run_state
 from app.modules.workflow.infrastructure.repositories import (
     SqlAlchemyWorkflowRepository,
     SqlAlchemyWorkflowRunRepository,
@@ -223,6 +228,7 @@ class WorkflowEngine:
         await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
+        await self._announce(run)
 
         return run
 
@@ -281,6 +287,7 @@ class WorkflowEngine:
         await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
+        await self._announce(run)
         return run
 
     async def resume_internal(
@@ -332,6 +339,7 @@ class WorkflowEngine:
         await self._persist_wait(run, result)
         self._collect_terminal_event(run)
         await self.uow.commit()
+        await self._announce(run)
         return run
 
     async def fail_internal(
@@ -362,6 +370,7 @@ class WorkflowEngine:
         run = await self.run_repo.update(run)
         self._collect_terminal_event(run)
         await self.uow.commit()
+        await self._announce(run)
         return run
 
     async def cancel_run(
@@ -386,17 +395,12 @@ class WorkflowEngine:
         if wait is not None:
             wait.cancel()
             await self.wait_repo.update(wait)
-            if wait.wait_type in (
-                WorkflowRunWaitType.AGENT,
-                WorkflowRunWaitType.FUNCTION,
-            ):
-                # The underlying work is not stopped; its completion event
-                # will find no ACTIVE wait and be dropped with a log line.
-                logger.debug(
-                    "workflow.cancel.underlying_work_left_running",
-                    run_id=str(run.id),
-                    wait_type=wait.wait_type.value,
-                )
+            await stop_underlying_work(
+                wait,
+                run=run,
+                agent_adapter=self.agent_adapter,
+                function_adapter=self.function_adapter,
+            )
         try:
             run.cancel()
         except ValueError as exc:
@@ -404,6 +408,7 @@ class WorkflowEngine:
         run = await self.run_repo.update(run)
         self._collect_terminal_event(run)
         await self.uow.commit()
+        await self._announce(run)
         logger.debug("workflow.run.cancelled", run_id=str(run.id))
         return run
 
@@ -494,6 +499,37 @@ class WorkflowEngine:
         flow.validate_graph()
         assert flow.entry_node_id is not None
         return flow.entry_node_id
+
+    async def _announce(self, run: WorkflowRunEntity) -> None:
+        """Push the committed run to anyone streaming it.
+
+        Called only after `uow.commit()` — a subscriber must never observe state
+        the database has not accepted. Imported lazily to keep the API schema
+        module out of the engine's import cycle.
+        """
+        from app.modules.workflow.api.schemas import run_response_from_domain
+
+        # Everything here is best effort and must stay that way: the run is
+        # already committed, so a failure to *tell anyone* cannot be allowed to
+        # turn a successful advance into a raised exception. Clients still poll.
+        try:
+            wait = await self.wait_repo.get_active_for_run(run.id)
+            await publish_run_state(
+                run.id,
+                run_response_from_domain(run, wait).model_dump(mode="json"),
+                terminal=run.status in TERMINAL_STATUSES,
+            )
+        except Exception:
+            logger.debug("workflow.run.announce_failed", exc_info=True)
+
+    async def stop_underlying_work(self, wait: WorkflowRunWaitEntity) -> None:
+        """Stop the work a wait holds, for a caller that has no run in hand."""
+        await stop_underlying_work_for_wait(
+            wait,
+            run_repo=self.run_repo,
+            agent_adapter=self.agent_adapter,
+            function_adapter=self.function_adapter,
+        )
 
     async def _persist_wait(self, run: WorkflowRunEntity, result: StepResult) -> None:
         if result.wait is None or run.status not in (

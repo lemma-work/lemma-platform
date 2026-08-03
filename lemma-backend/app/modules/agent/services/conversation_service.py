@@ -72,13 +72,24 @@ from app.modules.agent.services.workspace_location import new_workspace_cwd, res
 from app.modules.pod.contracts import PodConfig
 from app.composition.agent_pod import create_agent_pod_repository
 from app.composition.agent_usage import UsageLimitExceededError, UsageService
+from app.composition.agent_snooze_scheduler import cancel_snooze_wake
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
+from app.modules.agent.services.pause_resume import (
+    PAUSING_TOOL_NAMES,
+    PauseResumeMixin,
+)
+from app.modules.agent.tools.snooze.models import (
+    build_snooze_result,
+    elapsed_seconds,
+)
 
 _POD_ASSISTANT_AGENT_ID = DEFAULT_POD_AGENT_ID
 
-# Tools that pause the run for user input. Both persist their tool call (rendered
-# as a card by the client) and are resolved via the approvals endpoint, which
-# synthesizes their tool return and resumes the run.
-_PAUSING_TOOL_NAMES = ("ask_user", "request_approval")
+# Defined with the primitive that consumes it, so the list and the resume path
+# that depends on it cannot drift apart.
+_PAUSING_TOOL_NAMES = PAUSING_TOOL_NAMES
 
 
 class ApprovalResolution(NamedTuple):
@@ -121,7 +132,7 @@ class _Unset:
 _UNSET = _Unset()
 
 
-class ConversationService:
+class ConversationService(PauseResumeMixin):
     """Application service for conversation storage and run coordination."""
 
     def __init__(
@@ -659,11 +670,11 @@ class ConversationService:
             tool_call_id=approval_id,
         )
         if existing_return is None:
-            # Synthesize the tool return the resumed run will replay, and persist it
-            # under the *paused* run (the one that made the call). For an approved
-            # request_approval this runs the wrapped tool as the user. History is
-            # reconstructed per conversation, so _build_tool_batch pairs this return
-            # with its call regardless of which run each lives in.
+            # Build the return the resumed run will replay. This check guards the
+            # *build*, which for an approved request_approval runs the wrapped tool
+            # as the user — re-executing it (re-deploying an app, re-recording
+            # session grants) would be a correctness bug. The append below re-checks
+            # cheaply and closes the race.
             return_tool_name, tool_result = await self._build_resume_tool_return(
                 conversation=conversation,
                 user_id=user_id,
@@ -673,19 +684,12 @@ class ConversationService:
                 response=response,
                 paused_agent_run_id=paused_run_id,
             )
-            saved_return = await self.conversation_repository.append_message(
-                conversation_id=conversation.id,
-                agent_run_id=paused_run_id,
-                draft=MessageDraft.of_tool_return(
-                    tool_call_id=approval_id,
-                    tool_name=return_tool_name,
-                    tool_result=tool_result,
-                ),
-            )
-            await self.uow.commit()
-            await publish_conversation_event(
-                conversation.id,
-                message_payload(paused_run_id, message_to_payload(saved_return)),
+            await self.append_pause_tool_return(
+                conversation=conversation,
+                paused_run_id=paused_run_id,
+                tool_call_id=approval_id,
+                tool_name=return_tool_name,
+                tool_result=tool_result,
             )
 
         if agent_host_permission_request(tool_args) is not None:
@@ -695,76 +699,15 @@ class ConversationService:
             # duplicate host run for the same turn.
             return
 
-        # A turn can pause with several pending interactions (e.g. request_approval +
-        # ask_user in one assistant turn). Resume only once every pausing tool call in
-        # the paused run is resolved — otherwise the unresolved sibling would be
-        # orphaned (no return) and dropped from the resumed run's history, making the
-        # agent re-ask it.
-        await self.conversation_repository.lock_conversation(conversation.id)
-        remaining = await self._unresolved_pausing_call_ids(
-            conversation_id=conversation.id,
-            agent_run_id=paused_run_id,
+        await self.start_resume_run_if_ready(
+            conversation=conversation,
+            paused_run_id=paused_run_id,
+            resumed_tool_call_id=approval_id,
+            user_id=user_id,
+            pod_id=pod_id,
+            agent_name=agent_name,
+            source="approval_resume",
         )
-        if remaining:
-            # Still waiting on the user; the frontend reload surfaces the next card.
-            await self.uow.commit()
-            return
-        active_run = await self.conversation_repository.get_active_agent_run_for_update(
-            conversation.id
-        )
-        if active_run is not None:
-            # Another resolve already started the resume run (or a normal run is live);
-            # it will replay the now-complete tool returns. Nothing more to do.
-            await self.uow.commit()
-            return
-        agent = await self._resolve_agent(conversation=conversation, user_id=user_id)
-        selected_agent_runtime = (
-            conversation.agent_runtime
-            or agent.agent_runtime
-            or await self._default_agent_runtime_for_pod(pod_id=conversation.pod_id)
-        )
-        resume_run = await self.conversation_repository.create_agent_run(
-            conversation_id=conversation.id,
-            agent_id=conversation.agent_id,
-            agent_runtime=selected_agent_runtime,
-            metadata={"source": "approval_resume", "resumed_tool_call_id": approval_id},
-        )
-        self.uow.collect_events(
-            [
-                AgentRunStartedEvent(
-                    conversation_id=conversation.id,
-                    agent_run_id=resume_run.id,
-                    user_id=user_id,
-                    pod_id=pod_id,
-                    agent_name=agent_name,
-                )
-            ]
-        )
-        await self.uow.commit()
-
-    async def _unresolved_pausing_call_ids(
-        self,
-        *,
-        conversation_id: UUID,
-        agent_run_id: UUID,
-    ) -> list[str]:
-        """Pausing tool calls in the paused run that still lack a recorded decision."""
-        resolved_ids = await self.conversation_repository.list_resolved_approval_ids(
-            conversation_id=conversation_id
-        )
-        messages, _ = await self.conversation_repository.list_messages(
-            conversation_id=conversation_id,
-            limit=500,
-        )
-        return [
-            message.tool_call_id
-            for message in messages
-            if message.kind == MessageKind.TOOL_CALL
-            and message.tool_name in _PAUSING_TOOL_NAMES
-            and message.agent_run_id == agent_run_id
-            and message.tool_call_id is not None
-            and message.tool_call_id not in resolved_ids
-        ]
 
     async def _build_resume_tool_return(
         self,
@@ -1364,7 +1307,55 @@ class ConversationService:
                 ]
             )
             await self.uow.commit()
+            return conversation
+
+        # No active run, but the conversation may still be suspended. A snoozed
+        # turn has *no* run by construction — it ended cleanly when the tool
+        # paused it — so without this, Stop silently did nothing and the timer
+        # still fired later.
+        await self._cancel_active_snooze(conversation=conversation)
         return conversation
+
+    @property
+    def wait_repository(self) -> AgentConversationWaitRepository:
+        # Built on demand rather than in __init__: the repository binds a session
+        # eagerly, and plenty of callers construct this service without a real
+        # unit of work to exercise paths that never touch the database.
+        return AgentConversationWaitRepository(self.uow)
+
+    async def _cancel_active_snooze(self, *, conversation: Conversation) -> None:
+        """Stop a sleeping agent for good: drop the timer, never resume.
+
+        The CANCELLED tool return is still written, so the paused call is not
+        left dangling in history — a tool call with no return is dropped when
+        history is rebuilt, and the model would see a turn that ends mid-thought.
+        What is deliberately skipped is ``start_resume_run_if_ready``: Stop means
+        the agent does not wake.
+        """
+        wait = await self.wait_repository.find_active_for_conversation(conversation.id)
+        if wait is None:
+            return
+
+        wait.cancel()
+        await self.wait_repository.update(wait)
+        await self.conversation_repository.set_conversation_status(
+            conversation_id=conversation.id,
+            status=ConversationStatus.STOPPED,
+        )
+        conversation.status = ConversationStatus.STOPPED
+        await self.append_pause_tool_return(
+            conversation=conversation,
+            paused_run_id=wait.agent_run_id,
+            tool_call_id=wait.tool_call_id,
+            tool_name="snooze",
+            tool_result=build_snooze_result(
+                woke_because="CANCELLED",
+                slept_seconds=elapsed_seconds((wait.spec or {}).get("started_at")),
+                note_to_self=(wait.spec or {}).get("note_to_self"),
+            ),
+        )
+        if wait.external_ref:
+            await cancel_snooze_wake(wait.external_ref)
 
     async def _get_or_create_conversation_for_message(
         self,

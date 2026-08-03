@@ -12,6 +12,15 @@ interface PlainPageShellProps {
     contentWidthClassName?: string;
     contentClassName?: string;
     centerContent?: boolean;
+    /**
+     * Where the content column sits once it stops growing.
+     *
+     * `'center'` suits a single standalone card — the create-organization form,
+     * the remix panel. Settings areas want `'left'`: the header's title and tabs
+     * are left-aligned, and a centred body means the page's first character
+     * never lines up with the tab above it.
+     */
+    contentAlign?: 'left' | 'center';
     title?: ReactNode;
     icon?: ReactNode;
     backHref?: string;
@@ -26,6 +35,7 @@ export function PlainPageShell({
     contentWidthClassName = 'max-w-6xl',
     contentClassName,
     centerContent = false,
+    contentAlign = 'center',
     title,
     icon,
     backHref,
@@ -75,8 +85,18 @@ export function PlainPageShell({
                     </header>
                 ) : null}
 
-                <main className="min-h-0 flex-1 overflow-y-auto bg-[var(--pod-main-bg)] px-4 py-5 sm:px-7 sm:py-7 lg:px-10">
-                    <div className={cn('mx-auto flex w-full flex-col', contentWidthClassName, centerContent && 'min-h-full justify-center', contentClassName)}>
+                {/* Same horizontal padding as the header above it, so the body
+                    starts on the title's vertical instead of a further 12px in. */}
+                <main className="min-h-0 flex-1 overflow-y-auto bg-[var(--pod-main-bg)] px-3 py-5 sm:px-5 sm:py-7 lg:px-7">
+                    <div
+                        className={cn(
+                            'flex w-full flex-col',
+                            contentAlign === 'center' && 'mx-auto',
+                            contentWidthClassName,
+                            centerContent && 'min-h-full justify-center',
+                            contentClassName,
+                        )}
+                    >
                         {children}
                     </div>
                 </main>

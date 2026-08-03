@@ -28,7 +28,6 @@ import { usePodAccess } from '@/lib/hooks/use-pod-access';
 import { usePodAutomation } from '@/lib/hooks/use-pod-automation';
 import { Agent, UpdateAgentData } from '@/lib/types';
 import { formatAgentName } from '@/lib/utils/agents';
-import { playSoundFeedback } from '@/lib/feedback/sound-feedback';
 
 /**
  * One agent, one page.
@@ -165,7 +164,6 @@ export default function AgentDetailPage({
             await updateAgentAsync({ podId, agentName, data: payload });
             lastSavedHashRef.current = payloadHash;
             setHasUnsavedChanges(false);
-            playSoundFeedback('action-success');
         } catch (error) {
             console.error('Failed to save agent:', error);
             toast.error(error instanceof Error ? error.message : 'Failed to save agent. Please try again.');

@@ -12,12 +12,23 @@ def _routers():
     from app.modules.pod.api.controllers.resource_access_controller import (
         router as resource_access,
     )
+    from app.modules.pod.api.controllers.resource_preview_controller import (
+        router as resource_preview,
+    )
     from app.modules.pod.api.controllers.pod_role_controller import router as role
     from app.modules.pod.api.controllers.pod_join_request_controller import (
         router as join_request,
     )
 
-    return [pod, member, permission, resource_access, role, join_request]
+    return [
+        pod,
+        member,
+        permission,
+        resource_access,
+        resource_preview,
+        role,
+        join_request,
+    ]
 
 
 def _event_routers():

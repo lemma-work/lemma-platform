@@ -6,7 +6,7 @@ import { ProtectedRoute } from '@/components/auth/protected-route';
 import { PodSettingsShell } from '@/components/pod/pod-settings-shell';
 import { UsageOverview } from '@/components/usage/usage-overview';
 import { usePod } from '@/lib/hooks/use-pods';
-import { FieldRowsSkeleton } from '@/components/shared/loading';
+import { PodSettingsPanelsFill } from '@/components/pod/route-skeletons';
 
 export default function PodUsagePage({ params }: { params: Promise<{ id: string }> }) {
     return (
@@ -21,33 +21,23 @@ function PodUsagePageContent({ params }: { params: Promise<{ id: string }> }) {
     const { data: pod, isLoading } = usePod(podId);
     const organizationId = pod?.organization_id;
 
-    if (isLoading) {
-        return (
-            <div className="context-shell min-h-full bg-transparent">
-                <FieldRowsSkeleton rows={5} className="max-w-2xl" />
-            </div>
-        );
-    }
-
     return (
         <PodSettingsShell
             podId={podId}
-            title="Pod Settings"
+            title="Usage"
         >
-            <div className="w-full max-w-5xl">
-                {organizationId ? (
-                    <UsageOverview
-                        organizationId={organizationId}
-                        podId={podId}
-                        scope="pod"
-                        title={`${pod?.name || 'Pod'} usage`}
-                    />
-                ) : (
-                    <div className="surface-panel p-5 text-sm text-[var(--text-secondary)]">
-                        This pod does not include an organization id, so usage cannot be loaded yet.
-                    </div>
-                )}
-            </div>
+            {isLoading ? <PodSettingsPanelsFill panels={3} /> : organizationId ? (
+                <UsageOverview
+                    organizationId={organizationId}
+                    podId={podId}
+                    scope="pod"
+                    title={`${pod?.name || 'Pod'} usage`}
+                />
+            ) : (
+                <div className="surface-panel p-5 text-sm text-[var(--text-secondary)]">
+                    This pod does not include an organization id, so usage cannot be loaded yet.
+                </div>
+            )}
         </PodSettingsShell>
     );
 }

@@ -22,8 +22,6 @@ ROLE_ALIASES: dict[str, str] = {
 }
 
 SYSTEM_POD_ROLE_VALUES = set(ROLE_HIERARCHY)
-PERSONAL_VISIBILITY_VALUES = {"PERSONAL", "PRIVATE", "OWNER"}
-POD_VISIBILITY_VALUES = {"POD", "PUBLIC", "ALL"}
 
 
 def normalize_role_name(value: str | PodRole) -> str:

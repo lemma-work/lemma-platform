@@ -89,6 +89,7 @@ function OrgMembersPageContent() {
             meta={organization?.name || 'Organization'}
             tabs={<OrganizationSettingsNav organizationId={orgId} />}
             contentWidthClassName="max-w-6xl"
+            contentAlign="left"
             contentClassName="pb-16 sm:pb-20"
         >
             <SettingsStack className="office-arrive">

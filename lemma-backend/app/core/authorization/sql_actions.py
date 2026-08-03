@@ -114,11 +114,22 @@ def allowed_actions_expr(
         resource_path_col=resource_path_col,
     )
 
+    # Mirrors Authorizer._visibility_read_decision. These two must agree: if the
+    # projection is wider, a row advertises actions that 403 on use; if narrower,
+    # a resource the viewer can genuinely open renders as read-only or vanishes.
+    # POD and PUBLIC used to share one branch here, which is the listing half of
+    # the bug that made PUBLIC do nothing.
+    visibility_read_actions: list[str] = []
+    if ctx.actor_type == ActorType.USER and ctx.user_id is not None:
+        visibility_read_actions = [a for a in resource_actions if a.endswith(".read")]
+    public_actions = list(dict.fromkeys([*role_actions, *visibility_read_actions]))
+
     whens = []
     if owner_user_id_col is not None and ctx.user_id is not None:
         whens.append((owner_user_id_col == ctx.user_id, _text_array(owner_actions)))
     if visibility_col is not None:
-        whens.append((visibility_col.in_(["POD", "PUBLIC"]), _text_array(role_actions)))
+        whens.append((visibility_col == "POD", _text_array(role_actions)))
+        whens.append((visibility_col == "PUBLIC", _text_array(public_actions)))
         whens.append((visibility_col == "RESTRICTED", restricted_actions))
         whens.append((visibility_col == "PERSONAL", empty_actions))
     else:

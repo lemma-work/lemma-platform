@@ -140,63 +140,34 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 PY
 
-# Enforce the versioning discipline and stamp the spec identity. The backend is
-# the single source of truth for the API version (app/version.py -> FastAPI
-# version -> openapi info.version). If the schema shape changed but the version
-# did not, that is exactly the silent skew that shipped a stale message model
-# under an unchanged "0.2.0" — refuse it loudly here, at generation time. On a
-# real schema change we also auto-bump the SDK package patch version so a plain
-# `uv tool install` reinstalls (no --force needed).
-"$PYTHON_BIN" - "$CLIENT_SPEC_TMP" "$SDK_DIR/lemma_sdk/openapi_spec.json" "$SDK_DIR/lemma_sdk/_spec_info.py" "$SDK_DIR/pyproject.toml" <<'PY'
+# Stamp the spec identity. The backend is the single source of truth for the API
+# version (app/version.py -> FastAPI version -> openapi info.version).
+#
+# This used to also refuse to generate when the schema shape changed without an
+# API_VERSION bump, and auto-bumped the SDK package patch. Both are gone. Every
+# branch that touched the schema had to move the version, so a version nobody
+# had released still climbed once per PR, and every such branch conflicted with
+# every other on the same lines — while the number itself meant nothing, since
+# the release it names has not happened.
+#
+# Skew detection never depended on that label anyway: SPEC_SHA256 below
+# fingerprints the schema itself, so `lemma doctor` sees a mismatched client
+# whether or not anyone remembered to bump. What must hold is that every
+# component agrees at *release* time, which scripts/check_version_consistency.py
+# enforces against the tag before anything is published.
+"$PYTHON_BIN" - "$CLIENT_SPEC_TMP" "$SDK_DIR/lemma_sdk/openapi_spec.json" "$SDK_DIR/lemma_sdk/_spec_info.py" <<'PY'
 import hashlib
 import json
-import re
 import sys
 from pathlib import Path
 
-new_spec_path, committed_path, spec_info_path, pyproject_path = (
-    Path(p) for p in sys.argv[1:5]
-)
+new_spec_path, committed_path, spec_info_path = (Path(p) for p in sys.argv[1:4])
 
 new_text = new_spec_path.read_text(encoding="utf-8")
 new_spec = json.loads(new_text)
 new_version = str(new_spec.get("info", {}).get("version") or "")
 new_sha = hashlib.sha256(new_text.encode("utf-8")).hexdigest()
 
-
-def schema_shape(spec: dict) -> str:
-    # Version-label-independent fingerprint: the parts that matter for clients.
-    return json.dumps(
-        {"paths": spec.get("paths", {}), "components": spec.get("components", {})},
-        sort_keys=True,
-    )
-
-
-schema_changed = False
-if committed_path.exists():
-    old_spec = json.loads(committed_path.read_text(encoding="utf-8"))
-    old_version = str(old_spec.get("info", {}).get("version") or "")
-    schema_changed = schema_shape(old_spec) != schema_shape(new_spec)
-    if schema_changed and old_version == new_version:
-        sys.stderr.write(
-            "\nERROR: the OpenAPI schema changed but the API version is still "
-            f"{new_version!r}.\n"
-            "Bump app/version.py:API_VERSION in lemma-backend and regenerate, so "
-            "the SDK version tracks the schema and `lemma doctor` can detect skew.\n\n"
-        )
-        sys.exit(1)
-
-if schema_changed:
-    pyproject_text = pyproject_path.read_text(encoding="utf-8")
-    match = re.search(r'(?m)^version = "(\d+)\.(\d+)\.(\d+)"', pyproject_text)
-    if match:
-        major, minor, patch = (int(g) for g in match.groups())
-        bumped = f'version = "{major}.{minor}.{patch + 1}"'
-        pyproject_path.write_text(
-            pyproject_text[: match.start()] + bumped + pyproject_text[match.end():],
-            encoding="utf-8",
-        )
-        print(f"Bumped lemma-sdk package version -> {major}.{minor}.{patch + 1}")
 
 committed_path.write_text(new_text, encoding="utf-8")
 spec_info_path.write_text(

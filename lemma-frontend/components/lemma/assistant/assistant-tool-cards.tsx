@@ -35,7 +35,6 @@ import {
 import { cn } from "@/lib/utils";
 import { formatAgentName } from "@/lib/utils/agents";
 import { getLemmaClient } from "@/lib/sdk/lemma-client";
-import { playSoundFeedback } from "@/lib/feedback/sound-feedback";
 // Pure formatting / label / tool-payload helpers (extracted from assistant-experience).
 import {
   asArray,
@@ -73,7 +72,6 @@ export function DetailsWithCopy({ label, value }: { label: string; value: string
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
-      playSoundFeedback('action-success');
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }
   };
@@ -203,7 +201,6 @@ function CodeBlock({ label, value, tone = "default" }: { label?: string; value?:
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
-      playSoundFeedback('action-success');
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard access denied */ }
   };

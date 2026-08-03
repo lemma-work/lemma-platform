@@ -22,50 +22,81 @@ export const viewport: Viewport = {
   colorScheme: "light dark",
 };
 
-const fraunces = Fraunces({
-  weight: ["300", "400"],
-  subsets: ["latin"],
-  style: ["normal", "italic"],
-  variable: "--font-landing-serif",
-});
+/**
+ * Every family below is declared here so its CSS variable is global — the token
+ * chain in `styles/tokens.css` resolves against all of them, and a family scoped
+ * to a route group would silently fall back to system text wherever else it is
+ * referenced.
+ *
+ * `preload` is a separate decision from declaring. A preloaded family emits
+ * `<link rel="preload">` into every document, so it competes for bandwidth on
+ * the critical path of routes that never paint a single glyph of it. Only the
+ * faces that `--font-body-family`, `--font-display-family` and
+ * `--font-mono-family` actually resolve to earn that:
+ *
+ *   body    → Inter → system
+ *   display → Inter → system
+ *   mono    → DM Mono → ui-monospace
+ *
+ * The rest are landing, legal, greeting and document faces: no app route paints
+ * them above the fold. They still load the moment a matching rule applies —
+ * `preload: false` removes the eager fetch, not the font.
+ */
 
-// 600 is new here. Landing deliberately stops at 500 — it reserves 600 for the
-// fake product chrome inside its mockups. Now that the real product is set in
-// Inter too, that weight has to actually exist or dense UI gets a synthesized
-// bold instead of Inter's own semibold.
+// Body *and* display face — product and landing share one voice. 600 exists
+// because landing reserves it for the fake product chrome in its mockups, and
+// dense real UI needs Inter's own semibold rather than a synthesized bold.
 const inter = Inter({
   weight: ["300", "400", "500", "600"],
   subsets: ["latin"],
   variable: "--font-landing-sans",
 });
 
+// Mono face — code, tables and machine values in the assistant.
 const dmMono = DM_Mono({
   weight: ["400", "500"],
   subsets: ["latin"],
   variable: "--font-dm-mono",
 });
 
+// Landing display serif.
+const fraunces = Fraunces({
+  weight: ["300", "400"],
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  variable: "--font-landing-serif",
+  preload: false,
+});
+
+// Landing mono.
 const ibmPlexMono = IBM_Plex_Mono({
   weight: ["400", "500"],
   subsets: ["latin"],
   variable: "--font-landing-mono",
+  preload: false,
 });
 
+// The handwritten greeting, on one landing block. next/font gives this family
+// no `subsets` option and so never preloads it — there is no `preload` flag to
+// set here, and none is needed.
 const playwriteTz = Playwrite_TZ({
   weight: ["300", "400"],
   variable: "--font-greeting-hand",
 });
 
+// Long-form document and legal pages.
 const documentSans = DM_Sans({
   weight: ["300", "400", "500", "600"],
   subsets: ["latin"],
   variable: "--font-document-sans",
+  preload: false,
 });
 
 const bricolageGrotesque = Bricolage_Grotesque({
   weight: ["400", "500", "700", "800"],
   variable: "--font-bricolage-grotesque",
   subsets: ["latin"],
+  preload: false,
 });
 
 export const metadata: Metadata = {

@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Optional, Sequence, Tuple
 from uuid import UUID
 
-from app.core.authorization.context import ActorType, Context, ResourceVisibility
+from app.core.authorization.context import (
+    ActorType,
+    Context,
+    ResourceVisibility,
+    normalize_resource_visibility,
+)
 from app.modules.datastore.domain.datastore_entities import (
     ColumnSchema,
     DatastoreTableEntity,
@@ -371,11 +376,4 @@ class TableService:
 
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
-        normalized = str(value or ResourceVisibility.POD.value).strip().upper()
-        if normalized in {"PERSONAL", "PRIVATE", "OWNER"}:
-            return ResourceVisibility.PERSONAL
-        if normalized == "RESTRICTED":
-            return ResourceVisibility.RESTRICTED
-        if normalized == "PUBLIC":
-            return ResourceVisibility.PUBLIC
-        return ResourceVisibility.POD
+        return normalize_resource_visibility(value) or ResourceVisibility.POD

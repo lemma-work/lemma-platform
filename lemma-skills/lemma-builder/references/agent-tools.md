@@ -12,6 +12,7 @@ Two toolsets gate them (grant them in the agent's `toolsets`, see `agents.md`):
 | --- | --- |
 | `USER_INTERACTION` | `ask_user`, `display_resource`, `request_approval` |
 | `SPEECH` | `say`, `listen` |
+| `SNOOZE` | `snooze` |
 
 Every tool returns at least `{ success, message?, error? }` (errors are non-fatal — a
 failed tool returns `success:false` with `error`, it does not crash the run); the
@@ -37,6 +38,7 @@ delivers it per surface.
 | `display_resource` (TABLE/AGENT/…) | inline resource view | delivered as a link/summary | link/summary | not delivered |
 | `say` | audio player | **native voice note** (MP3) | **native voice note** (OGG voice bubble) | not delivered |
 | `request_approval` | approval card | approval card | approval card | (asks in prose) |
+| `snooze` | conversation reads as snoozed until it wakes | same — nothing is asked of the user | same | works, but see the 24h cap below |
 
 Ground truth: `agent_surfaces/platforms/platform_capabilities.py` (per-platform
 capabilities) and `agent/tools/user_interaction/pydantic_adapter.py`
@@ -45,16 +47,20 @@ recipient** — share files through the reply tool's `attachment_paths`.
 
 ## The pause / resume model
 
-`ask_user` and `request_approval` are **pausing** tools. When the agent calls one, the
-in-process run ends cleanly and the **conversation flips to `WAITING`** (the pending tool
-call is persisted). When the user answers/decides, the backend synthesizes the tool's
+`ask_user`, `request_approval`, and `snooze` are **pausing** tools. When the agent calls
+one, the in-process run ends cleanly and the **conversation flips to `WAITING`** (the
+pending tool call is persisted). When it resolves, the backend synthesizes the tool's
 return value and starts a **fresh run** that resumes from history — the agent sees the
-answer as that tool's result and continues.
+result as that tool's return and continues.
+
+What differs is *who resolves it*. `ask_user` and `request_approval` wait on a person, so
+they stay `WAITING` until someone answers. `snooze` resolves itself when its timer
+elapses, and needs nobody. Both take the same path back into the run.
 
 Daemon harnesses (Codex / Claude Code / OpenCode) own their own session and **cannot
-pause mid tool-call**; there, `ask_user` returns `success:false` with a message telling
-the agent to ask the question in prose and end its turn instead. Build agents so a
-prose-question fallback still works.
+pause mid tool-call**; there, all three return `success:false` with a message telling the
+agent what to do instead (ask in prose and end the turn). Build agents so that fallback
+still works.
 
 `display_resource`, `say`, and `listen` do **not** pause — they return immediately.
 
@@ -168,6 +174,47 @@ sending email, a privileged command).
 - On `DENY`, nothing runs (`executed:false`).
 
 Pausing tool (conversation → `WAITING`), same resume flow as `ask_user`.
+
+---
+
+## `snooze`
+
+Suspends the current turn for a while and picks it up later, in the same conversation with
+the same history. Gate: the `SNOOZE` toolset.
+
+```jsonc
+{
+  "reason": "waiting for the nightly build",      // shown to the user while asleep
+  "seconds": 900,                                 // clamped to [30, 86400]
+  "note_to_self": "post the result to #eng"       // handed back verbatim on wake
+}
+```
+
+**Time-based only.** Waking on a record change is deliberately not offered — see the
+trigger-or-snooze rule in `schedules-and-triggers.md`.
+
+**Waking proves nothing happened.** `woke_because` is `TIMER`: the time elapsed, and
+that is all it means. An agent that treats a wake as confirmation will act on something
+that never occurred — prompt it to re-check.
+
+Four constraints worth designing around:
+
+- **Duration should come from the wait, not from habit.** Each wake replays the entire
+  conversation, so a poll loop is the expensive way to wait. One sleep sized to the job
+  beats several short ones. Below 30s the call is rejected rather than clamped — asking
+  for a few seconds means the agent has mistaken this for `sleep()`.
+- **The sandbox does not survive.** The workspace container is reclaimed during the sleep,
+  so `/workspace` files, background processes, and the shell's cwd are gone on wake.
+  Anything needed afterwards must be written to the pod first.
+- **24 hours, hard.** Partly because each wake replays the whole conversation, and partly
+  because `reply_window_hours` is real — an agent that sleeps past a platform's reply
+  window (WhatsApp's 24h rule) cannot deliver its own result on the surface it was asked
+  on.
+- **Not available to sub-agents.** A sleeping sub-agent would block its parent's tool call
+  while the parent is still mid-run. Same depth=1 rule as `SUBAGENTS`.
+
+Don't use it to wait on a person — ask them and end the turn; their reply starts a fresh
+run on its own.
 
 ---
 

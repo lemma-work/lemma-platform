@@ -88,6 +88,11 @@ class StepRecord(BaseModel):
     completed_at: datetime | None = None
     output_data: Any | None = None
     error: str | None = None
+    # What this step suspended on — an agent conversation id, a function run id.
+    # Kept on the step because the wait row is the only other place it lives,
+    # and that row stops being the *active* wait the moment the step resumes:
+    # a finished agent step otherwise has no way back to its own transcript.
+    external_ref: str | None = None
 
 
 class WorkflowRunEntity(AggregateRoot):
@@ -182,8 +187,11 @@ class WorkflowRunEntity(AggregateRoot):
         output: Any = None,
         *,
         human_wait: bool = False,
+        external_ref: str | None = None,
     ) -> None:
         step.output_data = output
+        # Survives resume, which replaces output_data with the node's result.
+        step.external_ref = external_ref
         if human_wait:
             step.status = StepStatus.WAITING
             self.status = WorkflowRunStatus.WAITING

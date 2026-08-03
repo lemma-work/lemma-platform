@@ -1,51 +1,42 @@
 // JSON detection for chat messages. Agents answer with JSON constantly — fenced
 // as ```json, fenced with no language, or dumped straight into the prose — and
 // markdown renders the last two as an unreadable wall of run-together text.
-// These helpers find the JSON, leave the prose around it untouched, and hand the
-// renderer a pretty-printed, tokenized payload. Pure string work (no React, no
-// DOM) so the detection rules stay unit-testable.
+// These helpers find the JSON in a message and leave the prose around it
+// untouched. Pure string work (no React, no DOM) so the detection rules stay
+// unit-testable.
+//
+// Formatting and tokenizing the JSON once found is not chat-specific — the run
+// log renders the same blocks from step payloads — so that half lives in
+// lib/json/json-payload and is re-exported here under the chat-facing names.
 
-export type AssistantJsonTokenKind =
-    | 'key'
-    | 'string'
-    | 'number'
-    | 'boolean'
-    | 'null'
-    | 'punctuation'
-    | 'plain';
+import {
+    MAX_JSON_SOURCE_CHARS,
+    parseJsonContainer,
+    parseJsonPayload,
+    toPayload,
+    tokenizeJson,
+    type JsonPayload,
+    type JsonToken,
+    type JsonTokenKind,
+} from '@/lib/json/json-payload';
 
-export interface AssistantJsonToken {
-    text: string;
-    kind: AssistantJsonTokenKind;
-}
-
-export interface AssistantJsonPayload {
-    /** Source exactly as it appeared in the message, trimmed. */
-    raw: string;
-    /** Re-serialized with two-space indentation. */
-    formatted: string;
-    /** Shape summary for the block header: "8 keys", "12 items". */
-    summary: string;
-    lineCount: number;
-}
+export type AssistantJsonTokenKind = JsonTokenKind;
+export type AssistantJsonToken = JsonToken;
+export type AssistantJsonPayload = JsonPayload;
 
 export type AssistantMessageSegment =
     | { kind: 'markdown'; text: string }
     | { kind: 'json'; json: AssistantJsonPayload };
 
-/** Past this, reformatting costs more than the readability buys. */
-const MAX_JSON_SOURCE_CHARS = 200_000;
-/** Past this, per-token spans cost more than the coloring buys. */
-const MAX_TOKENIZE_CHARS = 120_000;
-
 const JSON_FENCE_LANGUAGES = new Set(['json', 'jsonc', 'json5', 'geojson', 'jsonld']);
 
 /** Parse a JSON object or array into a renderable payload, or null. Scalars are
  * rejected on purpose: a lone `42` or `"hi"` reads better as plain text. */
-export function parseAssistantJson(source: string): AssistantJsonPayload | null {
-    const parsed = parseJsonContainer(source);
-    return parsed ? toPayload(parsed.raw, parsed.value) : null;
-}
+export const parseAssistantJson = parseJsonPayload;
+
+/** Split formatted JSON into colorable spans. Token text concatenates back to
+ * the input exactly, so nothing is lost when the renderer stitches it together. */
+export const tokenizeAssistantJson = tokenizeJson;
 
 /** True for fence infostrings we treat as JSON (```json, ```jsonc, …). */
 export function isJsonFenceLanguage(language: string | null | undefined): boolean {
@@ -139,102 +130,6 @@ export function splitAssistantMessageSegments(content: string): AssistantMessage
     return segments;
 }
 
-/** Split formatted JSON into colorable spans. Token text concatenates back to
- * the input exactly, so nothing is lost when the renderer stitches it together. */
-export function tokenizeAssistantJson(formatted: string): AssistantJsonToken[] {
-    if (formatted.length > MAX_TOKENIZE_CHARS) return [{ text: formatted, kind: 'plain' }];
-
-    const tokens: AssistantJsonToken[] = [];
-    const numberPattern = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
-    const literalPattern = /true|false|null/y;
-    let plain = '';
-    let index = 0;
-
-    const flushPlain = () => {
-        if (plain) tokens.push({ text: plain, kind: 'plain' });
-        plain = '';
-    };
-
-    while (index < formatted.length) {
-        const char = formatted[index];
-
-        if (char === '"') {
-            const end = stringEnd(formatted, index);
-            flushPlain();
-            tokens.push({ text: formatted.slice(index, end), kind: isKeyPosition(formatted, end) ? 'key' : 'string' });
-            index = end;
-            continue;
-        }
-
-        if (char === '-' || (char >= '0' && char <= '9')) {
-            numberPattern.lastIndex = index;
-            const match = numberPattern.exec(formatted);
-            if (match) {
-                flushPlain();
-                tokens.push({ text: match[0], kind: 'number' });
-                index += match[0].length;
-                continue;
-            }
-        }
-
-        if (char === 't' || char === 'f' || char === 'n') {
-            literalPattern.lastIndex = index;
-            const match = literalPattern.exec(formatted);
-            if (match) {
-                flushPlain();
-                tokens.push({ text: match[0], kind: match[0] === 'null' ? 'null' : 'boolean' });
-                index += match[0].length;
-                continue;
-            }
-        }
-
-        if (char === '{' || char === '}' || char === '[' || char === ']' || char === ',' || char === ':') {
-            flushPlain();
-            tokens.push({ text: char, kind: 'punctuation' });
-            index += 1;
-            continue;
-        }
-
-        plain += char;
-        index += 1;
-    }
-
-    flushPlain();
-    return tokens;
-}
-
-function parseJsonContainer(source: string): { raw: string; value: object } | null {
-    const raw = source.trim();
-    if (raw.length < 2 || raw.length > MAX_JSON_SOURCE_CHARS) return null;
-    if (raw[0] !== '{' && raw[0] !== '[') return null;
-
-    let value: unknown;
-    try {
-        value = JSON.parse(raw);
-    } catch {
-        return null;
-    }
-    if (typeof value !== 'object' || value === null) return null;
-
-    return { raw, value };
-}
-
-function toPayload(raw: string, value: object): AssistantJsonPayload {
-    const formatted = JSON.stringify(value, null, 2);
-    return {
-        raw,
-        formatted,
-        summary: describeJsonShape(value),
-        lineCount: formatted.split('\n').length,
-    };
-}
-
-function describeJsonShape(value: object): string {
-    if (Array.isArray(value)) return value.length === 1 ? '1 item' : `${value.length} items`;
-    const keys = Object.keys(value as Record<string, unknown>).length;
-    return keys === 1 ? '1 key' : `${keys} keys`;
-}
-
 /** Unfenced JSON has to earn its block. `[1]` is a footnote, `[a](b)` is a link,
  * and `["red", "blue"]` is prose — so objects need a key and arrays have to look
  * like a record list. */
@@ -292,24 +187,4 @@ function balancedSpanEnd(content: string, start: number): number | null {
 function fenceMarkerOf(line: string): string | null {
     const match = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     return match ? match[1][0] : null;
-}
-
-function stringEnd(text: string, start: number): number {
-    let escaped = false;
-    for (let index = start + 1; index < text.length; index += 1) {
-        const char = text[index];
-        if (escaped) escaped = false;
-        else if (char === '\\') escaped = true;
-        else if (char === '"') return index + 1;
-    }
-    return text.length;
-}
-
-function isKeyPosition(text: string, afterString: number): boolean {
-    for (let index = afterString; index < text.length; index += 1) {
-        const char = text[index];
-        if (char === ' ' || char === '\t') continue;
-        return char === ':';
-    }
-    return false;
 }

@@ -1,3 +1,5 @@
+import { GITHUB_REPO_URL } from "@/lib/community-links";
+
 export const surfaceModes = [
   {
     key: "slack",
@@ -95,7 +97,7 @@ export const surfaceModes = [
 
 export type SurfaceMode = (typeof surfaceModes)[number];
 
-export const githubUrl = "https://github.com/lemma-work/lemma-platform";
+export const githubUrl = GITHUB_REPO_URL;
 
 export const terminalScript = [
   { command: "uv tool install lemma-terminal", output: [] },

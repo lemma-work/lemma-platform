@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Response, status
 
 from app.core.api.pagination import parse_uuid_page_token
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.modules.datastore.api.dependencies import (
     TableServiceDep,
 )
@@ -79,6 +79,7 @@ async def create_table(
     operation_id="table.list",
     summary="List Tables",
     description="List tables in a datastore.",
+    dependencies=[require_pod_membership("list tables")],
 )
 async def list_tables(
     pod_id: UUID,
