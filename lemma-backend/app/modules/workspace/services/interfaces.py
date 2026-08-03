@@ -116,16 +116,6 @@ class IWorkspaceSession(ABC):
         pass
 
     @abstractmethod
-    async def set_cwd(self, path: str) -> None:
-        """Set the current working directory for session operations."""
-        pass
-
-    @abstractmethod
-    async def get_cwd(self) -> str:
-        """Get the current working directory."""
-        pass
-
-    @abstractmethod
     async def close(self) -> None:
         """Close the session and cleanup resources."""
         pass

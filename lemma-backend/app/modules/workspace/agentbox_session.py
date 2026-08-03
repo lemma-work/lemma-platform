@@ -5,7 +5,6 @@ from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 import posixpath
-import shlex
 import time
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -86,6 +85,7 @@ class AgentBoxWorkspaceSession:
         auto_close: bool = True,
         activity_callback=None,
         owns_client: bool = True,
+        output_cursor_store=None,
     ) -> None:
         self.client = client
         self.logical_id = UUID(str(sandbox_id))
@@ -105,7 +105,13 @@ class AgentBoxWorkspaceSession:
         self._owns_client = owns_client
         self._activity_callback = activity_callback
         self._python_session_observed = False
+        # This object is rebuilt on every tool call, so an in-process cursor
+        # only spans a single call. It is kept as a same-call fast path; the
+        # durable cursor lives in the shared store so a later poll of the same
+        # process resumes where the previous one stopped instead of replaying
+        # the entire retained buffer.
         self._output_sequence: dict[UUID, int] = {}
+        self._output_cursor_store = output_cursor_store
 
     async def _touch_activity(self) -> None:
         if self._activity_callback is not None:
@@ -158,7 +164,13 @@ class AgentBoxWorkspaceSession:
     ) -> ShellCommandResult:
         result = await self.exec_command(cmd=command, timeout=timeout)
         return ShellCommandResult(
-            success=result.get("exit_code") == 0,
+            # `success` means the command was dispatched and has not failed -
+            # the same meaning `exec_command` gives it, so the two callers of
+            # one underlying operation cannot disagree. Whether it has finished
+            # and with what status is reported by `exit_code`; a command that
+            # yielded while still running has no exit code yet and is not a
+            # failure.
+            success=bool(result.get("success")),
             exit_code=result.get("exit_code"),
             stdout=result.get("stdout", ""),
             stderr=result.get("stderr", ""),
@@ -447,16 +459,12 @@ class AgentBoxWorkspaceSession:
             deadline_at=self._deadline(timeout),
         )
 
-    async def set_cwd(self, path: str) -> None:
-        resolved = await self._resolve_path(path)
-        await self.exec_command(cmd=f"mkdir -p {shlex.quote(resolved)}", timeout=30)
-        self._cwd = resolved
-
-    async def get_cwd(self) -> str:
-        result = await self.exec_command(cmd="pwd", timeout=5)
-        if result.get("success") and result.get("stdout"):
-            self._cwd = str(result["stdout"]).strip()
-        return self._cwd
+    # There is deliberately no set_cwd/get_cwd here. Every command runs as a
+    # fresh process started at `self._cwd`, and this object is rebuilt on each
+    # tool call from the conversation's resolved cwd, so there is no shell
+    # whose directory could be moved or queried. `pwd` could only ever echo
+    # `self._cwd` back. A `cd` inside one command likewise does not carry to
+    # the next; the tool descriptions say so.
 
     async def _resolve_path(self, path: str) -> str:
         return _canonical_runtime_path(path, base=self._cwd)
@@ -530,7 +538,8 @@ class AgentBoxWorkspaceSession:
     ) -> dict[str, Any]:
         started = time.monotonic()
         yield_seconds = None if yield_time_ms is None else yield_time_ms / 1000
-        after_sequence = self._output_sequence.get(operation_id, 0)
+        after_sequence = await self._load_output_cursor(operation_id)
+        initial_sequence = after_sequence
         stdout = bytearray()
         stderr = bytearray()
         state = ProcessState.RUNNING
@@ -564,6 +573,8 @@ class AgentBoxWorkspaceSession:
             if state in _TERMINAL_PROCESS_STATES:
                 break
         completed = state in _TERMINAL_PROCESS_STATES
+        if after_sequence != initial_sequence:
+            await self._save_output_cursor(operation_id, after_sequence)
         return {
             "success": state in {ProcessState.RUNNING, ProcessState.SUCCEEDED},
             "stdout": stdout.decode("utf-8", errors="replace"),
@@ -575,6 +586,41 @@ class AgentBoxWorkspaceSession:
             if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED}
             else state.value,
         }
+
+    async def _load_output_cursor(self, operation_id: UUID) -> int:
+        local = self._output_sequence.get(operation_id, 0)
+        if self._output_cursor_store is None:
+            return local
+        try:
+            stored = await self._output_cursor_store.get_output_cursor(
+                str(operation_id)
+            )
+        except Exception:
+            # A cursor is an optimisation, not a correctness requirement: on a
+            # store failure the poll re-reads output it has already shown,
+            # which is far better than failing the agent's tool call.
+            logger.debug(
+                "workspace.agentbox_session.output_cursor_read_failed",
+                sandbox_id=self.sandbox_id,
+                process_id=str(operation_id),
+            )
+            return local
+        return max(local, stored)
+
+    async def _save_output_cursor(self, operation_id: UUID, sequence: int) -> None:
+        if self._output_cursor_store is None:
+            return
+        try:
+            await self._output_cursor_store.set_output_cursor(
+                process_id=str(operation_id),
+                sequence=sequence,
+            )
+        except Exception:
+            logger.debug(
+                "workspace.agentbox_session.output_cursor_write_failed",
+                sandbox_id=self.sandbox_id,
+                process_id=str(operation_id),
+            )
 
     @staticmethod
     def _deadline(seconds: int | float) -> datetime:

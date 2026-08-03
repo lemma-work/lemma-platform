@@ -137,6 +137,93 @@ def _session(client: _CanonicalClient) -> AgentBoxWorkspaceSession:
     )
 
 
+class _ReplayTrackingClient:
+    """A client whose output buffer honours ``after_sequence``, like the manager."""
+
+    def __init__(self) -> None:
+        self.requested_after: list[int] = []
+        self._buffer = [
+            ProcessOutputChunk(
+                sequence=index,
+                channel=ProcessOutputChannel.STDOUT,
+                data=f"line-{index}\n".encode(),
+            )
+            for index in range(1, 4)
+        ]
+
+    async def start_process(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def send_process_input(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    async def read_process_output(
+        self, *_args: Any, **kwargs: Any
+    ) -> ProcessOutputSnapshot:
+        after = int(kwargs.get("after_sequence") or 0)
+        self.requested_after.append(after)
+        return ProcessOutputSnapshot(
+            chunks=tuple(item for item in self._buffer if item.sequence > after),
+            next_sequence=len(self._buffer) + 1,
+            truncated_before_sequence=None,
+            state=ProcessState.RUNNING,
+            exit_code=None,
+        )
+
+
+class _MemoryCursorStore:
+    def __init__(self) -> None:
+        self.cursors: dict[str, int] = {}
+
+    async def get_output_cursor(self, process_id: str) -> int:
+        return self.cursors.get(process_id, 0)
+
+    async def set_output_cursor(
+        self, *, process_id: str, sequence: int, ttl_seconds: int = 0
+    ) -> None:
+        del ttl_seconds
+        self.cursors[process_id] = sequence
+
+
+@pytest.mark.asyncio
+async def test_polling_a_process_again_does_not_replay_delivered_output() -> None:
+    """A second tool call must not re-read output the first already returned.
+
+    The session object is rebuilt per tool call, so an in-memory cursor
+    restarts at zero and every poll of a long-running or interactive process
+    re-delivers its whole retained buffer. The shared cursor store is what
+    makes the second poll resume where the first stopped.
+    """
+
+    client = _ReplayTrackingClient()
+    store = _MemoryCursorStore()
+    sandbox_id = uuid4()
+
+    def build() -> AgentBoxWorkspaceSession:
+        return AgentBoxWorkspaceSession(
+            client=client,  # type: ignore[arg-type]
+            sandbox_id=sandbox_id,
+            session_id="conversation-1",
+            output_cursor_store=store,
+        )
+
+    first = await build().exec_command(cmd="tail -f log", yield_time_ms=1)
+    process_id = first["process_id"]
+    assert process_id is not None
+    assert first["stdout"] == "line-1\nline-2\nline-3\n"
+    # The first poll of a new process starts from the beginning, and the
+    # delivered position is remembered outside this session object.
+    assert client.requested_after[0] == 0
+    assert store.cursors[process_id] == 3
+
+    # A separate tool call, and therefore a brand new session object.
+    client.requested_after.clear()
+    second = await build().write_stdin(process_id=process_id, yield_time_ms=1)
+
+    assert client.requested_after[0] == 3
+    assert second["stdout"] == ""
+
+
 @pytest.mark.asyncio
 async def test_shell_process_uses_typed_environment_and_collects_both_channels() -> (
     None
