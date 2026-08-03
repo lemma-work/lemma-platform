@@ -551,6 +551,72 @@ async def test_function_port_access_extends_timeout_once_across_a_burst(
     await provider.close()
 
 
+async def test_workspace_activity_refreshes_the_provider_timeout(
+    database: StateDatabase,
+) -> None:
+    """An actively-used workspace must never be paused by E2B mid-session.
+
+    E2B's `timeout` is a continuous-runtime ceiling, not an idle timer: nothing
+    happening inside the sandbox extends it. Without a refresh on activity the
+    provider stops a busy workspace once the window elapses, which is the
+    "sandbox reset itself" failure. Cached sandbox handles never re-enter
+    `connect()`, so the refresh has to happen on the cached path too.
+    """
+
+    selected_profile = profile()
+    provider = E2BSandboxAdapter(
+        ProfileRegistry((selected_profile,)),
+        E2BAdapterConfig(
+            api_key="e2b_" + "0" * 40,
+            scope="e2b:workspace-timeout-test",
+            workspace_timeout_seconds=900,
+            workspace_timeout_refresh_seconds=60,
+        ),
+        sandbox_class=FakeSandbox,
+    )
+    lifecycle = SandboxLifecycleService(database, provider)
+    filesystem = FilesystemService(database, provider)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    await lifecycle.ensure(
+        key,
+        selected_profile.ref,
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+    sandbox = next(iter(FakeSandbox.instances.values()))
+    baseline_calls = sandbox.timeout_calls
+
+    for index in range(3):
+        await filesystem.write(
+            key,
+            f"/workspace/activity-{index}",
+            b"busy",
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
+
+    # The sandbox starts with the configured inactivity window, and within one
+    # refresh interval a burst of activity costs no extra provider calls.
+    assert FakeSandbox.last_create_kwargs["timeout"] == 900
+    assert sandbox.timeout_calls == baseline_calls
+
+    # Once the interval has elapsed, the next operation pushes the window out.
+    provider._timeout_refreshed_at[sandbox.sandbox_id] = datetime.now(
+        timezone.utc
+    ) - timedelta(seconds=120)
+    await filesystem.write(
+        key,
+        "/workspace/activity-later",
+        b"busy",
+        expected_sha256=None,
+        deadline_at=deadline,
+    )
+    assert sandbox.timeout_calls == baseline_calls + 1
+    assert sandbox.timeout == 900
+    await provider.close()
+
+
 @pytest.fixture(autouse=True)
 def reset_fake() -> None:
     FakeSandbox.reset()
@@ -614,8 +680,12 @@ async def test_workspace_uses_exact_pause_resume_identity_and_native_storage(
     )
 
     assert created.ready is True
+    # The provider's own timeout pause must match the explicit release path:
+    # filesystem-only, so both edges of Active -> Suspended mean the same
+    # thing. The bare "pause" string would default to keep_memory=True. E2B
+    # also refuses auto-resume for filesystem-only snapshots.
     assert FakeSandbox.last_create_kwargs["lifecycle"] == {
-        "on_timeout": "pause",
+        "on_timeout": {"action": "pause", "keep_memory": False},
         "auto_resume": False,
     }
     assert released.ready is False

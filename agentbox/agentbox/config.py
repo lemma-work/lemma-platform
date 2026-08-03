@@ -166,13 +166,28 @@ class Settings(BaseSettings):
     )
     agentbox_e2b_request_timeout_seconds: float = Field(default=20, ge=1, le=120)
     agentbox_e2b_workspace_timeout_seconds: int = Field(
-        default=3600,
+        default=900,
         ge=600,
         le=24 * 60 * 60,
         description=(
-            "Provider safety timeout for an unmanaged E2B workspace. It must "
-            "comfortably exceed AgentBox idle cleanup so AgentBox remains the "
-            "normal pause/resume authority."
+            "Inactivity window after which E2B itself pauses a workspace. "
+            "E2B's timeout is a continuous-runtime ceiling rather than an idle "
+            "timer, so AgentBox refreshes it on every runtime operation; this "
+            "value is therefore the time a workspace survives with no AgentBox "
+            "activity at all. It is a backstop for manager failure and must "
+            "exceed AgentBox idle cleanup, which pauses first and "
+            "deterministically. Note E2B still enforces a hard maximum "
+            "continuous runtime per plan (24h on Pro), so a workspace busy for "
+            "longer is paused regardless; files survive, processes do not."
+        ),
+    )
+    agentbox_e2b_workspace_timeout_refresh_seconds: int = Field(
+        default=60,
+        ge=1,
+        description=(
+            "Minimum interval between provider timeout refreshes for one "
+            "workspace. Bounds the extra E2B calls to one per interval instead "
+            "of one per runtime operation."
         ),
     )
     agentbox_workspace_idle_seconds: float = Field(default=300, ge=1)
@@ -233,6 +248,11 @@ class Settings(BaseSettings):
                 "AGENTBOX_WORKSPACE_RETENTION_SECONDS must exceed "
                 "AGENTBOX_WORKSPACE_IDLE_SECONDS"
             )
+        # Both values now measure inactivity: AgentBox refreshes the E2B
+        # timeout on every runtime operation, so the provider's own pause only
+        # fires when AgentBox has gone quiet. Keeping it clear of idle cleanup
+        # means AgentBox releases first and deterministically, and E2B's stop
+        # stays a backstop for manager failure.
         if (
             self.agentbox_provider == "e2b"
             and self.agentbox_e2b_workspace_timeout_seconds
@@ -242,6 +262,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AGENTBOX_E2B_WORKSPACE_TIMEOUT_SECONDS must exceed idle cleanup "
                 "by at least two cleanup intervals"
+            )
+        if (
+            self.agentbox_e2b_workspace_timeout_refresh_seconds
+            >= self.agentbox_e2b_workspace_timeout_seconds
+        ):
+            raise ValueError(
+                "AGENTBOX_E2B_WORKSPACE_TIMEOUT_REFRESH_SECONDS must be shorter "
+                "than AGENTBOX_E2B_WORKSPACE_TIMEOUT_SECONDS"
             )
         return self
 

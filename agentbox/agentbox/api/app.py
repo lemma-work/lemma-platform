@@ -458,6 +458,9 @@ async def lifespan(app: FastAPI):
                 workspace_timeout_seconds=(
                     settings.agentbox_e2b_workspace_timeout_seconds
                 ),
+                workspace_timeout_refresh_seconds=(
+                    settings.agentbox_e2b_workspace_timeout_refresh_seconds
+                ),
                 function_allow_out=(settings.agentbox_e2b_function_allow_out_hosts),
                 max_file_transfer_bytes=settings.agentbox_max_file_transfer_bytes,
             ),
