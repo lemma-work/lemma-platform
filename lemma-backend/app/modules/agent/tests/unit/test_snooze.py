@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -150,9 +150,17 @@ def suspend_harness(monkeypatch):
     scheduled: list[dict] = []
     created: list[AgentConversationWaitEntity] = []
 
-    class _FakeScheduler:
-        async def schedule_once_job(self, **kwargs):
-            scheduled.append(kwargs)
+    async def _fake_schedule_snooze_wake(*, conversation_id, user_id, wake_at):
+        timer_id = uuid4()
+        scheduled.append(
+            {
+                "timer_id": timer_id,
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "wake_at": wake_at,
+            }
+        )
+        return timer_id
 
     class _FakeRepo:
         def __init__(self, uow):
@@ -172,7 +180,7 @@ def suspend_harness(monkeypatch):
         async def commit(self):
             pass
 
-    monkeypatch.setattr(adapter, "SchedulerAPIClient", lambda: _FakeScheduler())
+    monkeypatch.setattr(adapter, "schedule_snooze_wake", _fake_schedule_snooze_wake)
     monkeypatch.setattr(adapter, "AgentConversationWaitRepository", _FakeRepo)
     monkeypatch.setattr(
         adapter, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
@@ -184,9 +192,10 @@ def suspend_harness(monkeypatch):
 async def test_snooze_schedules_a_timer_and_pauses_the_run(suspend_harness):
     """The success path: one timer, one ACTIVE wait, and the pause signal.
 
-    Guards the scheduler call shape. ``schedule_once_job`` requires ``user_id``,
-    and nothing else here would notice if the call drifted — the tool raises
-    before returning, so a TypeError would surface only in production.
+    Guards the scheduler call shape. The composition adapter requires
+    ``user_id``, and nothing else here would notice if the call drifted — the
+    tool raises before returning, so a TypeError would surface only in
+    production.
     """
     ctx = _ctx()
     with pytest.raises(AgentInputRequired) as raised:
@@ -197,11 +206,11 @@ async def test_snooze_schedules_a_timer_and_pauses_the_run(suspend_harness):
 
     (job,) = suspend_harness.scheduled
     assert job["user_id"] == ctx.deps.user_id
-    assert job["payload"]["conversation_id"] == str(ctx.deps.conversation_id)
-    # The wake path resolves the fired timer through wait_ref, so it must match
-    # the wait's external_ref exactly.
+    assert job["conversation_id"] == ctx.deps.conversation_id
+    # The wake path resolves the fired timer through wait_ref, so the token the
+    # adapter returns must be what lands in external_ref.
     (wait,) = suspend_harness.created
-    assert job["payload"]["wait_ref"] == wait.external_ref
+    assert str(job["timer_id"]) == wait.external_ref
     assert wait.status is AgentWaitStatus.ACTIVE
     assert wait.tool_call_id == "tc-1"
     assert wait.spec["note_to_self"] is None
@@ -223,3 +232,57 @@ async def test_snooze_clamps_an_over_long_request(suspend_harness):
     assert slept == pytest.approx(MAX_SNOOZE_SECONDS, abs=1)
     # The unclamped ask is kept so the wake can see what the model actually wanted.
     assert wait.spec["requested_seconds"] == MAX_SNOOZE_SECONDS * 10
+
+
+# -- the composition adapter ---------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_snooze_wake_adapter_calls_the_scheduler_with_a_real_signature(monkeypatch):
+    """The payload is the contract with ScheduleStartService.handle_schedule_fired.
+
+    This is the one place the real ``schedule_once_job`` signature is exercised.
+    It gained a required ``user_id`` when schedule-run ownership landed; a call
+    that drifts from it raises TypeError only at runtime, because the tool that
+    makes it raises AgentInputRequired rather than returning.
+    """
+    from app.composition import agent_snooze_scheduler as sched
+
+    calls: list[dict] = []
+
+    class _FakeClient:
+        async def schedule_once_job(
+            self,
+            schedule_id,
+            user_id,
+            run_date,
+            payload=None,
+            replace_existing=True,
+            logical_schedule=False,
+        ):
+            calls.append(
+                {
+                    "schedule_id": schedule_id,
+                    "user_id": user_id,
+                    "run_date": run_date,
+                    "payload": payload,
+                }
+            )
+
+    monkeypatch.setattr(sched, "SchedulerAPIClient", lambda: _FakeClient())
+
+    conversation_id, user_id = uuid4(), uuid4()
+    wake_at = datetime.now(timezone.utc) + timedelta(seconds=600)
+    timer_id = await sched.schedule_snooze_wake(
+        conversation_id=conversation_id, user_id=user_id, wake_at=wake_at
+    )
+
+    (call,) = calls
+    assert call["schedule_id"] == timer_id
+    assert call["user_id"] == user_id
+    assert call["run_date"] == wake_at
+    # conversation_id selects the snooze branch; wait_ref resolves the fired
+    # timer to exactly one ACTIVE wait.
+    assert call["payload"]["conversation_id"] == str(conversation_id)
+    assert call["payload"]["wait_ref"] == str(timer_id)
+    assert call["payload"]["source"] == "agent_snooze"

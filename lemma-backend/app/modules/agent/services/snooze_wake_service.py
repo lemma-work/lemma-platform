@@ -20,9 +20,9 @@ from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitWakeReason,
 )
-from app.modules.agent.infrastructure.repositories import (
+from app.modules.agent.infrastructure.repositories import ConversationRepository
+from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
-    ConversationRepository,
 )
 from app.modules.agent.tools.snooze.models import SnoozeResponse
 

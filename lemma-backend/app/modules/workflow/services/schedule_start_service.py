@@ -97,21 +97,13 @@ class ScheduleStartService:
         llm_output: dict | None = None,
         source_occurred_at: datetime | None = None,
     ) -> None:
-        # 0. A wake for a snoozed agent conversation. Same shape as the workflow
-        # wake below — the timer carries the wait_ref that resolves to exactly one
-        # ACTIVE wait — but it resumes a paused conversation rather than a run.
-        if payload.get("conversation_id"):
-            await self._wake_snoozed_conversation(external_ref=payload.get("wait_ref"))
-            return
-
-        # 1. A wake for a specific run.
-        if payload.get("workflow_run_id"):
-            await self._handle_timer_fire(
-                payload=payload,
-                user_id=user_id,
-                metadata=metadata,
-                llm_output=llm_output,
-            )
+        # 1. A wake for one already-suspended execution, rather than a schedule.
+        if await self._dispatch_wake(
+            payload=payload,
+            user_id=user_id,
+            metadata=metadata,
+            llm_output=llm_output,
+        ):
             return
 
         # 2. A schedule targeting a workflow or agent.
@@ -270,13 +262,40 @@ class ScheduleStartService:
             llm_output=llm_output or {},
         )
 
+    async def _dispatch_wake(
+        self,
+        *,
+        payload: dict,
+        user_id: UUID | str | None,
+        metadata: dict | None,
+        llm_output: dict | None,
+    ) -> bool:
+        """Route a timer that resumes something already waiting. True if handled.
+
+        Both wakes have the same shape — the timer carries the ``wait_ref`` that
+        resolves to exactly one ACTIVE wait — and differ only in what they resume:
+        a snoozed conversation, or a suspended workflow run.
+        """
+        if payload.get("conversation_id"):
+            await self._wake_snoozed_conversation(external_ref=payload.get("wait_ref"))
+            return True
+        if payload.get("workflow_run_id"):
+            await self._handle_timer_fire(
+                payload=payload,
+                user_id=user_id,
+                metadata=metadata,
+                llm_output=llm_output,
+            )
+            return True
+        return False
+
     async def _wake_snoozed_conversation(self, *, external_ref: str | None) -> None:
         """Resume the agent whose snooze timer just fired."""
         if not external_ref:
             logger.debug("workflow.schedule_start_service.snooze_wake_no_ref.observed")
             return
         from app.modules.agent.domain.wait import AgentWaitWakeReason
-        from app.modules.agent.infrastructure.repositories import (
+        from app.modules.agent.infrastructure.wait_repository import (
             AgentConversationWaitRepository,
         )
         from app.modules.agent.services.snooze_wake_service import SnoozeWakeService

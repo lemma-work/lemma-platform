@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.core.log.log import get_logger
 from app.modules.agent.domain.wait import AgentWaitWakeReason
-from app.modules.agent.infrastructure.repositories import (
+from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
 from app.modules.agent.services.snooze_wake_service import SnoozeWakeService

@@ -10,16 +10,16 @@ scheduler timer rather than a person.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
 
 from pydantic_ai.tools import RunContext
 from pydantic_ai.toolsets import FunctionToolset
 
+from app.composition.agent_snooze_scheduler import schedule_snooze_wake
 from app.core.infrastructure.db.session import async_session_maker
 from app.core.infrastructure.db.uow_factory import SessionUnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.wait import AgentConversationWaitEntity, AgentWaitType
-from app.modules.agent.infrastructure.repositories import (
+from app.modules.agent.infrastructure.wait_repository import (
     AgentConversationWaitRepository,
 )
 from app.modules.agent.tools.context import BaseAgentContext
@@ -30,12 +30,10 @@ from app.modules.agent.tools.snooze.models import (
     SnoozeResponse,
 )
 from app.modules.agent.tools.tool_errors import AgentInputRequired
-from app.modules.schedule.scheduler.api_client import SchedulerAPIClient
 
 logger = get_logger(__name__)
 
 SNOOZE_TOOL_NAME = "snooze"
-SNOOZE_WAKE_SOURCE = "agent_snooze"
 
 
 async def snooze(
@@ -112,18 +110,10 @@ async def snooze(
     seconds = min(request.seconds, MAX_SNOOZE_SECONDS)
     wake_at = now + timedelta(seconds=seconds)
 
-    timer_id = uuid4()
-    await SchedulerAPIClient().schedule_once_job(
-        schedule_id=timer_id,
+    timer_id = await schedule_snooze_wake(
+        conversation_id=deps.conversation_id,
         user_id=deps.user_id,
-        run_date=wake_at,
-        payload={
-            "conversation_id": str(deps.conversation_id),
-            "wait_ref": str(timer_id),
-            "scheduled_at": wake_at.isoformat(),
-            "source": SNOOZE_WAKE_SOURCE,
-        },
-        replace_existing=True,
+        wake_at=wake_at,
     )
 
     wait = AgentConversationWaitEntity(
