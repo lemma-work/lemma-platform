@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 from app.modules.agent.domain.entities import Conversation
+from app.modules.agent.services.conversation_service import ConversationService
 from app.modules.agent.services.workspace_location import (
     generate_cwd_slug,
     pod_cwd_from_workspace_cwd,
@@ -117,6 +118,83 @@ def test_python_runtime_identity_tracks_conversation_working_directory():
     assert first.initial_cwd == "/workspace/conversations/first"
     assert second.initial_cwd == "/workspace/conversations/second"
     assert first.default_python_session_id != second.default_python_session_id
+
+
+class _StubConversationRepository:
+    def __init__(self, conversations: dict) -> None:
+        self._conversations = conversations
+
+    async def get_conversation(self, conversation_id, **_kwargs):
+        return self._conversations.get(conversation_id)
+
+
+def _service(conversations: dict):
+    return ConversationService(
+        uow=None,  # type: ignore[arg-type]
+        conversation_repository=_StubConversationRepository(  # type: ignore[arg-type]
+            conversations
+        ),
+        agent_repository=None,  # type: ignore[arg-type]
+        authorization_service=None,
+    )
+
+
+async def test_subagent_and_grandchild_share_the_parent_working_directory():
+    """A sub-agent must land in the directory its parent is already working in.
+
+    Sub-agents share the user's single sandbox, so running one in its own
+    fresh directory would strand it away from the files the parent asked it to
+    work on. Nothing else guards this, and the cwd is stamped once at creation
+    and read back forever after.
+    """
+
+    parent = Conversation(pod_id=uuid4(), user_id=uuid4())
+    service = _service({})
+    await service._apply_inherited_cwd(parent, parent_id=None)
+
+    child = Conversation(pod_id=parent.pod_id, user_id=parent.user_id)
+    service = _service({parent.id: parent})
+    await service._apply_inherited_cwd(child, parent_id=parent.id)
+
+    grandchild = Conversation(pod_id=parent.pod_id, user_id=parent.user_id)
+    service = _service({parent.id: parent, child.id: child})
+    await service._apply_inherited_cwd(grandchild, parent_id=child.id)
+
+    parent_cwd = resolve_workspace_location(parent).cwd
+    assert resolve_workspace_location(child).cwd == parent_cwd
+    assert resolve_workspace_location(grandchild).cwd == parent_cwd
+    # The pod filesystem is derived from the same value, so both filesystems
+    # stay aligned for the whole family.
+    assert resolve_pod_cwd(grandchild) == resolve_pod_cwd(parent)
+
+
+async def test_subagent_shell_and_python_runtimes_use_the_inherited_directory():
+    """The inherited cwd must actually reach the workspace tool runtime."""
+
+    parent = Conversation(pod_id=uuid4(), user_id=uuid4())
+    service = _service({})
+    await service._apply_inherited_cwd(parent, parent_id=None)
+    child = Conversation(pod_id=parent.pod_id, user_id=parent.user_id)
+    service = _service({parent.id: parent})
+    await service._apply_inherited_cwd(child, parent_id=parent.id)
+
+    contexts = [
+        workspace_runtime_context(
+            BaseAgentContext(
+                user_id=conversation.user_id,
+                pod_id=conversation.pod_id,
+                conversation_id=conversation.id,
+                workspace_cwd=resolve_workspace_location(conversation).cwd,
+            )
+        )
+        for conversation in (parent, child)
+    ]
+
+    assert contexts[0].initial_cwd == contexts[1].initial_cwd
+    # Separate conversations still get separate interpreters and shells; only
+    # the directory is shared.
+    assert contexts[0].default_python_session_id != contexts[1].default_python_session_id
+    assert contexts[0].default_shell_session_id != contexts[1].default_shell_session_id
 
 
 def test_generate_cwd_slug_is_short_and_alphanumeric():

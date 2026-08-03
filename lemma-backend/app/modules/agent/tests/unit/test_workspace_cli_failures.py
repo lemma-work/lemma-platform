@@ -376,3 +376,47 @@ async def test_list_processes_internal_binds_running_processes(
     assert result.success is True
     assert [process.process_id for process in result.processes] == ["proc-1"]
     assert runtime.bound_processes == [("proc-1", "session-1")]
+
+
+def _process(process_id: str) -> dict:
+    return {
+        "process_id": process_id,
+        "cmd": "npm run dev",
+        "cwd": "/workspace",
+        "tty": True,
+        "started_at": 123.0,
+        "completed": False,
+        "exit_code": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_processes_internal_hides_another_conversations_processes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Listing processes must not capture a sub-agent's running process.
+
+    One sandbox serves every conversation a user has, so this list spans all of
+    them. Rebinding indiscriminately let whichever agent listed last take over
+    processes started by its own sub-agents, leaving the real owner unable to
+    drive or terminate them.
+    """
+
+    runtime = _FakeRuntime({"processes": [_process("mine"), _process("theirs")]})
+    runtime.process_sessions["theirs"] = "session-other"
+    monkeypatch.setattr(
+        workspace_cli,
+        "get_workspace_tool_runtime",
+        lambda: runtime,
+    )
+
+    result = await workspace_cli.list_processes_internal(
+        _context(),
+        ListProcessesRequest(),
+    )
+
+    assert result.success is True
+    assert [process.process_id for process in result.processes] == ["mine"]
+    # The unowned process is claimed; the one another session owns is untouched.
+    assert runtime.bound_processes == [("mine", "session-1")]
+    assert runtime.process_sessions["theirs"] == "session-other"

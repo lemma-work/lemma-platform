@@ -302,15 +302,32 @@ async def list_processes_internal(
         )
         async with workspace_session:
             processes = await workspace_session.list_processes()
+        # One sandbox serves every conversation belonging to a user, so this
+        # list spans all of them. Show only what this conversation may drive:
+        # its own processes, plus any that no conversation currently owns.
+        # Rebinding indiscriminately would let a parent agent take over the
+        # processes its own sub-agents started, since a sub-agent shares the
+        # sandbox but has its own session.
+        session_id = workspace_session.session_id
+        visible: list[dict[str, Any]] = []
         for process in processes:
-            if not process.get("completed") and workspace_session.session_id:
-                await runtime.bind_process_to_session(
-                    process_id=str(process["process_id"]),
-                    session_id=workspace_session.session_id,
-                )
+            process_id = str(process["process_id"])
+            owner = await runtime.resolve_session_for_process(process_id)
+            if owner is None:
+                # Unowned: its binding expired, or it was started outside the
+                # tool path. Claiming it here is how an agent recovers a
+                # process it can otherwise no longer address.
+                if not process.get("completed") and session_id:
+                    await runtime.bind_process_to_session(
+                        process_id=process_id,
+                        session_id=session_id,
+                    )
+                visible.append(process)
+            elif owner == session_id:
+                visible.append(process)
         return ListProcessesResult(
             success=True,
-            processes=[ProcessInfo.model_validate(process) for process in processes],
+            processes=[ProcessInfo.model_validate(process) for process in visible],
         )
     except Exception as exc:
         logger.debug(
