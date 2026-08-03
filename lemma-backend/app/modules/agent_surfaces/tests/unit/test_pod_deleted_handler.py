@@ -20,7 +20,10 @@ from app.modules.agent_surfaces.domain.events import SurfaceWebhookReceivedEvent
 from app.modules.agent_surfaces.domain.ingress_context import SurfaceReplyContext
 from app.modules.agent_surfaces.events import handlers
 from app.modules.test_support.fakes import PassthroughEventInbox
-from app.modules.schedule.domain.events.schedule import ScheduleFired
+from app.modules.schedule.domain.events.schedule import (
+    ScheduleDeactivated,
+    ScheduleFired,
+)
 from app.modules.schedule.domain.schedule import ScheduleType
 
 
@@ -190,7 +193,7 @@ async def test_schedule_surface_event_is_inbox_backed_and_deterministically_queu
     )
 
     await handlers.handle_surface_schedule_event(
-        event,
+        event.model_dump(mode="json"),
         logging.getLogger("test"),
         uow_factory=partial(_mock_uow_factory, uow_mock),
         job_queue=job_queue,
@@ -206,6 +209,37 @@ async def test_schedule_surface_event_is_inbox_backed_and_deterministically_queu
         )
     else:
         job_queue.enqueue.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_surface_schedule_subscriber_ignores_lifecycle_events(monkeypatch):
+    """A non-fire event on ``schedule_events`` is skipped, not a validation error.
+
+    The stream carries created/updated/deleted/deactivated too. Parsing one as a
+    fire raises, and a poison message is never acked, so XAUTOCLAIM redelivers it
+    forever.
+    """
+    handler = AsyncMock()
+    job_queue = AsyncMock()
+    uow_mock = AsyncMock()
+    monkeypatch.setattr(handlers, "build_surface_event_handler", lambda uow: handler)
+    deactivated = ScheduleDeactivated(
+        schedule_id=uuid4(),
+        user_id=uuid4(),
+        schedule_type=ScheduleType.TIME,
+        consecutive_failures=12,
+    )
+
+    await handlers.handle_surface_schedule_event(
+        deactivated.model_dump(mode="json"),
+        logging.getLogger("test"),
+        uow_factory=partial(_mock_uow_factory, uow_mock),
+        job_queue=job_queue,
+        inbox=PassthroughEventInbox(),
+    )
+
+    handler.prepare_ingress.assert_not_awaited()
+    job_queue.enqueue.assert_not_awaited()
 
 
 @pytest.mark.asyncio
