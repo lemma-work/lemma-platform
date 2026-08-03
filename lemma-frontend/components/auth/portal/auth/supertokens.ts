@@ -27,7 +27,7 @@ let hasInitialised = false;
 
 const authSurfaceStyle = `
 [data-supertokens~="container"] {
-  font-family: var(--font-ibm-plex-sans), "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-body-family);
   width: min(100%, 26.5rem);
   margin: 0 auto;
   border: 0;
@@ -49,7 +49,7 @@ const authSurfaceStyle = `
 [data-supertokens~="headerTitle"] {
   margin: 0 0 0.55rem;
   color: var(--text-primary);
-  font-family: var(--font-bricolage-grotesque), var(--font-ibm-plex-sans), ui-sans-serif, sans-serif;
+  font-family: var(--font-display-family);
   font-size: 1.8rem;
   font-weight: 700;
   line-height: 1.15;

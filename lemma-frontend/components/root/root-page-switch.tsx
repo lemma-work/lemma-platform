@@ -4,6 +4,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { PageLoader } from '@/components/brand/loader';
+import { isLocalDeployment } from '@/lib/config';
 import { useLemmaAuth } from '@/lib/hooks/use-lemma-auth';
 import { useAccessiblePods } from '@/lib/hooks/use-pods';
 import {
@@ -31,13 +32,38 @@ export function RootPageSwitch({ mode = 'redirect' }: { mode?: RootPageMode }) {
         return <PageLoader />;
     }
 
-    return isAuthenticated ? (
+    if (!isAuthenticated) {
+        // A local installation is not selling anything. The marketing page
+        // never renders there, in any auth state, for any visitor — not the
+        // desktop webview, not a phone on the same Wi-Fi, not someone holding a
+        // public link. They all get the account portal instead.
+        return isLocalDeployment() ? <LocalAuthRedirect /> : <LandingPage />;
+    }
+
+    return (
         <AccountOnboarding preflightFallback={<PageLoader />}>
             {mode === 'home' ? <DashboardHomePage /> : <AuthenticatedRootRedirect />}
         </AccountOnboarding>
-    ) : (
-        <LandingPage />
     );
+}
+
+/**
+ * The safety net, not the main path.
+ *
+ * The desktop shell already opens `/auth?show=signup` directly when no local
+ * account exists, so this only catches the ways a local visitor lands on the
+ * bare root instead: signing out, an expired session, or typing the LAN URL.
+ * Signup is the right default for all three — an installation with an account
+ * to sign into would not have sent them here.
+ */
+function LocalAuthRedirect() {
+    const router = useRouter();
+
+    useEffect(() => {
+        router.replace('/auth?show=signup');
+    }, [router]);
+
+    return <PageLoader />;
 }
 
 function AuthenticatedRootRedirect() {

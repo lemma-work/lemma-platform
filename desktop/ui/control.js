@@ -118,21 +118,15 @@ function configureInteractionHandlers() {
     const page = $("attention-action").dataset.page || "ai";
     setPage(page);
   });
-  $("detect-ollama").addEventListener("click", () => {
-    $("ai-protocol").value = "openai_compat";
-    $("ai-base").value = "http://127.0.0.1:11434/v1";
-    $("ai-key").value = "";
-    $("ai-private-network").checked = false;
-    markDirty($("ai-base"));
-    toast("Ollama selected. Validate & apply will discover its models.");
+  document.querySelectorAll("[data-preset]").forEach((button) => {
+    button.addEventListener("click", () => applyProviderPreset(button.dataset.preset));
   });
-  $("detect-lmstudio").addEventListener("click", () => {
-    $("ai-protocol").value = "openai_compat";
-    $("ai-base").value = "http://127.0.0.1:1234/v1";
-    $("ai-key").value = "";
-    $("ai-private-network").checked = false;
-    markDirty($("ai-base"));
-    toast("LM Studio selected. Start its server, then validate.");
+  $("ai-discover").addEventListener("click", discoverModels);
+  $("ai-base").addEventListener("input", () => {
+    // The listed models belong to the endpoint they came from. Once that
+    // changes they are someone else's models, and offering them as a choice
+    // is how a default that the provider has never heard of gets saved.
+    clearDiscoveredModels();
   });
   document.querySelectorAll("[data-sharing-mode]").forEach((button) => {
     button.addEventListener("click", () => selectSharingChoice(button.dataset.sharingMode));
@@ -162,6 +156,103 @@ function configureInteractionHandlers() {
   $("public-confirm-activate").addEventListener("click", activatePublicSharing);
 }
 
+// Loopback endpoints for the two local runners, and base URLs for the API
+// providers. Local first: someone running Lemma on their own Mac most likely
+// already has one of these serving, and it needs no key and no account.
+const PROVIDER_PRESETS = {
+  ollama: { protocol: "openai_compat", base: "http://127.0.0.1:11434/v1", note: "Ollama selected. Make sure it is running, then list its models." },
+  lmstudio: { protocol: "openai_compat", base: "http://127.0.0.1:1234/v1", note: "LM Studio selected. Start its local server, then list its models." },
+  openai: { protocol: "openai_compat", base: "https://api.openai.com/v1", note: "Enter an OpenAI API key, then list models." },
+  anthropic: { protocol: "anthropic_compat", base: "https://api.anthropic.com", note: "Enter an Anthropic API key, then list models." },
+  openrouter: { protocol: "openai_compat", base: "https://openrouter.ai/api/v1", note: "Enter an OpenRouter API key, then list models." },
+};
+
+// Models the provider reported for the endpoint currently in the form. Held
+// here rather than in a text field because the point is that the user picks
+// from what exists instead of typing an id they have to already know.
+let discoveredModels = [];
+
+function applyProviderPreset(name) {
+  const preset = PROVIDER_PRESETS[name];
+  if (!preset) return;
+  document.querySelectorAll("[data-preset]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.preset === name);
+  });
+  $("ai-protocol").value = preset.protocol;
+  $("ai-base").value = preset.base;
+  $("ai-key").value = "";
+  $("ai-private-network").checked = false;
+  clearDiscoveredModels();
+  markDirty($("ai-base"));
+  toast(preset.note);
+}
+
+function clearDiscoveredModels() {
+  discoveredModels = [];
+  $("ai-model-panel").hidden = true;
+  $("ai-model").innerHTML = "";
+  $("ai-model-count").textContent = "";
+}
+
+function renderDiscoveredModels(models, selected) {
+  discoveredModels = models;
+  const select = $("ai-model");
+  select.innerHTML = "";
+  models.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    select.append(option);
+  });
+  select.value = models.includes(selected) ? selected : models[0] || "";
+  $("ai-model-count").textContent = `${models.length} model${models.length === 1 ? "" : "s"} available`;
+  $("ai-model-panel").hidden = models.length === 0;
+}
+
+async function discoverModels() {
+  const button = $("ai-discover");
+  if (button.disabled) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Connecting…";
+  try {
+    const models = await invoke("discover_provider_models", {
+      payload: {
+        ai: {
+          protocol: $("ai-protocol").value,
+          base_url: $("ai-base").value.trim(),
+          default_model: "",
+          models: [],
+          vision_models: [],
+          allow_private_network: $("ai-private-network").checked,
+        },
+        // Absent means "use the stored key", which is what an already
+        // configured provider wants. An empty field is a deliberate no-key.
+        api_key: $("ai-key").dataset.clear === "true" ? "" : $("ai-key").value,
+      },
+    });
+    // The command returns the list rather than announcing it on the event
+    // stream, so the answer belongs to this press and not to whichever page
+    // happened to be listening.
+    applyDiscoveredModels(Array.isArray(models) ? models : []);
+  } catch (error) {
+    toast(String(error), true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+function applyDiscoveredModels(models) {
+  if (!models.length) {
+    toast("That provider is reachable but reported no models.", true);
+    return;
+  }
+  renderDiscoveredModels(models, $("ai-model").value);
+  markDirty($("ai-model"));
+  toast(`Found ${models.length} model${models.length === 1 ? "" : "s"}. Pick a default, then apply.`);
+}
+
 function fillConfiguration() {
   if (!snapshot?.operator) return;
   filling = true;
@@ -169,8 +260,13 @@ function fillConfiguration() {
   const presence = snapshot.operator.secrets || {};
   $("ai-protocol").value = config.ai.protocol;
   $("ai-base").value = config.ai.base_url;
-  $("ai-model").value = config.ai.default_model;
-  $("ai-models").value = config.ai.models.join(", ");
+  // A saved profile already carries the list the probe returned when it was
+  // applied, so a returning user sees their picker without re-listing.
+  if (config.ai.models.length) {
+    renderDiscoveredModels(config.ai.models, config.ai.default_model);
+  } else {
+    clearDiscoveredModels();
+  }
   $("ai-vision").value = config.ai.vision_models.join(", ");
   $("ai-private-network").checked = Boolean(config.ai.allow_private_network);
   $("ai-validation").textContent = config.ai.last_validated_at_unix_ms
@@ -209,7 +305,9 @@ function collectConfiguration() {
     protocol: $("ai-protocol").value,
     base_url: $("ai-base").value.trim(),
     default_model: $("ai-model").value.trim(),
-    models: csv($("ai-models").value),
+    // Whatever the probe last returned for this endpoint. Apply re-probes and
+    // overwrites this with its own list, so it is a hint, not a claim.
+    models: discoveredModels,
     vision_models: csv($("ai-vision").value),
     allow_private_network: $("ai-private-network").checked,
   };

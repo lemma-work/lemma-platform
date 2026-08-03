@@ -92,7 +92,7 @@
 .remix-command .github-import-installer-copy > p:last-child {
   margin: 0.5rem 0 0;
   color: var(--import-muted);
-  font-family: var(--font-document-sans);
+  font-family: var(--font-document-family);
   font-size: var(--text-xs);
   line-height: 1.5;
 }
@@ -209,7 +209,7 @@
 .remix-command-empty > p {
   margin: 0;
   color: var(--import-muted);
-  font-family: var(--font-document-sans);
+  font-family: var(--font-document-family);
   font-size: var(--text-xs);
   line-height: 1.5;
 }

@@ -1008,7 +1008,7 @@ function PlaceLink(props: {
             className="lemma-product-nav-item lemma-sidebar-row lemma-sidebar-row-base custom-focus-ring group font-normal"
         >
             <span className="flex min-w-0 items-center gap-3">
-                <ProductIcon kind={kind} size="xs" state={active ? 'selected' : 'default'} />
+                <ProductIcon kind={kind} size="xs" state={active ? 'selected' : 'default'} interactive />
                 <span className="truncate">{label}</span>
             </span>
         </Link>

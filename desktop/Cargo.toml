@@ -8,7 +8,11 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "unstable"] }
+# macos-private-api is what gates WebviewWindowBuilder::transparent, which an
+# NSVisualEffectView has to sit behind to be visible at all. It is also what
+# makes a build ineligible for the Mac App Store — fine for the dmg/app targets
+# this ships as, and the reason to revisit if that ever changes.
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "unstable", "macos-private-api"] }
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-deep-link = "2"
@@ -21,6 +25,13 @@ zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Vibrancy behind the webview, and a direct read of NSColor so the web UI can
+# paint with the user's real System Settings accent rather than a guess.
+window-vibrancy = "0.6"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSColor", "NSColorSpace"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }

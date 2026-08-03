@@ -485,6 +485,14 @@ impl Daemon {
                 self.apply_operator_config(request, client);
                 return true;
             }
+            "config.discover-models" => {
+                self.discover_provider_models(request, client);
+                return true;
+            }
+            "config.set-ai" => {
+                self.set_ai_profile(request, client);
+                return true;
+            }
             "desktop.release" => {
                 self.release_for_desktop_exit(id.as_ref(), client);
                 return true;
@@ -1137,13 +1145,31 @@ impl Daemon {
         );
         let daemon = Arc::clone(self);
         thread::spawn(move || {
+            let result = daemon.write_operator_config(|store| store.apply(apply));
+            daemon.finish_config_write(result, id.as_ref());
+        });
+    }
+
+    /// Persist an operator-config change and restart the backend behind it.
+    ///
+    /// The write itself differs by caller — a whole configuration from the
+    /// settings page, one section from onboarding — but everything around it
+    /// is the same and is the part that is easy to get wrong: capture the
+    /// previous state, re-render the backend environment, restart, and put the
+    /// old configuration back if the restart does not come up.
+    fn write_operator_config(
+        self: &Arc<Self>,
+        write: impl FnOnce(&OperatorConfigStore) -> io::Result<Value>,
+    ) -> io::Result<Value> {
+        let daemon = self;
+        {
             let previous = daemon.operator_config.capture_state();
             let backend_restart_available = daemon
                 .host_processes
                 .as_ref()
                 .is_some_and(|manager| manager.backend_restart_available());
-            let result = previous.and_then(|previous| {
-                let snapshot = daemon.operator_config.apply(apply)?;
+            previous.and_then(|previous| {
+                let snapshot = write(daemon.operator_config.as_ref())?;
                 let activate: io::Result<Value> = (|| {
                     if let Some(manager) = daemon.host_processes.as_ref() {
                         if backend_restart_available {
@@ -1175,24 +1201,90 @@ impl Daemon {
                         }
                     }
                 }
-            });
-            match result {
-                Ok(snapshot) => daemon.broadcast(json!({
-                    "v": PROTOCOL_VERSION,
-                    "event": "config.applied",
-                    "id": id.as_ref(),
-                    "operator": snapshot,
-                    "restart": "backend",
-                })),
-                Err(error) => daemon.broadcast(error_event(
-                    "config-apply-failed",
-                    error.to_string(),
-                    id.as_ref(),
-                )),
-            }
-            daemon
-                .host_operation_running
-                .store(false, Ordering::Release);
+            })
+        }
+    }
+
+    /// Announce the outcome of an operator-config write and release the guard.
+    fn finish_config_write(self: &Arc<Self>, result: io::Result<Value>, id: Option<&Value>) {
+        match result {
+            Ok(snapshot) => self.broadcast(json!({
+                "v": PROTOCOL_VERSION,
+                "event": "config.applied",
+                "id": id,
+                "operator": snapshot,
+                "restart": "backend",
+            })),
+            Err(error) => self.broadcast(error_event("config-apply-failed", error.to_string(), id)),
+        }
+        self.host_operation_running.store(false, Ordering::Release);
+    }
+
+    /// Change only the AI profile.
+    ///
+    /// Onboarding runs in the workspace, on a remote origin, and is trusted
+    /// with this one section and nothing else — not sharing, not tunnels, not
+    /// the runtime. Keeping that narrow is the reason this is its own command
+    /// rather than a `config.apply` with the rest of the configuration echoed
+    /// back by the caller.
+    fn set_ai_profile(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
+        let id = request.get("id").cloned();
+        if self
+            .host_operation_running
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            self.send_direct(
+                client,
+                error_event("busy", "another local operation is running", id.as_ref()),
+            );
+            return;
+        }
+        let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        self.send_direct(
+            client,
+            json!({"v": PROTOCOL_VERSION, "event":"ack", "cmd":"config.set-ai", "id": id.as_ref()}),
+        );
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let result = daemon.write_operator_config(|store| store.set_ai(payload));
+            daemon.finish_config_write(result, id.as_ref());
+        });
+    }
+
+    /// Ask a provider what it can run, without committing to anything.
+    ///
+    /// `config.apply` already probes, but it probes as one step of a write that
+    /// restarts the backend — so the only way to find out a provider's model
+    /// names was to guess one, apply, and read the error. That is why both the
+    /// onboarding step and Local settings asked people to type model ids from
+    /// memory. This is the same probe with no write behind it: connect, list,
+    /// then let the user pick before anything is saved.
+    ///
+    /// Deliberately not guarded by `host_operation_running` — it mutates
+    /// nothing, and making a read-only lookup wait behind an unrelated start is
+    /// how a model picker ends up feeling broken.
+    fn discover_provider_models(self: &Arc<Self>, request: Value, client: &mpsc::Sender<String>) {
+        let id = request.get("id").cloned();
+        let payload = request.get("payload").cloned().unwrap_or(Value::Null);
+        let daemon = Arc::clone(self);
+        let client = client.clone();
+        thread::spawn(move || {
+            match daemon.operator_config.discover_models(payload) {
+                Ok(models) => daemon.send_direct(
+                    &client,
+                    json!({
+                        "v": PROTOCOL_VERSION,
+                        "event": "config.models",
+                        "id": id.as_ref(),
+                        "models": models,
+                    }),
+                ),
+                Err(error) => daemon.send_direct(
+                    &client,
+                    error_event("config-discover-failed", error.to_string(), id.as_ref()),
+                ),
+            };
         });
     }
 
