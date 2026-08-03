@@ -15,6 +15,7 @@ from agentbox.adapters.e2b import E2BAdapterConfig, E2BSandboxAdapter
 from agentbox.domain import (
     AdmissionClass,
     AgentBoxError,
+    AllocationState,
     ByteRange,
     CreatePythonSessionRequest,
     EnvironmentVariable,
@@ -101,14 +102,21 @@ def _function_profile() -> SandboxProfile:
     )
 
 
-def _adapter(registry: ProfileRegistry, *, scope: str) -> E2BSandboxAdapter:
+def _adapter(
+    registry: ProfileRegistry,
+    *,
+    scope: str,
+    workspace_timeout_seconds: int = 600,
+    workspace_timeout_refresh_seconds: int = 60,
+) -> E2BSandboxAdapter:
     return E2BSandboxAdapter(
         registry,
         E2BAdapterConfig(
             api_key=os.environ["E2B_API_KEY"],
             scope=scope,
             request_timeout_seconds=60,
-            workspace_timeout_seconds=600,
+            workspace_timeout_seconds=workspace_timeout_seconds,
+            workspace_timeout_refresh_seconds=workspace_timeout_refresh_seconds,
             function_timeout_seconds=300,
         ),
     )
@@ -715,6 +723,174 @@ async def test_real_e2b_function_runtime_port_and_exact_destroy(
         assert lease.profile == profile.ref
         assert database.active_units_of_work == 0
         assert await lifecycle.destroy(key, deadline_at=deadline)
+    finally:
+        provider_id = provider_id or await _provider_id(database, key)
+        await _kill_exact(provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+async def test_real_e2b_active_workspace_outlives_the_provider_timeout(
+    tmp_path: Path,
+) -> None:
+    """An actively-used workspace must never be paused by E2B mid-session.
+
+    E2B's `timeout` is a continuous-runtime ceiling, not an idle timer, so
+    without a refresh on activity the provider stops a busy workspace once the
+    window elapses. Compressed to E2B's 60s minimum so the behaviour is
+    observable in a test.
+
+    A background process is the proof: a workspace pause is filesystem-only and
+    cold-boots, so a process that is still running after more than one full
+    timeout window can only mean the sandbox was never paused.
+    """
+
+    profile = _workspace_profile()
+    adapter = _adapter(
+        ProfileRegistry((profile,)),
+        scope=f"e2b:workspace-timeout-refresh:{uuid4()}",
+        workspace_timeout_seconds=60,
+        workspace_timeout_refresh_seconds=5,
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(database, adapter)
+    processes = ProcessExecutionService(database, adapter)
+    filesystem = FilesystemService(database, adapter)
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
+    provider_id: str | None = None
+
+    try:
+        handle = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        assert handle.ready is True
+        provider_id = await _provider_id(database, key)
+
+        marker = uuid4()
+        background_id = uuid4()
+        await processes.start(
+            key,
+            StartProcessRequest(
+                operation_id=background_id,
+                shell_command=f"sleep 300 # {marker}",
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=4096,
+                deadline_at=deadline,
+            ),
+        )
+
+        # Stay busy for well over one full timeout window.
+        for index in range(9):
+            await asyncio.sleep(10)
+            await filesystem.write(
+                key,
+                f"/workspace/heartbeat-{index}",
+                b"busy",
+                expected_sha256=None,
+                deadline_at=deadline,
+            )
+
+        still_running = await processes.inspect(key, background_id)
+        assert still_running.state == ProcessState.RUNNING
+        assert await _provider_id(database, key) == provider_id
+    finally:
+        provider_id = provider_id or await _provider_id(database, key)
+        await _kill_exact(provider_id)
+        await adapter.close()
+        await database.dispose()
+
+
+async def test_real_e2b_running_process_defers_idle_release(
+    tmp_path: Path,
+) -> None:
+    """Idle cleanup must not pause a sandbox out from under a running process.
+
+    Activity protection is otherwise taken only for the starting operation's
+    deadline, so a dev server or long build was released - and killed by
+    quiesce - at the idle threshold after the agent's last poll.
+    """
+
+    profile = _workspace_profile()
+    adapter = _adapter(
+        ProfileRegistry((profile,)),
+        scope=f"e2b:process-lease:{uuid4()}",
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(database, adapter)
+    processes = ProcessExecutionService(database, adapter)
+    # Idle cleanup is due immediately, so only the process lease can hold it off.
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=5)
+    provider_id: str | None = None
+
+    try:
+        await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        provider_id = await _provider_id(database, key)
+
+        background_id = uuid4()
+        # Starting a process protects the sandbox only for its own request
+        # deadline; a short one here is exactly the case the lease exists for -
+        # a process that outlives the call that started it.
+        await processes.start(
+            key,
+            StartProcessRequest(
+                operation_id=background_id,
+                shell_command="sleep 300",
+                argv=None,
+                cwd="/workspace",
+                environment=(),
+                tty=None,
+                output_limit_bytes=4096,
+                deadline_at=datetime.now(timezone.utc) + timedelta(seconds=5),
+            ),
+        )
+        assert await processes.renew_process_leases(lease_seconds=20) == 1
+
+        # Held off purely by the lease: the sandbox is otherwise long idle.
+        assert await maintenance.run_once(deadline_at=deadline) == 0
+        assert (await processes.inspect(key, background_id)).state == (
+            ProcessState.RUNNING
+        )
+
+        # Once the process is gone the lease stops being renewed, and after the
+        # outstanding protection expires idle cleanup proceeds normally. Note
+        # protection only ever extends, so this waits it out rather than
+        # shortening it.
+        await processes.terminate(
+            key, background_id, grace_seconds=0, deadline_at=deadline
+        )
+        assert await processes.renew_process_leases(lease_seconds=20) == 0
+        await asyncio.sleep(21)
+
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        async with database.uow() as uow:
+            released = await uow.repository.current_allocation(key)
+            await uow.commit()
+        assert released is not None
+        assert released.state == AllocationState.RELEASED
     finally:
         provider_id = provider_id or await _provider_id(database, key)
         await _kill_exact(provider_id)

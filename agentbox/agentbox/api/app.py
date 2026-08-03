@@ -31,7 +31,7 @@ from agentbox.lifecycle import SandboxLifecycleService
 from agentbox.maintenance import SandboxMaintenanceWorker, maintenance_loop
 from agentbox.port_access import PortAccessService, PortAccessSigner
 from agentbox.persistence.uow import StateDatabase
-from agentbox.processes import ProcessExecutionService
+from agentbox.processes import ProcessExecutionService, process_lease_loop
 from agentbox.profiles import (
     DockerProfileArtifact,
     E2BProfileArtifact,
@@ -546,14 +546,27 @@ async def lifespan(app: FastAPI):
         ),
         name="agentbox-maintenance",
     )
+    # A running process counts as activity. Without this, idle cleanup pauses a
+    # sandbox out from under a background build or dev server at the idle
+    # threshold after the agent's last poll, and quiesce kills it.
+    app.state.process_lease_task = create_background_task(
+        process_lease_loop(
+            app.state.process_execution,
+            interval_seconds=settings.agentbox_process_lease_interval_seconds,
+            lease_seconds=settings.agentbox_process_lease_seconds,
+        ),
+        name="agentbox-process-lease",
+    )
     try:
         yield
     finally:
         app.state.reconciliation_task.cancel()
         app.state.maintenance_task.cancel()
+        app.state.process_lease_task.cancel()
         await asyncio.gather(
             app.state.reconciliation_task,
             app.state.maintenance_task,
+            app.state.process_lease_task,
             return_exceptions=True,
         )
         await app.state.port_proxy_http_client.aclose()

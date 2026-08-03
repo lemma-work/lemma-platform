@@ -291,7 +291,9 @@ class E2BSandboxAdapter:
         self._sandboxes: dict[str, E2BSandboxType] = {}
         self._processes: dict[tuple[str, str], _ProcessBuffer] = {}
         self._process_lock = asyncio.Lock()
-        self._python_contexts: dict[str, set[str]] = {}
+        # provider_id -> {session_id: context_id}. Ownership is per session so
+        # replacing one session's interpreter can never destroy another's.
+        self._python_contexts: dict[str, dict[str, str]] = {}
         self._python_context_locks: dict[str, asyncio.Lock] = {}
         # When E2B will stop each sandbox, and when we last pushed that out.
         # E2B's `timeout` is a continuous-runtime ceiling rather than an idle
@@ -1089,24 +1091,32 @@ class E2BSandboxAdapter:
             asyncio.Lock(),
         )
         async with context_lock:
-            owned = self._python_contexts.setdefault(allocation.provider_id, set())
+            owned = self._python_contexts.setdefault(allocation.provider_id, {})
             try:
                 existing = await sandbox.list_code_contexts()
                 existing_ids = {context.id for context in existing}
-                owned.intersection_update(existing_ids)
-                # A manager restart intentionally forgets runtime handles. Clear
-                # the abandoned provider contexts before creating a new one so
-                # an old execution cannot overlap a fresh interpreter.
-                for context in existing:
-                    if context.id not in owned:
-                        await sandbox.remove_code_context(context.id)
-                before = set(owned)
+                # Forget ownership of contexts the provider no longer has.
+                for session_key, context_id in list(owned.items()):
+                    if context_id not in existing_ids:
+                        owned.pop(session_key, None)
+                # Replace only *this* session's previous interpreter, so a new
+                # one cannot overlap an execution still running on the old.
+                # Contexts belonging to other sessions are left alone: one
+                # sandbox serves every conversation a user has, and a manager
+                # restart forgets ownership, so reaping everything unrecognised
+                # destroyed other live conversations' kernels. A context we no
+                # longer own is instead released when the sandbox next pauses,
+                # which cold-boots it.
+                stale = owned.pop(str(request.session_id), None)
+                if stale is not None and stale in existing_ids:
+                    await sandbox.remove_code_context(stale)
             except (AuthenticationException, InvalidArgumentException) as exc:
                 raise ProviderPythonSessionCreateRejected(str(exc)) from exc
             except Exception as exc:
                 raise ProviderPythonSessionCreateRejected(
                     f"could not quiesce abandoned Python contexts: {exc}"
                 ) from exc
+            before = existing_ids - {stale} if stale is not None else existing_ids
             try:
                 context = await sandbox.create_code_context(
                     cwd=request.cwd,
@@ -1122,14 +1132,14 @@ class E2BSandboxAdapter:
                         context for context in after if context.id not in before
                     ]
                     if len(created) == 1 and created[0].cwd == request.cwd:
-                        owned.add(created[0].id)
+                        owned[str(request.session_id)] = created[0].id
                         return ProviderPythonSessionCreateResult(
                             provider_context_id=created[0].id
                         )
                 except Exception:
                     pass
                 raise ProviderPythonSessionCreateAmbiguous(str(exc)) from exc
-            owned.add(context.id)
+            owned[str(request.session_id)] = context.id
             return ProviderPythonSessionCreateResult(
                 provider_context_id=context.id
             )
@@ -1249,9 +1259,11 @@ class E2BSandboxAdapter:
             removed = True
         finally:
             if removed:
-                self._python_contexts.get(allocation.provider_id, set()).discard(
-                    session.provider_context_id
-                )
+                owned = self._python_contexts.get(allocation.provider_id)
+                if owned is not None:
+                    for session_key, context_id in list(owned.items()):
+                        if context_id == session.provider_context_id:
+                            owned.pop(session_key, None)
 
     async def resolve_port_target(
         self,

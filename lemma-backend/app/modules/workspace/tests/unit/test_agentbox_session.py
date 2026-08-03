@@ -137,6 +137,78 @@ def _session(client: _CanonicalClient) -> AgentBoxWorkspaceSession:
     )
 
 
+class _CapacityThenSucceedClient:
+    """Rejects the first start with a retryable capacity signal, then accepts."""
+
+    def __init__(self, rejections: int = 2) -> None:
+        self.remaining_rejections = rejections
+        self.start_operation_ids: list[Any] = []
+
+    async def start_process(self, *_args: Any, **kwargs: Any) -> None:
+        self.start_operation_ids.append(kwargs["operation_id"])
+        if self.remaining_rejections > 0:
+            self.remaining_rejections -= 1
+            response = httpx.Response(
+                429,
+                request=httpx.Request("POST", "https://agentbox.test/processes"),
+            )
+            raise AgentBoxApiError(
+                response,
+                AgentBoxErrorResponse(
+                    error=AgentBoxErrorBody(
+                        code="CAPACITY_EXHAUSTED",
+                        message="manager process routing capacity is full",
+                        retry=RetryDisposition.WAIT,
+                        retry_after_ms=1,
+                    )
+                ),
+            )
+
+    async def read_process_output(
+        self, *_args: Any, **_kwargs: Any
+    ) -> ProcessOutputSnapshot:
+        return ProcessOutputSnapshot(
+            chunks=(
+                ProcessOutputChunk(
+                    sequence=1,
+                    channel=ProcessOutputChannel.STDOUT,
+                    data=b"ok\n",
+                ),
+            ),
+            next_sequence=2,
+            truncated_before_sequence=None,
+            state=ProcessState.SUCCEEDED,
+            exit_code=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_capacity_pressure_is_absorbed_instead_of_failing_the_tool_call() -> None:
+    """A WAIT signal must not become an agent-visible tool failure.
+
+    Capacity is rejected before anything is dispatched, so asking the agent to
+    retry made it the retry loop for a platform-level limit and amplified the
+    load that caused it. Retries reuse the operation ID, so the manager still
+    deduplicates.
+    """
+
+    client = _CapacityThenSucceedClient(rejections=2)
+    session = AgentBoxWorkspaceSession(
+        client=client,  # type: ignore[arg-type]
+        sandbox_id=uuid4(),
+        session_id="conversation-1",
+    )
+
+    result = await session.exec_command(cmd="echo ok", timeout=30)
+
+    assert result["success"] is True
+    assert result["stdout"] == "ok\n"
+    assert result["error"] is None
+    assert len(client.start_operation_ids) == 3
+    # One operation identity across all attempts keeps manager dedup effective.
+    assert len(set(client.start_operation_ids)) == 1
+
+
 class _ReplayTrackingClient:
     """A client whose output buffer honours ``after_sequence``, like the manager."""
 

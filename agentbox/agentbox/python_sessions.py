@@ -61,7 +61,8 @@ class PythonSessionService:
         provider: ProviderPythonSessionPort,
         *,
         max_sessions: int = 512,
-        max_execution_results: int = 32,
+        max_execution_results: int = 1024,
+        max_execution_results_per_sandbox: int | None = None,
         session_idle_seconds: int = 3600,
     ) -> None:
         if (
@@ -70,6 +71,15 @@ class PythonSessionService:
             or session_idle_seconds < 1
         ):
             raise ValueError("Python runtime caches must retain at least one record")
+        # Derived from the total unless chosen explicitly, so a caller that only
+        # sizes the aggregate still gets per-sandbox fairness rather than a
+        # per-sandbox cap it never asked for and cannot satisfy.
+        if max_execution_results_per_sandbox is None:
+            max_execution_results_per_sandbox = min(32, max_execution_results)
+        if not 1 <= max_execution_results_per_sandbox <= max_execution_results:
+            raise ValueError(
+                "per-sandbox Python result capacity must be between 1 and the total"
+            )
         self._database = database
         self._provider = provider
         self._sessions: dict[tuple[str, UUID, UUID], PythonSessionRef] = {}
@@ -86,6 +96,7 @@ class PythonSessionService:
         ] = {}
         self._max_sessions = max_sessions
         self._max_execution_results = max_execution_results
+        self._max_execution_results_per_sandbox = max_execution_results_per_sandbox
         self._session_idle = timedelta(seconds=session_idle_seconds)
         self._state_lock = asyncio.Lock()
         # Provider calls for one stateful interpreter must be serialized, but
@@ -250,6 +261,20 @@ class PythonSessionService:
                         status_code=409,
                     )
             else:
+                # Charged per sandbox first: results are retained until their
+                # deadline rather than evicted, so a single global limit let one
+                # busy user exhaust Python execution for the whole platform.
+                if (
+                    self._sandbox_result_load_locked(key)
+                    >= self._max_execution_results_per_sandbox
+                ):
+                    raise AgentBoxError(
+                        ErrorCode.CAPACITY_EXHAUSTED,
+                        "this sandbox has too many concurrent Python executions",
+                        retry=RetryDisposition.WAIT,
+                        status_code=429,
+                        retry_after_ms=1000,
+                    )
                 if (
                     len(self._results) + len(self._inflight_executions)
                     >= self._max_execution_results
@@ -528,6 +553,14 @@ class PythonSessionService:
         return (
             tombstone.allocation_id == allocation.allocation_id
             and tombstone.allocation_epoch == (allocation.allocation_epoch or 0)
+        )
+
+    def _sandbox_result_load_locked(self, key: SandboxKey) -> int:
+        prefix = (key.workload_kind.value, key.logical_id)
+        return sum(
+            1 for result_key in self._results if result_key[:2] == prefix
+        ) + sum(
+            1 for result_key in self._inflight_executions if result_key[:2] == prefix
         )
 
     def _prune_expired_results_locked(self, now: datetime) -> None:

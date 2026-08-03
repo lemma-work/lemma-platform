@@ -122,14 +122,18 @@ class AgentBoxWorkspaceSession:
         deadline = self._deadline(timeout)
         try:
             await self._ensure_python_session(deadline)
-            result = await self.client.execute_python(
-                self.logical_id,
-                self.python_session_id,
-                operation_id=uuid4(),
-                code=code,
-                environment=self._environment,
-                output_limit_bytes=1024 * 1024,
-                deadline_at=deadline,
+            operation_id = uuid4()
+            result = await self._with_backpressure(
+                lambda: self.client.execute_python(
+                    self.logical_id,
+                    self.python_session_id,
+                    operation_id=operation_id,
+                    code=code,
+                    environment=self._environment,
+                    output_limit_bytes=1024 * 1024,
+                    deadline_at=deadline,
+                ),
+                deadline,
             )
         except (AgentBoxApiError, httpx.HTTPError, OSError) as exc:
             return PythonExecutionResult(
@@ -198,16 +202,19 @@ class AgentBoxWorkspaceSession:
             max(1024, (max_output_tokens or 1_000_000) * 4),
         )
         try:
-            await self.client.start_process(
-                WorkloadKind.WORKSPACE,
-                self.logical_id,
-                operation_id=operation_id,
-                shell_command=cmd,
-                cwd=workdir or self._cwd,
-                environment=self._environment,
-                tty=TerminalSize(cols=cols, rows=rows) if tty else None,
-                output_limit_bytes=output_limit,
-                deadline_at=deadline,
+            await self._with_backpressure(
+                lambda: self.client.start_process(
+                    WorkloadKind.WORKSPACE,
+                    self.logical_id,
+                    operation_id=operation_id,
+                    shell_command=cmd,
+                    cwd=workdir or self._cwd,
+                    environment=self._environment,
+                    tty=TerminalSize(cols=cols, rows=rows) if tty else None,
+                    output_limit_bytes=output_limit,
+                    deadline_at=deadline,
+                ),
+                deadline,
             )
             effective_yield_ms = yield_time_ms
             if effective_yield_ms is None and tty:
@@ -640,6 +647,31 @@ class AgentBoxWorkspaceSession:
             if state in {ProcessState.RUNNING, ProcessState.SUCCEEDED}
             else state.value,
         }
+
+    async def _with_backpressure(self, operation, deadline: datetime):
+        """Wait out a retryable capacity/provisioning signal instead of failing.
+
+        A WAIT disposition means the manager rejected the call before anything
+        was dispatched - the sandbox is still provisioning, or routing capacity
+        is momentarily full. Surfacing that as a tool failure asked the agent to
+        be the retry loop for a platform-level limit, which amplifies the very
+        load that caused it. The operation ID is unchanged across attempts, so
+        the manager still deduplicates if one did get through.
+        """
+
+        attempt = 0
+        while True:
+            try:
+                return await operation()
+            except AgentBoxApiError as exc:
+                remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+                if exc.retry.value != "wait" or remaining <= 0:
+                    raise
+                delay = max(0.05, (exc.retry_after_ms or 250) / 1000)
+                # Back off so a burst of waiting callers does not resynchronise.
+                delay = min(delay * (1.5**min(attempt, 4)), 5.0, remaining)
+                attempt += 1
+                await asyncio.sleep(delay)
 
     async def _load_output_cursor(self, operation_id: UUID) -> int:
         local = self._output_sequence.get(operation_id, 0)

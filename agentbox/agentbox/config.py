@@ -92,7 +92,18 @@ class Settings(BaseSettings):
         default=4_000_000_000,
         ge=100_000_000,
     )
-    agentbox_provider_max_active: int = Field(default=32, ge=1, le=10000)
+    agentbox_provider_max_active: int = Field(
+        default=90,
+        ge=1,
+        le=10000,
+        description=(
+            "Maximum concurrently active provider sandboxes. Must be set from "
+            "the provider plan's own concurrency ceiling with headroom: E2B "
+            "allows 100 concurrent sandboxes on Pro and 20 on Hobby. One "
+            "sandbox serves one user, so this is effectively the number of "
+            "simultaneously active users."
+        ),
+    )
     agentbox_provider_create_rate_per_second: float = Field(default=2.0, gt=0, le=1000)
     agentbox_provider_create_burst: int = Field(default=4, ge=1, le=1000)
     agentbox_provider_interactive_capacity_reserve: int = Field(default=4, ge=0)
@@ -190,6 +201,20 @@ class Settings(BaseSettings):
             "of one per runtime operation."
         ),
     )
+    agentbox_process_lease_seconds: float = Field(
+        default=180,
+        ge=10,
+        description=(
+            "How long a running process keeps its sandbox awake per renewal. "
+            "Short and repeatedly renewed, so a manager that dies cannot leave "
+            "a sandbox pinned - the protection simply expires."
+        ),
+    )
+    agentbox_process_lease_interval_seconds: float = Field(
+        default=30,
+        ge=1,
+        description="How often running processes renew their sandbox lease.",
+    )
     agentbox_workspace_idle_seconds: float = Field(default=300, ge=1)
     agentbox_function_idle_seconds: float = Field(default=300, ge=1)
     agentbox_cleanup_interval_seconds: float = Field(default=30, ge=1)
@@ -270,6 +295,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AGENTBOX_E2B_WORKSPACE_TIMEOUT_REFRESH_SECONDS must be shorter "
                 "than AGENTBOX_E2B_WORKSPACE_TIMEOUT_SECONDS"
+            )
+        # A lease must outlive its own renewal interval, or a running process
+        # would leave its sandbox unprotected between renewals and be released.
+        if (
+            self.agentbox_process_lease_seconds
+            <= self.agentbox_process_lease_interval_seconds
+        ):
+            raise ValueError(
+                "AGENTBOX_PROCESS_LEASE_SECONDS must exceed "
+                "AGENTBOX_PROCESS_LEASE_INTERVAL_SECONDS"
             )
         return self
 

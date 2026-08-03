@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 from uuid import UUID
 
@@ -21,7 +21,7 @@ from agentbox.domain import (
     StartProcessRequest,
     TerminalSize,
 )
-from agentbox.observability import create_inherited_task
+from agentbox.observability import create_inherited_task, get_logger
 from agentbox.persistence.uow import StateDatabase
 from agentbox.ports import (
     ProviderAllocationRef,
@@ -32,6 +32,8 @@ from agentbox.ports import (
     ProviderProcessStartRequest,
 )
 
+
+logger = get_logger(__name__)
 
 _TERMINAL_STATES = {
     ProcessState.SUCCEEDED,
@@ -45,6 +47,9 @@ _TERMINAL_STATES = {
 class _ProcessRecord:
     request_hash: str
     ref: ProcessRef
+    # When this manager first stored the record. `ref.started_at` is optional
+    # and provider-reported, so it cannot bound a record's lifetime on its own.
+    stored_at: datetime
 
 
 class ProcessExecutionService:
@@ -60,13 +65,28 @@ class ProcessExecutionService:
         database: StateDatabase,
         provider: ProviderProcessPort,
         *,
-        max_records: int = 64,
+        max_records: int = 2048,
+        max_records_per_sandbox: int | None = None,
+        max_process_lifetime_seconds: float = 12 * 60 * 60,
     ) -> None:
         if max_records < 1:
             raise ValueError("process routing cache must retain at least one record")
+        # Derived from the total unless chosen explicitly, so a caller that only
+        # sizes the aggregate still gets per-sandbox fairness rather than a
+        # per-sandbox cap it never asked for and cannot satisfy.
+        if max_records_per_sandbox is None:
+            max_records_per_sandbox = min(64, max_records)
+        if not 1 <= max_records_per_sandbox <= max_records:
+            raise ValueError(
+                "per-sandbox process capacity must be between 1 and the total"
+            )
+        if max_process_lifetime_seconds <= 0:
+            raise ValueError("process lifetime bound must be positive")
         self._database = database
         self._provider = provider
         self._max_records = max_records
+        self._max_records_per_sandbox = max_records_per_sandbox
+        self._max_process_lifetime = timedelta(seconds=max_process_lifetime_seconds)
         self._records: OrderedDict[
             tuple[str, UUID, UUID], _ProcessRecord
         ] = OrderedDict()
@@ -98,6 +118,18 @@ class ProcessExecutionService:
                 if in_flight_hash != request_hash:
                     raise self._operation_conflict(request.operation_id)
             else:
+                # Capacity is charged per sandbox first. A process-global limit
+                # alone let one busy user consume the whole manager's routing
+                # capacity and 429 everybody else, because records are retained
+                # until their deadline rather than evicted.
+                if self._sandbox_load_locked(key) >= self._max_records_per_sandbox:
+                    raise AgentBoxError(
+                        ErrorCode.CAPACITY_EXHAUSTED,
+                        "this sandbox has too many concurrent processes",
+                        retry=RetryDisposition.WAIT,
+                        status_code=429,
+                        retry_after_ms=1000,
+                    )
                 if len(self._records) + len(self._inflight) >= self._max_records:
                     raise AgentBoxError(
                         ErrorCode.CAPACITY_EXHAUSTED,
@@ -399,19 +431,83 @@ class ProcessExecutionService:
     ) -> None:
         async with self._lock:
             record_key = self._record_key(key, ref.operation_id)
+            existing = self._records.get(record_key)
             self._records[record_key] = _ProcessRecord(
-                request_hash=request_hash, ref=ref
+                request_hash=request_hash,
+                ref=ref,
+                stored_at=(
+                    existing.stored_at
+                    if existing is not None
+                    else datetime.now(timezone.utc)
+                ),
             )
             self._records.move_to_end(record_key)
 
+    def _sandbox_load_locked(self, key: SandboxKey) -> int:
+        prefix = (key.workload_kind.value, key.logical_id)
+        return sum(
+            1 for record_key in self._records if record_key[:2] == prefix
+        ) + sum(1 for record_key in self._inflight if record_key[:2] == prefix)
+
     def _prune_expired_locked(self, now: datetime) -> None:
+        """Drop records that can no longer be addressed or replayed.
+
+        A record's deadline is the deadline of the call that *started* it, which
+        for a backgrounded process is far shorter than the process itself. That
+        deadline bounds the idempotency window, not the process, so a record is
+        only dropped once its process is terminal. Otherwise a dev server
+        started behind a 60-second tool call would become unreachable, and the
+        activity lease that keeps its sandbox awake would end with it.
+
+        Non-terminal records are still bounded, by a maximum lifetime, so a
+        process whose completion was never observed cannot pin routing capacity
+        or its sandbox forever.
+        """
+
         expired = [
             record_key
             for record_key, record in self._records.items()
-            if record.ref.deadline_at <= now
+            if (
+                record.ref.deadline_at <= now
+                and record.ref.state in _TERMINAL_STATES
+            )
+            or record.stored_at + self._max_process_lifetime <= now
         ]
         for record_key in expired:
             self._records.pop(record_key, None)
+
+    async def renew_process_leases(self, *, lease_seconds: float) -> int:
+        """Treat a running process as activity so idle cleanup waits for it.
+
+        Activity protection is otherwise taken only for the duration of the
+        operation that starts a process, so a background build or dev server
+        was released - and killed by quiesce - at the idle threshold after the
+        agent's last poll. This does not promise a process survives a pause;
+        under the workspace model it never does. It only stops AgentBox pausing
+        a sandbox out from under work that is still running.
+        """
+
+        now = datetime.now(timezone.utc)
+        async with self._lock:
+            self._prune_expired_locked(now)
+            keys = {
+                record.ref.key
+                for record in self._records.values()
+                if record.ref.state not in _TERMINAL_STATES
+            }
+        renewed = 0
+        until = now + timedelta(seconds=lease_seconds)
+        for key in keys:
+            try:
+                async with self._database.uow() as uow:
+                    await uow.repository.protect_activity(key, until=until)
+                    await uow.commit()
+            except AgentBoxError:
+                # The sandbox may already be quiescing, replaced, or gone. Its
+                # records become unusable with it and are pruned by lifetime.
+                continue
+            renewed += 1
+        return renewed
 
     async def _terminalize(
         self,
@@ -556,3 +652,28 @@ class ProcessExecutionService:
                 kind="process", operation_id=operation_id
             ),
         )
+
+
+async def process_lease_loop(
+    service: ProcessExecutionService,
+    *,
+    interval_seconds: float,
+    lease_seconds: float,
+) -> None:
+    """Keep sandboxes with running processes out of idle cleanup.
+
+    The lease is deliberately short and renewed, so a manager that dies cannot
+    leave a sandbox pinned awake: the protection simply expires.
+    """
+
+    while True:
+        try:
+            await service.renew_process_leases(lease_seconds=lease_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "agentbox.process_lease.failed",
+                exc_info=True,
+            )
+        await asyncio.sleep(interval_seconds)

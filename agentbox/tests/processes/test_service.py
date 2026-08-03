@@ -307,6 +307,92 @@ async def test_live_process_record_is_never_evicted_and_replayed(
     assert len(provider.calls) == 1
 
 
+async def test_one_busy_sandbox_cannot_starve_another(
+    database: StateDatabase,
+):
+    """Capacity is charged per sandbox, not just to one global pool.
+
+    Records are retained until their deadline rather than evicted, so a single
+    global limit let one busy user consume the manager's whole routing capacity
+    and 429 every other user's shell command.
+    """
+
+    busy = await provision_function(database)
+    other = await provision_function(database)
+    provider = ProcessProvider(database)
+    service = ProcessExecutionService(
+        database,
+        provider,
+        max_records=8,
+        max_records_per_sandbox=1,
+    )
+
+    await service.start(busy, request(uuid4()))
+    with pytest.raises(AgentBoxError) as saturated:
+        await service.start(busy, request(uuid4()))
+
+    # The other sandbox is unaffected by its neighbour saturating itself.
+    accepted, created = await service.start(other, request(uuid4()))
+
+    assert saturated.value.code == ErrorCode.CAPACITY_EXHAUSTED
+    assert saturated.value.retry.value == "wait"
+    assert created is True
+    assert accepted.key == other
+
+
+async def test_a_running_process_keeps_its_sandbox_awake(
+    database: StateDatabase,
+):
+    """A background process counts as activity so idle cleanup waits for it.
+
+    Activity protection is otherwise taken only for the starting operation's
+    deadline, so a dev server or long build was released - and killed by
+    quiesce - at the idle threshold after the agent's last poll.
+    """
+
+    key = await provision_function(database)
+    provider = ProcessProvider(database)
+    service = ProcessExecutionService(database, provider)
+    await service.start(key, request(uuid4()))
+
+    async with database.uow() as uow:
+        before = await uow.repository.get_logical(key)
+        await uow.commit()
+    assert before is not None
+
+    renewed = await service.renew_process_leases(lease_seconds=600)
+
+    async with database.uow() as uow:
+        after = await uow.repository.get_logical(key)
+        await uow.commit()
+    assert after is not None
+    assert renewed == 1
+    assert after.protected_until is not None
+    assert before.protected_until is None or (
+        after.protected_until > before.protected_until
+    )
+
+
+async def test_a_finished_process_stops_holding_its_sandbox_awake(
+    database: StateDatabase,
+):
+    """The lease must end with the process, or an idle sandbox never releases."""
+
+    key = await provision_function(database)
+    provider = ProcessProvider(database)
+    service = ProcessExecutionService(database, provider)
+    operation_id = uuid4()
+    await service.start(key, request(operation_id))
+    await service.terminate(
+        key,
+        operation_id,
+        grace_seconds=0,
+        deadline_at=datetime.now(timezone.utc) + timedelta(seconds=30),
+    )
+
+    assert await service.renew_process_leases(lease_seconds=600) == 0
+
+
 async def test_manager_restart_explicitly_loses_process_handle(
     database: StateDatabase,
 ):

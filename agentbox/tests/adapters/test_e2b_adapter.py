@@ -290,6 +290,7 @@ class FakeSandbox:
         self.processes: dict[int, FakeProcessInfo] = {}
         self.next_pid = 100
         self.contexts: dict[str, FakeContext] = {}
+        self.context_sequence = 0
         self.fail_context_list = False
         self.paused = False
         self.pause_keep_memory: bool | None = None
@@ -363,7 +364,11 @@ class FakeSandbox:
         return True
 
     async def create_code_context(self, *, cwd: str, **_kwargs):
-        context = FakeContext(f"context-{len(self.contexts) + 1}", cwd)
+        # Monotonic, not derived from the current count: after a removal a
+        # count-based name would collide with a live context and silently
+        # replace it, hiding exactly the kind of bug these tests look for.
+        self.context_sequence += 1
+        context = FakeContext(f"context-{self.context_sequence}", cwd)
         self.contexts[context.id] = context
         return context
 
@@ -858,9 +863,18 @@ async def test_native_process_files_and_python_are_provider_neutral(
     assert provider.workspace_storage_kind == StorageKind.SANDBOX_NATIVE
 
 
-async def test_new_manager_clears_abandoned_e2b_python_context_before_create(
+async def test_a_new_manager_leaves_another_sessions_python_context_alone(
     database: StateDatabase,
 ) -> None:
+    """A restarted manager must not reap kernels it simply does not recognise.
+
+    One sandbox serves every conversation a user has, and a manager restart
+    forgets which context belongs to which session. Removing every unrecognised
+    context therefore destroyed other live conversations' interpreters. An
+    unowned context is instead released when the sandbox next pauses, which
+    cold-boots it.
+    """
+
     provider, _lifecycle, key, deadline, _handle = await provision(database)
     async with database.uow() as uow:
         allocation = await uow.repository.current_allocation(key)
@@ -898,4 +912,52 @@ async def test_new_manager_clears_abandoned_e2b_python_context_before_create(
         ),
     )
 
-    assert len(sandbox.contexts) == 1
+    # The other conversation's kernel survives alongside the new one.
+    assert len(sandbox.contexts) == 2
+
+
+async def test_recreating_one_session_replaces_only_its_own_interpreter(
+    database: StateDatabase,
+) -> None:
+    """Reuse of a session ID still replaces that session's own context.
+
+    This is what stops a fresh interpreter overlapping an execution still
+    running on the previous one for the same session.
+    """
+
+    provider, _lifecycle, key, deadline, _handle = await provision(database)
+    async with database.uow() as uow:
+        allocation = await uow.repository.current_allocation(key)
+        await uow.commit()
+    assert allocation is not None
+    assert allocation.provider_id is not None
+    provider_ref = ProviderAllocationRef(
+        provider_id=allocation.provider_id,
+        provider_instance_id=allocation.provider_instance_id,
+        allocation_id=allocation.allocation_id,
+        allocation_token=allocation.allocation_token,
+        key=allocation.key,
+        resource_generation=allocation.resource_generation,
+    )
+    mine = uuid4()
+    theirs = uuid4()
+
+    def request(session_id):
+        return CreatePythonSessionRequest(
+            session_id=session_id,
+            cwd="/workspace",
+            environment_keys=(),
+            deadline_at=deadline,
+        )
+
+    first = await provider.create_python_session(provider_ref, request(mine))
+    await provider.create_python_session(provider_ref, request(theirs))
+    sandbox = FakeSandbox.instances[allocation.provider_id]
+    assert len(sandbox.contexts) == 2
+
+    second = await provider.create_python_session(provider_ref, request(mine))
+
+    assert second.provider_context_id != first.provider_context_id
+    assert first.provider_context_id not in sandbox.contexts
+    # Still two: this session's replacement, and the other session's untouched.
+    assert len(sandbox.contexts) == 2
