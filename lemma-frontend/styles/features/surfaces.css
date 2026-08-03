@@ -27,7 +27,7 @@
 .surfaces-hero-title {
   max-width: 46rem;
   color: var(--text-primary);
-  font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display-family);
   font-size: var(--text-4xl);
   font-weight: 400;
   line-height: 1.05;
@@ -777,7 +777,7 @@
   max-width: 76ch;
   margin-inline: auto;
   color: var(--lemma-markdown-text);
-  font-family: var(--font-document-sans), var(--font-body-family);
+  font-family: var(--font-document-family);
   font-size: var(--text-sm);
   font-weight: 400;
   line-height: 1.62;
@@ -819,7 +819,7 @@
 .lemma-markdown-editor.prose h2 {
   margin: 1.65rem 0 0.5rem;
   color: var(--lemma-markdown-heading);
-  font-family: var(--font-document-sans), var(--font-body-family);
+  font-family: var(--font-document-family);
   font-size: var(--text-base);
   font-weight: 600;
   letter-spacing: 0;
@@ -829,7 +829,7 @@
 .lemma-markdown-editor.prose h3 {
   margin: 1.35rem 0 0.38rem;
   color: var(--lemma-markdown-muted);
-  font-family: var(--font-document-sans), var(--font-body-family);
+  font-family: var(--font-document-family);
   font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.035em;
@@ -842,7 +842,7 @@
 .lemma-markdown-editor.prose h6 {
   margin: 1.2rem 0 0.3rem;
   color: var(--lemma-markdown-heading);
-  font-family: var(--font-document-sans), var(--font-body-family);
+  font-family: var(--font-document-family);
   font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0;

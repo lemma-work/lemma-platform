@@ -58,20 +58,48 @@ const iconByKind: Record<ProductIconKind, typeof FolderOpen> = {
     conversation: Chat,
 };
 
+/**
+ * Weight is the expressive axis: `regular` at rest, `bold` under the pointer,
+ * `fill` once selected. Phosphor swaps path data per weight rather than
+ * scaling a stroke, so the pointer step cannot be a CSS property — it is a
+ * second glyph stacked on the first and crossfaded by the row that owns the
+ * hover. A selected icon is already the loudest thing in its row, so it opts
+ * out of the pointer layer and stays a single glyph.
+ *
+ * `interactive` is opt-in: identity icons that merely label a page header stay
+ * inert and render one glyph, the same as before.
+ */
 export function ProductIcon({
     kind,
     size = 'md',
     state = 'default',
+    interactive = false,
 }: {
     kind: ProductIconKind;
     size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl';
     state?: 'default' | 'selected';
+    interactive?: boolean;
 }) {
     const Icon = iconByKind[kind] || FolderOpen;
+    const selected = state === 'selected';
+    const respondsToPointer = interactive && !selected;
 
     return (
-        <span className="lemma-product-icon" data-size={size} data-kind={kind} data-state={state}>
-            <Icon weight={state === 'selected' ? 'fill' : 'regular'} className="h-full w-full" />
+        <span
+            className="lemma-product-icon"
+            data-size={size}
+            data-kind={kind}
+            data-state={state}
+            data-interactive={respondsToPointer ? 'true' : undefined}
+        >
+            <Icon
+                weight={selected ? 'fill' : 'regular'}
+                className="lemma-product-icon-glyph"
+                data-layer="rest"
+            />
+            {respondsToPointer ? (
+                <Icon weight="bold" className="lemma-product-icon-glyph" data-layer="pointer" />
+            ) : null}
         </span>
     );
 }

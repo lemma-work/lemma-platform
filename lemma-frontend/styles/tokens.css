@@ -1,33 +1,38 @@
 @theme {
-  /* Primary scale — indigo, confident and modern */
-  --color-primary-50: #eef2ff;
-  --color-primary-100: #e0e7ff;
-  --color-primary-200: #c7d2fe;
-  --color-primary-300: #a5b4fc;
-  --color-primary-400: #818cf8;
-  --color-primary-500: #6366f1;
-  --color-primary-600: #4f46e5;
-  --color-primary-700: #4338ca;
-  --color-primary-800: #3730a3;
-  --color-primary-900: #312e81;
+  /* Primary scale — the landing violet. 500 is #5a3fd4, the tone landing
+     already uses for agents and collaboration; the ramp is its ladder.
+     Product chrome should read --accent-rgb rather than these fixed steps. */
+  --color-primary-50: #f2effe;
+  --color-primary-100: #e6e0ff;
+  --color-primary-200: #cfc4fb;
+  --color-primary-300: #b0a0f7;
+  --color-primary-400: #8b7af5;
+  --color-primary-500: #5a3fd4;
+  --color-primary-600: #4a32b5;
+  --color-primary-700: #3c2894;
+  --color-primary-800: #2e1f73;
+  --color-primary-900: #221755;
 
-  /* Neutral scale — cool slate and concrete */
-  --color-neutral-50: #f5f4f0;
-  --color-neutral-100: #edecea;
-  --color-neutral-200: #e5e4e0;
-  --color-neutral-300: #d4d3cf;
-  --color-neutral-400: #b8b7b3;
-  --color-neutral-500: #8c8b87;
-  --color-neutral-600: #6b6a66;
-  --color-neutral-700: #4a4945;
-  --color-neutral-800: #2a2926;
-  --color-neutral-900: #141414;
+  /* Neutral scale — paper to ink. Warm at the light end, near-black (never
+     pure black) at the dark end, exactly as the landing sets it. */
+  --color-neutral-50: #faf9f6;
+  --color-neutral-100: #f5f3ed;
+  --color-neutral-200: #eceae2;
+  --color-neutral-300: #ded9cd;
+  --color-neutral-400: #b9b6ae;
+  --color-neutral-500: #888b90;
+  --color-neutral-600: #62666b;
+  --color-neutral-700: #43464a;
+  --color-neutral-800: #2a2c2f;
+  --color-neutral-900: #17181a;
 
-  /* Semantic state colors */
-  --color-success: #16a34a;
-  --color-warning: #d97706;
-  --color-error: #dc2626;
-  --color-info: #0891b2;
+  /* Semantic state colors — the landing badge foregrounds. Every one was
+     already picked to be legible as text on its own soft fill, which is why
+     they can serve both roles here without an accessible-variant split. */
+  --color-success: #11743c;
+  --color-warning: #8a6400;
+  --color-error: #c22f15;
+  --color-info: #5a3fd4;
 
   /* Semantic aliases — resolved from CSS custom properties at runtime */
   --color-background: var(--background);
@@ -73,17 +78,22 @@
      so they can never disagree. Do not redeclare these in :root or a theme
      scope; radius is theme-independent by design. */
   /* Tiny marks and loader bars — the brand mark's bars are 2px. */
-  --radius-xs: 2px;
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  --radius-xl: 10px;
-  --radius-2xl: 12px;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  /* Sized off what the landing actually draws, counted across its stylesheets:
+     8px is the most common corner by a distance (the button), then 10px, then
+     7/6px, then 12px. 14px appears 16 times and is the floating header pill,
+     not a card — reading it as the card corner set every panel a full step too
+     round. */
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-2xl: 14px;
   /* Soft steps — the home, template, assistant-card, and office surfaces
      design.md calls out as intentionally rounder than product chrome.
      Everything denser than these belongs on the steps above. */
   --radius-3xl: 16px;
-  --radius-4xl: 24px;
+  --radius-4xl: 20px;
   --radius-full: 9999px;
 
   /* Named animations — only include ones with clear semantic meaning */
@@ -304,66 +314,71 @@
 .setup-theme-light {
   color-scheme: light;
 
-  --bg-canvas: #f5f4f0;
+  /* First-run is pinned to light appearance, so it carries its own copy of
+     the token set. Same ink-on-paper mapping as :root — first-run is the
+     first thing anyone sees, and it should already be in the voice. */
+  --bg-canvas: #f2efe7;
   --bg-surface: #ffffff;
-  --bg-subtle: #f0efec;
-  --bg-muted: #e8e6e2;
+  --bg-subtle: #f7f5ef;
+  --bg-muted: #edeae1;
   --surface-1: #ffffff;
-  --surface-2: #f2f0ed;
-  --surface-3: #e5e3df;
+  --surface-2: #f7f5ef;
+  --surface-3: #edeae1;
   --surface-overlay: color-mix(in srgb, var(--surface-1) 96%, transparent);
 
-  --brand-primary: #6366f1;
-  --brand-secondary: #6b6a66;
-  --brand-accent: #d99a32;
-  --brand-warm: #d99a32;
-  --brand-coral: #df6a45;
-  --brand-sky: #6fa9bb;
-  --brand-lilac: #8d82bd;
-  --brand-blue: #527f91;
-  --brand-blue-soft: #e8f1f3;
-  --brand-yellow-soft: #fbf1dc;
-  --brand-green: #16a34a;
-  --brand-green-soft: #e6f7ed;
-  --brand-cyan: #0891b2;
-  --brand-cyan-soft: #e6f7f9;
-  --brand-tan: #e7dbc9;
-  --brand-glow: rgba(99, 102, 241, 0.16);
-  --focus-blue: #6366f1;
-  --cta-bg: #6366f1;
-  --cta-fg: #ffffff;
-  --interactive-primary: #6366f1;
+  --brand-primary: rgb(var(--accent-rgb));
+  --brand-secondary: #62666b;
+  --brand-accent: #8a6400;
+  --brand-warm: #c0801f;
+  --brand-coral: #c22f15;
+  --brand-sky: #d97757;
+  --brand-lilac: rgb(var(--accent-rgb));
+  --brand-blue: rgb(var(--accent-rgb));
+  --brand-blue-soft: #f2ebe6;
+  --brand-yellow-soft: #fff3c4;
+  --brand-green: #11743c;
+  --brand-green-soft: #d9f5e3;
+  --brand-cyan: #11743c;
+  --brand-cyan-soft: #d9f5e3;
+  --brand-tan: #f0ece1;
+  --brand-glow: rgb(var(--accent-rgb) / 0.16);
+  --focus-blue: rgb(var(--accent-rgb));
+  --cta-bg: rgb(var(--accent-rgb));
+  --cta-fg: rgb(var(--accent-fg-rgb));
+  --interactive-primary: rgb(var(--accent-rgb));
 
-  --text-primary: #141414;
-  --text-secondary: #6b6b6b;
-  --text-tertiary: #9a9a9a;
-  --text-soft: #b0b0b0;
+  --text-primary: #17181a;
+  --text-secondary: #62666b;
+  --text-tertiary: #888b90;
+  --text-soft: #a8abaf;
   --text-inverse: #ffffff;
-  --text-on-brand: #ffffff;
+  --text-on-brand: rgb(var(--accent-fg-rgb));
 
-  --border-subtle: #e5e5e5;
-  --border-default: #d4d4d4;
-  --border-strong: #c0c0c0;
+  --border-subtle: rgb(13 15 18 / 0.13);
+  --border-default: rgb(13 15 18 / 0.22);
+  --border-strong: rgb(13 15 18 / 0.30);
 
-  --state-success: #16a34a;
-  --state-warning: #d97706;
-  --state-error: #dc2626;
-  --state-info: #0891b2;
+  --state-success: #11743c;
+  --state-warning: #8a6400;
+  --state-error: #c22f15;
+  --state-info: rgb(var(--accent-rgb));
 
   --shadow-xs:
-    0 1px 3px rgba(0, 0, 0, 0.04);
+    0 0 0 1px rgb(13 15 18 / 0.05);
   --shadow-sm:
-    0 1px 3px rgba(0, 0, 0, 0.05),
-    0 0 0 1px color-mix(in srgb, var(--border-subtle) 50%, transparent);
+    0 1px 2px rgb(13 15 18 / 0.05),
+    0 0 0 1px rgb(13 15 18 / 0.06);
   --shadow-md:
-    0 8px 24px -16px rgba(0, 0, 0, 0.18);
+    0 6px 16px -8px rgb(13 15 18 / 0.14);
   --shadow-lg:
-    0 20px 48px -16px rgba(0, 0, 0, 0.22);
+    0 16px 40px -12px rgb(13 15 18 / 0.20),
+    0 0 0 1px rgb(13 15 18 / 0.05);
   --shadow-xl:
-    0 28px 64px -16px rgba(0, 0, 0, 0.28);
+    0 28px 64px -16px rgb(13 15 18 / 0.26),
+    0 0 0 1px rgb(13 15 18 / 0.05);
   /* Upward overflow cue for sticky footers above scrollable content. */
   --shadow-overflow-top:
-    0 -10px 24px -22px rgba(43, 39, 33, 0.45);
+    0 -8px 20px -18px rgb(0 0 0 / 0.40);
 
   /* Buttons are lit like surfaces you press: a shadow small enough to read as
      "raised" rather than "floating", plus a one-pixel highlight along the top
@@ -379,16 +394,16 @@
   --shadow-pressed-quiet: inset 0 1px 2px rgb(0 0 0 / 0.07);
 
   --action-primary: var(--interactive-primary);
-  --action-primary-hover: #4f46e5;
-  --action-primary-soft: rgba(99, 102, 241, 0.08);
+  --action-primary-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 84%, black);
+  --action-primary-soft: #e6e0ff;
   --attention: var(--brand-coral);
-  --attention-soft: #fdf0ea;
+  --attention-soft: #ffe1da;
   --delight: var(--brand-accent);
   --delight-soft: var(--brand-yellow-soft);
   --intelligence: var(--brand-sky);
   --intelligence-soft: var(--brand-blue-soft);
-  --collaboration: var(--brand-lilac);
-  --collaboration-soft: #eeebf7;
+  --collaboration: rgb(var(--accent-rgb));
+  --collaboration-soft: #e6e0ff;
 
   --button-primary-bg: var(--action-primary);
   --button-primary-bg-hover: var(--action-primary-hover);
@@ -1494,7 +1509,7 @@
   width: min(100%, 48rem);
   margin: 0;
   color: var(--text-primary);
-  font-family: var(--font-ibm-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-display-family);
   font-size: clamp(2.625rem, 5vw, 3.375rem);
   font-weight: 400;
   line-height: 1.04;
@@ -2026,7 +2041,7 @@
 }
 
 .setup-split-title {
-  font-family: var(--font-ibm-plex-sans);
+  font-family: var(--font-display-family);
   font-weight: 700;
   font-size: 20px;
   line-height: 1.25;
@@ -2114,87 +2129,121 @@
   --noise-opacity: 0.01;
   --noise-blend: multiply;
 
-  /* Quiet operations: warm canvas, continuous shell, crisp working surfaces. */
-  --bg-canvas: #f4f3ef;
+  /* ── Ink on paper ─────────────────────────────────────────────────────
+     The product speaks the landing's language: near-black ink on warm
+     paper, alpha hairlines rather than grey borders, and four saturated
+     jewel tones carrying meaning. Editorial, not chrome — the palette is
+     supposed to have an opinion.
+
+     --accent-rgb is a channel triple, not a colour, so tints are a plain
+     alpha (`rgb(var(--accent-rgb) / 0.12)`) and every downstream color-mix
+     keeps working. Read the channel; never hardcode #5a3fd4. */
+  --accent-rgb: 90 63 212;
+  --accent-fg-rgb: 255 255 255;
+
+  /* Surfaces — paper stock. Canvas is warm and slightly deeper than the
+     sheets on it, so a card lifts without needing a shadow to say so. */
+  --bg-canvas: #f2efe7;
   --bg-surface: #ffffff;
-  --bg-subtle: #f6f5f2;
-  --bg-muted: #ebeae5;
+  --bg-subtle: #f7f5ef;
+  --bg-muted: #edeae1;
   --surface-1: #ffffff;
-  --surface-2: #f6f5f2;
-  --surface-3: #efeee9;
+  --surface-2: #f7f5ef;
+  --surface-3: #edeae1;
   --surface-overlay: color-mix(in srgb, var(--surface-1) 96%, transparent);
-  --pod-shell-bg: #eeede7;
-  --pod-main-bg: #f8f7f3;
+  /* Sidebar sits behind vibrancy in the desktop shell; this is the opaque
+     fallback the web build and reduced-transparency users get. */
+  --pod-shell-bg: #eae7dd;
+  --pod-main-bg: #ffffff;
 
-  /* Brand and delight accents. Indigo carries action; honey/coral carry warmth and attention. */
-  --brand-primary: #5f61d8;
-  --brand-secondary: #6b6a66;
-  --brand-accent: #e4b52d;
-  --brand-warm: #e4b52d;
-  --brand-coral: #f06b3e;
-  --brand-sky: #6ea5c1;
-  --brand-lilac: #8588e8;
-  --brand-blue: #6ea5c1;
-  --brand-blue-soft: #e8f1f3;
-  --brand-yellow-soft: #fbf1dc;
-  --brand-green: #32c98a;
-  --brand-green-soft: #e6f7ed;
-  --brand-cyan: #0891b2;
-  --brand-cyan-soft: #e6f7f9;
-  --brand-tan: #e7dbc9;
-  --brand-glow: rgba(95, 97, 216, 0.14);
-  --focus-blue: #7779e3;
-  --cta-bg: #5f61d8;
-  --cta-fg: #ffffff;
-  --interactive-primary: #5f61d8;
+  /* Identity. Violet carries action; the other three are the landing's
+     badge tones, each already picked to be legible as text on its own fill.
+     They map onto the semantic roles further down rather than floating free:
+     violet collaborates, green confirms, amber delights, rust asks. */
+  --brand-primary: rgb(var(--accent-rgb));
+  --brand-secondary: #62666b;
+  --brand-accent: #8a6400;
+  --brand-warm: #c0801f;
+  --brand-coral: #c22f15;
+  /* Terracotta is the assistant's colour on the landing, and stays the
+     assistant's colour here. */
+  --brand-sky: #d97757;
+  --brand-lilac: rgb(var(--accent-rgb));
+  --brand-blue: rgb(var(--accent-rgb));
+  --brand-blue-soft: #f2ebe6;
+  --brand-yellow-soft: #fff3c4;
+  --brand-green: #11743c;
+  --brand-green-soft: #d9f5e3;
+  --brand-cyan: #11743c;
+  --brand-cyan-soft: #d9f5e3;
+  --brand-tan: #f0ece1;
+  --brand-glow: rgb(var(--accent-rgb) / 0.13);
+  --focus-blue: rgb(var(--accent-rgb));
+  --cta-bg: rgb(var(--accent-rgb));
+  --cta-fg: rgb(var(--accent-fg-rgb));
+  --interactive-primary: rgb(var(--accent-rgb));
 
-  /* Text hierarchy */
-  --text-primary: #181816;
-  --text-secondary: #6f6d68;
-  --text-tertiary: #99968f;
-  --text-soft: #b3b0a9;
+  /* Ink. Near-black, never pure black — #17181a is the landing's ink and
+     reads as printed rather than as a screen default. */
+  --text-primary: #17181a;
+  --text-secondary: #62666b;
+  --text-tertiary: #888b90;
+  --text-soft: #a8abaf;
   --text-inverse: #ffffff;
-  --text-on-brand: #ffffff;
+  --text-on-brand: rgb(var(--accent-fg-rgb));
 
-  /* Borders */
-  --border-subtle: #e8e7e2;
-  --border-default: #d9d7d1;
-  --border-strong: #bbb8b0;
+  /* Rules, not borders. Alpha over the paper, so a hairline stays a hairline
+     on white, on cream, and on a tinted row instead of turning into a grey
+     line that fights all three.
 
-  /* State colors */
-  --state-success: #32c98a;
-  --state-warning: #e4b52d;
-  --state-error: #dc6155;
-  --state-info: #6ea5c1;
+     0.13 and 0.30 are --lp-rule and --lp-rule-strong exactly. Subtle was set
+     at 0.10 first, which is a 30% weaker line than the landing draws, and it
+     read as washed out on every card. */
+  --border-subtle: rgb(13 15 18 / 0.13);
+  --border-default: rgb(13 15 18 / 0.22);
+  --border-strong: rgb(13 15 18 / 0.30);
 
-  /* Elevation — cards have visible mass, deep shadow for floating layers */
+  /* State colours — the landing badge foregrounds, unchanged. */
+  --state-success: #11743c;
+  --state-warning: #8a6400;
+  --state-error: #c22f15;
+  --state-info: rgb(var(--accent-rgb));
+
+  /* Elevation — paper, not glass. Shadows are cast in the ink colour rather
+     than neutral black, so a lifted card warms the sheet under it instead of
+     greying it. Sheets stay close to the page; only true overlays float. */
   --shadow-xs:
-    0 1px 3px rgba(0, 0, 0, 0.04);
+    0 0 0 1px rgb(13 15 18 / 0.05);
   --shadow-sm:
-    0 1px 3px rgba(0, 0, 0, 0.05),
-    0 0 0 1px color-mix(in srgb, var(--border-subtle) 50%, transparent);
+    0 1px 2px rgb(13 15 18 / 0.05),
+    0 0 0 1px rgb(13 15 18 / 0.06);
   --shadow-md:
-    0 8px 24px -16px rgba(0, 0, 0, 0.18);
+    0 6px 16px -8px rgb(13 15 18 / 0.14);
   --shadow-lg:
-    0 20px 48px -16px rgba(0, 0, 0, 0.22);
+    0 16px 40px -12px rgb(13 15 18 / 0.20),
+    0 0 0 1px rgb(13 15 18 / 0.05);
   --shadow-xl:
-    0 28px 64px -16px rgba(0, 0, 0, 0.28);
+    0 28px 64px -16px rgb(13 15 18 / 0.26),
+    0 0 0 1px rgb(13 15 18 / 0.05);
   /* Upward overflow cue for sticky footers above scrollable content. */
   --shadow-overflow-top:
-    0 -10px 24px -22px rgba(43, 39, 33, 0.45);
+    0 -8px 20px -18px rgb(13 15 18 / 0.38);
 
-  /* Semantic roles: use these in new product code before raw brand tokens. */
+  /* Semantic roles. Each is a landing badge pair — a saturated foreground
+     and the soft fill it was drawn to sit on — so a status chip in the app
+     and a badge on the marketing page are the same object, not two takes on
+     the same idea. Use these before reaching for a raw brand token. */
   --action-primary: var(--interactive-primary);
-  --action-primary-hover: #5052c8;
-  --action-primary-soft: #eeeeff;
+  --action-primary-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 84%, black);
+  --action-primary-soft: #e6e0ff;
   --attention: var(--brand-coral);
-  --attention-soft: #fdf0ea;
+  --attention-soft: #ffe1da;
   --delight: var(--brand-accent);
   --delight-soft: var(--brand-yellow-soft);
   --intelligence: var(--brand-sky);
   --intelligence-soft: var(--brand-blue-soft);
-  --collaboration: var(--brand-lilac);
-  --collaboration-soft: #eeebf7;
+  --collaboration: rgb(var(--accent-rgb));
+  --collaboration-soft: #e6e0ff;
 
   /* Component contracts: primitives should consume these instead of bespoke mixes. */
   --button-primary-bg: var(--action-primary);
@@ -2235,11 +2284,20 @@
   --sidebar-active-bg: var(--surface-1);
   --sidebar-active-accent: var(--brand-primary);
 
-  /* Typography */
-  --font-display-family: var(--font-bricolage-grotesque, "Bricolage Grotesque"), var(--font-ibm-plex-sans, "IBM Plex Sans"), system-ui, sans-serif;
-  --font-body-family: var(--font-ibm-plex-sans, "IBM Plex Sans"), var(--font-landing-sans, "Inter"), system-ui, sans-serif;
-  --font-document-family: var(--font-document-sans, "DM Sans"), var(--font-body-family);
-  --font-mono-family: var(--font-dm-mono, "DM Mono"), var(--font-source-code-pro, "Source Code Pro"), ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* Typography — one family, product and landing.
+     landing-type.css already argued this out for the marketing side: mixing
+     Bricolage for display, IBM Plex for body and Inter elsewhere is why
+     sections stopped looking related. The same was true across the signup
+     boundary — the app and the page that sold it were set in different
+     voices. Inter for everything, DM Mono for anything that represents a
+     path, a code value, or a machine.
+
+     Display and body are deliberately the SAME stack. Hierarchy comes from
+     weight, size and tracking, not from a second typeface. */
+  --font-display-family: var(--font-landing-sans, "Inter"), system-ui, sans-serif;
+  --font-body-family: var(--font-landing-sans, "Inter"), system-ui, sans-serif;
+  --font-document-family: var(--font-body-family);
+  --font-mono-family: var(--font-dm-mono, "DM Mono"), ui-monospace, SFMono-Regular, Menlo, monospace;
 
   /* Type scale */
   --text-2xs: 0.6875rem;
@@ -2276,9 +2334,11 @@
   --leading-normal: 1.5;
   --leading-relaxed: 1.7;
 
-  /* Tracking */
-  --tracking-tight: -0.03em;
-  --tracking-snug: -0.01em;
+  /* Tracking — the landing's values. Inter wants real negative tracking as
+     it scales up; -0.032em on display and -0.016em on titles is what makes
+     a heading read as set rather than as typed. */
+  --tracking-tight: -0.032em;
+  --tracking-snug: -0.016em;
   --tracking-normal: 0;
   --tracking-wide: 0.04em;
   --tracking-wider: 0.08em;
@@ -2376,16 +2436,18 @@
   --border: var(--border-subtle);
   --input: var(--border-default);
   --ring: color-mix(in srgb, var(--focus-blue) 45%, transparent);
-  --chart-1: var(--brand-coral);
-  --chart-2: var(--brand-lilac);
-  --chart-3: var(--state-success);
-  --chart-4: var(--state-warning);
-  --chart-5: #a6a8a2;
+  /* The four jewels plus terracotta — the same five tones the landing uses,
+     in the order that keeps adjacent series furthest apart in hue. */
+  --chart-1: rgb(var(--accent-rgb));
+  --chart-2: var(--state-success);
+  --chart-3: var(--brand-coral);
+  --chart-4: var(--brand-warm);
+  --chart-5: var(--brand-sky);
   --sidebar: var(--bg-surface);
   --sidebar-foreground: var(--text-primary);
   --sidebar-primary: var(--cta-bg);
   --sidebar-primary-foreground: var(--cta-fg);
-  --sidebar-accent: rgba(99, 102, 241, 0.08);
+  --sidebar-accent: rgb(var(--accent-rgb) / 0.10);
   --sidebar-accent-foreground: var(--brand-primary);
   --sidebar-border: var(--border-subtle);
   --sidebar-ring: color-mix(in srgb, var(--focus-blue) 45%, transparent);
@@ -2400,77 +2462,90 @@
   --noise-opacity: 0.008;
   --noise-blend: overlay;
 
-  --bg-canvas: #11120f;
-  --bg-surface: #20211e;
-  --bg-subtle: #262722;
-  --bg-muted: #2d2f29;
-  --surface-1: #20211e;
-  --surface-2: #262722;
-  --surface-3: #2d2f29;
+  /* Dark is the same press run on darker stock: warm near-black paper, cream
+     ink, and the four jewels lifted until they hold on it. Not a grey app —
+     every neutral here carries a little warmth, the same as the light side.
+     The landing is light-only, so this half is ours. */
+  --accent-rgb: 139 122 245;
+  --accent-fg-rgb: 255 255 255;
+
+  --bg-canvas: #131311;
+  --bg-surface: #1b1b19;
+  --bg-subtle: #212120;
+  --bg-muted: #2a2a27;
+  --surface-1: #1b1b19;
+  --surface-2: #212120;
+  --surface-3: #2a2a27;
   --surface-overlay: color-mix(in srgb, var(--surface-1) 94%, transparent);
-  --pod-shell-bg: #161713;
-  --pod-main-bg: #1a1b18;
+  --pod-shell-bg: #100f0e;
+  --pod-main-bg: #1b1b19;
 
-  --brand-primary: #8588e8;
-  --brand-secondary: #9e9e9e;
-  --brand-accent: #e0aa55;
-  --brand-warm: #e0aa55;
-  --brand-coral: #f87171;
-  --brand-sky: #83b8c8;
-  --brand-lilac: #aaa0d7;
-  --brand-blue: #83b8c8;
-  --brand-blue-soft: #1c2a2e;
-  --brand-yellow-soft: #2a2215;
-  --brand-green: #4ade80;
-  --brand-green-soft: #162819;
-  --brand-cyan: #22d3ee;
-  --brand-cyan-soft: #152a2e;
-  --brand-tan: #3a342b;
-  --brand-glow: rgba(129, 140, 248, 0.22);
-  --focus-blue: #9a9cf0;
-  --cta-bg: #8588e8;
-  --cta-fg: #ffffff;
-  --interactive-primary: #8588e8;
+  --brand-primary: rgb(var(--accent-rgb));
+  --brand-secondary: #a3a29c;
+  --brand-accent: #e5b33c;
+  --brand-warm: #e5b33c;
+  --brand-coral: #f08a72;
+  --brand-sky: #e09274;
+  --brand-lilac: rgb(var(--accent-rgb));
+  --brand-blue: rgb(var(--accent-rgb));
+  --brand-blue-soft: color-mix(in srgb, var(--brand-sky) 20%, var(--surface-1));
+  --brand-yellow-soft: color-mix(in srgb, var(--brand-accent) 18%, var(--surface-1));
+  --brand-green: #5fdc95;
+  --brand-green-soft: color-mix(in srgb, var(--brand-green) 18%, var(--surface-1));
+  --brand-cyan: #5fdc95;
+  --brand-cyan-soft: color-mix(in srgb, var(--brand-green) 18%, var(--surface-1));
+  --brand-tan: #2e2d29;
+  --brand-glow: rgb(var(--accent-rgb) / 0.22);
+  --focus-blue: rgb(var(--accent-rgb));
+  --cta-bg: rgb(var(--accent-rgb));
+  --cta-fg: rgb(var(--accent-fg-rgb));
+  --interactive-primary: rgb(var(--accent-rgb));
 
-  --text-primary: #f0efea;
-  --text-secondary: #aaa9a2;
-  --text-tertiary: #75766e;
-  --text-soft: #595b54;
-  --text-inverse: #141414;
-  --text-on-brand: #ffffff;
+  --text-primary: #f2f0ea;
+  --text-secondary: #a3a29c;
+  --text-tertiary: #78776f;
+  --text-soft: #575651;
+  --text-inverse: #17181a;
+  --text-on-brand: rgb(var(--accent-fg-rgb));
 
-  --border-subtle: #2d2f29;
-  --border-default: #45473f;
-  --border-strong: #62645a;
+  /* Rules stay alpha, now in the ink's inverse — a light hairline over dark
+     stock, matching what the light side does in the other direction. */
+  --border-subtle: rgb(245 243 237 / 0.13);
+  --border-default: rgb(245 243 237 / 0.22);
+  --border-strong: rgb(245 243 237 / 0.30);
 
-  --state-success: #4ade80;
-  --state-warning: #fbbf24;
-  --state-error: #f87171;
-  --state-info: #22d3ee;
+  --state-success: #5fdc95;
+  --state-warning: #e5b33c;
+  --state-error: #f08a72;
+  --state-info: rgb(var(--accent-rgb));
 
   --shadow-xs:
-    0 1px 3px rgba(0, 0, 0, 0.28);
+    0 0 0 1px rgb(245 243 237 / 0.06);
   --shadow-sm:
-    0 1px 3px rgba(0, 0, 0, 0.30),
-    0 0 0 1px color-mix(in srgb, var(--border-subtle) 50%, transparent);
+    0 1px 2px rgb(0 0 0 / 0.34),
+    0 0 0 1px rgb(245 243 237 / 0.06);
   --shadow-md:
-    0 8px 24px -16px rgba(0, 0, 0, 0.48);
+    0 6px 16px -8px rgb(0 0 0 / 0.50);
   --shadow-lg:
-    0 20px 48px -16px rgba(0, 0, 0, 0.52);
+    0 16px 40px -12px rgb(0 0 0 / 0.60),
+    0 0 0 1px rgb(245 243 237 / 0.07);
   --shadow-xl:
-    0 28px 64px -16px rgba(0, 0, 0, 0.60);
+    0 28px 64px -16px rgb(0 0 0 / 0.70),
+    0 0 0 1px rgb(245 243 237 / 0.07);
 
   --action-primary: var(--interactive-primary);
-  --action-primary-hover: #9a9cf0;
-  --action-primary-soft: color-mix(in srgb, var(--brand-primary) 14%, transparent);
+  /* Dark brightens on hover rather than darkening — a darker fill recedes
+     into the surface instead of reading as pressed. */
+  --action-primary-hover: color-mix(in srgb, rgb(var(--accent-rgb)) 84%, white);
+  --action-primary-soft: rgb(var(--accent-rgb) / 0.18);
   --attention: var(--brand-coral);
-  --attention-soft: #331919;
+  --attention-soft: color-mix(in srgb, var(--brand-coral) 18%, var(--surface-1));
   --delight: var(--brand-accent);
   --delight-soft: var(--brand-yellow-soft);
   --intelligence: var(--brand-sky);
   --intelligence-soft: var(--brand-blue-soft);
-  --collaboration: var(--brand-lilac);
-  --collaboration-soft: #28243a;
+  --collaboration: rgb(var(--accent-rgb));
+  --collaboration-soft: rgb(var(--accent-rgb) / 0.20);
 
   --button-primary-bg: var(--action-primary);
   --button-primary-bg-hover: var(--action-primary-hover);
@@ -2510,28 +2585,29 @@
   --sidebar-active-bg: var(--surface-1);
   --sidebar-active-accent: var(--brand-primary);
 
-  /* Dark mode primary scale — inverted lightness (indigo) */
-  --color-primary-50: #1e1b3a;
-  --color-primary-100: #272347;
-  --color-primary-200: #342e5a;
-  --color-primary-300: #453c73;
-  --color-primary-400: #5c52a0;
-  --color-primary-500: #818cf8;
-  --color-primary-600: #a5b4fc;
-  --color-primary-700: #c7d2fe;
-  --color-primary-800: #e0e7ff;
-  --color-primary-900: #eef2ff;
+  /* Dark violet ramp — inverted lightness */
+  --color-primary-50: #1c1541;
+  --color-primary-100: #241b52;
+  --color-primary-200: #30246f;
+  --color-primary-300: #402f95;
+  --color-primary-400: #5a3fd4;
+  --color-primary-500: #8b7af5;
+  --color-primary-600: #a99cf7;
+  --color-primary-700: #c4bbfa;
+  --color-primary-800: #e6e0ff;
+  --color-primary-900: #f2effe;
 
-  --color-neutral-50: #151515;
-  --color-neutral-100: #1c1c1c;
-  --color-neutral-200: #262626;
-  --color-neutral-300: #303030;
-  --color-neutral-400: #444444;
-  --color-neutral-500: #6b6b6b;
-  --color-neutral-600: #9a9a9a;
-  --color-neutral-700: #c0c0c0;
-  --color-neutral-800: #d4d4d4;
-  --color-neutral-900: #ececec;
+  /* Warm ink ladder, dark stock */
+  --color-neutral-50: #131311;
+  --color-neutral-100: #1b1b19;
+  --color-neutral-200: #2a2a27;
+  --color-neutral-300: #3a3934;
+  --color-neutral-400: #575651;
+  --color-neutral-500: #78776f;
+  --color-neutral-600: #a3a29c;
+  --color-neutral-700: #c4c2ba;
+  --color-neutral-800: #ddd9d0;
+  --color-neutral-900: #f2f0ea;
 
   /* Shadcn/Radix aliases — dark overrides */
   --background: var(--bg-canvas);
@@ -2556,10 +2632,51 @@
   --sidebar-foreground: var(--text-primary);
   --sidebar-primary: var(--cta-bg);
   --sidebar-primary-foreground: var(--cta-fg);
-  --sidebar-accent: rgba(99, 102, 241, 0.12);
+  --sidebar-accent: rgb(var(--accent-rgb) / 0.16);
   --sidebar-accent-foreground: var(--brand-primary);
   --sidebar-border: var(--border-subtle);
   --sidebar-ring: color-mix(in srgb, var(--focus-blue) 50%, transparent);
+}
+
+/* ────────────────────────────────────────────
+   NATIVE MATERIALS — macOS vibrancy
+
+   The desktop shell puts an NSVisualEffectView behind the webview and sets
+   [data-desktop-vibrancy] once it succeeds. Vibrancy is only visible where
+   the web content declines to paint, so the rail hands its background back
+   and body stops painting the canvas — the main pane already paints
+   --pod-main-bg itself, so it stays opaque without help.
+
+   Applied only under the shell's own attribute: the web build never sees
+   this, and neither does a desktop build with LEMMA_DESKTOP_VIBRANCY unset.
+
+   NOT YET SWEPT: any full-page surface that inherited its background from
+   body rather than painting one goes translucent here. dashboard-home-page
+   is the known case — it fills the page with --pod-shell-bg. Verify each
+   route in the running app before turning the flag on by default.
+   ──────────────────────────────────────────── */
+[data-desktop-vibrancy="macos"] {
+  --pod-shell-bg: transparent;
+}
+
+[data-desktop-vibrancy="macos"] body {
+  background: transparent;
+}
+
+/* "Reduce transparency" is a legibility setting, not a taste one — when it is
+   on, AppKit itself falls back to a flat fill, and so do we. */
+@media (prefers-reduced-transparency: reduce) {
+  [data-desktop-vibrancy="macos"] {
+    --pod-shell-bg: #eae7dd;
+  }
+
+  [data-desktop-vibrancy="macos"] body {
+    background: var(--bg-canvas);
+  }
+
+  .dark[data-desktop-vibrancy="macos"] {
+    --pod-shell-bg: #100f0e;
+  }
 }
 
 /* ────────────────────────────────────────────

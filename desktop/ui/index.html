@@ -1354,9 +1354,22 @@
       !s.ready
     );
   }
+  // Why this document was opened. The splash reloads with no memory, so
+  // without this it reads "nothing is running" as "start Lemma" — which is
+  // right when the user opened the app and wrong when they asked it to stop.
+  const openIntent = new URLSearchParams(location.search).get("intent");
+
   window.lemmaDesktop.getState().then((s) => {
     if (s && s.mode === "undecided") {
       showChooser();
+    } else if (openIntent === "stop") {
+      // Say what is actually happening, and never offer to start what the
+      // user is in the middle of stopping.
+      say(VOICE.stopping[0]);
+      truth.textContent = VOICE.stopping[1];
+      openBtn.hidden = true;
+      progressEl.classList.add("active");
+      bar.style.width = "100%";
     } else {
       renderState(s);
       if (shouldAutoStart(s)) {

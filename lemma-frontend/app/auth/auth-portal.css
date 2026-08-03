@@ -1,16 +1,17 @@
 .auth-portal-root {
   color-scheme: light;
-  --font-display-family: var(--font-bricolage-grotesque), var(--font-ibm-plex-sans), "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-body-family: var(--font-ibm-plex-sans), "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono-family: var(--font-ibm-plex-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* The portal used to pin its own faces; it now inherits the one product
+     voice instead. Signup is the seam between the landing and the app, so it
+     is the last place that should be set in a third typeface.
+
+     The cv02/cv03/cv04/ss03 feature settings that were here selected IBM Plex
+     character variants and mean nothing in Inter. */
+  --font-display-family: var(--font-landing-sans, "Inter"), system-ui, sans-serif;
+  --font-body-family: var(--font-landing-sans, "Inter"), system-ui, sans-serif;
+  --font-mono-family: var(--font-dm-mono, "DM Mono"), ui-monospace, SFMono-Regular, Menlo, monospace;
   font-family: var(--font-body-family);
   line-height: 1.5;
   font-weight: 400;
-  font-feature-settings:
-    "cv02" 1,
-    "cv03" 1,
-    "cv04" 1,
-    "ss03" 1;
   --page-bg: var(--bg-canvas);
   --surface: var(--surface-1);
   --surface-soft: var(--surface-2);

@@ -43,8 +43,10 @@ import { useAccessiblePods } from "@/lib/hooks/use-pods";
 import { useProfile, useUpdateProfile } from "@/lib/hooks/use-user";
 import {
   useCreateAgentRuntime,
+  useManagedAgentRuntimes,
   useUpdatePodDefaultAgentRuntime,
 } from "@/lib/hooks/use-agent-runtime";
+import { RuntimeProfileKind, RuntimeProfileStatus } from "lemma-sdk";
 import {
   OrganizationInvitationStatus,
   OrganizationJoinPolicy,
@@ -92,6 +94,9 @@ import {
   TeamStep,
   WorkspaceStep,
 } from "./account-onboarding-steps";
+import { LocalIntelligenceStep, LocalSharingStep } from "./local-setup-steps";
+import { isLocalDeployment } from "@/lib/config";
+import { readLocalAiStatus } from "@/lib/desktop/local-capabilities";
 
 const AnomalousOrb = dynamic(
   () => import("@/components/ui/anomalous-orb").then((module) => module.AnomalousOrb),
@@ -277,10 +282,15 @@ function SetupAssistant({
   const normalizedWorkDomain = normalizeEmailDomain(workDomain);
   const inferredName = inferFullName(profile);
   const initialIdentityName = hasUsableProfileName(profile) ? inferredName : "";
+  // A local installation runs its own step list. Resolved once here rather than
+  // per render: the deployment cannot change while the app is open, and a step
+  // list that flickered would strand the user mid-flow.
+  const isLocal = isLocalDeployment();
   const normalizedInitialStep = normalizeOnboardingStep(
     initialStep,
     initialAudience,
     Boolean(initialOrganization),
+    isLocal,
   );
   const [step, setStep] = useState<SetupStep>(normalizedInitialStep);
   const [createdOrganization, setCreatedOrganization] =
@@ -332,6 +342,11 @@ function SetupAssistant({
       slug.length > 2,
   });
   const activeOrganization = createdOrganization || initialOrganization;
+  // Only queried on a local install, and only to answer "is there exactly one
+  // coding agent to adopt as this pod's default".
+  const localRuntimeProfiles = useManagedAgentRuntimes(
+    isLocal ? activeOrganization?.id : null,
+  );
 
   useEffect(() => {
     if (
@@ -457,7 +472,10 @@ function SetupAssistant({
         }
       }
 
-      goTo("start");
+      // Local installs owe the user three more answers before they can be
+      // handed a working workspace — most importantly a model, without which
+      // agents silently do nothing.
+      goTo(isLocal ? "intelligence" : "start");
     } catch (error) {
       const message =
         error instanceof Error && error.message
@@ -467,6 +485,20 @@ function SetupAssistant({
     } finally {
       identitySubmissionRef.current = false;
     }
+  };
+
+  /**
+   * Leaving the intelligence step, whether or not anything was configured.
+   *
+   * Deferring is a real choice — the rest of Lemma works without AI, and the
+   * banner in the workspace keeps asking — so it advances just the same. What
+   * it must not do is claim the step succeeded.
+   */
+  const handleLocalIntelligenceContinue = (outcome: "ready" | "deferred") => {
+    if (outcome === "deferred") {
+      toast.info("Agents stay unavailable until a model or a coding agent is set.");
+    }
+    goTo("sharing");
   };
 
   const resolveTeamName = (kind = teamKind, customName = customTeamName) =>
@@ -543,6 +575,12 @@ function SetupAssistant({
           organization_id: organization.id,
         });
         setBasePod(pod);
+        // A coding agent picked during setup has to actually answer in this
+        // pod. Nothing else was doing that: the pod's default runtime stayed
+        // pointed at the installation provider, which on a local install is
+        // usually unconfigured — so a user who deliberately chose Claude Code
+        // got "check the agent runtime configuration" on their first message.
+        await adoptLocalAgentAsPodDefault(pod.id);
         saveOnboardingDraft({
           organizationId: organization.id,
           basePodId: pod.id,
@@ -564,6 +602,54 @@ function SetupAssistant({
     })();
     createPodPromiseRef.current = creation;
     return creation;
+  };
+
+  /**
+   * Give a new pod a runtime that actually answers, before anyone opens it.
+   *
+   * The pod experience needs a default. Without one it falls back to the
+   * installation provider, which on a local install is usually unconfigured —
+   * so the first message dies on "check the agent runtime configuration" and
+   * the pod is useless from the moment it is created.
+   *
+   * So this is not best-effort. When there is no working provider and the user
+   * did pick an agent, that agent becomes the default or they are told the pod
+   * has no model — never left to discover it by sending a message.
+   */
+  const adoptLocalAgentAsPodDefault = async (podId: string) => {
+    if (!isLocal) return;
+    // A configured provider already answers as the system default; the pod
+    // needs nothing of its own.
+    if ((await readLocalAiStatus()) === "ready") return;
+
+    const agents = (localRuntimeProfiles.data?.items ?? []).filter(
+      (profile) =>
+        profile.kind === RuntimeProfileKind.HARNESS
+        && profile.status === RuntimeProfileStatus.ACTIVE,
+    );
+    if (!agents.length) {
+      // Nothing was configured at all — the deferred path. The workspace
+      // banner is already saying so, so this stays quiet rather than
+      // repeating it at pod creation.
+      return;
+    }
+
+    try {
+      // Whichever came first, deterministically. With several to choose from
+      // the composer's picker is where someone changes their mind; what must
+      // not happen is the pod opening with no default at all.
+      await updatePodDefaultRuntime.mutateAsync({
+        podId,
+        runtime: { profile_id: agents[0].id },
+      });
+    } catch (error) {
+      // Loud, because the pod does not work without this.
+      toast.error(
+        `${agents[0].name} could not be set as this pod's model: `
+          + `${error instanceof Error ? error.message : "unknown error"}. `
+          + "Pick a model in the composer before sending a message.",
+      );
+    }
   };
 
   const handleAudienceSelect = async (value: Audience) => {
@@ -794,7 +880,7 @@ function SetupAssistant({
     );
   }
 
-  const orderedSteps = setupStepsForAudience(audience).filter(
+  const orderedSteps = setupStepsForAudience(audience, isLocal).filter(
     (candidate) => candidate !== "workspace" || !activeOrganization,
   );
   const previousStep = previousOnboardingStep(orderedSteps, step);
@@ -892,6 +978,19 @@ function SetupAssistant({
         <ConnectStep
           isSaving={isConnectingAi}
           onContinue={handleConnectContinue}
+          onBack={onBack}
+          steps={orderedSteps}
+        />
+      ) : step === "intelligence" ? (
+        <LocalIntelligenceStep
+          organizationId={activeOrganization?.id ?? null}
+          onContinue={handleLocalIntelligenceContinue}
+          onBack={onBack}
+          steps={orderedSteps}
+        />
+      ) : step === "sharing" ? (
+        <LocalSharingStep
+          onContinue={() => goTo("start")}
           onBack={onBack}
           steps={orderedSteps}
         />

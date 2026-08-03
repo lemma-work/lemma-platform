@@ -508,13 +508,60 @@ fn permission_payload(request: &RequestPermissionRequest) -> JsonMap {
         .collect()
 }
 
+/// The name Lemma's run-scoped MCP server is registered under.
+///
+/// Kept next to the matcher because that is the only thing tying the two
+/// together: `runtime.rs` registers `McpServerStdio::new(SCOPED_MCP_SERVER, …)`
+/// and this is how a permission request is recognised as belonging to it.
+pub(crate) const SCOPED_MCP_SERVER: &str = "lemma";
+
+/// Is this the agent asking permission to use one of *our* tools?
+///
+/// Lemma's own MCP tools are already scoped to the run and authorised by the
+/// workspace, so prompting for each one is noise the user has to click through
+/// on every single call.
+///
+/// Two ways to tell, because one is not enough. The `_meta` flag is a Claude
+/// Code convention; an agent that does not set it — `OpenCode` does not — had
+/// every Lemma tool call raise an approval card. So the tool name is checked
+/// too, against the server name we registered ourselves, in the shapes agents
+/// actually namespace MCP tools with.
 fn is_scoped_mcp_tool_approval(request: &RequestPermissionRequest) -> bool {
-    serde_json::to_value(request)
-        .ok()
-        .and_then(|value| value.get("_meta").cloned())
-        .and_then(|meta| meta.get("is_mcp_tool_approval").cloned())
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
+    let Ok(value) = serde_json::to_value(request) else {
+        return false;
+    };
+    let flagged = value
+        .get("_meta")
+        .and_then(|meta| meta.get("is_mcp_tool_approval"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    flagged || names_scoped_mcp_tool(&value)
+}
+
+/// Does the tool being requested belong to Lemma's own MCP server?
+///
+/// Agents namespace MCP tools differently — `mcp__lemma__read_table`,
+/// `lemma__read_table`, `lemma.read_table`, `lemma/read_table` — so this looks
+/// for the server name followed by a separator rather than assuming one
+/// convention. Anchored at the start so a user's tool that merely mentions
+/// "lemma" somewhere does not get silently auto-approved.
+fn names_scoped_mcp_tool(value: &Value) -> bool {
+    let candidates = [
+        value.pointer("/toolCall/title").and_then(Value::as_str),
+        value.pointer("/toolCall/toolName").and_then(Value::as_str),
+        value.pointer("/toolCall/name").and_then(Value::as_str),
+        value
+            .pointer("/toolCall/toolCallId")
+            .and_then(Value::as_str),
+        value.get("toolName").and_then(Value::as_str),
+    ];
+    candidates.into_iter().flatten().any(|name| {
+        let name = name.trim().to_ascii_lowercase();
+        // `mcp__` is the common prefix agents add before the server name.
+        let name = name.strip_prefix("mcp__").unwrap_or(&name);
+        name.strip_prefix(SCOPED_MCP_SERVER)
+            .is_some_and(|rest| rest.starts_with(['_', '.', '/', ':', '-']))
+    })
 }
 
 fn tool_call_id(payload: &JsonMap) -> Option<String> {
@@ -877,5 +924,48 @@ mod tests {
             &converted,
             &Value::String("agent-full-access".into())
         ));
+    }
+}
+
+#[cfg(test)]
+mod scoped_mcp_approval_tests {
+    use super::names_scoped_mcp_tool;
+    use serde_json::json;
+
+    #[test]
+    fn lemmas_own_tools_are_recognised_however_the_agent_namespaces_them() {
+        // The `_meta` flag this used to rely on is a Claude Code convention.
+        // An agent that does not set it — OpenCode — made every Lemma tool
+        // call raise an approval card the user had to click through.
+        for name in [
+            "mcp__lemma__read_table",
+            "lemma__read_table",
+            "lemma.read_table",
+            "lemma/read_table",
+            "lemma:read_table",
+        ] {
+            assert!(
+                names_scoped_mcp_tool(&json!({"toolCall": {"title": name}})),
+                "{name} is one of ours",
+            );
+        }
+    }
+
+    #[test]
+    fn someone_elses_tool_is_never_auto_approved() {
+        // Anchored at the start on purpose: auto-approving anything that
+        // merely mentions Lemma would hand away the user's decision.
+        for name in [
+            "read_lemma_notes",
+            "lemmatize",
+            "bash",
+            "write_file",
+            "my-lemma-helper",
+        ] {
+            assert!(
+                !names_scoped_mcp_tool(&json!({"toolCall": {"title": name}})),
+                "{name} is not ours to approve",
+            );
+        }
     }
 }

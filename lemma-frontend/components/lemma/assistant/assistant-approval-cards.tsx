@@ -49,6 +49,45 @@ export function approvalToolParamsDisplay(args: ToolCardArgs): Array<{ name: str
   }));
 }
 
+// The key the backend stamps onto a `request_approval` call to mark it as an
+// Agent Host permission (`agent_host_permissions.AGENT_HOST_PERMISSION_KEY`).
+// Its presence is what routes the decision to the local agent instead of to a
+// resumed run, so it is also how this card knows which kind it is rendering.
+const AGENT_HOST_PERMISSION_KEY = "agent_host_permission";
+
+// Fold `allow_always` / `allowAlways` / `ALLOW_ALWAYS` to one spelling, the way
+// the backend's `_normalized_kind` does, so a decision means the same thing on
+// both sides of the wire.
+function normalizedOptionKind(value: unknown): string {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function agentHostPermissionMarker(args: ToolCardArgs): Record<string, unknown> | null {
+  const marker = args[AGENT_HOST_PERMISSION_KEY];
+  return marker && typeof marker === "object" && !Array.isArray(marker)
+    ? marker as Record<string, unknown>
+    : null;
+}
+
+// The "always allow" choice the local agent itself offered, if it offered one.
+//
+// An Agent Host permission is not Lemma's to scope: the agent decides what
+// "always" covers, and says so in the option's own name — "Always Allow
+// WebFetch(domain:github.com)" is a far smaller grant than "Always Allow all
+// Bash". Generic wording of our own left that scope invisible at the one moment
+// it can be judged, so the button wears the agent's label instead.
+function agentHostAlwaysAllowOption(args: ToolCardArgs): { name: string } | null {
+  const marker = agentHostPermissionMarker(args);
+  if (!marker) return null;
+  const options = Array.isArray(marker.options) ? marker.options : [];
+  for (const entry of options) {
+    const option = asRecord(entry);
+    if (normalizedOptionKind(option.kind) !== "allowalways") continue;
+    return { name: asString(option.name) || "" };
+  }
+  return null;
+}
+
 export function userApprovalDetails(args: ToolCardArgs): {
   title: string;
   request: string;
@@ -57,6 +96,7 @@ export function userApprovalDetails(args: ToolCardArgs): {
   kind?: string;
   params: Array<{ name: string; value: string }>;
   canApproveForSession: boolean;
+  approveForSessionLabel?: string;
 } {
   // request_approval args: { tool_name, args, title, reason, payload?, permission_ids? }.
   const toolName = asString(args.tool_name) || toolNameFromApprovalMessage(asString(args.reason));
@@ -64,6 +104,8 @@ export function userApprovalDetails(args: ToolCardArgs): {
   const reason = asString(args.reason);
   const request = reason
     || (toolName ? `Run ${formatToolDisplayName(toolName)}` : "The assistant is requesting permission to continue.");
+  const isAgentHostPermission = !!agentHostPermissionMarker(args);
+  const alwaysAllow = agentHostAlwaysAllowOption(args);
 
   return {
     title: title
@@ -76,7 +118,14 @@ export function userApprovalDetails(args: ToolCardArgs): {
     // "Approve for session" persists the approved action types for this agent
     // in this conversation (backend session-approval store, TTL-bound), so the
     // same action type won't re-prompt until it expires.
-    canApproveForSession: true,
+    //
+    // An Agent Host permission is the exception: it is answered by picking one
+    // of the local agent's own options, so "for session" only means anything
+    // when the agent offered an "always" one. Without that option the decision
+    // falls back to allow-once, and offering the button would promise a
+    // durable grant that silently expires with this single call.
+    canApproveForSession: isAgentHostPermission ? !!alwaysAllow : true,
+    approveForSessionLabel: alwaysAllow?.name || undefined,
   };
 }
 
@@ -169,7 +218,7 @@ export function UserApprovalCard({
                   disabled={!canResolve}
                   className="h-8 px-3 text-xs"
                 >
-                  {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : "Approve session"}
+                  {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : (details.approveForSessionLabel || "Approve session")}
                 </Button>
               ) : null}
               <Button
@@ -257,7 +306,7 @@ export function ComposerApprovalPanel({
             disabled={!canResolve}
             className="h-9 px-4 text-sm"
           >
-            {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : "Approve session"}
+            {pendingDecision === "APPROVE_FOR_SESSION" ? "Approving..." : (details.approveForSessionLabel || "Approve session")}
           </Button>
         ) : null}
         <Button

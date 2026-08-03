@@ -26,6 +26,10 @@ export type SetupStep =
   | "team"
   | "workspace"
   | "connect"
+  // Local-only. A Lemma Desktop installation has to answer two questions the
+  // hosted flow never asks: what should answer in chats, and who can reach it.
+  | "intelligence"
+  | "sharing"
   | "start";
 export type BuildPath = "ai" | "template" | "code";
 export type OnboardingStartPath =
@@ -174,10 +178,31 @@ export function previousOnboardingStep(
   return previousStep === "boot" ? null : previousStep;
 }
 
+// A local installation's own setup, regardless of audience.
+//
+// The hosted flow can defer AI configuration because hosted Lemma has models of
+// its own; a local one has none until someone points it at something, so
+// `intelligence` is the step that decides whether agents work at all. It covers
+// both answers to that question — a coding agent already on this Mac, or an API
+// provider — in one place, because they are one decision and splitting them
+// meant sending the user through two screens and a second window to make it.
+export const LOCAL_SETUP_STEPS: SetupStep[] = [
+  "identity",
+  "intelligence",
+  "sharing",
+  "start",
+];
+
 // Solo users skip the workspace step entirely — their workspace is created
 // silently when the first pod lands. SetupProgressBar uses this so its fill
 // matches the path the user is actually on.
-export function setupStepsForAudience(audience: Audience | null): SetupStep[] {
+export function setupStepsForAudience(
+  audience: Audience | null,
+  isLocal = false,
+): SetupStep[] {
+  if (isLocal) {
+    return LOCAL_SETUP_STEPS;
+  }
   if (audience === "personal") {
     return ["identity", "start"];
   }
@@ -210,7 +235,14 @@ export function normalizeOnboardingStep(
   step: SetupStep,
   audience: Audience | null,
   hasOrganization: boolean,
+  isLocal = false,
 ): SetupStep {
+  if (isLocal) {
+    // A draft written before this install grew its own steps, or by the same
+    // account against hosted Lemma, can name a step this flow does not have.
+    // Resuming on one would strand the user on a screen with no way forward.
+    return LOCAL_SETUP_STEPS.includes(step) ? step : "identity";
+  }
   // Drafts created by the old team-first flow may resume on the team step
   // before an organization exists. Send those users through workspace setup
   // instead of letting the pod CTA lead to another unrelated step.

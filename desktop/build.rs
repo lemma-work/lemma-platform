@@ -31,6 +31,8 @@ const COMMANDS: &[&str] = &[
     "agent_host_refresh",
     "agent_host_open_log",
     "apply_operator_config",
+    "discover_provider_models",
+    "configure_ai_provider",
     "sharing_action",
     "close_local_settings",
     "open_developer_tools",

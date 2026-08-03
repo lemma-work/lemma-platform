@@ -1,85 +1,61 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { buildApiUrl } from "@/components/auth/portal/auth/config";
 import { Button } from "@/components/ui/button";
+import { useOrganization } from "@/components/dashboard/org-context";
+import { isLocalDeployment } from "@/lib/config";
+import { useAutoConnectThisComputer } from "@/lib/desktop/auto-connect";
+import { openLocalSettings, useLocalAiStatus } from "@/lib/desktop/local-capabilities";
+import { useManagedAgentRuntimes } from "@/lib/hooks/use-agent-runtime";
+import { RuntimeProfileKind } from "lemma-sdk";
 
-type CapabilityHealth = {
-  capabilities?: {
-    ai_profile?: {
-      status?: string;
-    };
-  };
-};
-
-declare global {
-  interface Window {
-    __TAURI__?: {
-      core?: {
-        invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
-      };
-    };
-  }
-}
-
+/**
+ * "Configure an AI provider", but only when that is actually true.
+ *
+ * The capability probe behind this answers one narrow question — is the
+ * installation's operator config pointing at a provider — and that is not the
+ * same question as "can this person use an agent". Someone who connected Claude
+ * Code has a working agent and no operator provider, and used to be told
+ * forever that they had to configure one.
+ *
+ * This is also where the Agent Host gets connected. Every authenticated local
+ * page mounts it, so by the time anyone looks at Models or onboarding, this
+ * computer has already paired itself and scanned.
+ */
 export function LocalAiSetupBanner() {
-  const [needsSetup, setNeedsSetup] = useState(false);
+    const local = isLocalDeployment();
+    // Runs before the early return: connecting this computer is not conditional
+    // on whether the banner has anything to say.
+    useAutoConnectThisComputer();
 
-  const refresh = useCallback(async () => {
-    if (window.__LEMMA_DESKTOP__?.mode !== "local") {
-      setNeedsSetup(false);
-      return;
-    }
-    try {
-      const response = await fetch(buildApiUrl("/health/capabilities"), {
-        credentials: "include",
-        cache: "no-store",
-      });
-      if (!response.ok) return;
-      const health = (await response.json()) as CapabilityHealth;
-      setNeedsSetup(
-        health.capabilities?.ai_profile?.status === "needs_setup",
-      );
-    } catch {
-      // Core readiness already has its own recovery UI. Do not add a second
-      // warning when the capability probe is temporarily unavailable.
-    }
-  }, []);
+    const { currentOrg } = useOrganization();
+    const { status } = useLocalAiStatus(local);
+    const managed = useManagedAgentRuntimes(local ? currentOrg?.id : null);
 
-  useEffect(() => {
-    const initial = window.setTimeout(() => void refresh(), 0);
-    const timer = window.setInterval(refresh, 15_000);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void refresh();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearTimeout(initial);
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [refresh]);
+    if (!local || status !== "needs_setup") return null;
 
-  if (!needsSetup) return null;
+    // A saved coding agent answers chats on its own credentials, so it settles
+    // the question the banner is asking even though the operator config is
+    // still empty.
+    const hasCodingAgent = (managed.data?.items ?? []).some(
+        (profile) => profile.kind === RuntimeProfileKind.HARNESS,
+    );
+    if (hasCodingAgent) return null;
 
-  return (
-    <aside className="state-surface-warning sticky top-0 z-[70] flex min-h-12 items-center justify-between gap-4 px-5 py-2.5 text-sm">
-      <span>
-        <strong>Configure an AI provider.</strong>{" "}
-        Agents are unavailable until a provider validates; the rest of Lemma is ready.
-      </span>
-      <Button variant="secondary"
-        type="button"
-        size="sm"
-        className="shrink-0"
-        onClick={() => {
-          void window.__TAURI__?.core?.invoke?.("open_control_center", {
-            page: "ai",
-          });
-        }}
-      >
-        Configure AI
-      </Button>
-    </aside>
-  );
+    return (
+        <aside className="state-surface-warning sticky top-0 z-[70] flex min-h-12 items-center justify-between gap-4 px-5 py-2.5 text-sm">
+            <span>
+                <strong>No model is set up yet.</strong>{" "}
+                Connect a coding agent on this Mac or an API provider, and agents start working.
+            </span>
+            <Button
+                variant="secondary"
+                type="button"
+                size="sm"
+                className="shrink-0"
+                onClick={() => void openLocalSettings("ai")}
+            >
+                Set up
+            </Button>
+        </aside>
+    );
 }

@@ -462,13 +462,13 @@ impl HostProcessManager {
             == self.ordered_ids.len()
         {
             self.desired_running.store(true, Ordering::Release);
-            for id in &self.ordered_ids {
-                if let Some(health) = self.health_spec(id) {
-                    self.wait_process_health(id, &health).map_err(|error| {
-                        io::Error::other(format!("{id} failed health gate: {error}"))
-                    })?;
-                }
-            }
+            // Everything is already up, so this is a reconcile, not a start.
+            // `verify_all_health_now` runs the same probes with the same retry
+            // budget; what it drops is the per-service stabilization dwell,
+            // which is ~2s each, serialized, on every warm launch. That dwell
+            // exists to catch a process that dies seconds after it starts
+            // listening — a service that has been serving since the last
+            // session has already proven it. The cold path below still pays it.
             self.verify_all_health_now()?;
             self.health_ready.store(true, Ordering::Release);
             return Ok(());
@@ -491,12 +491,42 @@ impl HostProcessManager {
         progress("migrations");
         self.run_setups()?;
         self.desired_running.store(true, Ordering::Release);
+
+        // Spawn first, gate afterwards.
+        //
+        // This used to spawn a service, wait for it to pass its full health
+        // gate, and only then spawn the next — which put the frontend's entire
+        // boot after the backend's, for about 2.7s of a 20s cold start that it
+        // never needed to wait for. `next start` serves a prebuilt app and does
+        // not call the backend to come up; its health check reads a static file
+        // it serves itself.
+        //
+        // Spawning in `ordered_ids` order still honours declared dependencies,
+        // and honours them exactly as the supervision loop does: it requires a
+        // dependency's *process to exist*, not to be healthy. Readiness is
+        // unchanged — every service still passes the same gate in the same
+        // order before this returns.
+        // A spawn failure is held rather than returned, so that a service which
+        // started and then died still gets to report its exit status and log
+        // first. Spawning concurrently means both can be true at once, and the
+        // process that crashed is nearly always the more useful answer than the
+        // one that could not start because of it.
+        let mut spawn_failure = None;
         for id in &self.ordered_ids {
             progress(id);
             self.release_idle_port_for(id);
             if let Err(error) = self.spawn_if_missing(id) {
-                let _ = self.stop_all();
-                return Err(error);
+                spawn_failure.get_or_insert((id.clone(), error));
+            }
+        }
+        for id in &self.ordered_ids {
+            // Nothing to wait for on a service that never started; waiting
+            // would just spend its whole health timeout to say so.
+            if spawn_failure
+                .as_ref()
+                .is_some_and(|(failed, _)| failed == id)
+            {
+                continue;
             }
             if let Some(health) = self.health_spec(id) {
                 if let Err(error) = self.wait_process_health(id, &health) {
@@ -506,6 +536,10 @@ impl HostProcessManager {
                     )));
                 }
             }
+        }
+        if let Some((_, error)) = spawn_failure {
+            let _ = self.stop_all();
+            return Err(error);
         }
         if let Err(error) = self.verify_all_health_now() {
             let _ = self.stop_all();
@@ -1312,10 +1346,18 @@ fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
     if executable.starts_with('(') && executable.ends_with(')') {
         return Ok(None);
     }
-    let executable = Path::new(executable)
-        .canonicalize()?
-        .to_string_lossy()
-        .into_owned();
+    // The bracket is not the only shape that transient takes. `sh -c "…"`
+    // execs into the command it was given, and a name read across that
+    // boundary can be unbracketed and still name nothing that resolves. That
+    // is the same "not settled yet" the bracket means, so it retries too —
+    // propagating ENOENT here spent none of the 500ms settle budget and
+    // reported a starting child as one whose ownership could not be recorded.
+    // A child that never settles still fails, with the outer error that says
+    // so rather than a bare "No such file or directory".
+    let Ok(executable) = Path::new(executable).canonicalize() else {
+        return Ok(None);
+    };
+    let executable = executable.to_string_lossy().into_owned();
     let start_identity = String::from_utf8(started.stdout)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
         .trim()
@@ -1941,6 +1983,54 @@ mod tests {
         }
     }
 
+    /// A health endpoint that keeps answering, but not before `delay_ms`.
+    ///
+    /// Two of these started at once finish in about one delay; started one
+    /// after the other they cost two. That difference is the whole point of
+    /// spawning services concurrently, so the test measures it directly.
+    ///
+    /// The body is shared because the manager mints the runtime generation and
+    /// rewrites every health spec's expected body to it, so what counts as
+    /// healthy is not known until the generation exists.
+    fn slow_response(
+        delay_ms: u64,
+        body: Arc<Mutex<String>>,
+    ) -> (HttpHealthSpec, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let ready_at = Instant::now() + Duration::from_millis(delay_ms);
+        let served = Arc::clone(&body);
+        let server = thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                if Instant::now() < ready_at {
+                    // Refuse rather than answer: the prober retries, which is
+                    // what a service that has not finished booting looks like.
+                    drop(stream);
+                    continue;
+                }
+                let payload = served.lock().unwrap().clone();
+                let _ = stream.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                        payload.len()
+                    )
+                    .as_bytes(),
+                );
+                let _ = stream.flush();
+            }
+        });
+        (
+            HttpHealthSpec {
+                url: format!("http://{address}/health"),
+                timeout_seconds: 30,
+                expected_body: Some("placeholder".into()),
+                stabilization_seconds: 0,
+            },
+            server,
+        )
+    }
+
     fn one_response(status: u16, body: &str) -> (HttpHealthSpec, thread::JoinHandle<()>) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
@@ -2380,6 +2470,45 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(5));
         assert!(error.contains("process exited"));
         assert!(error.contains("exact-backend-failure"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn services_boot_alongside_each_other_rather_than_one_after_another() {
+        // The frontend used to be spawned only after the backend passed its
+        // full health gate, which put its entire boot on the critical path for
+        // no reason: `next start` serves a prebuilt app and does not wait on
+        // the backend. Two services that each take a moment to answer must now
+        // overlap, so the total is about the slower one rather than the sum.
+        let body = Arc::new(Mutex::new(String::new()));
+        let (backend_health, backend_server) = slow_response(700, Arc::clone(&body));
+        let (frontend_health, frontend_server) = slow_response(700, Arc::clone(&body));
+        let mut backend = service("backend", &[]);
+        backend.command = vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()];
+        backend.health = Some(backend_health);
+        let mut frontend = service("frontend", &["backend"]);
+        frontend.command = vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()];
+        frontend.health = Some(frontend_health);
+
+        let root = tempdir().unwrap();
+        let mut value = manifest(vec![frontend, backend]);
+        value.setup[0].command = vec!["/usr/bin/true".into()];
+        let manager = HostProcessManager::new(value, root.path().into()).unwrap();
+        // The production path mints the generation before starting, and every
+        // health spec is rewritten to expect it.
+        *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
+
+        let started = Instant::now();
+        manager.start_all().unwrap();
+        let elapsed = started.elapsed();
+        manager.stop_all().unwrap();
+        drop(backend_server);
+        drop(frontend_server);
+
+        assert!(
+            elapsed < Duration::from_millis(1300),
+            "serialized boot would have cost both delays; took {elapsed:?}",
+        );
     }
 
     #[cfg(unix)]
