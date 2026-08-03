@@ -202,9 +202,8 @@ class RunResumeService:
         than a visible error. An agent blocked on a *person* is not exempt: that
         is the hang the ceiling exists to catch.
 
-        Today `get_conversation_status` only ever reports `HUMAN`, so nothing is
-        exempt yet. Self-waking agents arrive with #266 (agent snooze); that PR
-        needs to report `SNOOZE` here or sleeping agents will be failed out.
+        `get_conversation_status` reports `SNOOZE` for a conversation holding an
+        ACTIVE snooze wait, and `HUMAN` otherwise.
         """
         if wait.wait_type == WorkflowRunWaitType.TIME:
             return False

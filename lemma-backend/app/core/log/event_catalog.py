@@ -564,6 +564,7 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'workflow.run.completed': EventSpec('debug', frozenset({'run_id'})),
     'workflow.run.failed': EventSpec('warning', frozenset({'failed_node_id', 'run_id'})),
     'workflow.run.publish_failed': EventSpec('debug', frozenset({'run_id'})),
+    'workflow.run.stream_teardown_failed': EventSpec('debug', frozenset({'run_id'})),
     'workflow.run.stream_failed': EventSpec('error', frozenset({'run_id'})),
     'workflow.run_resume_service.no_active_workflow_wait_agent.observed': EventSpec('debug', frozenset({'conversation_id'})),
     'workflow.run_resume_service.no_active_workflow_wait_function.observed': EventSpec('debug', frozenset({'function_run_id'})),

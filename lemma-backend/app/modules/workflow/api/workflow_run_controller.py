@@ -310,7 +310,12 @@ async def stream_workflow_run(
                 try:
                     await subscription.__aexit__(None, None, None)
                 except Exception:
-                    pass
+                    # Teardown of an already-broken subscription. The client has
+                    # gone either way and the response is finished, so there is
+                    # nobody to report this to and nothing left to clean up.
+                    logger.debug(
+                        "workflow.run.stream_teardown_failed", run_id=str(run_id)
+                    )
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

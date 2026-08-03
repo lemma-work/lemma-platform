@@ -11708,6 +11708,17 @@
             ],
             "title": "Error"
           },
+          "external_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Ref"
+          },
           "node_id": {
             "title": "Node Id",
             "type": "string"
@@ -16433,7 +16444,7 @@
   "info": {
     "description": "Authentication API with JWT, user management, and OAuth support",
     "title": "Lemma Backend",
-    "version": "0.7.1"
+    "version": "0.7.2"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -28968,6 +28979,102 @@
         }
       }
     },
+    "/pods/{pod_id}/workflow-runs": {
+      "get": {
+        "description": "Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable).",
+        "operationId": "workflow.run.list_for_pod",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Workflow Runs In Pod",
+        "tags": [
+          "workflows"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "workflow.run",
+          "result": "entity",
+          "verb": "list_for_pod"
+        }
+      }
+    },
     "/pods/{pod_id}/workflow-runs/waiting/assigned-to-me": {
       "get": {
         "description": "The current user's approval queue: active form waits assigned to them, with the owning run.",
@@ -29241,6 +29348,65 @@
           "resource": "workflow.run.form",
           "result": "entity",
           "verb": "submit"
+        }
+      }
+    },
+    "/pods/{pod_id}/workflow-runs/{run_id}/stream": {
+      "get": {
+        "description": "Server-sent events carrying the run's state as it advances. The first frame is the current run, so a client needs no separate GET; each later frame is the whole run again rather than a diff, which makes reconnecting a matter of replacing state. A `completed` frame is sent when the run reaches a terminal status, after which the stream closes. Polling remains a valid fallback.",
+        "operationId": "workflow.run.stream",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pod_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pod Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream Workflow Run",
+        "tags": [
+          "workflows"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": false,
+          "resource": "workflow.run",
+          "result": "entity",
+          "verb": "stream"
         }
       }
     },

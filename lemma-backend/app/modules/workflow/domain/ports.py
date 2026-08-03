@@ -157,7 +157,6 @@ class AgentPort(ABC):
         when a workflow run is cancelled, so the agent stops working on an
         answer nobody will read.
         """
-        ...
 
 
 class FunctionPort(ABC):
@@ -181,7 +180,6 @@ class FunctionPort(ABC):
     @abstractmethod
     async def cancel_run(self, function_run_id: UUID) -> None:
         """Cancels a dispatched function run. Best effort; see stop_conversation."""
-        ...
 
 
 class SchedulePort(ABC):

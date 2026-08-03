@@ -30,6 +30,9 @@ from app.modules.agent.infrastructure.repositories import (
 from app.modules.agent.infrastructure.conversation_idempotency_store import (
     create_conversation_for_id,
 )
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
+)
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
 )
@@ -43,6 +46,7 @@ class AgentControlAdapter(AgentPort):
         self.uow = uow
         self.agent_repo = AgentRepository(uow)
         self.conversation_repo = ConversationRepository(uow)
+        self.wait_repo = AgentConversationWaitRepository(uow)
 
     async def run_agent(
         self,
@@ -157,15 +161,16 @@ class AgentControlAdapter(AgentPort):
         if conversation.status is ConversationStatus.COMPLETED:
             return {"status": "COMPLETED", "output_data": output}
         if conversation.status is ConversationStatus.WAITING:
-            # The expiry policy needs to know *why* a conversation is waiting:
-            # blocked on a person is the only reason today, and every reason is
-            # subject to the ceiling. A self-waking agent would be healthy and
-            # must not have its run failed out from under it — see the note in
-            # `run_resume_service._agent_wait_is_expired`.
+            # The expiry policy needs to know *why* a conversation is waiting. An
+            # agent blocked on a person is the hang the ceiling exists to catch;
+            # a snoozed agent will wake itself and is perfectly healthy, so
+            # failing its run would be a silent wrong outcome rather than a
+            # visible error. See `run_resume_service._expire_overdue_wait`.
+            snooze = await self.wait_repo.find_active_for_conversation(conversation_id)
             return {
                 "status": "WAITING",
-                "wait_reason": "HUMAN",
-                "wakes_at": None,
+                "wait_reason": "SNOOZE" if snooze else "HUMAN",
+                "wakes_at": snooze.scheduled_at.isoformat() if snooze else None,
                 "output_data": output,
             }
         if conversation.status in {
