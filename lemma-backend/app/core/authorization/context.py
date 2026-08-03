@@ -45,7 +45,49 @@ class ResourceVisibility(str, Enum):
     PERSONAL = "PERSONAL"
     POD = "POD"
     RESTRICTED = "RESTRICTED"
+    # Everyone signed in inside the resource's organization, pod membership or
+    # not. The level most sharers actually mean: "anyone at my company".
+    ORGANIZATION = "ORGANIZATION"
+    # Every Lemma account, including outside the organization. Never anonymous:
+    # authorization still runs against a signed-in principal.
     PUBLIC = "PUBLIC"
+
+
+# Spellings accepted from older payloads and bundles, per canonical level.
+_VISIBILITY_ALIASES: dict[str, ResourceVisibility] = {
+    "PRIVATE": ResourceVisibility.PERSONAL,
+    "OWNER": ResourceVisibility.PERSONAL,
+    "USER": ResourceVisibility.PERSONAL,
+    "ORG": ResourceVisibility.ORGANIZATION,
+    "ALL": ResourceVisibility.POD,
+}
+
+
+def normalize_resource_visibility(
+    value: str | ResourceVisibility | None,
+    *,
+    default: ResourceVisibility = ResourceVisibility.POD,
+) -> ResourceVisibility | None:
+    """Canonical string -> ``ResourceVisibility``.
+
+    The single place that decides what a visibility string means. Three
+    hand-rolled copies of this used to live in the app, table and authorization
+    services, each ending in a silent ``return POD`` — so any level added to the
+    enum was quietly downgraded by whichever copy was not updated. Returns
+    ``None`` for an unrecognized value so callers choose between raising and
+    defaulting rather than inheriting a silent fallback.
+    """
+    if value is None:
+        return default
+    if isinstance(value, ResourceVisibility):
+        return value
+    normalized = str(value).strip().upper()
+    if not normalized:
+        return default
+    try:
+        return ResourceVisibility(normalized)
+    except ValueError:
+        return _VISIBILITY_ALIASES.get(normalized)
 
 
 @dataclass(frozen=True, slots=True)

@@ -232,6 +232,46 @@ def reject_delegated_workload_pod(action_label: str):
     return Depends(_dependency)
 
 
+def require_pod_membership(action_label: str = "browse this pod"):
+    """Gate *enumeration* on real membership, independent of what is readable.
+
+    Listing endpoints carry no permission dependency: what a caller sees is
+    decided entirely by the visibility projection in ``sql_actions``. That was
+    safe while every above-pod visibility still resolved through the caller's pod
+    role. It no longer is — ORGANIZATION and PUBLIC now project read actions for
+    people who are not in the pod, which is right for opening a resource someone
+    sent you and wrong for walking everything else the pod holds.
+
+    So the two directions move apart deliberately: reads widen, enumeration does
+    not. Holding one shared link must not become a directory of every other
+    shared thing, and the shape of a pod (folder names, table names, how much is
+    in there) is not public just because one document in it is.
+
+    Only human callers are gated. Workload actors keep the grant-first projection
+    this change never touched, so agents and functions are unaffected.
+    """
+
+    async def _dependency(ctx: PodContextDep) -> None:
+        if ctx.actor_type != ActorType.USER or ctx.is_superuser:
+            return
+        if any(ref.type == "POD_MEMBER" for ref in ctx.principal_refs):
+            return
+        # Org owners hold authority over every pod in their organization without
+        # necessarily having a membership row — the same shortcut
+        # Authorizer._is_org_owner_of_pod applies.
+        if "ORG_OWNER" in ctx.role_names:
+            return
+        from app.core.domain.errors import DomainError
+
+        raise DomainError(
+            f"You need access to this pod to {action_label}.",
+            code="POD_MEMBERSHIP_REQUIRED",
+            status_code=403,
+        )
+
+    return Depends(_dependency)
+
+
 async def pod_from_path(request: Request) -> ResourceRef:
     raw_pod_id = request.path_params.get("pod_id")
     if not raw_pod_id:

@@ -16,6 +16,7 @@ from app.core.authorization.context import (
     ResourceRef,
     ResourceType,
     ResourceVisibility,
+    normalize_resource_visibility,
 )
 from app.core.html_document import wrap_html_fragment
 from app.core.ports.widget_content import WidgetArtifact
@@ -49,10 +50,6 @@ from app.modules.apps.services.app_storage_phase import (
     _WrittenBundle,
 )
 from app.modules.pod.contracts import PodRole
-from app.modules.pod.contracts import (
-    PERSONAL_VISIBILITY_VALUES,
-    POD_VISIBILITY_VALUES,
-)
 
 logger = structlog.get_logger()
 
@@ -585,16 +582,9 @@ class AppService:
 
     @staticmethod
     def _normalize_visibility_value(value: str | None) -> ResourceVisibility:
-        normalized = str(value or ResourceVisibility.POD.value).strip().upper()
-        if normalized in PERSONAL_VISIBILITY_VALUES or normalized in {
-            "PRIVATE",
-            "OWNER",
-        }:
-            return ResourceVisibility.PERSONAL
-        if normalized == "RESTRICTED":
-            return ResourceVisibility.RESTRICTED
-        if normalized == "PUBLIC":
-            return ResourceVisibility.PUBLIC
-        if normalized in POD_VISIBILITY_VALUES:
-            return ResourceVisibility.POD
-        raise AppValidationError("Unsupported app visibility")
+        # Apps reject an unrecognized value rather than defaulting, so a typo in
+        # a bundle surfaces at import instead of silently publishing narrower.
+        visibility = normalize_resource_visibility(value)
+        if visibility is None:
+            raise AppValidationError("Unsupported app visibility")
+        return visibility

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
+import { Building2, Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
 import type { PodMemberResponse, ResourceAccessGrantResponse, ResourceAccessResponse } from 'lemma-sdk';
 
 import { ConceptHint } from '@/components/education/concept-hint';
@@ -26,7 +26,23 @@ import { buildShareLink, shareKindForResourceType } from '@/lib/share/share-link
 import type { SocialCardVariant } from '@/lib/share/social-card';
 import { cn } from '@/lib/utils';
 
-export type ResourceVisibilityValue = 'PERSONAL' | 'POD' | 'RESTRICTED' | 'PUBLIC';
+// The scale itself lives in lib/share so it can be tested without this
+// component's React/Query surface; re-exported below so existing importers of
+// `ResourceVisibilityValue` / `normalizeResourceVisibility` are unaffected.
+import {
+    normalizeResourceVisibility,
+    REACHES_OUTSIDE_POD,
+    VISIBILITY_VALUES,
+    type ResourceVisibilityValue,
+} from '@/lib/share/resource-visibility';
+
+export {
+    normalizeResourceVisibility,
+    REACHES_OUTSIDE_POD,
+    VISIBILITY_VALUES,
+    type ResourceVisibilityValue,
+};
+
 export type ShareableResourceType =
     | 'agent'
     | 'function'
@@ -46,7 +62,6 @@ type ResourceVisibilityCopy = {
     className: string;
 };
 
-const VISIBILITY_VALUES: ResourceVisibilityValue[] = ['PERSONAL', 'POD', 'RESTRICTED', 'PUBLIC'];
 const NO_GRANTEE_VALUE = '__none__';
 
 /**
@@ -120,15 +135,6 @@ function toResourceLabel(resourceLabel?: string) {
     return resourceLabel?.trim() || 'resources';
 }
 
-export function normalizeResourceVisibility(value?: string | null): ResourceVisibilityValue {
-    const normalized = String(value || 'POD').trim().toUpperCase();
-    if (normalized === 'PRIVATE' || normalized === 'OWNER' || normalized === 'USER') return 'PERSONAL';
-    if (VISIBILITY_VALUES.includes(normalized as ResourceVisibilityValue)) {
-        return normalized as ResourceVisibilityValue;
-    }
-    return 'POD';
-}
-
 export function getResourceVisibilityCopy(
     value?: string | null,
     resourceLabel?: string,
@@ -158,17 +164,28 @@ export function getResourceVisibilityCopy(
         };
     }
 
+    if (visibility === 'ORGANIZATION') {
+        return {
+            value: visibility,
+            label: 'Everyone at work',
+            shortDescription: 'Anyone in your organization',
+            description: 'Anyone in your organization can open it, pod member or not.',
+            icon: Building2,
+            className: 'state-badge-info',
+        };
+    }
+
     if (visibility === 'PUBLIC') {
         return {
             value: visibility,
             // Not anonymous: authorization still runs against a signed-in
-            // principal, so this waives pod scope rather than opening the
+            // principal, so this waives org scope rather than opening the
             // resource to the open internet. The copy has to say so.
             label: 'Anyone signed in',
             shortDescription: 'Anyone with a Lemma account',
-            description: 'Anyone with a Lemma account can open it using the link.',
+            description: 'Anyone with a Lemma account can open it, including outside your organization.',
             icon: Globe2,
-            className: 'state-badge-info',
+            className: 'state-badge-warning',
         };
     }
 
@@ -243,7 +260,9 @@ function getGrantInitials(grant: ResourceAccessGrantResponse) {
 const VISIBILITY_TONE: Record<string, string> = {
     PERSONAL: 'text-[var(--text-secondary)]',
     RESTRICTED: 'text-[var(--state-warning)]',
-    PUBLIC: 'text-[var(--state-info)]',
+    ORGANIZATION: 'text-[var(--state-info)]',
+    // Warning, not info: this is the only level that leaves the organization.
+    PUBLIC: 'text-[var(--state-warning)]',
     POD: 'text-[var(--text-tertiary)]',
 };
 
@@ -387,6 +406,8 @@ export function ResourceShareButton({
     const [selectedAccessLevel, setSelectedAccessLevel] = useState<string>('viewer');
     const [draftGrants, setDraftGrants] = useState<ResourceAccessGrantResponse[]>([]);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [hasAcknowledgedPublic, setHasAcknowledgedPublic] = useState(false);
+    const [inviteEmail, setInviteEmail] = useState('');
     const cardSectionRef = useRef<HTMLElement | null>(null);
     const hasVisibilityChange = draftVisibility !== current;
     const canManageSpecificAccess = Boolean(podId && resourceType && resourceId);
@@ -439,6 +460,14 @@ export function ResourceShareButton({
     const removedPersonalGrantCount = draftVisibility === 'PERSONAL' ? draftGrants.length : 0;
     const hasGrantChanges = canManageSpecificAccess && Boolean(accessData) && !sameGrantLists(grants, effectiveDraftGrants);
     const hasChanges = hasVisibilityChange || hasGrantChanges;
+    /**
+     * Leaving the organization is the one step here that cannot be walked back
+     * by editing a member list, so it is the one step that asks twice. Only on
+     * newly selecting it — reopening the dialog on an already-public resource
+     * does not re-prompt.
+     */
+    const needsPublicConfirmation = draftVisibility === 'PUBLIC' && current !== 'PUBLIC';
+    const isBlockedOnConfirmation = needsPublicConfirmation && !hasAcknowledgedPublic;
     const accessSectionTitle = draftVisibility === 'RESTRICTED' ? 'People with access' : 'Additional people';
     const accessSectionDescription = draftVisibility === 'RESTRICTED'
         ? 'Only these people can open it.'
@@ -453,13 +482,16 @@ export function ResourceShareButton({
     const cardVariant = resourceType ? SOCIAL_CARD_VARIANT_BY_RESOURCE[resourceType] : undefined;
 
     /**
-     * A `/pod/…` URL is signed-in-only and serves no Open Graph tags, so it
-     * unfurls as nothing. Once the resource is open to anyone signed in, hand
-     * out the `/s/…` wrapper instead: it previews properly, and a teammate who
-     * already has a session is redirected straight through to this same URL.
+     * A `/pod/…` URL is signed-in-only and drops anyone without pod access on a
+     * "request access" wall, whatever the resource's own visibility says. Once
+     * the audience reaches past the pod, hand out the `/s/…` wrapper instead:
+     * it can render the resource for someone who is allowed to read it but is
+     * not a member, and anyone who *does* have pod access is redirected straight
+     * through to this same URL. It also unfurls, which `/pod/…` never did.
      */
-    const publicShareUrl = useMemo(() => {
-        if (!shareUrl || !resourceType || draftVisibility !== 'PUBLIC') return null;
+    const outsidePodShareUrl = useMemo(() => {
+        if (!shareUrl || !resourceType) return null;
+        if (!REACHES_OUTSIDE_POD.includes(draftVisibility)) return null;
         return buildShareLink({
             kind: shareKindForResourceType(resourceType),
             canonicalUrl: shareUrl,
@@ -467,8 +499,24 @@ export function ResourceShareButton({
         });
     }, [shareUrl, resourceType, resourceName, draftVisibility]);
 
-    const linkToShare = publicShareUrl ?? shareUrl;
-    const canShowCard = Boolean(cardVariant && publicShareUrl);
+    const linkToShare = outsidePodShareUrl ?? shareUrl;
+    // Only a genuinely public resource gets a card. An org-visible one would
+    // unfurl its name into whatever timeline the link was pasted into.
+    const canShowCard = Boolean(cardVariant && outsidePodShareUrl && draftVisibility === 'PUBLIC');
+
+    const inviteByEmail = useMutation({
+        mutationFn: async () => {
+            if (!podId || !resourceType || !resourceId) return null;
+            await getLemmaClient(podId).resourceAccess.requestInvite({
+                resource_type: resourceType as never,
+                resource_name: resourceId,
+                email: inviteEmail.trim(),
+                permission_ids: selectedAccess?.permissionIds || [],
+            });
+            setInviteEmail('');
+            return null;
+        },
+    });
 
     const saveSharing = useMutation({
         mutationFn: async () => {
@@ -573,6 +621,7 @@ export function ResourceShareButton({
         setSelectedGrantee(NO_GRANTEE_VALUE);
         setSelectedAccessLevel('viewer');
         setSaveError(null);
+        setHasAcknowledgedPublic(false);
         setOpen(nextOpen);
     };
 
@@ -595,6 +644,7 @@ export function ResourceShareButton({
             setOpen(false);
             return;
         }
+        if (isBlockedOnConfirmation) return;
         void saveSharing.mutate();
     };
 
@@ -634,7 +684,7 @@ export function ResourceShareButton({
                                     layout="compact"
                                     variant={cardVariant}
                                     name={resourceName}
-                                    url={publicShareUrl}
+                                    url={outsidePodShareUrl}
                                     unfurls
                                 />
                             </section>
@@ -664,6 +714,23 @@ export function ResourceShareButton({
                                     />
                                 ))}
                             </RadioGroup>
+
+                            {needsPublicConfirmation ? (
+                                <label className="flex cursor-pointer items-start gap-2.5 rounded-md border border-[color:var(--state-warning)] bg-[color:color-mix(in_srgb,var(--state-warning)_10%,transparent)] px-3 py-2.5">
+                                    <input
+                                        type="checkbox"
+                                        className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--state-warning)]"
+                                        checked={hasAcknowledgedPublic}
+                                        onChange={(event) => setHasAcknowledgedPublic(event.target.checked)}
+                                    />
+                                    <span className="text-xs text-[var(--text-secondary)]">
+                                        This leaves your organization. Anyone with a Lemma account —
+                                        including people you do not work with — will be able to open{' '}
+                                        {resourceName ? <strong>{resourceName}</strong> : 'this'} using the
+                                        link.
+                                    </span>
+                                </label>
+                            ) : null}
                         </section>
 
                         {canManageSpecificAccess && directAccessEnabled ? (
@@ -723,6 +790,44 @@ export function ResourceShareButton({
                                         </SelectContent>
                                     </Select>
                                 </div>
+
+                                {/* Someone outside the pod — possibly without an
+                                    account at all. Held as an invite against the
+                                    address and redeemed into a real grant once
+                                    that address is verified, so sharing outward
+                                    no longer means adding them to the org. */}
+                                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                                    <input
+                                        type="email"
+                                        value={inviteEmail}
+                                        onChange={(event) => setInviteEmail(event.target.value)}
+                                        placeholder="Or invite by email…"
+                                        className="h-9 min-w-0 rounded-md border border-[color:var(--border-subtle)] bg-[var(--surface-2)] px-3 text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)]"
+                                    />
+                                    <Button
+                                        type="button"
+                                        variant="secondary"
+                                        size="sm"
+                                        className="h-9"
+                                        loading={inviteByEmail.isPending}
+                                        loadingLabel="Inviting"
+                                        disabled={!inviteEmail.includes('@')}
+                                        onClick={() => inviteByEmail.mutate()}
+                                    >
+                                        Invite
+                                    </Button>
+                                </div>
+                                {inviteByEmail.isSuccess ? (
+                                    <p className="text-xs text-[var(--text-tertiary)]">
+                                        Invited. They will get access when they sign in with that
+                                        address.
+                                    </p>
+                                ) : null}
+                                {inviteByEmail.isError ? (
+                                    <p className="text-xs text-[var(--state-error)]">
+                                        Could not send that invite.
+                                    </p>
+                                ) : null}
 
                                 {effectiveDraftGrants.length === 0 ? (
                                     <p className="rounded-md border border-dashed border-[color:var(--border-subtle)] px-3 py-2.5 text-xs text-[var(--text-tertiary)]">
@@ -808,7 +913,7 @@ export function ResourceShareButton({
                             onClick={handleDone}
                             loading={saveSharing.isPending}
                             loadingLabel="Saving"
-                            disabled={canManageSpecificAccess && isAccessLoading}
+                            disabled={(canManageSpecificAccess && isAccessLoading) || isBlockedOnConfirmation}
                         >
                             {hasChanges ? 'Save' : 'Done'}
                         </Button>

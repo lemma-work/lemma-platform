@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
     CheckCircle2,
     Files,
@@ -244,6 +244,24 @@ export function DocumentSpace({ podId }: { podId: string }) {
     const selectedFilePath = searchParams.get('file');
     const selectedFileName = selectedFilePath ? getFileNameFromPath(selectedFilePath) : '';
     const selectedFileIsPersonal = isPersonalPath(selectedFilePath);
+    /**
+     * Share links address a file by id; this view works in paths. Resolve the id
+     * once on arrival and swap it for the canonical path.
+     *
+     * Links used to carry the path directly, which quietly broke for anything
+     * under `/me`: that prefix is an alias for the *reader's* own folder, so a
+     * recipient opening `/me/notes.md` got their own file — a 404 that reads as
+     * "deleted", or, on a name collision, the wrong document with no error at
+     * all. An id means the same file for everyone.
+     */
+    const sharedFileId = searchParams.get('fileId');
+    const shouldResolveSharedFile = Boolean(sharedFileId) && !selectedFilePath;
+    const { data: sharedFile, error: sharedFileError } = useQuery({
+        queryKey: ['datastore-file-by-id', podId, sharedFileId],
+        queryFn: () => getLemmaClient(podId).files.getById(sharedFileId!),
+        enabled: shouldResolveSharedFile,
+        retry: false,
+    });
     const folderUpload = useResumableFolderUpload({
         podId,
         datastoreName: DATASTORE_NAME,
@@ -382,6 +400,38 @@ export function DocumentSpace({ podId }: { podId: string }) {
     const updateQuery = (updates: Record<string, string | null>) => {
         router.push(buildDocsHref(updates), { scroll: false });
     };
+
+    /**
+     * The URL to hand to someone else — as opposed to the one this view
+     * navigates with.
+     *
+     * A file is addressed by id so the link means the same file for every
+     * reader and survives a rename. Folders have no id-addressable read
+     * endpoint yet, so they still carry a path; that is safe for pod folders
+     * and is why personal ones offer promotion instead of a share link.
+     *
+     * Built from scratch rather than from the current query, so a share never
+     * carries along whatever search or filter happened to be open.
+     */
+    const buildShareableHref = (entry: DatastoreFile): string | undefined => {
+        if (typeof window === 'undefined') return undefined;
+        const params = new URLSearchParams();
+        if (isFolder(entry)) params.set('folder', getFilePath(entry));
+        else params.set('fileId', entry.id);
+        return `${window.location.origin}${pathname}?${params.toString()}`;
+    };
+
+    // Swap a resolved share id for the path this view navigates in, and drop the
+    // id so a refresh does not re-resolve it. `replace`, not `push`: the id and
+    // the path are the same destination, and Back should leave the document
+    // rather than bounce between two spellings of it.
+    useEffect(() => {
+        if (!sharedFile?.path) return;
+        const nextParams = new URLSearchParams(searchParams.toString());
+        nextParams.delete('fileId');
+        nextParams.set('file', sharedFile.path);
+        router.replace(`${pathname}?${nextParams.toString()}`, { scroll: false });
+    }, [pathname, router, searchParams, sharedFile]);
 
     /**
      * The one gesture personal files need that pod docs do not: this stops
@@ -627,6 +677,31 @@ export function DocumentSpace({ podId }: { podId: string }) {
         void handleDocsUpload(event.dataTransfer.files, 'drop');
     };
 
+    // A share link is still resolving, or names something this reader cannot
+    // open. Either way the folder listing behind it is not the answer — showing
+    // it would look like the document simply was not there.
+    if (shouldResolveSharedFile) {
+        return (
+            <div className="flex h-full items-center justify-center px-4">
+                <div className="max-w-md text-center">
+                    {sharedFileError ? (
+                        <>
+                            <h2 className="mb-2 font-display text-lg font-semibold text-[var(--text-primary)]">
+                                This document isn&apos;t available to you
+                            </h2>
+                            <p className="text-sm text-[var(--text-secondary)]">
+                                It may have been deleted, or you may not have access to it. Ask
+                                whoever shared the link to check.
+                            </p>
+                        </>
+                    ) : (
+                        <p className="text-sm text-[var(--text-secondary)]">Opening document…</p>
+                    )}
+                </div>
+            </div>
+        );
+    }
+
     if (!selectedFilePath) {
         const parentFolderPath = getParentDirectoryPath(folderPath);
         const folderBackLabel = getDirectoryLabel(parentFolderPath);
@@ -659,48 +734,64 @@ export function DocumentSpace({ podId }: { podId: string }) {
         const renderEntryActions = (entry: DatastoreFile) => {
             const folder = isFolder(entry);
             const path = getFilePath(entry);
+            /**
+             * Personal files promote; they do not share.
+             *
+             * `/me` is an alias resolved against whoever is reading, so a
+             * personal file has no address that means the same thing to anyone
+             * else — a share link would resolve to the recipient's own folder.
+             * Its grants are unreachable for the same reason: they key on the
+             * stored `/{user_id}/…` path, which the dialog never sees. And a
+             * visibility flip alone would leave the file authorized but absent
+             * from every listing, since the personal root is synthetic.
+             *
+             * Promotion is the honest move, and the one the namespace exists to
+             * make: this stops being mine and starts being ours.
+             */
+            const isPersonal = isPersonalPath(path);
             return (
                 <ResourceActionsMenu
                     ariaLabel={`Open actions for ${entry.name}`}
                     triggerClassName="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                 >
-                    <ResourceShareButton
-                        value={getDocEntryVisibility(entry)}
-                        podId={podId}
-                        resourceType={folder ? 'folder' : 'document'}
-                        resourceId={path}
-                        resourceLabel="files"
-                        resourceName={entry.name}
-                        shareUrl={typeof window === 'undefined' ? undefined : `${window.location.origin}${buildDocsHref({ folder: folder ? path : null, file: folder ? null : path })}`}
-                        onChange={(visibility) => handleShareEntryVisibilityChange(entry, visibility)}
-                        className="contents"
-                        trigger={({ openShare, disabled }) => (
+                    {isPersonal ? (
+                        !folder ? (
                             <DropdownMenuItem
-                                disabled={disabled}
+                                disabled={isCopyingAcrossNamespace}
                                 onSelect={(event) => {
                                     event.preventDefault();
-                                    openShare();
+                                    void handleCopyToPodDocs(path);
                                 }}
                             >
-                                <Share2 className="mr-2 h-4 w-4" />
-                                Share
+                                <Files className="mr-2 h-4 w-4" />
+                                Share to pod docs
                             </DropdownMenuItem>
-                        )}
-                    />
-                    {/* Promotion, on the row rather than three clicks into the
-                        viewer — it is the move personal files exist to make. */}
-                    {!folder && isPersonalPath(path) ? (
-                        <DropdownMenuItem
-                            disabled={isCopyingAcrossNamespace}
-                            onSelect={(event) => {
-                                event.preventDefault();
-                                void handleCopyToPodDocs(path);
-                            }}
-                        >
-                            <Files className="mr-2 h-4 w-4" />
-                            Copy to pod docs
-                        </DropdownMenuItem>
-                    ) : null}
+                        ) : null
+                    ) : (
+                        <ResourceShareButton
+                            value={getDocEntryVisibility(entry)}
+                            podId={podId}
+                            resourceType={folder ? 'folder' : 'document'}
+                            resourceId={path}
+                            resourceLabel="files"
+                            resourceName={entry.name}
+                            shareUrl={buildShareableHref(entry)}
+                            onChange={(visibility) => handleShareEntryVisibilityChange(entry, visibility)}
+                            className="contents"
+                            trigger={({ openShare, disabled }) => (
+                                <DropdownMenuItem
+                                    disabled={disabled}
+                                    onSelect={(event) => {
+                                        event.preventDefault();
+                                        openShare();
+                                    }}
+                                >
+                                    <Share2 className="mr-2 h-4 w-4" />
+                                    Share
+                                </DropdownMenuItem>
+                            )}
+                        />
+                    )}
                     <DestructiveResourceActionItem onSelect={() => setEntryPendingDelete(entry)}>
                         Delete {folder ? 'folder' : 'file'}
                     </DestructiveResourceActionItem>
@@ -1163,7 +1254,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
                             className="h-8 w-8 rounded"
                             disabled={isCopyingAcrossNamespace}
                             onClick={() => void handleCopyToPodDocs(selectedFilePath)}
-                            aria-label="Duplicate to pod"
+                            aria-label="Share to pod docs"
                         >
                             {isCopyingAcrossNamespace ? (
                                 <StepLoader size="sm" />
@@ -1172,7 +1263,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
                             )}
                         </Button>
                         </TooltipTrigger>
-                        <TooltipContent>Duplicate to pod</TooltipContent>
+                        <TooltipContent>Share to pod docs</TooltipContent>
                     </Tooltip>
                     ) : undefined}
             />

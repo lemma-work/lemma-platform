@@ -20,7 +20,7 @@ from app.core.api.streaming_multipart import (
     stream_multipart_form,
     streaming_multipart_openapi,
 )
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.core.helpers.slug import normalize_resource_name
 from app.modules.apps.api.asset_response import app_asset_response
 from app.modules.apps.config import apps_settings
@@ -138,6 +138,7 @@ async def create_app_from_widget(
     status_code=status.HTTP_200_OK,
     operation_id="app.list",
     summary="List Apps",
+    dependencies=[require_pod_membership("list apps")],
 )
 async def list_apps(
     pod_id: UUID,

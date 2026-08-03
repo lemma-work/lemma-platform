@@ -6,6 +6,7 @@ import {
     prettifySlug,
     resolveShareDestination,
     resolveShareName,
+    resolveShareTarget,
     shareKindForResourceType,
 } from './share-link';
 
@@ -77,5 +78,63 @@ describe('share links', () => {
         expect(isShareKind('table')).toBe(true);
         expect(isShareKind('datastore_table')).toBe(false);
         expect(isShareKind(null)).toBe(false);
+    });
+});
+
+describe('resolveShareTarget', () => {
+    const podPath = ['pod', 'p1'];
+
+    it('addresses a document by id', () => {
+        expect(resolveShareTarget('document', [...podPath, 'files'], { fileId: 'f-1' })).toEqual({
+            podId: 'p1',
+            resourceType: 'document',
+            resourceId: 'f-1',
+        });
+    });
+
+    it('still resolves documents from links minted before ids', () => {
+        expect(resolveShareTarget('document', [...podPath, 'files'], { file: '/notes.md' })).toEqual({
+            podId: 'p1',
+            resourceType: 'document',
+            resourceName: '/notes.md',
+        });
+    });
+
+    it('takes named resources from the last path segment', () => {
+        expect(resolveShareTarget('agent', [...podPath, 'agents', 'support-triage'], {})).toEqual({
+            podId: 'p1',
+            resourceType: 'agent',
+            resourceName: 'support-triage',
+        });
+    });
+
+    it('decodes a name that needed escaping in the path', () => {
+        expect(
+            resolveShareTarget('workflow', [...podPath, 'flows', 'nightly%20sync'], {}),
+        ).toMatchObject({ resourceName: 'nightly sync' });
+    });
+
+    it('takes a table from the query key the data route actually uses', () => {
+        expect(resolveShareTarget('table', [...podPath, 'data'], { tab: 'orders' })).toEqual({
+            podId: 'p1',
+            resourceType: 'datastore_table',
+            resourceName: 'orders',
+        });
+    });
+
+    it('maps kinds onto the backend resource-type vocabulary', () => {
+        expect(
+            resolveShareTarget('table', [...podPath, 'data'], { tab: 't' })?.resourceType,
+        ).toBe('datastore_table');
+    });
+
+    it('returns null for a pod link, which names no resource', () => {
+        expect(resolveShareTarget('pod', podPath, {})).toBeNull();
+    });
+
+    it('returns null when the identity is missing or the path is not a pod', () => {
+        expect(resolveShareTarget('document', [...podPath, 'files'], {})).toBeNull();
+        expect(resolveShareTarget('agent', ['not-pod', 'p1', 'agents', 'a'], {})).toBeNull();
+        expect(resolveShareTarget('agent', [], {})).toBeNull();
     });
 });

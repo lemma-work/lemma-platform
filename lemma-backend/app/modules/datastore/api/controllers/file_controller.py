@@ -25,7 +25,7 @@ from app.modules.datastore.api.file_upload_openapi import (
     FILE_UPLOAD_OPENAPI,
     MARKDOWN_ATTACH_OPENAPI,
 )
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.modules.datastore.api.dependencies import FileServiceDep, FileUseCasesDep
 from app.modules.datastore.api.schemas.datastore_schemas import (
     CreateFolderRequest,
@@ -205,6 +205,7 @@ async def create_folder(
     status_code=status.HTTP_200_OK,
     operation_id="file.list",
     summary="List Files",
+    dependencies=[require_pod_membership("list files")],
 )
 async def list_files(
     pod_id: UUID,
@@ -582,6 +583,7 @@ async def download_file_child(
     status_code=status.HTTP_200_OK,
     operation_id="file.search",
     summary="Search Files",
+    dependencies=[require_pod_membership("search files")],
 )
 async def search_files(
     pod_id: UUID,
@@ -613,6 +615,7 @@ async def search_files(
     status_code=status.HTTP_200_OK,
     operation_id="file.tree",
     summary="Get Directory Tree",
+    dependencies=[require_pod_membership("browse files")],
 )
 async def get_directory_tree(
     pod_id: UUID,
@@ -637,3 +640,35 @@ async def get_directory_tree(
         files_per_directory=files_per_directory,
         tree=public_tree,
     )
+
+
+# Declared last on purpose: a bare `/{file_id}` would otherwise shadow the
+# literal sibling routes above (`/tree`, `/by-path`, `/children`, `/search`),
+# which FastAPI matches in declaration order.
+@router.get(
+    "/{file_id}",
+    response_model=FileDetailResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="file.get_by_id",
+    summary="Get File by ID",
+)
+async def get_file_by_id(
+    pod_id: UUID,
+    file_id: UUID,
+    file_service: FileServiceDep,
+    user: CurrentUser,
+    ctx: PodContextDep,
+) -> FileDetailResponse:
+    """Read one file by its id.
+
+    Files were addressable only by path, which forced share links to carry one —
+    and a personal path is the alias ``/me``, resolved against *whoever is
+    asking*. A link to ``/me/notes.md`` therefore pointed at the recipient's own
+    file: a 404 that reads as "deleted", or, on a name collision, silently the
+    wrong document. An id means the same file for everyone, and survives renames
+    and moves besides.
+    """
+    file_entity = await file_service.get_file(file_id, ctx=ctx)
+    response = await _file_detail_response(file_entity, user.id)
+    _ensure_file_in_pod(response, pod_id)
+    return response

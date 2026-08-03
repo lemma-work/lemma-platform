@@ -1,0 +1,175 @@
+"""Visibility above POD is evaluated on the resource, not the viewer's role.
+
+``PUBLIC`` used to be unreachable: its branch in ``Authorizer.authorize`` sat
+*after* the pod-permission gate, so a non-member — who holds no pod permissions —
+was denied before it ever ran. These tests pin the ordering fix and, more
+importantly, the two ways it could go wrong in the other direction: handing
+outsiders write access, or letting ORGANIZATION collapse into PUBLIC.
+"""
+
+from __future__ import annotations
+
+from uuid import uuid4
+
+from app.core.authorization.context import (
+    ActorType,
+    Context,
+    PrincipalRef,
+    ResourceRef,
+    ResourceType,
+    ResourceVisibility,
+)
+from app.core.authorization.service import Authorizer
+
+POD_ID = uuid4()
+ORG_ID = uuid4()
+USER_ID = uuid4()
+
+
+def _ctx(
+    *,
+    actor_type: ActorType = ActorType.USER,
+    is_org_member: bool = False,
+    pod_id=POD_ID,
+    permission_ids: frozenset[str] = frozenset(),
+) -> Context:
+    """A viewer holding no pod permissions unless told otherwise.
+
+    ``organization_id`` is always set, mirroring ``build_user_context``: it is
+    read off the Pod row before membership is checked, so it is present even for
+    a total stranger. Membership is carried by the ORG_MEMBER principal ref.
+    """
+    principal_refs = set()
+    if is_org_member:
+        principal_refs.add(PrincipalRef("ORG_MEMBER", uuid4()))
+    return Context(
+        actor_type=actor_type,
+        actor_id=str(USER_ID),
+        user_id=USER_ID,
+        organization_id=ORG_ID,
+        pod_id=pod_id,
+        permission_ids=frozenset(permission_ids),
+        principal_refs=frozenset(principal_refs),
+        authorizer=object(),
+    )
+
+
+def _resource(visibility: ResourceVisibility, *, pod_id=POD_ID) -> ResourceRef:
+    return ResourceRef(
+        resource_type=ResourceType.DOCUMENT,
+        resource_id=uuid4(),
+        pod_id=pod_id,
+        organization_id=ORG_ID,
+        owner_user_id=uuid4(),
+        visibility=visibility,
+    )
+
+
+def _decide(ctx: Context, permission_id: str, resource: ResourceRef):
+    return Authorizer(session=None)._visibility_read_decision(ctx, permission_id, resource)
+
+
+class TestPublic:
+    def test_non_member_may_read(self):
+        decision = _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PUBLIC))
+
+        assert decision is not None and decision.allowed
+        assert decision.reason_code =="PUBLIC_RESOURCE"
+
+    def test_non_member_may_not_write(self):
+        # The whole point of the narrow rule: readable never implies editable.
+        assert _decide(_ctx(), "folder.write", _resource(ResourceVisibility.PUBLIC)) is None
+
+    def test_outside_org_may_still_read(self):
+        # PUBLIC means every Lemma account, so no org membership is required.
+        decision = _decide(
+            _ctx(is_org_member=False), "folder.read", _resource(ResourceVisibility.PUBLIC)
+        )
+
+        assert decision is not None and decision.allowed
+
+
+class TestOrganization:
+    def test_org_member_may_read(self):
+        decision = _decide(
+            _ctx(is_org_member=True), "folder.read", _resource(ResourceVisibility.ORGANIZATION)
+        )
+
+        assert decision is not None and decision.allowed
+        assert decision.reason_code =="ORG_VISIBLE"
+
+    def test_non_org_member_is_denied(self):
+        # The regression that would make ORGANIZATION a synonym for PUBLIC:
+        # ctx.organization_id matches the resource for *everyone*, because it is
+        # read off the pod rather than off the viewer's memberships.
+        assert (
+            _decide(
+                _ctx(is_org_member=False),
+                "folder.read",
+                _resource(ResourceVisibility.ORGANIZATION),
+            )
+            is None
+        )
+
+    def test_org_member_may_not_write(self):
+        assert (
+            _decide(
+                _ctx(is_org_member=True),
+                "folder.write",
+                _resource(ResourceVisibility.ORGANIZATION),
+            )
+            is None
+        )
+
+
+class TestFallthrough:
+    def test_pod_visibility_is_untouched(self):
+        assert _decide(_ctx(), "folder.read", _resource(ResourceVisibility.POD)) is None
+
+    def test_personal_visibility_is_untouched(self):
+        assert _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PERSONAL)) is None
+
+    def test_restricted_visibility_is_untouched(self):
+        assert _decide(_ctx(), "folder.read", _resource(ResourceVisibility.RESTRICTED)) is None
+
+    def test_missing_visibility_defaults_to_pod(self):
+        resource = ResourceRef(
+            resource_type=ResourceType.DOCUMENT,
+            resource_id=uuid4(),
+            pod_id=POD_ID,
+            visibility=None,
+        )
+
+        assert _decide(_ctx(), "folder.read", resource) is None
+
+
+class TestActorScope:
+    def test_delegated_workload_gains_nothing(self):
+        # A workload's reach must come from its own grants. If a visibility flip
+        # widened it, sharing a doc would silently widen every agent in the pod.
+        assert (
+            _decide(
+                _ctx(actor_type=ActorType.DELEGATED_USER_WORKLOAD),
+                "folder.read",
+                _resource(ResourceVisibility.PUBLIC),
+            )
+            is None
+        )
+
+    def test_agent_actor_gains_nothing(self):
+        assert (
+            _decide(
+                _ctx(actor_type=ActorType.AGENT),
+                "folder.read",
+                _resource(ResourceVisibility.PUBLIC),
+            )
+            is None
+        )
+
+    def test_resource_in_another_pod_is_denied(self):
+        # The ctx was built for one pod; a resource from a different one must not
+        # ride through on it.
+        assert (
+            _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PUBLIC, pod_id=uuid4()))
+            is None
+        )

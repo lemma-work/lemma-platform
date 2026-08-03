@@ -92,6 +92,18 @@ export class FilesNamespace {
   }
 
   /**
+   * Read a file by id.
+   *
+   * Prefer this over {@link get} for anything that outlives the current view —
+   * a share link, a bookmark, a stored reference. A path is not stable: `/me/…`
+   * is an alias resolved against *whoever is asking*, so the same path is a
+   * different file for a different person, and any path breaks on rename.
+   */
+  getById(fileId: string) {
+    return this.client.request(() => FilesService.fileGetById(this.podId(), fileId));
+  }
+
+  /**
    * URLs for a file: a short-lived download `url` plus a permanent
    * authenticated `app_url` deep-link that opens the file in the Lemma
    * frontend (the viewer must be a signed-in pod member).

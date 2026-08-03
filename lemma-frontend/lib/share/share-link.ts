@@ -142,6 +142,86 @@ export function resolveShareDestination(
     return search ? `${path}?${search}` : path;
 }
 
+/** What a share link points at, in the vocabulary the backend authorizes in. */
+export interface ShareTarget {
+    podId: string;
+    resourceType: ShareResourceType;
+    /** Set for documents, which links address by id so they survive a rename. */
+    resourceId?: string;
+    /** Set for everything else, whose public identifier is its name or path. */
+    resourceName?: string;
+}
+
+const RESOURCE_TYPE_BY_KIND: Record<ShareKind, ShareResourceType | null> = {
+    agent: 'agent',
+    app: 'app',
+    workflow: 'workflow',
+    function: 'function',
+    table: 'datastore_table',
+    document: 'document',
+    folder: 'folder',
+    schedule: 'schedule',
+    // A whole pod is not a shareable resource — there is nothing to preview and
+    // nothing to grant. Pod links keep the request-access path.
+    pod: null,
+};
+
+/**
+ * Where a resource's identity lives for each kind.
+ *
+ * Some kinds keep it in the path (`/agents/support-triage`), others in the
+ * query (`?tab=orders`), because that is how the workspace routes them. The
+ * table is here rather than inferred so a route change is a one-line fix in one
+ * place instead of a silently broken share link.
+ */
+const NAME_QUERY_KEY_BY_KIND: Partial<Record<ShareKind, string>> = {
+    folder: 'folder',
+    table: 'tab',
+    app: 'page',
+};
+
+function firstQueryValue(value: string | string[] | undefined): string | undefined {
+    const candidate = Array.isArray(value) ? value[0] : value;
+    return candidate?.trim() || undefined;
+}
+
+/**
+ * Resolve what a share link points at, so a viewer who is not a pod member can
+ * ask whether they may read it.
+ *
+ * Returns null when the link carries no addressable resource — a pod link, or a
+ * malformed path — in which case there is nothing to preview.
+ */
+export function resolveShareTarget(
+    kind: ShareKind,
+    segments: string[] | undefined,
+    query: Record<string, string | string[] | undefined> = {},
+): ShareTarget | null {
+    const parts = (segments ?? []).filter(Boolean);
+    if (parts[0] !== 'pod' || !parts[1]) return null;
+    const podId = parts[1];
+    const resourceType = RESOURCE_TYPE_BY_KIND[kind];
+    if (!resourceType) return null;
+
+    if (kind === 'document') {
+        const resourceId = firstQueryValue(query.fileId);
+        if (resourceId) return { podId, resourceType, resourceId };
+        // Links minted before documents were addressed by id. They still work
+        // for a pod file; a `/me/…` one never resolved for anyone else anyway.
+        const resourceName = firstQueryValue(query.file);
+        return resourceName ? { podId, resourceType, resourceName } : null;
+    }
+
+    const queryKey = NAME_QUERY_KEY_BY_KIND[kind];
+    const resourceName = queryKey
+        ? firstQueryValue(query[queryKey])
+        : parts.length > 3
+            ? decodeURIComponent(parts[parts.length - 1])
+            : undefined;
+
+    return resourceName ? { podId, resourceType, resourceName } : null;
+}
+
 /**
  * The name to print on the card.
  *

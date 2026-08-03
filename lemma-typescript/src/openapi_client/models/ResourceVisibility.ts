@@ -6,5 +6,6 @@ export enum ResourceVisibility {
     PERSONAL = 'PERSONAL',
     POD = 'POD',
     RESTRICTED = 'RESTRICTED',
+    ORGANIZATION = 'ORGANIZATION',
     PUBLIC = 'PUBLIC',
 }
