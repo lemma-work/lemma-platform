@@ -553,3 +553,23 @@ async def test_executor_exception_fails_run():
     assert run.failed_node_id == "save"
     assert "boom" in run.error
     assert run.step_history[-1].status == StepStatus.FAILED
+
+
+class RecordingAgentPort(StubAgentPort):
+    """Agent port that records stop requests, so cancel can be asserted on."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stopped: list[tuple[str, str]] = []
+
+    async def stop_conversation(self, conversation_id, user_id):
+        self.stopped.append((str(conversation_id), str(user_id)))
+
+
+class RecordingFunctionPort(StubFunctionPort):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cancelled: list[str] = []
+
+    async def cancel_run(self, function_run_id):
+        self.cancelled.append(str(function_run_id))

@@ -11,6 +11,8 @@ from ..openapi_client.api.workflows import (
     workflow_run_form_submit,
     workflow_run_get,
     workflow_run_list,
+    workflow_run_list_for_pod,
+    workflow_run_stream,
     workflow_run_waiting_assigned_to_me,
     workflow_update,
 )
@@ -24,11 +26,13 @@ from ..openapi_client.models.workflow_run_form_submit_request import (
     WorkflowRunFormSubmitRequest,
 )
 from ..openapi_client.models.workflow_run_list_response import WorkflowRunListResponse
+from ..openapi_client.models.workflow_run_status import WorkflowRunStatus
 from ..openapi_client.models.workflow_run_response import WorkflowRunResponse
 from ..openapi_client.models.workflow_run_wait_assignment_list_response import (
     WorkflowRunWaitAssignmentListResponse,
 )
 from ..openapi_client.models.workflow_update_request import WorkflowUpdateRequest
+from ..openapi_client.types import UNSET
 from ..types import FunctionInput
 from .base import BoundResource, as_uuid
 
@@ -77,6 +81,46 @@ class PodWorkflows(BoundResource):
 
     def runs(self, name: str, *, limit: int = 100) -> WorkflowRunListResponse:
         return self._call(workflow_run_list, self._pod_uuid(), name, limit=limit)
+
+    def pod_runs(
+        self,
+        *,
+        limit: int = 50,
+        status: list[WorkflowRunStatus] | None = None,
+        page_token: str | None = None,
+    ) -> WorkflowRunListResponse:
+        """Recent runs across every workflow in the pod, newest first.
+
+        The "what has been happening here" query, so an index does not have to
+        call :meth:`runs` once per workflow. ``status`` is the enum: an
+        unrecognised value is a 422 rather than an empty page.
+        """
+        return self._call(
+            workflow_run_list_for_pod,
+            self._pod_uuid(),
+            limit=limit,
+            status=status if status is not None else UNSET,
+            page_token=page_token if page_token is not None else UNSET,
+        )
+
+    def stream_run(self, run_id: str):
+        """Server-sent events carrying a run's state as it advances.
+
+        Returns the raw streaming ``httpx.Response`` — the caller iterates the
+        SSE frames — matching ``conversations.stream``. The first frame is the
+        whole run, and each later frame is the whole run again, so reconnecting
+        is a matter of replacing state rather than replaying a diff.
+        """
+        kwargs = workflow_run_stream._get_kwargs(self._pod_uuid(), as_uuid(run_id))
+        httpx_client = self.generated.get_httpx_client()
+        response = httpx_client.send(httpx_client.build_request(**kwargs), stream=True)
+        if response.status_code >= 400:
+            content_bytes = response.read()
+            response.close()
+            raise self._transport._error_from_response(
+                response.status_code, None, content_bytes
+            )
+        return response
 
     def submit_form(
         self,

@@ -6,7 +6,65 @@ import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 import { WorkflowNode } from '@/lib/types';
 import { formDefaults, isRecord } from '../run-format';
+import { humanizeKey } from '@/components/lemma/assistant/assistant-format';
+import { getResourceErrorMessage } from '@/components/shared/resource-feedback';
 import { StepLoader } from '@/components/brand/loader';
+
+/** Array and object properties used to fall through to a text input, so the
+ * string it produced failed server-side jsonschema and came back as a raw
+ * validator message. They get a JSON editor instead. */
+function isStructuredField(property: Record<string, unknown>): boolean {
+    if (Array.isArray(property.enum)) return false;
+    return property.type === 'object' || property.type === 'array';
+}
+
+function StructuredField({
+    value,
+    required,
+    onChange,
+}: {
+    value: unknown;
+    required: boolean;
+    onChange: (value: unknown) => void;
+}) {
+    const [draft, setDraft] = useState(() => (value === undefined ? '' : JSON.stringify(value, null, 2)));
+    const [parseError, setParseError] = useState<string | null>(null);
+
+    const handleChange = (next: string) => {
+        setDraft(next);
+        if (!next.trim()) {
+            setParseError(null);
+            onChange(undefined);
+            return;
+        }
+        try {
+            onChange(JSON.parse(next));
+            setParseError(null);
+        } catch (error) {
+            // Keep the keystrokes; just refuse to submit half-typed JSON.
+            setParseError(error instanceof Error ? error.message : 'Invalid JSON');
+        }
+    };
+
+    return (
+        <div className="space-y-1.5">
+            <textarea
+                required={required}
+                value={draft}
+                spellCheck={false}
+                rows={5}
+                onChange={(event) => handleChange(event.target.value)}
+                className={cn(
+                    'w-full rounded-md border bg-[var(--surface-1)] px-3 py-2 font-mono text-xs leading-5 text-[var(--text-primary)] outline-none',
+                    parseError ? 'border-[color:var(--state-error)]' : 'border-[var(--border-subtle)] focus:border-[color:var(--field-border-focus)]'
+                )}
+            />
+            {parseError ? (
+                <p className="text-xs text-[var(--state-error)]">{parseError}</p>
+            ) : null}
+        </div>
+    );
+}
 
 export function RunInputForm({
     nodeId,
@@ -55,8 +113,10 @@ export function RunInputForm({
         try {
             await onSubmitInput(nodeId, formData);
         } catch (err) {
-            console.error('Failed to submit input:', err);
-            setError(err instanceof Error ? err.message : 'Failed to submit input');
+            // Inline rather than a toast: the fix is in this form, so the message
+            // belongs next to it. getResourceErrorMessage unwraps the validator's
+            // per-field details, which `err.message` alone throws away.
+            setError(getResourceErrorMessage(err, 'Could not submit this form'));
         } finally {
             setIsSubmitting(false);
         }
@@ -87,10 +147,28 @@ export function RunInputForm({
 
                     return (
                     <div key={key} className="space-y-1.5">
+                        {/* The schema's own `title` is what the author wrote for
+                            a reader; the key is what the engine binds against.
+                            Showing the key made every form read like a database
+                            column list. */}
                         <Label className="type-eyebrow">
-                            {key} {isRequired ? <span className="text-[var(--state-error)]">*</span> : null}
+                            {typeof property.title === 'string' && property.title.trim()
+                                ? property.title
+                                : humanizeKey(key)}
+                            {isRequired ? <span className="ml-1 text-[var(--state-error)]">*</span> : null}
                         </Label>
-                        {options ? (
+                        {description ? (
+                            // Help text, not a placeholder — a placeholder
+                            // vanishes exactly when you start typing and need it.
+                            <p className="text-xs leading-5 text-[var(--text-tertiary)]">{description}</p>
+                        ) : null}
+                        {isStructuredField(property) ? (
+                            <StructuredField
+                                value={fieldValue}
+                                required={isRequired}
+                                onChange={(next) => setField(key, next)}
+                            />
+                        ) : options ? (
                             <select
                                 required={isRequired}
                                 value={fieldValue !== undefined && fieldValue !== null ? String(fieldValue) : ''}
@@ -98,7 +176,7 @@ export function RunInputForm({
                                 className="flex h-9 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] px-3 text-sm text-[var(--text-primary)] outline-none focus:border-[color:var(--field-border-focus)]"
                             >
                                 <option value="" disabled>
-                                    {description || 'Select an option'}
+                                    Select an option
                                 </option>
                                 {options.map((option, idx) => (
                                     <option key={String(option)} value={String(option)}>
@@ -111,7 +189,6 @@ export function RunInputForm({
                                 type="number"
                                 required={isRequired}
                                 value={typeof fieldValue === 'number' ? fieldValue : ''}
-                                placeholder={description}
                                 onChange={(e) => setField(key, e.target.value === '' ? undefined : Number(e.target.value))}
                             />
                         ) : property.type === 'boolean' || property.type === 'checkbox' ? (
@@ -130,7 +207,6 @@ export function RunInputForm({
                                 type="text"
                                 required={isRequired}
                                 value={fieldValue !== undefined && fieldValue !== null ? String(fieldValue) : ''}
-                                placeholder={description}
                                 onChange={(e) => setField(key, e.target.value)}
                             />
                         )}

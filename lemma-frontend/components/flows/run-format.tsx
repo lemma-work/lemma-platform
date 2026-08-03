@@ -14,7 +14,6 @@ import {
     XCircle,
 } from '@/components/ui/icons';
 import { NodeType, WorkflowNode, WorkflowRun } from '@/lib/types';
-import { getPreviewFields, truncatePreview } from '@/lib/utils/payload-preview';
 import { StepLoader } from '@/components/brand/loader';
 
 export type StatusVariant = 'default' | 'success' | 'error' | 'warning' | 'info';
@@ -43,7 +42,6 @@ export type RunLike = {
     current_node_id?: string | null;
     step_history?: Array<Record<string, unknown>> | null;
 };
-export type StepSelectionMode = 'follow' | 'inspect';
 
 export type RunCardRun = WorkflowRun | RunLike & {
     id?: string;
@@ -70,8 +68,6 @@ export type RunTraceEntry = {
     index: number;
 };
 
-export const UNREACHED_NODE_SELECTION_PREFIX = 'node:';
-
 export function isRecord(value: unknown): value is Record<string, unknown> {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -88,15 +84,12 @@ export function isActiveStepStatus(status: string): boolean {
     return ACTIVE_STEP_STATUSES.has(status);
 }
 
-export function getAgentConversationId(outputData: unknown): string | null {
-    if (!isRecord(outputData)) return null;
-    const candidate = outputData.agent_conversation_id
-        ?? outputData.waiting_agent_conversation_id
-        ?? outputData.conversation_id
-        ?? outputData.external_conversation_id
-        ?? outputData.external_task_id;
-    return typeof candidate === 'string' ? candidate : null;
+/** Terminal for display purposes — decides whether an unvisited step reads as
+ * "not taken" (the run is over, it never will be) or "not reached" (not yet). */
+export function isTerminalRunStatus(status: string): boolean {
+    return COMPLETE_STATUSES.has(status) || FAILURE_STATUSES.has(status);
 }
+
 
 export function getAgentDisplayOutput(outputData: unknown): unknown {
     const parsedOutput = parseStructuredPayload(outputData);
@@ -156,54 +149,8 @@ export function extractStructuredEntryText(entry: unknown): string {
     return '';
 }
 
-export function extractConversationContentText(content: unknown): string {
-    if (typeof content === 'string') return content.trim();
 
-    if (Array.isArray(content)) {
-        return content
-            .map((entry) => extractStructuredEntryText(entry))
-            .filter(Boolean)
-            .join('\n\n')
-            .trim();
-    }
 
-    if (!isRecord(content)) return '';
-
-    if (typeof content.content === 'string') return content.content.trim();
-    if (Array.isArray(content.content)) {
-        const nested = content.content
-            .map((entry) => extractStructuredEntryText(entry))
-            .filter(Boolean)
-            .join('\n\n')
-            .trim();
-        if (nested) return nested;
-    }
-
-    if (typeof content.text === 'string') return content.text.trim();
-    if (typeof content.value === 'string') return content.value.trim();
-
-    return extractStructuredEntryText(content);
-}
-
-export function formatStructuredOutput(value: unknown): string {
-    if (typeof value === 'string') return value;
-    try {
-        return JSON.stringify(value, null, 2);
-    } catch {
-        return String(value);
-    }
-}
-
-export function getFinalStructuredOutput(messages: Array<{ metadata?: Record<string, unknown> | null }>): unknown | undefined {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const metadata = messages[index]?.metadata;
-        if (isRecord(metadata) && metadata.is_final_answer === true && 'structured_output' in metadata) {
-            return metadata.structured_output;
-        }
-    }
-
-    return undefined;
-}
 
 export function parseApiDate(value: unknown): Date | null {
     if (typeof value !== 'string' || !value.trim()) return null;
@@ -483,7 +430,13 @@ export function getRunHistoryDetail(run: WorkflowRun, nodes: WorkflowNode[]): st
     }
 
     if (FAILURE_STATUSES.has(status)) {
-        return `${currentNodeLabel || 'A step'} · ${stepPosition}`;
+        // The reason, not the position. Somebody scanning this list is looking
+        // for which run broke and why; "A step · Step 3 of 5" answers neither,
+        // and `run.error` has been in the payload the whole time.
+        const reason = typeof run.error === 'string' ? run.error.trim() : '';
+        const failedLabel = getNodeLabel(run.failed_node_id, nodes) || currentNodeLabel;
+        if (reason) return failedLabel ? `${failedLabel}: ${reason}` : reason;
+        return `${failedLabel || 'A step'} · ${stepPosition}`;
     }
 
     if (COMPLETE_STATUSES.has(status)) {
@@ -497,102 +450,9 @@ export function getRunHistoryDetail(run: WorkflowRun, nodes: WorkflowNode[]): st
     return `${nodes.length} step${nodes.length === 1 ? '' : 's'}`;
 }
 
-export function getRunHistorySubdetail(run: WorkflowRun, nodes: WorkflowNode[]): string {
-    const currentNodeId = getRunCurrentNodeId(run);
-    const nextNode = getNextNode(currentNodeId, nodes);
-    const status = toRunStatus(run.status);
-
-    if (WAITING_STATUSES.has(status)) {
-        return nextNode ? `Continue to ${getDisplayNodeLabel(nextNode)}` : 'Ready to continue';
-    }
-
-    if (COMPLETE_STATUSES.has(status)) {
-        return nodes.map((node) => getDisplayNodeLabel(node)).slice(0, 4).join(' -> ');
-    }
-
-    if (FAILURE_STATUSES.has(status)) {
-        return 'Open the run to inspect the failed step';
-    }
-
-    if (isActiveStepStatus(status)) {
-        return nextNode ? `Heading toward ${getDisplayNodeLabel(nextNode)}` : 'Moving through the procedure';
-    }
-
-    return 'No step activity recorded yet';
-}
-
-export function getStepSummaryText(value: unknown): string | null {
-    if (typeof value === 'string' && value.trim()) {
-        return truncatePreview(value, 140);
-    }
-
-    if (isRecord(value)) {
-        const previewFields = getPreviewFields(value);
-        if (previewFields.length > 0) {
-            return truncatePreview(`${previewFields[0].label}: ${previewFields[0].value}`, 140);
-        }
-    }
-
-    return null;
-}
-
-export function getSelectedPlaybackNodeId(
-    selection: { nodeId: string; mode: StepSelectionMode } | null | undefined,
-    nodes: WorkflowNode[],
-    currentNodeId: string | null
-): string | null {
-    if (!selection) return null;
-    if (selection.mode === 'inspect') return selection.nodeId;
-
-    const selectedNodeIndex = getNodeIndex(selection.nodeId, nodes);
-    const currentNodeIndex = getNodeIndex(currentNodeId, nodes);
-    if (selectedNodeIndex < 0) return null;
-    if (currentNodeIndex < 0) return selection.nodeId;
-
-    return selectedNodeIndex > currentNodeIndex ? selection.nodeId : null;
-}
-
-export function getStepSelectionMode({
-    nodeId,
-    run,
-    nodes,
-    currentNodeId,
-    runStatus,
-}: {
-    nodeId: string;
-    run: RunCardRun | null;
-    nodes: WorkflowNode[];
-    currentNodeId: string | null;
-    runStatus: string;
-}): StepSelectionMode {
-    if (!run) return 'follow';
-
-    const selectedNodeIndex = getNodeIndex(nodeId, nodes);
-    const currentNodeIndex = getNodeIndex(currentNodeId, nodes);
-    if (selectedNodeIndex < 0) return 'follow';
-    if (COMPLETE_STATUSES.has(runStatus)) return 'inspect';
-    if (currentNodeIndex >= 0 && selectedNodeIndex >= currentNodeIndex) return 'follow';
-
-    const node = nodes[selectedNodeIndex];
-    const latestStepByNode = getLatestStepByNode(run.step_history || []);
-    const state = getProcedureStepState({
-        node,
-        step: latestStepByNode.get(node.id) || null,
-        index: selectedNodeIndex,
-        currentNodeId: currentNodeId ?? undefined,
-        currentNodeIndex,
-        runStatus,
-    });
-
-    return state === 'completed' || state === 'failed' ? 'inspect' : 'follow';
-}
-
 export type ProcedureStepState = 'completed' | 'waiting' | 'running' | 'failed' | 'next' | 'pending';
 export type RunCompletionTiming = { startedAt: Date | null; completedAt: Date | null; duration: string | null };
 
-export function isReachedStepState(state: ProcedureStepState): boolean {
-    return state === 'completed' || state === 'waiting' || state === 'running' || state === 'failed';
-}
 
 export function getProcedureStepState({
     node,
@@ -640,44 +500,6 @@ export function getProcedureStatusForVariant(state: ProcedureStepState): string 
     if (state === 'running') return 'RUNNING';
     if (state === 'failed') return 'FAILED';
     return 'PENDING';
-}
-
-export function getStepNarrative({
-    node,
-    state,
-    nextNodeLabel,
-    index,
-    totalSteps,
-}: {
-    node: WorkflowNode;
-    state: ProcedureStepState;
-    nextNodeLabel: string | null;
-    index: number;
-    totalSteps: number;
-}): string {
-    const label = getDisplayNodeLabel(node);
-
-    if (state === 'waiting') {
-        return nextNodeLabel ? `Waiting here before continuing to ${nextNodeLabel}.` : 'Waiting for the required input.';
-    }
-
-    if (state === 'running') {
-        return nextNodeLabel ? `Working now. Next up: ${nextNodeLabel}.` : 'Working through the last step.';
-    }
-
-    if (state === 'completed') {
-        return nextNodeLabel ? `Completed and handed off to ${nextNodeLabel}.` : 'Completed the workflow path.';
-    }
-
-    if (state === 'failed') {
-        return `${label} stopped the run. Review the step output before retrying.`;
-    }
-
-    if (state === 'next') {
-        return `Runs after step ${index} completes.`;
-    }
-
-    return index + 1 === totalSteps ? 'Waiting for the workflow to reach the final step.' : 'Not reached in this run yet.';
 }
 
 export function getNodeIconElement(type: string | undefined) {

@@ -147,6 +147,59 @@ class SqlAlchemyWorkflowRunRepository(WorkflowRunRepository):
 
         return [self._to_summary_entity(m) for m in models], next_cursor
 
+    async def list_by_pod(
+        self,
+        pod_id: UUID,
+        *,
+        limit: int = 100,
+        cursor: UUID | None = None,
+        statuses: List[str] | None = None,
+    ) -> tuple[List[WorkflowRunEntity], UUID | None]:
+        """Recent runs across every workflow in a pod, newest first.
+
+        The index and the pod home both want "what has been happening here",
+        which used to mean one list request per workflow fanned out client-side.
+        Run ids are UUIDv7, so id-descending *is* newest-first and the same
+        cursor pagination as list_by_flow applies.
+        """
+        stmt = (
+            select(WorkflowRunModel)
+            .options(
+                load_only(
+                    WorkflowRunModel.id,
+                    WorkflowRunModel.flow_id,
+                    WorkflowRunModel.pod_id,
+                    WorkflowRunModel.user_id,
+                    WorkflowRunModel.start_type,
+                    WorkflowRunModel.schedule_event_id,
+                    WorkflowRunModel.status,
+                    WorkflowRunModel.current_node_id,
+                    WorkflowRunModel.error,
+                    WorkflowRunModel.failed_node_id,
+                    WorkflowRunModel.started_at,
+                    WorkflowRunModel.completed_at,
+                    WorkflowRunModel.created_at,
+                    WorkflowRunModel.updated_at,
+                )
+            )
+            .where(WorkflowRunModel.pod_id == pod_id)
+            .order_by(WorkflowRunModel.id.desc())
+            .limit(limit + 1)
+        )
+        if statuses:
+            stmt = stmt.where(WorkflowRunModel.status.in_(statuses))
+        if cursor is not None:
+            stmt = stmt.where(WorkflowRunModel.id < cursor)
+        result = await self.session.execute(stmt)
+        models = list(result.scalars().all())
+
+        next_cursor = None
+        if len(models) > limit:
+            next_cursor = models[limit - 1].id
+            models = models[:limit]
+
+        return [self._to_summary_entity(m) for m in models], next_cursor
+
     async def find_by_schedule_event(
         self,
         *,

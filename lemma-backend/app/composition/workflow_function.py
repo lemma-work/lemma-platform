@@ -41,6 +41,10 @@ class FunctionControlAdapter(FunctionPort):
             "function_type": FunctionType.JOB.value,
         }
 
+    async def cancel_run(self, function_run_id: UUID) -> None:
+        """Cancel the dispatched run. Already-finished runs cancel to a no-op."""
+        await self._use_cases.cancel_function_run(function_run_id)
+
     async def get_run_status(self, function_run_id: UUID) -> dict[str, Any]:
         run = await self.run_repository.get_run(function_run_id)
         if run is None:

@@ -444,6 +444,11 @@ class FunctionUseCases:
         resolved = await self._resolve_with_revision_backfill(resolve_once)
         return await self._run_resolved(resolved, user_email=None)
 
+    async def cancel_function_run(self, run_id: UUID) -> None:
+        """Cancel a dispatched run. Used when a workflow run that was waiting on
+        it is cancelled, so the sandbox stops work nobody is waiting for."""
+        await self._dispatcher.cancel(run_id)
+
     async def dispatch_function_for_workflow(
         self,
         *,

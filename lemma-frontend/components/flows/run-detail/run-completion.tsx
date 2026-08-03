@@ -10,7 +10,7 @@ import {
     type RunCardRun,
     type RunCompletionTiming,
 } from '../run-format';
-import { StepDataPreview } from './step-data-preview';
+import { JsonView } from '@/components/shared/json-view';
 
 export function RunCompletionChamber({
     timing,
@@ -44,7 +44,7 @@ export function RunCompletionChamber({
 
             <div>
                 {hasVisibleData(output) ? (
-                    <StepDataPreview label="Final result" data={output} variant="flat" />
+                    <JsonView value={output} label="Final result" defaultExpanded />
                 ) : (
                     <QuietEmptyState icon={<Flag className="h-4 w-4" />}>
                         This run reached the end without a recorded final output.
@@ -78,7 +78,7 @@ export function RunCompletionCard({
                     <CompletionMeta timing={timing} compact />
                     {hasVisibleData(output) ? (
                         <div className="mt-4">
-                            <StepDataPreview label="Final output" data={output} variant="flat" />
+                            <JsonView value={output} label="Final output" defaultExpanded />
                         </div>
                     ) : null}
                 </div>

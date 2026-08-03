@@ -273,8 +273,10 @@ run `uv run python scripts/generate_route_inventory.py`.
 | Method | Path | Operation ID | Summary |
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}/workflows/{workflow_name}` | `workflow.delete` | Delete Workflow |
+| GET | `/pods/{pod_id}/workflow-runs` | `workflow.run.list_for_pod` | List Workflow Runs In Pod |
 | GET | `/pods/{pod_id}/workflow-runs/waiting/assigned-to-me` | `workflow.run.waiting_assigned_to_me` | List Workflow Runs Waiting For Current User |
 | GET | `/pods/{pod_id}/workflow-runs/{run_id}` | `workflow.run.get` | Get Workflow Run |
+| GET | `/pods/{pod_id}/workflow-runs/{run_id}/stream` | `workflow.run.stream` | Stream Workflow Run |
 | GET | `/pods/{pod_id}/workflow-runs/{run_id}/visualize` | `workflow.run.visualize` | Visualize Workflow Run |
 | GET | `/pods/{pod_id}/workflows` | `workflow.list` | List Workflows |
 | GET | `/pods/{pod_id}/workflows/{workflow_name}` | `workflow.get` | Get Workflow |

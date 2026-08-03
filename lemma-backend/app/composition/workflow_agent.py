@@ -12,8 +12,12 @@ from app.core.domain.runtime import AgentRuntimeConfig
 from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from app.modules.agent.domain.entities import Conversation
 from app.modules.agent.domain.errors import AgentNotFoundError
-from app.modules.agent.domain.events import AgentRunStartedEvent
+from app.modules.agent.domain.events import (
+    AgentRunStartedEvent,
+    AgentRunStopRequestedEvent,
+)
 from app.modules.agent.domain.value_objects import (
+    AgentRunStatus,
     ConversationStatus,
     ConversationType,
     MessageDraft,
@@ -25,6 +29,9 @@ from app.modules.agent.infrastructure.repositories import (
 )
 from app.modules.agent.infrastructure.conversation_idempotency_store import (
     create_conversation_for_id,
+)
+from app.modules.agent.infrastructure.wait_repository import (
+    AgentConversationWaitRepository,
 )
 from app.modules.agent.services.runtime_profile_service import (
     DEFAULT_SYSTEM_AGENT_RUNTIME_PROFILE_ID,
@@ -39,6 +46,7 @@ class AgentControlAdapter(AgentPort):
         self.uow = uow
         self.agent_repo = AgentRepository(uow)
         self.conversation_repo = ConversationRepository(uow)
+        self.wait_repo = AgentConversationWaitRepository(uow)
 
     async def run_agent(
         self,
@@ -153,7 +161,18 @@ class AgentControlAdapter(AgentPort):
         if conversation.status is ConversationStatus.COMPLETED:
             return {"status": "COMPLETED", "output_data": output}
         if conversation.status is ConversationStatus.WAITING:
-            return {"status": "WAITING", "output_data": output}
+            # The expiry policy needs to know *why* a conversation is waiting. An
+            # agent blocked on a person is the hang the ceiling exists to catch;
+            # a snoozed agent will wake itself and is perfectly healthy, so
+            # failing its run would be a silent wrong outcome rather than a
+            # visible error. See `run_resume_service._expire_overdue_wait`.
+            snooze = await self.wait_repo.find_active_for_conversation(conversation_id)
+            return {
+                "status": "WAITING",
+                "wait_reason": "SNOOZE" if snooze else "HUMAN",
+                "wakes_at": snooze.scheduled_at.isoformat() if snooze else None,
+                "output_data": output,
+            }
         if conversation.status in {
             ConversationStatus.FAILED,
             ConversationStatus.STOPPED,
@@ -164,6 +183,33 @@ class AgentControlAdapter(AgentPort):
                 "output_data": output,
             }
         return {"status": "RUNNING"}
+
+    async def stop_conversation(self, conversation_id: UUID, user_id: UUID) -> None:
+        """Ask the conversation's active run to stop.
+
+        Mirrors ConversationService.stop_conversation minus the access checks —
+        the caller is the engine cancelling a run it already authorized, not a
+        user reaching in. Nothing to stop is success, not an error: the agent
+        may have finished between the cancel and this call.
+        """
+        active_run = await self.conversation_repo.get_active_agent_run_for_update(
+            conversation_id
+        )
+        if active_run is None:
+            return
+        await self.conversation_repo.finish_agent_run(
+            agent_run_id=active_run.id,
+            status=AgentRunStatus.STOP_REQUESTED,
+        )
+        self.conversation_repo.collect_events(
+            [
+                AgentRunStopRequestedEvent(
+                    conversation_id=conversation_id,
+                    agent_run_id=active_run.id,
+                    user_id=user_id,
+                )
+            ]
+        )
 
     async def _default_agent_runtime_for_pod(
         self, *, pod_id: UUID

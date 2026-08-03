@@ -17,7 +17,6 @@ import {
     getRunCurrentNodeId,
     getRunDisplayDate,
     getRunHistoryDetail,
-    getRunHistorySubdetail,
     getRunHistoryTitle,
     getStepPositionLabel,
     isActiveStepStatus,
@@ -120,7 +119,6 @@ export function RunListCard({
     const currentNodePosition = getStepPositionLabel(currentNodeId, nodes);
     const historyTitle = getRunHistoryTitle(runStatus);
     const historyDetail = getRunHistoryDetail(run as WorkflowRun, nodes);
-    const historySubdetail = getRunHistorySubdetail(run as WorkflowRun, nodes);
     const isLive = isActiveStepStatus(runStatus) || WAITING_STATUSES.has(runStatus);
     const statusDot = cn(
         'h-2 w-2 shrink-0 rounded-full',
@@ -146,7 +144,9 @@ export function RunListCard({
                     <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition-transform group-hover:translate-x-0.5" />
                 </span>
                 {/* `historyDetail` already names the step and its position, so the
-                    separate position line the wide row carries is dropped here. */}
+                    separate position line the wide row carries is dropped here.
+                    On a failure it is the reason instead — the whole point of
+                    scanning this list is finding which run broke and why. */}
                 <span className="flow-run-compact-detail">{historyDetail}</span>
                 <span className="flow-run-compact-meta">
                     <span className="font-mono">#{formatRunIdShort(runIdValue)}</span>
@@ -183,7 +183,6 @@ export function RunListCard({
                     <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--text-tertiary)]">
                         <span className="text-[var(--text-secondary)]">{historyDetail}</span>
                         <span>{currentNodePosition}</span>
-                        <span className="hidden min-w-0 truncate lg:inline">{historySubdetail}</span>
                         <span className="md:hidden">{runDisplayDate ? formatTimestamp(runDisplayDate) : 'Unknown time'}</span>
                         {runDuration ? <span className="md:hidden">{runDuration}</span> : null}
                     </div>
