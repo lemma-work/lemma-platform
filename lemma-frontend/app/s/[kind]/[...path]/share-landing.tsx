@@ -9,8 +9,7 @@ import { ArrowRight } from '@/components/ui/icons';
 import { Button } from '@/components/ui/button';
 import { StepLoader } from '@/components/brand/loader';
 import { GuestResourceView } from '@/components/share/guest-resource-view';
-import { RequestAccessPanel } from '@/components/share/request-access-panel';
-import { getShareKindCopy } from '@/lib/share/share-link';
+import { JoinPodPanel } from '@/components/share/join-pod-panel';
 import { useLemmaAuth } from '@/lib/hooks/use-lemma-auth';
 import { getLemmaClient } from '@/lib/sdk/lemma-client';
 import type { ShareKind, ShareTarget } from '@/lib/share/share-link';
@@ -147,7 +146,7 @@ export function ShareLanding({
                     </h1>
                     <p className="mt-1 text-sm text-[var(--text-secondary)]">
                         {isDeniedToSignedInReader ? (
-                            'This isn’t available to you. It may have been deleted, or it may not be shared with your account — ask whoever sent the link.'
+                            'This isn’t shared with you. It may have been deleted, or it may only be open to the pod it lives in.'
                         ) : (
                             <>
                                 {name ? `${name} is ${article} on Lemma. ` : ''}
@@ -158,13 +157,10 @@ export function ShareLanding({
                 </div>
 
                 {isDeniedToSignedInReader && target ? (
-                    // The ask belongs here, at the refusal — and it asks for this
-                    // one thing, not for the pod around it.
+                    // The ask belongs at the refusal, not somewhere else in the
+                    // product the reader has no way to find.
                     <div className="mt-6">
-                        <RequestAccessPanel
-                            target={target}
-                            resourceLabel={getShareKindCopy(kind).noun}
-                        />
+                        <JoinPodPanel podId={target.podId} />
                     </div>
                 ) : (
                     <div className="mt-6 flex flex-col items-center gap-3">

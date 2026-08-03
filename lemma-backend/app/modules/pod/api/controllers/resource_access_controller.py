@@ -237,10 +237,10 @@ async def _resolve_resource_id(
 
 def _normalize_grantee_type(grantee_type: str) -> str:
     normalized = grantee_type.strip().upper()
-    if normalized not in {"ROLE", "POD_MEMBER", "USER"}:
+    if normalized not in {"ROLE", "POD_MEMBER"}:
         raise HTTPException(
             status_code=400,
-            detail="grantee_type must be ROLE, POD_MEMBER, or USER",
+            detail="grantee_type must be ROLE or POD_MEMBER",
         )
     return normalized
 
@@ -267,16 +267,6 @@ async def _require_grantee(
         role_id = (await uow.session.execute(stmt)).scalar_one_or_none()
         if role_id is None:
             raise HTTPException(status_code=404, detail="Role not found")
-        return
-
-    if grantee_type == "USER":
-        # Deliberately not checked against pod membership: naming someone who is
-        # *not* in the pod is the whole point of this grantee type. The user must
-        # exist, so a typo'd id cannot sit around as a grant to nobody.
-        stmt = select(User.id).where(User.id == grantee_id)
-        user_id = (await uow.session.execute(stmt)).scalar_one_or_none()
-        if user_id is None:
-            raise HTTPException(status_code=404, detail="User not found")
         return
 
     stmt = select(PodMember.id).where(

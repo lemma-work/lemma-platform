@@ -207,62 +207,6 @@ class ResourcePreviewResponse(BaseSchema):
     allowed_actions: list[str] = []
 
 
-class ResourceAccessInviteCreateRequest(BaseSchema):
-    resource_type: ResourceType
-    resource_id: UUID | None = None
-    resource_name: str | None = None
-    email: EmailStr
-    permission_ids: list[str] = []
-
-
-class ResourceAccessInviteResponse(BaseSchema):
-    id: UUID
-    pod_id: UUID
-    resource_type: str
-    resource_id: UUID
-    resource_name: str | None = None
-    email: str
-    permission_ids: list[str] = []
-    status: str
-    invited_by_user_id: UUID | None = None
-    invited_at: datetime
-    redeemed_at: datetime | None = None
-
-
-class ResourceAccessInviteListResponse(BaseSchema):
-    items: list[ResourceAccessInviteResponse] = []
-
-
-class ResourceAccessRequestCreateRequest(BaseSchema):
-    resource_type: ResourceType
-    # Either identifier. Documents are addressed by id (their name is a path the
-    # requester does not have); everything else by name.
-    resource_id: UUID | None = None
-    resource_name: str | None = None
-    message: str | None = None
-
-
-class ResourceAccessRequestResponse(BaseSchema):
-    id: UUID
-    pod_id: UUID
-    resource_type: str
-    resource_id: UUID
-    resource_name: str | None = None
-    requester_user_id: UUID
-    requested_permission_ids: list[str] = []
-    status: str
-    message: str | None = None
-    requested_at: datetime
-    decided_at: datetime | None = None
-    decided_by_user_id: UUID | None = None
-    requester_email: str | None = None
-    requester_name: str | None = None
-
-
-class ResourceAccessRequestListResponse(BaseSchema):
-    items: list[ResourceAccessRequestResponse] = []
-
-
 class PodJoinRequestCreateResponse(BaseSchema):
     id: UUID
     pod_id: UUID

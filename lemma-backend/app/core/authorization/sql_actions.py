@@ -123,11 +123,6 @@ def allowed_actions_expr(
     if ctx.actor_type == ActorType.USER and ctx.user_id is not None:
         visibility_read_actions = [a for a in resource_actions if a.endswith(".read")]
     public_actions = list(dict.fromkeys([*role_actions, *visibility_read_actions]))
-    # ORGANIZATION turns on membership in the resource's org, which the
-    # ORG_MEMBER principal ref proves. ctx.organization_id would not: it is read
-    # off the pod being queried, so it matches for strangers too.
-    viewer_is_org_member = any(ref.type == "ORG_MEMBER" for ref in ctx.principal_refs)
-    org_actions = public_actions if viewer_is_org_member else role_actions
 
     whens = []
     if owner_user_id_col is not None and ctx.user_id is not None:
@@ -135,7 +130,6 @@ def allowed_actions_expr(
     if visibility_col is not None:
         whens.append((visibility_col == "POD", _text_array(role_actions)))
         whens.append((visibility_col == "PUBLIC", _text_array(public_actions)))
-        whens.append((visibility_col == "ORGANIZATION", _text_array(org_actions)))
         whens.append((visibility_col == "RESTRICTED", restricted_actions))
         whens.append((visibility_col == "PERSONAL", empty_actions))
     else:

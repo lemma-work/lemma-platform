@@ -41,12 +41,7 @@ __all__ = [
 
 # Grantee types representing humans (sharing); AGENT/FUNCTION grantees are
 # workload capability grants and must survive visibility transitions.
-#
-# USER names a person by user id rather than by their membership row, which is
-# the only way to grant access to someone who is not in the pod. ROLE and
-# POD_MEMBER both presuppose the membership this whole feature exists to avoid
-# requiring.
-HUMAN_GRANTEE_TYPES: tuple[str, ...] = ("ROLE", "POD_MEMBER", "USER")
+HUMAN_GRANTEE_TYPES: tuple[str, ...] = ("ROLE", "POD_MEMBER")
 
 
 class ResourceGrantInputProtocol(Protocol):

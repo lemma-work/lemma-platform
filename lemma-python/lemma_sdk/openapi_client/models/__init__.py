@@ -348,13 +348,6 @@ _NAME_TO_MODULE = {
     'ResolveUserApprovalRequestResponseType0': 'resolve_user_approval_request_response_type_0',
     'ResourceAccessGrantRequest': 'resource_access_grant_request',
     'ResourceAccessGrantResponse': 'resource_access_grant_response',
-    'ResourceAccessInviteCreateRequest': 'resource_access_invite_create_request',
-    'ResourceAccessInviteListResponse': 'resource_access_invite_list_response',
-    'ResourceAccessInviteResponse': 'resource_access_invite_response',
-    'ResourceAccessRequestCreateRequest': 'resource_access_request_create_request',
-    'ResourceAccessRequestListResponse': 'resource_access_request_list_response',
-    'ResourceAccessRequestResponse': 'resource_access_request_response',
-    'ResourceAccessRequestStatus': 'resource_access_request_status',
     'ResourceAccessResponse': 'resource_access_response',
     'ResourcePreviewResponse': 'resource_preview_response',
     'ResourceType': 'resource_type',
@@ -851,13 +844,6 @@ if TYPE_CHECKING:
     from .resolve_user_approval_request_response_type_0 import ResolveUserApprovalRequestResponseType0
     from .resource_access_grant_request import ResourceAccessGrantRequest
     from .resource_access_grant_response import ResourceAccessGrantResponse
-    from .resource_access_invite_create_request import ResourceAccessInviteCreateRequest
-    from .resource_access_invite_list_response import ResourceAccessInviteListResponse
-    from .resource_access_invite_response import ResourceAccessInviteResponse
-    from .resource_access_request_create_request import ResourceAccessRequestCreateRequest
-    from .resource_access_request_list_response import ResourceAccessRequestListResponse
-    from .resource_access_request_response import ResourceAccessRequestResponse
-    from .resource_access_request_status import ResourceAccessRequestStatus
     from .resource_access_response import ResourceAccessResponse
     from .resource_preview_response import ResourcePreviewResponse
     from .resource_type import ResourceType
@@ -1367,13 +1353,6 @@ __all__ = [
     'ResolveUserApprovalRequestResponseType0',
     'ResourceAccessGrantRequest',
     'ResourceAccessGrantResponse',
-    'ResourceAccessInviteCreateRequest',
-    'ResourceAccessInviteListResponse',
-    'ResourceAccessInviteResponse',
-    'ResourceAccessRequestCreateRequest',
-    'ResourceAccessRequestListResponse',
-    'ResourceAccessRequestResponse',
-    'ResourceAccessRequestStatus',
     'ResourceAccessResponse',
     'ResourcePreviewResponse',
     'ResourceType',

@@ -2,9 +2,8 @@
 
 ``PUBLIC`` used to be unreachable: its branch in ``Authorizer.authorize`` sat
 *after* the pod-permission gate, so a non-member — who holds no pod permissions —
-was denied before it ever ran. These tests pin the ordering fix and, more
-importantly, the two ways it could go wrong in the other direction: handing
-outsiders write access, or letting ORGANIZATION collapse into PUBLIC.
+was denied before it ever ran. These tests pin the ordering fix and the way it
+could go wrong in the other direction: handing outsiders anything beyond a read.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from uuid import uuid4
 from app.core.authorization.context import (
     ActorType,
     Context,
-    PrincipalRef,
     ResourceRef,
     ResourceType,
     ResourceVisibility,
@@ -29,19 +27,10 @@ USER_ID = uuid4()
 def _ctx(
     *,
     actor_type: ActorType = ActorType.USER,
-    is_org_member: bool = False,
     pod_id=POD_ID,
     permission_ids: frozenset[str] = frozenset(),
 ) -> Context:
-    """A viewer holding no pod permissions unless told otherwise.
-
-    ``organization_id`` is always set, mirroring ``build_user_context``: it is
-    read off the Pod row before membership is checked, so it is present even for
-    a total stranger. Membership is carried by the ORG_MEMBER principal ref.
-    """
-    principal_refs = set()
-    if is_org_member:
-        principal_refs.add(PrincipalRef("ORG_MEMBER", uuid4()))
+    """A viewer holding no pod permissions unless told otherwise."""
     return Context(
         actor_type=actor_type,
         actor_id=str(USER_ID),
@@ -49,7 +38,7 @@ def _ctx(
         organization_id=ORG_ID,
         pod_id=pod_id,
         permission_ids=frozenset(permission_ids),
-        principal_refs=frozenset(principal_refs),
+        principal_refs=frozenset(),
         authorizer=object(),
     )
 
@@ -80,46 +69,11 @@ class TestPublic:
         # The whole point of the narrow rule: readable never implies editable.
         assert _decide(_ctx(), "folder.write", _resource(ResourceVisibility.PUBLIC)) is None
 
-    def test_outside_org_may_still_read(self):
-        # PUBLIC means every Lemma account, so no org membership is required.
-        decision = _decide(
-            _ctx(is_org_member=False), "folder.read", _resource(ResourceVisibility.PUBLIC)
-        )
+    def test_a_total_stranger_may_still_read(self):
+        # PUBLIC means every Lemma account: no org or pod relationship required.
+        decision = _decide(_ctx(), "folder.read", _resource(ResourceVisibility.PUBLIC))
 
         assert decision is not None and decision.allowed
-
-
-class TestOrganization:
-    def test_org_member_may_read(self):
-        decision = _decide(
-            _ctx(is_org_member=True), "folder.read", _resource(ResourceVisibility.ORGANIZATION)
-        )
-
-        assert decision is not None and decision.allowed
-        assert decision.reason_code =="ORG_VISIBLE"
-
-    def test_non_org_member_is_denied(self):
-        # The regression that would make ORGANIZATION a synonym for PUBLIC:
-        # ctx.organization_id matches the resource for *everyone*, because it is
-        # read off the pod rather than off the viewer's memberships.
-        assert (
-            _decide(
-                _ctx(is_org_member=False),
-                "folder.read",
-                _resource(ResourceVisibility.ORGANIZATION),
-            )
-            is None
-        )
-
-    def test_org_member_may_not_write(self):
-        assert (
-            _decide(
-                _ctx(is_org_member=True),
-                "folder.write",
-                _resource(ResourceVisibility.ORGANIZATION),
-            )
-            is None
-        )
 
 
 class TestFallthrough:

@@ -2,7 +2,6 @@ from enum import Enum
 
 
 class ResourceVisibility(str, Enum):
-    ORGANIZATION = "ORGANIZATION"
     PERSONAL = "PERSONAL"
     POD = "POD"
     PUBLIC = "PUBLIC"

@@ -436,11 +436,6 @@ class AuthorizationDataService:
         permission_ids: set[str] = set()
         principal_refs: set[PrincipalRef] = set()
 
-        # The person themselves, always — independent of any membership row.
-        # A USER grant is how a resource reaches someone who is not in the pod,
-        # so its principal cannot be conditional on being in the pod.
-        principal_refs.add(PrincipalRef("USER", user_id))
-
         if organization_id is not None:
             org_member = await self._get_org_member(
                 user_id=user_id,
@@ -1086,13 +1081,7 @@ class Authorizer:
             return AuthorizationDecision(
                 False, "PERSONAL_RESOURCE_DENIED", permission_id, hydrated
             )
-        # ORGANIZATION rides with POD here. Reaching this point means the caller
-        # already holds the pod permission, so they are inside the pod and the
-        # wider audience is irrelevant to them; the extra reach ORGANIZATION
-        # grants outsiders is handled by _visibility_read_decision above. Without
-        # this, a member *writing* to an org-visible resource would fall past
-        # every branch and die on UNSUPPORTED_VISIBILITY.
-        if visibility in (ResourceVisibility.POD, ResourceVisibility.ORGANIZATION):
+        if visibility == ResourceVisibility.POD:
             if hydrated.pod_id is not None and hydrated.pod_id != ctx.pod_id:
                 return AuthorizationDecision(False, "POD_SCOPE_MISMATCH", permission_id, hydrated)
             return AuthorizationDecision(True, "POD_VISIBLE", permission_id, hydrated)
@@ -1254,10 +1243,7 @@ class Authorizer:
                 resource,
                 matched_grant_ids=tuple(workload_grant_ids),
             )
-        # ORGANIZATION rides with POD: a workload's reach comes from its own
-        # grants (already matched above), never from how widely the resource is
-        # shared with humans.
-        if visibility in (ResourceVisibility.POD, ResourceVisibility.ORGANIZATION):
+        if visibility == ResourceVisibility.POD:
             return AuthorizationDecision(
                 True,
                 "POD_VISIBLE",
@@ -1279,26 +1265,6 @@ class Authorizer:
     def _is_read_permission(permission_id: str) -> bool:
         return permission_id.endswith(".read")
 
-    @staticmethod
-    def _viewer_is_member_of_resource_org(ctx: Context, resource: ResourceRef) -> bool:
-        """Whether the viewer really holds membership in the resource's org.
-
-        ``ctx.organization_id`` is resolved from the *pod being addressed*, not
-        from the viewer's memberships (``build_user_context`` reads it off the Pod
-        row before it looks up whether the user belongs to it). Comparing it to
-        the resource's organization is therefore true for literally anyone, and
-        would silently make ORGANIZATION a synonym for PUBLIC.
-
-        The ORG_MEMBER principal ref is the honest signal: it is added only when a
-        membership row exists. Pairing it with a pod match means the org we
-        verified membership in is the one that owns the resource.
-        """
-        if resource.pod_id is None or ctx.pod_id is None:
-            return False
-        if resource.pod_id != ctx.pod_id:
-            return False
-        return any(ref.type == "ORG_MEMBER" for ref in ctx.principal_refs)
-
     def _visibility_read_decision(
         self,
         ctx: Context,
@@ -1317,8 +1283,8 @@ class Authorizer:
 
         Deliberately narrow: reads only, humans only. Write-shaped actions and
         every workload actor fall through to the paths they already took, so
-        flipping a resource to ORGANIZATION or PUBLIC can never widen what an
-        agent or function may do, nor let anyone edit what they can now read.
+        flipping a resource to PUBLIC can never widen what an agent or function
+        may do, nor let anyone edit what they can now read.
         """
         if ctx.actor_type != ActorType.USER or ctx.user_id is None:
             return None
@@ -1330,10 +1296,6 @@ class Authorizer:
         visibility = resource.visibility or ResourceVisibility.POD
         if visibility == ResourceVisibility.PUBLIC:
             return AuthorizationDecision(True, "PUBLIC_RESOURCE", permission_id, resource)
-        if visibility == ResourceVisibility.ORGANIZATION and (
-            self._viewer_is_member_of_resource_org(ctx, resource)
-        ):
-            return AuthorizationDecision(True, "ORG_VISIBLE", permission_id, resource)
         return None
 
     @staticmethod

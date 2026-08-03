@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Building2, Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
+import { Globe2, LockKeyhole, Share2, Trash2, UserRound, UsersRound, type LemmaIcon } from '@/components/ui/icons';
 import type { PodMemberResponse, ResourceAccessGrantResponse, ResourceAccessResponse } from 'lemma-sdk';
 
 import { ConceptHint } from '@/components/education/concept-hint';
@@ -11,7 +11,6 @@ import { SocialCardPanel } from '@/components/share/social-card-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import {
     Dialog,
     DialogContent,
@@ -166,17 +165,6 @@ export function getResourceVisibilityCopy(
         };
     }
 
-    if (visibility === 'ORGANIZATION') {
-        return {
-            value: visibility,
-            label: 'Everyone at work',
-            shortDescription: 'Anyone in your organization',
-            description: 'Anyone in your organization can open it, pod member or not.',
-            icon: Building2,
-            className: 'state-badge-info',
-        };
-    }
-
     if (visibility === 'PUBLIC') {
         return {
             value: visibility,
@@ -185,7 +173,7 @@ export function getResourceVisibilityCopy(
             // resource to the open internet. The copy has to say so.
             label: 'Anyone signed in',
             shortDescription: 'Anyone with a Lemma account',
-            description: 'Anyone with a Lemma account can open it, including outside your organization.',
+            description: 'Anyone with a Lemma account can open it, including people outside your team.',
             icon: Globe2,
             className: 'state-badge-warning',
         };
@@ -262,8 +250,7 @@ function getGrantInitials(grant: ResourceAccessGrantResponse) {
 const VISIBILITY_TONE: Record<string, string> = {
     PERSONAL: 'text-[var(--text-secondary)]',
     RESTRICTED: 'text-[var(--state-warning)]',
-    ORGANIZATION: 'text-[var(--state-info)]',
-    // Warning, not info: this is the only level that leaves the organization.
+    // Warning, not info: it is the only level that reaches past the pod.
     PUBLIC: 'text-[var(--state-warning)]',
     POD: 'text-[var(--text-tertiary)]',
 };
@@ -409,7 +396,6 @@ export function ResourceShareButton({
     const [draftGrants, setDraftGrants] = useState<ResourceAccessGrantResponse[]>([]);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [hasAcknowledgedPublic, setHasAcknowledgedPublic] = useState(false);
-    const [inviteEmail, setInviteEmail] = useState('');
     const cardSectionRef = useRef<HTMLElement | null>(null);
     const hasVisibilityChange = draftVisibility !== current;
     const canManageSpecificAccess = Boolean(podId && resourceType && resourceId);
@@ -505,20 +491,6 @@ export function ResourceShareButton({
     // Only a genuinely public resource gets a card. An org-visible one would
     // unfurl its name into whatever timeline the link was pasted into.
     const canShowCard = Boolean(cardVariant && outsidePodShareUrl && draftVisibility === 'PUBLIC');
-
-    const inviteByEmail = useMutation({
-        mutationFn: async () => {
-            if (!podId || !resourceType || !resourceId) return null;
-            await getLemmaClient(podId).resourceAccess.requestInvite({
-                resource_type: resourceType as never,
-                resource_name: resourceId,
-                email: inviteEmail.trim(),
-                permission_ids: selectedAccess?.permissionIds || [],
-            });
-            setInviteEmail('');
-            return null;
-        },
-    });
 
     const saveSharing = useMutation({
         mutationFn: async () => {
@@ -727,8 +699,8 @@ export function ResourceShareButton({
                                         }
                                     />
                                     <span className="text-xs text-[var(--text-secondary)]">
-                                        This leaves your organization. Anyone with a Lemma account —
-                                        including people you do not work with — will be able to open{' '}
+                                        Anyone with a Lemma account — including people you do not
+                                        work with — will be able to open{' '}
                                         {resourceName ? <strong>{resourceName}</strong> : 'this'} using the
                                         link.
                                     </span>
@@ -793,44 +765,6 @@ export function ResourceShareButton({
                                         </SelectContent>
                                     </Select>
                                 </div>
-
-                                {/* Someone outside the pod — possibly without an
-                                    account at all. Held as an invite against the
-                                    address and redeemed into a real grant once
-                                    that address is verified, so sharing outward
-                                    no longer means adding them to the org. */}
-                                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                                    <Input
-                                        type="email"
-                                        value={inviteEmail}
-                                        onChange={(event) => setInviteEmail(event.target.value)}
-                                        placeholder="Or invite by email…"
-                                        className="h-9 min-w-0"
-                                    />
-                                    <Button
-                                        type="button"
-                                        variant="secondary"
-                                        size="sm"
-                                        className="h-9"
-                                        loading={inviteByEmail.isPending}
-                                        loadingLabel="Inviting"
-                                        disabled={!inviteEmail.includes('@')}
-                                        onClick={() => inviteByEmail.mutate()}
-                                    >
-                                        Invite
-                                    </Button>
-                                </div>
-                                {inviteByEmail.isSuccess ? (
-                                    <p className="text-xs text-[var(--text-tertiary)]">
-                                        Invited. They will get access when they sign in with that
-                                        address.
-                                    </p>
-                                ) : null}
-                                {inviteByEmail.isError ? (
-                                    <p className="text-xs text-[var(--state-error)]">
-                                        Could not send that invite.
-                                    </p>
-                                ) : null}
 
                                 {effectiveDraftGrants.length === 0 ? (
                                     <p className="rounded-md border border-dashed border-[color:var(--border-subtle)] px-3 py-2.5 text-xs text-[var(--text-tertiary)]">

@@ -13,8 +13,9 @@ This suite asks. Three viewers with genuinely different standing:
   feature exists for: someone was sent a link at work)
 * ``outsider`` - a Lemma account with no relationship to the org at all
 
-and it pins both directions: reads widen with visibility, while enumeration and
-writes do not.
+and it pins both directions: PUBLIC widens reads to every signed-in account,
+while enumeration and writes stay shut. Nothing narrower than PUBLIC reaches
+past pod membership — being in the same organization buys nothing on its own.
 """
 
 from __future__ import annotations
@@ -138,16 +139,15 @@ class TestReadsWidenWithVisibility:
         assert await _read(async_client, pod_id, path, matrix["colleague"]) != status.HTTP_200_OK
         assert await _read(async_client, pod_id, path, matrix["outsider"]) != status.HTTP_200_OK
 
-    async def test_organization_visibility_admits_the_colleague_but_not_the_outsider(
+    async def test_restricted_visibility_admits_only_granted_pod_members(
         self, authenticated_client: AsyncClient, async_client: AsyncClient, matrix
     ):
+        # Being in the org buys nothing on its own: sharing reaches past the pod
+        # only via PUBLIC, and everything narrower stops at pod membership.
         pod_id, path = matrix["pod_id"], matrix["path"]
-        await _set_visibility(authenticated_client, pod_id, path, "ORGANIZATION")
+        await _set_visibility(authenticated_client, pod_id, path, "RESTRICTED")
 
-        assert await _read(async_client, pod_id, path, matrix["member"]) == status.HTTP_200_OK
-        assert await _read(async_client, pod_id, path, matrix["colleague"]) == status.HTTP_200_OK
-        # The regression that would make ORGANIZATION a synonym for PUBLIC:
-        # ctx.organization_id is read off the pod, so it matches for everyone.
+        assert await _read(async_client, pod_id, path, matrix["colleague"]) != status.HTTP_200_OK
         assert await _read(async_client, pod_id, path, matrix["outsider"]) != status.HTTP_200_OK
 
     async def test_public_visibility_admits_everyone_signed_in(
@@ -171,16 +171,14 @@ class TestReadsWidenWithVisibility:
 
 
 class TestEnumerationStaysShut:
-    @pytest.mark.parametrize("visibility", ["ORGANIZATION", "PUBLIC"])
     async def test_non_members_cannot_walk_the_tree_even_when_they_can_read(
         self,
         authenticated_client: AsyncClient,
         async_client: AsyncClient,
         matrix,
-        visibility: str,
     ):
         pod_id, path = matrix["pod_id"], matrix["path"]
-        await _set_visibility(authenticated_client, pod_id, path, visibility)
+        await _set_visibility(authenticated_client, pod_id, path, "PUBLIC")
 
         # Readable...
         assert await _read(async_client, pod_id, path, matrix["colleague"]) == status.HTTP_200_OK
@@ -215,13 +213,13 @@ class TestSharePreview:
         self, authenticated_client: AsyncClient, async_client: AsyncClient, matrix
     ):
         pod_id, path = matrix["pod_id"], matrix["path"]
-        await _set_visibility(authenticated_client, pod_id, path, "ORGANIZATION")
+        await _set_visibility(authenticated_client, pod_id, path, "PUBLIC")
 
         response = await self._preview(async_client, pod_id, path, matrix["colleague"])
 
         assert response.status_code == status.HTTP_200_OK, response.text
         body = response.json()
-        assert body["visibility"] == "ORGANIZATION"
+        assert body["visibility"] == "PUBLIC"
         assert "folder.read" in body["allowed_actions"]
         # Readable is not editable, and the preview must not imply otherwise.
         assert "folder.write" not in body["allowed_actions"]
@@ -230,7 +228,7 @@ class TestSharePreview:
         self, authenticated_client: AsyncClient, async_client: AsyncClient, matrix
     ):
         pod_id, path = matrix["pod_id"], matrix["path"]
-        await _set_visibility(authenticated_client, pod_id, path, "ORGANIZATION")
+        await _set_visibility(authenticated_client, pod_id, path, "POD")
 
         response = await self._preview(async_client, pod_id, path, matrix["outsider"])
 
@@ -244,7 +242,7 @@ class TestSharePreview:
         # Share links carry an id, not a path, so the recipient has no name to
         # ask with — the preview has to accept the id and hand the name back.
         pod_id, path = matrix["pod_id"], matrix["path"]
-        await _set_visibility(authenticated_client, pod_id, path, "ORGANIZATION")
+        await _set_visibility(authenticated_client, pod_id, path, "PUBLIC")
 
         response = await async_client.get(
             f"/pods/{pod_id}/resources/document/preview",
@@ -268,16 +266,14 @@ class TestSharePreview:
 
 
 class TestWritesDoNotWiden:
-    @pytest.mark.parametrize("visibility", ["ORGANIZATION", "PUBLIC"])
     async def test_readable_never_means_editable(
         self,
         authenticated_client: AsyncClient,
         async_client: AsyncClient,
         matrix,
-        visibility: str,
     ):
         pod_id, path = matrix["pod_id"], matrix["path"]
-        await _set_visibility(authenticated_client, pod_id, path, visibility)
+        await _set_visibility(authenticated_client, pod_id, path, "PUBLIC")
 
         response = await async_client.request(
             "PATCH",

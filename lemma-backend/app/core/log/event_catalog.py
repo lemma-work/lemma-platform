@@ -412,7 +412,6 @@ EVENT_CATALOG: dict[str, EventSpec] = {
     'pod.pod_handlers.no_pod_admins_notify_pod.observed': EventSpec('debug', frozenset({'pod_id'})),
     'pod.pod_handlers.pod_not_found_skipping_notification.diagnostic': EventSpec('debug', frozenset({'pod_id'})),
     'pod.pod_handlers.requester_not_found_skipping_notification.diagnostic': EventSpec('debug', frozenset()),
-    'pod.pod_handlers.resource_invites_redeemed.observed': EventSpec('info', frozenset({'user_id', 'count'})),
     'pod.pod_member_service.could_not_find_user_details.diagnostic': EventSpec('debug', frozenset({'organization_member_id'})),
     'pod.pod_member_service.fetch_user_info_event_emission.diagnostic': EventSpec('debug', frozenset()),
     'pod_bundle.ai_readme.readme_ai_polish_using_deterministic.diagnostic': EventSpec('debug', frozenset()),

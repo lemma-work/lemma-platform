@@ -45,11 +45,7 @@ def _get_role_cache() -> RedisJsonCache | None:
     if _role_cache is None or _role_cache._ttl_seconds != ttl:
         _role_cache = RedisJsonCache(
             redis_url=settings.redis_url,
-            # v2: snapshots now carry a USER principal ref. A v1 snapshot cached
-            # before a deploy would lack it, so a grant made to someone by user
-            # id would silently not apply until the TTL elapsed. Bumping the
-            # prefix retires those rather than serving them.
-            key_prefix="authz:role-snapshot:v2",
+            key_prefix="authz:role-snapshot",
             ttl_seconds=ttl,
         )
     return _role_cache

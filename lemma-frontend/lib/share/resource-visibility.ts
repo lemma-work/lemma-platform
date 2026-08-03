@@ -7,40 +7,31 @@
  * levels *are* and how a stored string maps onto one.
  */
 
-export type ResourceVisibilityValue =
-    | 'PERSONAL'
-    | 'POD'
-    | 'RESTRICTED'
-    | 'ORGANIZATION'
-    | 'PUBLIC';
+export type ResourceVisibilityValue = 'PERSONAL' | 'POD' | 'RESTRICTED' | 'PUBLIC';
 
-/**
- * Ordered narrow to wide. The two levels that reach past the pod sit together
- * at the wide end, so the list reads as one widening scale.
- */
+/** Ordered narrow to wide, so the list reads as one widening scale. */
 export const VISIBILITY_VALUES: ResourceVisibilityValue[] = [
     'PERSONAL',
     'POD',
     'RESTRICTED',
-    'ORGANIZATION',
     'PUBLIC',
 ];
 
 /**
- * Levels whose audience includes people who are not in the pod.
+ * The only level whose audience includes people who are not in the pod.
  *
- * These are the ones that need the `/s/…` share wrapper: a `/pod/…` URL drops a
- * non-member on the request-access wall no matter what the resource's own
- * visibility permits.
+ * This is what needs the `/s/…` share wrapper: a `/pod/…` URL drops a non-member
+ * on the request-access wall no matter what the resource's own visibility
+ * permits. Everything narrower stops at pod membership, so a workspace URL is
+ * the right link for it.
  */
-export const REACHES_OUTSIDE_POD: ResourceVisibilityValue[] = ['ORGANIZATION', 'PUBLIC'];
+export const REACHES_OUTSIDE_POD: ResourceVisibilityValue[] = ['PUBLIC'];
 
 /** Spellings accepted from older payloads and bundles, per canonical level. */
 const VISIBILITY_ALIASES: Record<string, ResourceVisibilityValue> = {
     PRIVATE: 'PERSONAL',
     OWNER: 'PERSONAL',
     USER: 'PERSONAL',
-    ORG: 'ORGANIZATION',
     ALL: 'POD',
 };
 

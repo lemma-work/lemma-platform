@@ -15,12 +15,6 @@ def _routers():
     from app.modules.pod.api.controllers.resource_preview_controller import (
         router as resource_preview,
     )
-    from app.modules.pod.api.controllers.resource_access_request_controller import (
-        router as resource_access_request,
-    )
-    from app.modules.pod.api.controllers.resource_access_invite_controller import (
-        router as resource_access_invite,
-    )
     from app.modules.pod.api.controllers.pod_role_controller import router as role
     from app.modules.pod.api.controllers.pod_join_request_controller import (
         router as join_request,
@@ -32,8 +26,6 @@ def _routers():
         permission,
         resource_access,
         resource_preview,
-        resource_access_request,
-        resource_access_invite,
         role,
         join_request,
     ]
@@ -51,7 +43,5 @@ module = LemmaModule(
     event_routers=_event_routers,
     stream_groups=(
         ("pod_events", "pod-join-request-events"),
-        # Redeeming resource invites when an account appears for their address.
-        ("identity_events", "pod-resource-invite-redemption"),
     ),
 )

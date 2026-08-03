@@ -202,7 +202,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | --- | --- | --- | --- |
 | DELETE | `/pods/{pod_id}` | `pod.delete` | Delete Pod |
 | DELETE | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.remove` | Remove Pod Member |
-| DELETE | `/pods/{pod_id}/resource-access-invites/{invite_id}` | `pod.resource_access_invite.revoke` | Revoke a Pending Invite |
 | DELETE | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.delete` | Delete Resource Access Grant |
 | DELETE | `/pods/{pod_id}/roles/{role_name}` | `pod.roles.delete` | Delete Pod Role |
 | GET | `/pods/organization/{organization_id}` | `pod.list` | List PodS by Organization |
@@ -215,9 +214,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/pods/{pod_id}/members/{pod_member_id}` | `pod.member.get` | Get Pod Member |
 | GET | `/pods/{pod_id}/permissions/catalog` | `pod.permissions.catalog` | Get Pod Permission Catalog |
 | GET | `/pods/{pod_id}/permissions/me` | `pod.permissions.me` | Get My Pod Permissions |
-| GET | `/pods/{pod_id}/resource-access-invites` | `pod.resource_access_invite.list` | List Pending Invites for a Resource |
-| GET | `/pods/{pod_id}/resource-access-requests` | `pod.resource_access_request.list` | List Resource Access Requests |
-| GET | `/pods/{pod_id}/resource-access-requests/me` | `pod.resource_access_request.me` | Get My Pending Request for a Resource |
 | GET | `/pods/{pod_id}/resources/{resource_type}/preview` | `pod.resource.preview` | Preview a Shared Resource |
 | GET | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access` | `pod.resource_access.get` | Get Resource Access |
 | GET | `/pods/{pod_id}/roles` | `pod.roles.list` | List Pod Roles |
@@ -229,10 +225,6 @@ run `uv run python scripts/generate_route_inventory.py`.
 | POST | `/pods/{pod_id}/join-requests` | `pod.join_request.create` | Create Pod Join Request |
 | POST | `/pods/{pod_id}/join-requests/{join_request_id}/approve` | `pod.join_request.approve` | Approve Pod Join Request |
 | POST | `/pods/{pod_id}/members` | `pod.member.add` | Add Pod Member |
-| POST | `/pods/{pod_id}/resource-access-invites` | `pod.resource_access_invite.create` | Invite an Email to a Resource |
-| POST | `/pods/{pod_id}/resource-access-requests` | `pod.resource_access_request.create` | Request Access to a Resource |
-| POST | `/pods/{pod_id}/resource-access-requests/{request_id}/approve` | `pod.resource_access_request.approve` | Approve a Resource Access Request |
-| POST | `/pods/{pod_id}/resource-access-requests/{request_id}/reject` | `pod.resource_access_request.reject` | Reject a Resource Access Request |
 | POST | `/pods/{pod_id}/roles` | `pod.roles.create` | Create Pod Role |
 | PUT | `/pods/{pod_id}` | `pod.update` | Update Pod |
 | PUT | `/pods/{pod_id}/resources/{resource_type}/{resource_name}/access/grantees/{grantee_type}/{grantee_id}` | `pod.resource_access.grant.replace` | Replace Resource Access Grant |

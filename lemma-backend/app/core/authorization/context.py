@@ -45,11 +45,9 @@ class ResourceVisibility(str, Enum):
     PERSONAL = "PERSONAL"
     POD = "POD"
     RESTRICTED = "RESTRICTED"
-    # Everyone signed in inside the resource's organization, pod membership or
-    # not. The level most sharers actually mean: "anyone at my company".
-    ORGANIZATION = "ORGANIZATION"
-    # Every Lemma account, including outside the organization. Never anonymous:
-    # authorization still runs against a signed-in principal.
+    # Every Lemma account, pod membership or not. Never anonymous: authorization
+    # still runs against a signed-in principal, so this waives pod scope rather
+    # than opening the resource to the open internet.
     PUBLIC = "PUBLIC"
 
 
@@ -58,7 +56,6 @@ _VISIBILITY_ALIASES: dict[str, ResourceVisibility] = {
     "PRIVATE": ResourceVisibility.PERSONAL,
     "OWNER": ResourceVisibility.PERSONAL,
     "USER": ResourceVisibility.PERSONAL,
-    "ORG": ResourceVisibility.ORGANIZATION,
     "ALL": ResourceVisibility.POD,
 }
 
