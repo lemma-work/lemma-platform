@@ -187,6 +187,8 @@ class AgentBoxWorkspaceSession:
         workdir: str | None = None,
         yield_time_ms: int | None = None,
         timeout: int | None = 300,
+        cols: int = 120,
+        rows: int = 40,
     ) -> dict[str, Any]:
         await self._touch_activity()
         operation_id = uuid4()
@@ -203,7 +205,7 @@ class AgentBoxWorkspaceSession:
                 shell_command=cmd,
                 cwd=workdir or self._cwd,
                 environment=self._environment,
-                tty=TerminalSize(cols=120, rows=40) if tty else None,
+                tty=TerminalSize(cols=cols, rows=rows) if tty else None,
                 output_limit_bytes=output_limit,
                 deadline_at=deadline,
             )
@@ -303,6 +305,52 @@ class AgentBoxWorkspaceSession:
                 process_id=process_id,
                 completed=False,
             )
+
+    async def resize_terminal(
+        self, *, process_id: str, cols: int, rows: int
+    ) -> dict[str, Any]:
+        """Resize an interactive process's terminal.
+
+        Programs that render to a TTY lay out against the terminal size they
+        were given, so a fixed size makes wide tables and full-screen UIs wrap
+        into unreadable output.
+        """
+
+        await self._touch_activity()
+        operation_id = UUID(process_id)
+        try:
+            await self.client.resize_process(
+                WorkloadKind.WORKSPACE,
+                self.logical_id,
+                operation_id,
+                TerminalSize(cols=cols, rows=rows),
+                deadline_at=self._deadline(30),
+            )
+        except AgentBoxApiError as exc:
+            return _agentbox_command_failure(
+                error=f"AgentBox {exc.code}: {exc}",
+                retryable=exc.retry.value != "do_not_retry",
+                process_id=process_id,
+                completed=False,
+            )
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            return _agentbox_command_failure(
+                error=(
+                    f"AgentBox terminal resize failed: {type(exc).__name__}: {exc}"
+                ),
+                retryable=True,
+                process_id=process_id,
+                completed=False,
+            )
+        return {
+            "success": True,
+            "stdout": "",
+            "stderr": "",
+            "exit_code": None,
+            "completed": False,
+            "process_id": process_id,
+            "error": None,
+        }
 
     async def terminate_process(self, process_id: str) -> dict[str, Any]:
         await self._touch_activity()
@@ -575,6 +623,12 @@ class AgentBoxWorkspaceSession:
         completed = state in _TERMINAL_PROCESS_STATES
         if after_sequence != initial_sequence:
             await self._save_output_cursor(operation_id, after_sequence)
+        # Each poll's bytes are decoded as a unit, so a chunk boundary inside
+        # one poll is handled correctly. A multi-byte character split across
+        # two polls still yields one replacement character; holding the partial
+        # sequence back is not worth it, because the output cursor is a single
+        # sequence over interleaved stdout/stderr chunks and rewinding it could
+        # duplicate or drop real output.
         return {
             "success": state in {ProcessState.RUNNING, ProcessState.SUCCEEDED},
             "stdout": stdout.decode("utf-8", errors="replace"),

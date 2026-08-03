@@ -13,6 +13,7 @@ from app.modules.agent.tools.workspace_cli.models import (
     ExecutePythonRequest,
     ListProcessesRequest,
     ManageProcessRequest,
+    ResizeTerminalRequest,
     TerminateProcessRequest,
     ViewImageRequest,
     WriteStdinRequest,
@@ -78,6 +79,9 @@ async def manage_process(
       or anything started accidentally).
     - `action="list"` — list tracked shell processes in this workspace (find dev
       servers/REPLs before polling, stopping, or starting another).
+    - `action="resize"` — change an interactive terminal's `cols`/`rows` when
+      output is wrapping badly or a full-screen UI is clipped, then poll with
+      `action="input"`, `chars=""` to read the redrawn screen.
     """
     if request.action == "list":
         return await workspace_cli.list_processes(
@@ -87,7 +91,19 @@ async def manage_process(
         return ExecCommandResult(
             success=False,
             completed=False,
-            error="process_id is required for action='input' and action='kill'.",
+            error=(
+                "process_id is required for action='input', 'kill', and 'resize'."
+            ),
+        )
+    if request.action == "resize":
+        return await workspace_cli.resize_terminal(
+            ctx.deps,
+            ResizeTerminalRequest(
+                process_id=request.process_id,
+                cols=request.cols,
+                rows=request.rows,
+                comment=request.comment,
+            ),
         )
     if request.action == "kill":
         return await workspace_cli.terminate_process(

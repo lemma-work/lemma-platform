@@ -19,12 +19,18 @@ from app.modules.agent.tools.workspace_cli.models import (
     ListProcessesRequest,
     ListProcessesResult,
     ProcessInfo,
+    ResizeTerminalRequest,
     TerminateProcessRequest,
     ViewImageRequest,
     ViewImageResponse,
     WriteStdinRequest,
 )
-from app.modules.agent.tools.workspace_cli.helper import trim_python_result
+from app.modules.agent.tools.workspace_cli.helper import (
+    CHARACTER_LIMIT_STDOUT,
+    normalize_terminal_output,
+    tail_truncate,
+    trim_python_result,
+)
 from app.modules.agent.tools.workspace_entities import PythonExecutionResult
 from app.composition.agent_workspace import (
     get_workspace_tool_runtime,
@@ -140,6 +146,61 @@ async def _get_workspace_session(
     )
 
 
+def _render_terminal_result(
+    result: dict[str, Any], *, tty: bool
+) -> tuple[str | None, str | None]:
+    """Make raw PTY output readable, keeping the end rather than the start."""
+
+    stdout = result.get("stdout")
+    stderr = result.get("stderr")
+    if not tty:
+        return stdout, stderr
+    return (
+        tail_truncate(normalize_terminal_output(stdout or ""), CHARACTER_LIMIT_STDOUT),
+        tail_truncate(normalize_terminal_output(stderr or ""), CHARACTER_LIMIT_STDOUT),
+    )
+
+
+async def resize_terminal_internal(
+    ctx: BaseAgentContext,
+    request: ResizeTerminalRequest,
+) -> ExecCommandResult:
+    try:
+        runtime = get_workspace_tool_runtime()
+        runtime_context = workspace_runtime_context(ctx)
+        resolved_session_id = (
+            await runtime.resolve_session_for_process(request.process_id)
+            or runtime_context.default_shell_session_id
+        )
+        workspace_session = await _get_workspace_session(
+            ctx,
+            session_id=resolved_session_id,
+            close_on_exit=False,
+        )
+        async with workspace_session:
+            result = await workspace_session.resize_terminal(
+                process_id=request.process_id,
+                cols=request.cols,
+                rows=request.rows,
+            )
+        return ExecCommandResult(
+            success=bool(result.get("success")),
+            stdout=result.get("stdout"),
+            stderr=result.get("stderr"),
+            exit_code=result.get("exit_code"),
+            completed=False,
+            process_id=request.process_id,
+            error=result.get("error"),
+        )
+    except Exception as exc:
+        return _workspace_tool_failure(
+            exc,
+            operation="resize_terminal",
+            completed=False,
+            process_id=request.process_id,
+        )
+
+
 async def exec_command_internal(
     ctx: BaseAgentContext,
     request: ExecCommandRequest,
@@ -175,6 +236,8 @@ async def exec_command_internal(
                 workdir=request.workdir,
                 yield_time_ms=effective_yield_time_ms,
                 timeout=effective_timeout,
+                cols=request.cols,
+                rows=request.rows,
             )
             completed = bool(result.get("completed", True))
             process_id = result.get("process_id")
@@ -183,10 +246,11 @@ async def exec_command_internal(
                     process_id=process_id,
                     session_id=workspace_session.session_id,
                 )
+        stdout, stderr = _render_terminal_result(result, tty=request.tty)
         return ExecCommandResult(
             success=bool(result.get("success")),
-            stdout=result.get("stdout"),
-            stderr=result.get("stderr"),
+            stdout=stdout,
+            stderr=stderr,
             exit_code=result.get("exit_code"),
             completed=completed,
             process_id=process_id if not completed else None,
@@ -230,10 +294,13 @@ async def write_stdin_internal(
                 process_id=str(result["process_id"]),
                 session_id=workspace_session.session_id,
             )
+        # write_stdin only ever targets an interactive process, so its output is
+        # terminal output and is rendered as such.
+        stdout, stderr = _render_terminal_result(result, tty=True)
         return ExecCommandResult(
             success=bool(result.get("success")),
-            stdout=result.get("stdout"),
-            stderr=result.get("stderr"),
+            stdout=stdout,
+            stderr=stderr,
             exit_code=result.get("exit_code"),
             completed=completed,
             process_id=result.get("process_id"),
@@ -515,6 +582,20 @@ async def write_stdin(
     - Run another command in the same shell: `chars="npm test\\n"`
     """
     return await write_stdin_internal(ctx, request)
+
+
+async def resize_terminal(
+    ctx: BaseAgentContext,
+    request: ResizeTerminalRequest,
+) -> ExecCommandResult:
+    """
+    Resize an interactive terminal so its program re-renders at a new size.
+
+    Use when a `tty` program's output is wrapping badly or a full-screen UI is
+    clipped — for example a wide table, `htop`, or a pager. Follow with
+    `write_stdin` (`chars=""`) to read the redrawn screen.
+    """
+    return await resize_terminal_internal(ctx, request)
 
 
 async def terminate_process(
