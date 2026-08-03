@@ -157,6 +157,29 @@ lemma schedules update <id> --data '{"filter_instruction": "..."}'
 lemma schedules delete <id> --yes
 ```
 
+## Trigger or snooze?
+
+Both make something happen later, so be precise about which you want:
+
+> **A trigger starts work nobody was doing. A snooze resumes work already underway.
+> If there is no conversation sitting there waiting for it, you want a trigger.**
+
+| You want | Use |
+| --- | --- |
+| "When an invoice is approved, run the payout workflow" | `DATASTORE` trigger — no one is waiting; this is a standing rule |
+| "Every weekday at 9, post the summary" | `TIME` trigger |
+| "Give the build ten minutes, then check it" | `snooze(seconds=600)` |
+| "I filed the invoice; finish once it's approved" | Ask the user and end the turn, or snooze and re-check on wake |
+
+**Reacting to a row changing is always a trigger.** `snooze` is time-based only —
+it deliberately has no record-watching mode, so there is exactly one way to react
+to data changing and it is a trigger.
+
+They differ in kind, not just scope. A trigger is a pod resource: it persists, it
+is listed, it can be paused, and it fires any number of times. A snooze is one
+suspended execution — invisible in `schedules`, resolves exactly once, and caps at
+24h.
+
 ## Limits & gotchas
 
 - **Pause or delete test schedules.** A near-future cron you set to verify keeps

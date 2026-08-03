@@ -2633,6 +2633,121 @@
     }
   },
   {
+    "tool_name": "snooze",
+    "toolset": "SNOOZE",
+    "description": "Suspend this turn for a while and pick it up later, where you left off.\n\nUSE WHEN the work genuinely has a gap in the middle \u2014 you kicked off a build\nand want to check back in ten minutes, you asked someone for an approval and\nneed to look again later, something needs time to settle. You wake up in the\nsame conversation, with the same history, as though this tool call simply\ntook a long time to return.\n\nCHOOSE `seconds` FROM WHAT YOU ARE WAITING FOR, not out of habit. A job that\ntakes about eight minutes deserves one ~500s check, not eight 60s ones. Don't\nsnooze in a tight loop to poll something \u2014 each wake replays this entire\nconversation, so a poll loop costs far more than it saves. If you're unsure\nhow long something takes, prefer one longer sleep and check when you wake.\n\nYOUR SANDBOX DOES NOT SURVIVE. The workspace container is reclaimed while you\nsleep: files under /workspace, background processes, and your shell's working\ndirectory are all gone when you wake. Anything you need on the other side must\nbe written to the pod (a table or a pod file) BEFORE you call this.\n\nWAKING PROVES NOTHING HAPPENED. `woke_because` is `TIMER` \u2014 your time\nelapsed, and that is all it means. Check the thing you were waiting for\nbefore acting as though it is done.\n\nDo NOT use this to wait on a person \u2014 ask them and end your turn, and their\nreply starts a fresh run on its own. Do NOT use it to pad out a reply, or to\nwait for something you could just check right now.",
+    "input_schema": {
+      "properties": {
+        "reason": {
+          "description": "One short line, shown to the user while you sleep. Say what you are waiting on, specifically: 'waiting for the nightly build' beats 'waiting'. They read this to understand what you're doing without having to ask.",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "How long to sleep. Choose it from what you are actually waiting for, not out of habit \u2014 a build that takes about eight minutes deserves one ~500s check, not eight 60s ones. Under 30s is rejected, not clamped; over 86400s (24h) is clamped down.",
+          "type": "integer"
+        },
+        "note_to_self": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Handed back verbatim on wake. What you intended to do next."
+        }
+      },
+      "required": [
+        "reason",
+        "seconds"
+      ],
+      "title": "SnoozeRequest",
+      "type": "object"
+    },
+    "output_schema": {
+      "description": "What the agent sees when it wakes.",
+      "properties": {
+        "success": {
+          "default": false,
+          "description": "Whether the tool completed successfully.",
+          "type": "boolean"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable error details when the tool fails."
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Human-readable status or follow-up information for the tool call."
+        },
+        "woke_because": {
+          "anyOf": [
+            {
+              "enum": [
+                "TIMER",
+                "CANCELLED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "TIMER: your time elapsed \u2014 this says nothing about whether what you were waiting for actually happened, so check. CANCELLED: the wait was ended early."
+        },
+        "slept_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Actual time asleep."
+        },
+        "note_to_self": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whatever you passed in note_to_self."
+        },
+        "interaction_fallback": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "title": "SnoozeResponse",
+      "type": "object"
+    }
+  },
+  {
     "tool_name": "spawn_subagent",
     "toolset": "SUBAGENTS",
     "description": "Start a pod agent as a linked child conversation; returns a handle.\n\nOmit agent_name to spawn another instance of yourself for a targeted subtask.\nNon-blocking: returns {conversation_id, run_id, status}. Use interact_subagent\n(action='await') to wait, or query_subagents (mode='messages') to poll.",

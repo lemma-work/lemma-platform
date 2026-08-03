@@ -218,6 +218,13 @@ form wait is assigned to you (`runs waiting` lists them), `runs submit-form --da
 with the form's fields completes it and advances the run. This is how you
 participate in human-agent workflows.
 
+A **conversation** in `WAITING` is a different thing, and the difference matters
+before you go chasing it: it is either blocked on you (an `ask_user` question or an
+approval card — answer it and the agent continues) or **snoozed**, meaning the agent
+suspended itself and wakes on its own within 24 hours. A snoozed conversation is
+healthy and needs nothing from you. Conversation status carries `wait_reason`
+(`HUMAN` or `SNOOZE`) and, when snoozed, `wakes_at`.
+
 ## Agents and chat
 
 ```bash
@@ -307,5 +314,8 @@ is clear but the operation isn't, ask `connector-helper-agent` first.
 - The model → `lemma-builder/references/pod-model.md`
 - Build/restructure a pod → the `lemma-builder` skill
 - Inline live views over pod data → the `lemma-widget` skill
-- Drive a browser / test a pod app → the `browser` skill
+- Drive a browser → the `browser` skill; test a pod app systematically → `lemma-app-qa`
+- Run a source-backed investigation → the `lemma-research` skill
+- Perform quantitative analysis → the `lemma-data-analysis` skill
+- Package established content into a durable file → the `lemma-artifact-author` skill
 - Local parsing/OCR of ad-hoc files → the `liteparse-documents` skill

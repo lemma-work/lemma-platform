@@ -1126,6 +1126,23 @@ class ConversationRepository:
             updated=True,
         )
 
+    async def set_conversation_status(
+        self,
+        *,
+        conversation_id: UUID,
+        status: ConversationStatus,
+    ) -> None:
+        """Move a conversation's status with no run to finish.
+
+        ``finish_agent_run`` is the usual path, but a suspended conversation has
+        no active run — the run ended when the tool paused it — so cancelling its
+        wait has to set the status directly.
+        """
+        await self._update_conversation_status(
+            conversation_id=conversation_id,
+            status=status,
+        )
+
     async def _update_conversation_status(
         self,
         *,

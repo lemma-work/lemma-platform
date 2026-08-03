@@ -9,6 +9,7 @@ from app.modules.agent.tools.connectors.pydantic_adapter import connectors_tools
 from app.modules.agent.tools.speech.pydantic_adapter import speech_toolset
 from app.modules.agent.tools.pod.pydantic_adapter import pod_toolset
 from app.modules.agent.tools.skills.pydantic_adapter import skills_toolset
+from app.modules.agent.tools.snooze.pydantic_adapter import snooze_toolset
 from app.modules.agent.tools.subagents.pydantic_adapter import subagents_toolset
 from app.modules.agent.tools.user_interaction.pydantic_adapter import (
     user_interaction_toolset,
@@ -43,6 +44,7 @@ _TOOLSET_BY_NAME: dict[AgentToolset, object] = {
     AgentToolset.SUBAGENTS: subagents_toolset,
     AgentToolset.VIEW_IMAGE: view_image_toolset,
     AgentToolset.CONNECTORS: connectors_toolset,
+    AgentToolset.SNOOZE: snooze_toolset,
 }
 
 # Toolsets that are NOT static singletons — they are realized per-conversation as

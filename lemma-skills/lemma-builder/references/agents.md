@@ -90,6 +90,9 @@ Grant only the toolsets the job needs:
 | `USER_INTERACTION` | ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
 | `SUBAGENTS` | async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
+| `CONNECTORS` | call third-party APIs through the org's connector installs — `list_connectors`, then `search_connector_operations` / `describe_connector_operation` to find and inspect one, then `run_connector_operation`. Deferred: an org with a few MCP servers can expose thousands of operations, so the agent discovers them via `search_tools` rather than carrying them in every prompt |
+| `TODO` | a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
+| `SNOOZE` | suspend the current turn and resume it later after a delay (`snooze`), capped at 24h. Opt-in: waking replays the whole conversation, so grant it only to agents whose work genuinely has a gap in the middle |
 
 For pod files and data, prefer `POD` (typed, grant-checked table/record/file tools).
 `WORKSPACE_CLI` is the escape hatch when the agent needs a real shell. There is no

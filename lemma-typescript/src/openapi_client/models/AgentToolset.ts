@@ -15,5 +15,6 @@ export enum AgentToolset {
     SUBAGENTS = 'SUBAGENTS',
     TODO = 'TODO',
     CONNECTORS = 'CONNECTORS',
+    SNOOZE = 'SNOOZE',
     VIEW_IMAGE = 'VIEW_IMAGE',
 }

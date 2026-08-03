@@ -196,6 +196,24 @@ async def reconcile_workflow_waits():
         await service.reconcile_stale_waits()
 
 
+@streaq_cron("*/5 * * * *", name="reconcile_agent_snoozes")
+async def reconcile_agent_snoozes():
+    """Wake snoozed conversations whose scheduler event was lost.
+
+    Unlike an agent or function wait there is no external system to poll — a
+    timer only has to elapse — so a wait overdue by more than the sweep's grace
+    period is simply fired here. Waking is idempotent (the wake claims the row
+    under a lock), which makes a duplicate with the primary timer harmless.
+    """
+    from app.modules.agent.services.snooze_reconcile_service import (
+        SnoozeReconcileService,
+    )
+
+    # Opens a session per step itself: one wait's failed wake must not roll back
+    # the transaction the rest of the batch is running in.
+    await SnoozeReconcileService().reconcile_due_waits()
+
+
 # --- Schedule Integration ---
 
 
