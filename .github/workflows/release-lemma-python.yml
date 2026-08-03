@@ -40,6 +40,17 @@ jobs:
         with:
           python-version: "3.14"
 
+      # Every Lemma-owned component must name the release version. Branches no
+      # longer bump versions one by one — that forced a number nobody had
+      # released to climb per-PR and conflict on every schema-touching branch —
+      # so this is the one place consistency is enforced, and it blocks the
+      # publish rather than merely warning about it.
+      - name: Check version consistency across components
+        working-directory: .
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+        run: python scripts/check_version_consistency.py --expect "$RELEASE_VERSION"
+
       - name: Set package version from release tag
         shell: python
         env:
