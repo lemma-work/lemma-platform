@@ -522,7 +522,10 @@ impl HostProcessManager {
         for id in &self.ordered_ids {
             // Nothing to wait for on a service that never started; waiting
             // would just spend its whole health timeout to say so.
-            if spawn_failure.as_ref().is_some_and(|(failed, _)| failed == id) {
+            if spawn_failure
+                .as_ref()
+                .is_some_and(|(failed, _)| failed == id)
+            {
                 continue;
             }
             if let Some(health) = self.health_spec(id) {

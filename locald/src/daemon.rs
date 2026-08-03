@@ -1215,11 +1215,7 @@ impl Daemon {
                 "operator": snapshot,
                 "restart": "backend",
             })),
-            Err(error) => self.broadcast(error_event(
-                "config-apply-failed",
-                error.to_string(),
-                id,
-            )),
+            Err(error) => self.broadcast(error_event("config-apply-failed", error.to_string(), id)),
         }
         self.host_operation_running.store(false, Ordering::Release);
     }

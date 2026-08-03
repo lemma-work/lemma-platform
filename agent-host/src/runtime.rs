@@ -751,14 +751,7 @@ impl TargetWorker {
                     let message = authentication_hint(&adapter_name, &raw)
                         .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
                         .unwrap_or_else(|| redact_error(&raw));
-                    terminal_failure(
-                        &journal,
-                        target_id,
-                        run_id,
-                        lease_epoch,
-                        state,
-                        &message,
-                    )?;
+                    terminal_failure(&journal, target_id, run_id, lease_epoch, state, &message)?;
                 }
                 Err(_) => {
                     terminal_failure(
@@ -1551,7 +1544,7 @@ fn terminal_failure(
 /// Keyed on the conversation, not the run. ACP's `session/load` takes a working
 /// directory, and a per-run directory is deleted the moment its run ends — so
 /// every follow-up turn asked the agent to resume a session whose cwd no longer
-/// existed. Resumption could therefore never succeed, and for OpenCode the
+/// existed. Resumption could therefore never succeed, and for `OpenCode` the
 /// failed load left the connection unable to open a new session either, which
 /// is why the first message answered and the second one did not.
 ///
@@ -1596,9 +1589,7 @@ fn prune_stale_scratch(target_root: &std::path::Path) {
         let stale = entry
             .metadata()
             .and_then(|metadata| metadata.modified())
-            .is_ok_and(|modified| {
-                modified.elapsed().is_ok_and(|age| age > SCRATCH_RETENTION)
-            });
+            .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > SCRATCH_RETENTION));
         if stale {
             let _ = std::fs::remove_dir_all(entry.path());
         }
@@ -2160,10 +2151,7 @@ mod target_worker_tests {
             )
             .unwrap();
 
-        let (_, checkpoints, _) = harness
-            .journal
-            .pending_control(harness.target_id)
-            .unwrap();
+        let (_, checkpoints, _) = harness.journal.pending_control(harness.target_id).unwrap();
         let terminal = checkpoints
             .iter()
             .find(|checkpoint| checkpoint.run_id == run_id)
@@ -2701,7 +2689,10 @@ mod adapter_failure_message_tests {
         );
         let hint = authentication_hint("Claude Code", raw).expect("recognised as an auth failure");
 
-        assert!(hint.contains("Claude Code"), "name the agent that needs signing in");
+        assert!(
+            hint.contains("Claude Code"),
+            "name the agent that needs signing in"
+        );
         assert!(hint.contains("sign in") || hint.contains("signed in"));
         assert!(!hint.contains("errorKind"), "no adapter internals");
     }
@@ -2733,7 +2724,10 @@ mod adapter_failure_message_tests {
 
         let first = super::scratch_directory(&paths, target, conversation);
         let second = super::scratch_directory(&paths, target, conversation);
-        assert_eq!(first, second, "both turns share the conversation's directory");
+        assert_eq!(
+            first, second,
+            "both turns share the conversation's directory"
+        );
 
         let other = super::scratch_directory(&paths, target, uuid::Uuid::from_u128(3));
         assert_ne!(first, other, "different conversations stay isolated");
@@ -2758,7 +2752,10 @@ mod adapter_failure_message_tests {
             "Agent Host run deadline elapsed; the provider process was terminated",
             "adapter executable opencode was not found",
         ] {
-            assert!(super::adapter_failure_message("OpenCode", raw).is_none(), "{raw:?}");
+            assert!(
+                super::adapter_failure_message("OpenCode", raw).is_none(),
+                "{raw:?}"
+            );
         }
     }
 

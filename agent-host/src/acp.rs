@@ -522,7 +522,7 @@ pub(crate) const SCOPED_MCP_SERVER: &str = "lemma";
 /// on every single call.
 ///
 /// Two ways to tell, because one is not enough. The `_meta` flag is a Claude
-/// Code convention; an agent that does not set it — OpenCode does not — had
+/// Code convention; an agent that does not set it — `OpenCode` does not — had
 /// every Lemma tool call raise an approval card. So the tool name is checked
 /// too, against the server name we registered ourselves, in the shapes agents
 /// actually namespace MCP tools with.
@@ -550,7 +550,9 @@ fn names_scoped_mcp_tool(value: &Value) -> bool {
         value.pointer("/toolCall/title").and_then(Value::as_str),
         value.pointer("/toolCall/toolName").and_then(Value::as_str),
         value.pointer("/toolCall/name").and_then(Value::as_str),
-        value.pointer("/toolCall/toolCallId").and_then(Value::as_str),
+        value
+            .pointer("/toolCall/toolCallId")
+            .and_then(Value::as_str),
         value.get("toolName").and_then(Value::as_str),
     ];
     candidates.into_iter().flatten().any(|name| {

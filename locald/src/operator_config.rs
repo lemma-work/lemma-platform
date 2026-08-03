@@ -1079,7 +1079,10 @@ mod tests {
         // Minted once: rows encrypted on one run have to stay readable on the
         // next, so a second call must return the stored keyset, not a new one.
         assert_eq!(
-            store.backend_environment().unwrap().get("SECRET_ENCRYPTION_KEYSET"),
+            store
+                .backend_environment()
+                .unwrap()
+                .get("SECRET_ENCRYPTION_KEYSET"),
             Some(keyset),
         );
     }
