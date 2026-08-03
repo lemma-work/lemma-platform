@@ -91,9 +91,9 @@ async def _seed_agent_owned_connector(
         id=connector_id,
         title=f"{connector_id} title",
         description="Agent owned connector e2e",
-        provider_capabilities=[
+        kinds=[
             {
-                "provider": "LEMMA",
+                "kind": "package",
                 "auth_scheme": "API_KEY",
                 "system_default_available": True,
             }
@@ -106,7 +106,7 @@ async def _seed_agent_owned_connector(
         organization_id=organization_id,
         connector_id=connector_id,
         name=connector_id,
-        provider="LEMMA",
+        kind="package",
         config_source="SYSTEM_DEFAULT",
         status="ACTIVE",
     )

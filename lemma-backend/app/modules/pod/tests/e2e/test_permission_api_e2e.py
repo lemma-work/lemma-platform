@@ -354,7 +354,7 @@ async def test_workload_permission_apis_replace_resource_grants_e2e(
                 id=connector_id,
                 title="Telegram",
                 description="Permission API telegram app id grant e2e",
-                provider_capabilities=[],
+                kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )
