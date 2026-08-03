@@ -54,6 +54,35 @@ class WorkspaceStateStore:
     def _state_key(self, runtime: str, user_id: UUID) -> str:
         return f"{self._key_prefix}:{runtime}:{user_id}"
 
+    def _seen_generation_key(self, runtime: str, session_id: str) -> str:
+        return f"{self._key_prefix}:{runtime}:seen-generation:{session_id}"
+
+    async def observe_storage_generation(
+        self,
+        *,
+        runtime: str,
+        session_id: str,
+        generation: int,
+        ttl_seconds: int = 30 * 24 * 60 * 60,
+    ) -> bool:
+        """Record the disk generation this session last saw.
+
+        Returns True only when the disk has been recreated since this session
+        last looked. First sight returns False: a brand new session starting on
+        a brand new workspace has lost nothing, and telling it otherwise is the
+        same false alarm we are trying to remove.
+        """
+
+        key = self._seen_generation_key(runtime, session_id)
+        previous = await self._redis.get(key)
+        await self._redis.set(key, str(generation), ex=max(1, ttl_seconds))
+        if previous is None:
+            return False
+        try:
+            return generation > int(previous)
+        except (TypeError, ValueError):
+            return False
+
     def _lock_key(self, runtime: str, user_id: UUID) -> str:
         return f"{self._lock_prefix}:{runtime}:{user_id}"
 

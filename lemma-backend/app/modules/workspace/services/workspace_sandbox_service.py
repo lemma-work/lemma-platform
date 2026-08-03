@@ -417,6 +417,23 @@ class WorkspaceSandboxService:
                 sandbox_info=sandbox_info,
             )
 
+        # Tell this session, once, if the disk it is about to use is not the one
+        # it saw last. Without it an agent cannot distinguish a recreated
+        # workspace from an ordinary empty directory.
+        workspace_recreated = False
+        if session_id and sandbox_info.storage_generation is not None:
+            try:
+                workspace_recreated = (
+                    await self.state_store.observe_storage_generation(
+                        runtime=self.runtime,
+                        session_id=session_id,
+                        generation=sandbox_info.storage_generation,
+                    )
+                )
+            except Exception:
+                # A missing notice is far better than a failed tool call.
+                workspace_recreated = False
+
         return AgentBoxWorkspaceSession(
             client=self._get_manager_client(),
             sandbox_id=str(agentbox_sandbox_id(user_id)),
@@ -427,6 +444,7 @@ class WorkspaceSandboxService:
             activity_callback=_activity_callback,
             owns_client=False,
             output_cursor_store=self.process_store,
+            workspace_recreated=workspace_recreated,
         )
 
     async def _ensure_workspace_directory(

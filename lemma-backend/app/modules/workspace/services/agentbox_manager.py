@@ -125,6 +125,7 @@ class AgentBoxSandbox(ISandbox):
                 else None
             ),
             allocation_epoch=sandbox.allocation_epoch,
+            storage_generation=sandbox.storage_generation,
         )
 
     def _to_container_info(

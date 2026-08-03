@@ -18,6 +18,9 @@ class SandboxInfo:
     name: str | None = None
     allocation_id: str | None = None
     allocation_epoch: int | None = None
+    # Increments whenever the workspace's durable disk is recreated, so callers
+    # can tell a wiped workspace from an ordinary empty directory.
+    storage_generation: int | None = None
 
     @property
     def container_name(self) -> str:

@@ -146,6 +146,22 @@ async def _get_workspace_session(
     )
 
 
+WORKSPACE_RECREATED_NOTICE = (
+    "[workspace notice] This workspace was recreated since this conversation "
+    "last used it, so files written earlier are gone. This is the one case "
+    "where an empty working directory really does mean lost work — recreate "
+    "anything you still need."
+)
+
+
+def _with_recreation_notice(text: str | None, *, recreated: bool) -> str | None:
+    """Say once, explicitly, that files were lost — never make the agent guess."""
+
+    if not recreated:
+        return text
+    return f"{WORKSPACE_RECREATED_NOTICE}\n{text or ''}"
+
+
 def _render_terminal_result(
     result: dict[str, Any], *, tty: bool
 ) -> tuple[str | None, str | None]:
@@ -247,6 +263,9 @@ async def exec_command_internal(
                     session_id=workspace_session.session_id,
                 )
         stdout, stderr = _render_terminal_result(result, tty=request.tty)
+        stdout = _with_recreation_notice(
+            stdout, recreated=workspace_session.workspace_recreated
+        )
         return ExecCommandResult(
             success=bool(result.get("success")),
             stdout=stdout,
@@ -422,7 +441,10 @@ async def execute_python_internal(ctx: BaseAgentContext, request: ExecutePythonR
             result = await workspace_session.execute_code(
                 request.code, request.timeout_seconds
             )
-        return trim_python_result(result)
+        trimmed = trim_python_result(result)
+        if workspace_session.workspace_recreated:
+            trimmed.stdout = _with_recreation_notice(trimmed.stdout, recreated=True)
+        return trimmed
     except Exception as exc:
         return _python_workspace_tool_failure(exc, operation="execute_python")
 

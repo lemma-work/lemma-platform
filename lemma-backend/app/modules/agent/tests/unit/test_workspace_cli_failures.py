@@ -30,6 +30,7 @@ class _FakeWorkspaceSession:
         self.session_id = session_id
         self.auto_close = False
         self.deleted = False
+        self.workspace_recreated = False
 
     async def __aenter__(self):
         return self

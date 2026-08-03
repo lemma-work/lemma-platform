@@ -896,3 +896,82 @@ async def test_real_e2b_running_process_defers_idle_release(
         await _kill_exact(provider_id)
         await adapter.close()
         await database.dispose()
+
+
+async def test_real_e2b_storage_generation_marks_only_a_genuinely_lost_disk(
+    tmp_path: Path,
+) -> None:
+    """The generation must move only when files are actually gone.
+
+    It is the one signal that lets an agent tell a wiped workspace from an
+    ordinary empty directory, so a false positive is as harmful as no signal
+    at all: it would teach agents to distrust it.
+    """
+
+    profile = _workspace_profile()
+    adapter = _adapter(
+        ProfileRegistry((profile,)),
+        scope=f"e2b:storage-generation:{uuid4()}",
+    )
+    database = StateDatabase(f"sqlite+aiosqlite:///{tmp_path / 'state.db'}")
+    await database.create_schema_for_test()
+    lifecycle = SandboxLifecycleService(
+        database,
+        adapter,
+        workspace_retention_seconds=0,
+    )
+    maintenance = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
+    original_provider_id: str | None = None
+    recreated_provider_id: str | None = None
+
+    try:
+        first = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        original_provider_id = await _provider_id(database, key)
+        assert first.storage_generation == 0
+
+        # An ordinary idle pause and resume keeps the disk, so the generation
+        # must not move: this is the case agents were misreading as a wipe.
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        resumed = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        assert resumed.storage_generation == 0
+        assert await _provider_id(database, key) == original_provider_id
+
+        # Retention expiry genuinely destroys the disk, and that must show.
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        assert await maintenance.run_once(deadline_at=deadline) == 1
+        recreated = await lifecycle.ensure(
+            key,
+            profile.ref,
+            admission_class=AdmissionClass.INTERACTIVE,
+            deadline_at=deadline,
+            verify_ready=True,
+        )
+        recreated_provider_id = await _provider_id(database, key)
+
+        assert recreated_provider_id != original_provider_id
+        assert recreated.storage_generation == 1
+    finally:
+        await _kill_exact(original_provider_id)
+        await _kill_exact(recreated_provider_id)
+        await adapter.close()
+        await database.dispose()

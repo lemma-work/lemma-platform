@@ -86,6 +86,7 @@ class AgentBoxWorkspaceSession:
         activity_callback=None,
         owns_client: bool = True,
         output_cursor_store=None,
+        workspace_recreated: bool = False,
     ) -> None:
         self.client = client
         self.logical_id = UUID(str(sandbox_id))
@@ -112,6 +113,10 @@ class AgentBoxWorkspaceSession:
         # the entire retained buffer.
         self._output_sequence: dict[UUID, int] = {}
         self._output_cursor_store = output_cursor_store
+        # True only when this session's durable disk was recreated since it last
+        # ran. Callers surface it once so an agent is told its files are gone
+        # rather than having to infer it from an empty directory.
+        self.workspace_recreated = workspace_recreated
 
     async def _touch_activity(self) -> None:
         if self._activity_callback is not None:

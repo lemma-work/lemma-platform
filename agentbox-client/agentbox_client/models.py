@@ -45,6 +45,9 @@ class SandboxHandle(StrictModel):
     ready: bool
     operation_id: UUID | None
     retry_after_ms: int | None
+    # Increments whenever the workspace's durable disk is recreated, so a
+    # caller can tell "your files are gone" from an ordinary empty directory.
+    storage_generation: int | None = None
 
 
 class EnvironmentVariable(StrictModel):
