@@ -64,7 +64,7 @@ async def _seed_connector(db_session, connector_id: str) -> None:
                 id=connector_id,
                 title=f"{connector_id} title",
                 description="App for delegated workload grant tests",
-                provider_capabilities=[],
+                kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )
