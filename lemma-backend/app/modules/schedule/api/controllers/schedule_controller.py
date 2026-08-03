@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.core.api.pagination import parse_uuid_page_token
 from app.core.authorization.context import ResourceRef
-from app.core.authorization.dependencies import PodContextDep
+from app.core.authorization.dependencies import PodContextDep, require_pod_membership
 from app.core.authorization.permissions import Permissions
 from app.modules.schedule.api.dependencies import (
     ScheduleServiceDep,
@@ -78,6 +78,7 @@ async def create_schedule(
     "",
     response_model=ScheduleListResponse,
     operation_id="schedule.list",
+    dependencies=[require_pod_membership("list schedules")],
 )
 async def list_schedules(
     pod_id: UUID,

@@ -412,4 +412,35 @@ export class FilesService {
             },
         });
     }
+    /**
+     * Get File by ID
+     * Read one file by its id.
+     *
+     * Files were addressable only by path, which forced share links to carry one —
+     * and a personal path is the alias ``/me``, resolved against *whoever is
+     * asking*. A link to ``/me/notes.md`` therefore pointed at the recipient's own
+     * file: a 404 that reads as "deleted", or, on a name collision, silently the
+     * wrong document. An id means the same file for everyone, and survives renames
+     * and moves besides.
+     * @param podId
+     * @param fileId
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    public static fileGetById(
+        podId: string,
+        fileId: string,
+    ): CancelablePromise<FileDetailResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/pods/{pod_id}/datastore/files/{file_id}',
+            path: {
+                'pod_id': podId,
+                'file_id': fileId,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
 }

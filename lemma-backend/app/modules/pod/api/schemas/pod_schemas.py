@@ -191,6 +191,22 @@ class ResourceAccessResponse(BaseSchema):
     grants: list[ResourceAccessGrantResponse] = []
 
 
+class ResourcePreviewResponse(BaseSchema):
+    """What a shared link may disclose about its target.
+
+    Returned only when the viewer can actually read the resource, so every field
+    here is something they could already see by opening it.
+    """
+
+    resource_type: ResourceType
+    resource_name: str | None = None
+    resource_id: UUID | None = None
+    pod_id: UUID
+    visibility: str | None = None
+    owner_user_id: UUID | None = None
+    allowed_actions: list[str] = []
+
+
 class PodJoinRequestCreateResponse(BaseSchema):
     id: UUID
     pod_id: UUID

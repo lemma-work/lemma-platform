@@ -264,6 +264,7 @@ export type { ResolveUserApprovalRequest } from './models/ResolveUserApprovalReq
 export type { ResourceAccessGrantRequest } from './models/ResourceAccessGrantRequest.js';
 export type { ResourceAccessGrantResponse } from './models/ResourceAccessGrantResponse.js';
 export type { ResourceAccessResponse } from './models/ResourceAccessResponse.js';
+export type { ResourcePreviewResponse } from './models/ResourcePreviewResponse.js';
 export { ResourceType } from './models/ResourceType.js';
 export { ResourceVisibility } from './models/ResourceVisibility.js';
 export { RuntimeModelCapability } from './models/RuntimeModelCapability.js';
@@ -402,6 +403,7 @@ export { PodJoinRequestsService } from './services/PodJoinRequestsService.js';
 export { PodMembersService } from './services/PodMembersService.js';
 export { PodPermissionsService } from './services/PodPermissionsService.js';
 export { PodResourceAccessService } from './services/PodResourceAccessService.js';
+export { PodResourcePreviewService } from './services/PodResourcePreviewService.js';
 export { PodRolesService } from './services/PodRolesService.js';
 export { PodsService } from './services/PodsService.js';
 export { QueryService } from './services/QueryService.js';

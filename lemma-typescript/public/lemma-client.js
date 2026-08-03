@@ -9835,7 +9835,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.7.2";
+  var SDK_VERSION = "0.7.0";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
   function shouldSendClientHeader(apiUrl, method) {
@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.2",
+    VERSION: "0.7.0",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -12122,6 +12122,34 @@ var LemmaClient = (() => {
         }
       });
     }
+    /**
+     * Get File by ID
+     * Read one file by its id.
+     *
+     * Files were addressable only by path, which forced share links to carry one —
+     * and a personal path is the alias ``/me``, resolved against *whoever is
+     * asking*. A link to ``/me/notes.md`` therefore pointed at the recipient's own
+     * file: a 404 that reads as "deleted", or, on a name collision, silently the
+     * wrong document. An id means the same file for everyone, and survives renames
+     * and moves besides.
+     * @param podId
+     * @param fileId
+     * @returns FileDetailResponse Successful Response
+     * @throws ApiError
+     */
+    static fileGetById(podId, fileId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/datastore/files/{file_id}",
+        path: {
+          "pod_id": podId,
+          "file_id": fileId
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
   };
 
   // src/namespaces/files.ts
@@ -12232,6 +12260,17 @@ var LemmaClient = (() => {
     }
     get(path) {
       return this.client.request(() => FilesService.fileGet(this.podId(), path));
+    }
+    /**
+     * Read a file by id.
+     *
+     * Prefer this over {@link get} for anything that outlives the current view —
+     * a share link, a bookmark, a stored reference. A path is not stable: `/me/…`
+     * is an alias resolved against *whoever is asking*, so the same path is a
+     * different file for a different person, and any path breaks on rename.
+     */
+    getById(fileId) {
+      return this.client.request(() => FilesService.fileGetById(this.podId(), fileId));
     }
     /**
      * URLs for a file: a short-lived download `url` plus a permanent
@@ -15267,11 +15306,65 @@ var LemmaClient = (() => {
     }
   };
 
+  // src/openapi_client/services/PodResourcePreviewService.ts
+  var PodResourcePreviewService = class {
+    /**
+     * Preview a Shared Resource
+     * Describe a shared resource, addressed by id or by name.
+     *
+     * Both, because the two live in different worlds: agents, apps and tables are
+     * linked by name, while a document's "name" is its stored path — which a
+     * recipient does not have, since the link they were sent carries an id
+     * precisely so it does not depend on a path.
+     * @param podId
+     * @param resourceType
+     * @param name
+     * @param id
+     * @returns ResourcePreviewResponse Successful Response
+     * @throws ApiError
+     */
+    static podResourcePreview(podId, resourceType, name, id) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/resources/{resource_type}/preview",
+        path: {
+          "pod_id": podId,
+          "resource_type": resourceType
+        },
+        query: {
+          "name": name,
+          "id": id
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+  };
+
   // src/namespaces/resource-access.ts
   var ResourceAccessNamespace = class {
     constructor(client, podId) {
       __publicField(this, "client", client);
       __publicField(this, "podId", podId);
+    }
+    /**
+     * Ask whether a shared resource is readable, and what it is.
+     *
+     * The one call here that does not need pod membership — it is what a link
+     * recipient asks before anything is rendered. Rejects with 404 both when the
+     * resource does not exist and when it is not theirs to see, so it cannot be
+     * used to discover what a pod contains.
+     */
+    preview(resourceType, target, podId) {
+      return this.client.request(
+        () => PodResourcePreviewService.podResourcePreview(
+          podId != null ? podId : this.podId(),
+          resourceType,
+          target.name,
+          target.id
+        )
+      );
     }
     get(resourceType, resourceName, podId) {
       return this.client.request(

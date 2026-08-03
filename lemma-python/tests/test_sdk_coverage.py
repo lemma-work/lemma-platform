@@ -67,6 +67,9 @@ KNOWN_UNEXPOSED_PREFIXES = (
     "pod.member.",
     "pod.permissions.",
     "pod.resource_access.",
+    # Same story as the grant endpoints above: driven by the guest share page
+    # (TS SDK), not by a Python caller.
+    "pod.resource.preview",
     "pod.role",
     "pod.config.get",
     # Runtime/visualization extras pending facade adoption

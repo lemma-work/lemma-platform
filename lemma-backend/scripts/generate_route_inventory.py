@@ -27,6 +27,7 @@ TAG_MODULES = {
     "Pod Members": "pod",
     "Pod Permissions": "pod",
     "Pod Resource Access": "pod",
+    "Pod Resource Preview": "pod",
     "Pod Roles": "pod",
     "Pods": "pod",
     "Schedules": "schedule",

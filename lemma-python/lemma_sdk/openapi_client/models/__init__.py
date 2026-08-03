@@ -349,6 +349,7 @@ _NAME_TO_MODULE = {
     'ResourceAccessGrantRequest': 'resource_access_grant_request',
     'ResourceAccessGrantResponse': 'resource_access_grant_response',
     'ResourceAccessResponse': 'resource_access_response',
+    'ResourcePreviewResponse': 'resource_preview_response',
     'ResourceType': 'resource_type',
     'ResourceVisibility': 'resource_visibility',
     'RuntimeModelCapability': 'runtime_model_capability',
@@ -844,6 +845,7 @@ if TYPE_CHECKING:
     from .resource_access_grant_request import ResourceAccessGrantRequest
     from .resource_access_grant_response import ResourceAccessGrantResponse
     from .resource_access_response import ResourceAccessResponse
+    from .resource_preview_response import ResourcePreviewResponse
     from .resource_type import ResourceType
     from .resource_visibility import ResourceVisibility
     from .runtime_model_capability import RuntimeModelCapability
@@ -1352,6 +1354,7 @@ __all__ = [
     'ResourceAccessGrantRequest',
     'ResourceAccessGrantResponse',
     'ResourceAccessResponse',
+    'ResourcePreviewResponse',
     'ResourceType',
     'ResourceVisibility',
     'RuntimeModelCapability',

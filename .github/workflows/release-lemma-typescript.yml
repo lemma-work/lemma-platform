@@ -49,6 +49,17 @@ jobs:
       - name: Use npm with trusted publishing support
         run: npm install --global npm@11.18.0
 
+      # See the note in release-lemma-python.yml: consistency is enforced at
+      # release time, in one place, instead of per-PR version bumps. It covers
+      # every component, where the src/version.ts check below sees only this one
+      # — that check stays as the last word before `npm version` rewrites
+      # package.json out from under it.
+      - name: Check version consistency across components
+        working-directory: .
+        env:
+          RELEASE_VERSION: ${{ github.event.release.tag_name || inputs.version }}
+        run: python3 scripts/check_version_consistency.py --expect "$RELEASE_VERSION"
+
       - name: Set package version from release tag
         id: version
         shell: bash

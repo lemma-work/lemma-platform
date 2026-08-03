@@ -329,6 +329,28 @@ def test_version_compatibility_line():
     assert tuple(map(int, floor.split("."))) <= tuple(map(int, SDK_VERSION.split(".")))
 
 
+def test_every_component_declares_the_same_version():
+    """The whole set agrees, not just the three this module reads.
+
+    ``test_version_compatibility_line`` above covers the CLI, the Python SDK and
+    the TypeScript SDK. It does not see the backend's ``API_VERSION``, the
+    bundled spec, or the generated clients — and a mismatch in any of those is
+    the same skew.
+
+    Equality is the requirement, not motion: nothing here asks a branch to *bump*
+    anything. Regeneration used to refuse a schema change that left ``API_VERSION``
+    alone, which made an unreleased number climb once per PR and put every
+    schema-touching branch in conflict with every other. This asks only that the
+    components agree, so a release can be cut from any commit that passes.
+    """
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_version_consistency.py")],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 # --- TS SDK version in browser bundle ---------------------------------------
 
 
