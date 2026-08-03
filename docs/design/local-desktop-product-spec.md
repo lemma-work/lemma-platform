@@ -49,16 +49,31 @@ container sockets, PostgreSQL, Redis, SuperTokens, or fixed ports.
 - SMTP is unnecessary.
 - WKWebView sessions persist through same-host cookie-compatible local origins.
 - Hosted sign-in continues to use the system browser.
+- A local installation never serves the marketing landing page, to any visitor,
+  in any auth state. That covers the desktop webview, a LAN browser, and a
+  public link, so the rule is carried by a deployment marker on the frontend
+  process rather than by the shell's injected global.
 
 ### 3.3 Configure capabilities
 
 - A missing AI profile does not block signup or non-AI workspace features.
+- Onboarding asks the three questions only a local installation can answer, in
+  order: **AI provider**, **agents on this computer**, and **who can reach
+  this installation**. The provider step is required with an explicit
+  **Set this up later**; the other two are skippable, because a machine with no
+  coding agents and a user who wants Lemma private to it are both ordinary.
+- The AI profile is the installation's single default, shared by every account
+  on it. Onboarding says so before the user picks, because sharing later makes
+  that key answer for everyone who connects.
+- The default model is chosen from the list the provider itself returns. A
+  provider is connected first, listed second, and applied third; typing a model
+  name remains only a fallback for a provider with no listing endpoint.
 - Authenticated local pages show **Configure an AI provider** until validation
   succeeds.
 - The action opens the in-window **Local settings** surface directly to
   **AI provider**.
 - Ollama, LM Studio, OpenAI-compatible, and Anthropic-compatible profiles can
-  be validated.
+  be validated. Local runners are offered first.
 - Agents show an explicit unavailable reason until a profile is ready.
 - Integrations, custom OAuth apps, and agent surfaces are independently
   configurable.
@@ -72,6 +87,10 @@ container sockets, PostgreSQL, Redis, SuperTokens, or fixed ports.
   Startup/error views and the tray retain access while unhealthy.
 - Three exclusive access modes are available: **This computer**, **Local
   network**, and **Public link**.
+- Onboarding asks which one, so the question is answered once rather than
+  discovered in settings. Choosing there is still a one-time activation with the
+  same interface choice and the same public confirmation; it is never standing
+  consent for future launches.
 - LAN mode binds only the chosen private IPv4 interface and shows its URL, QR
   code, interface identity, and trusted-Wi-Fi warning.
 - Public mode supports an authenticated ngrok installation or Cloudflare login.
@@ -183,7 +202,11 @@ uses HTTPS at the tunnel edge while its gateway remains loopback-only.
 
 - Privileged native IPC is available only to the `control` child webview at the
   exact bundled asset URL. The remote workspace cannot mutate configuration,
-  models, runtime, sharing, tunnels, or diagnostics.
+  models, runtime, sharing, tunnels, or diagnostics. This is a deliberate,
+  retained boundary, not an artefact: onboarding therefore *orchestrates* the
+  provider and sharing steps and waits on their result, while the control page
+  performs the write. Local settings wears the product's design system so the
+  hand-off does not read as leaving the app.
 - locald uses a per-user authenticated Unix socket or named pipe.
 - State directories and ledgers are private to the user.
 - Runtime artifacts and image references are digest pinned.
@@ -198,7 +221,16 @@ uses HTTPS at the tunnel edge while its gateway remains loopback-only.
 ## 7. Performance and quality targets
 
 - cached cold core readiness: 45 seconds or less;
-- warm application restart: 4 seconds or less;
+- warm launch to an interactive workspace: 800 ms or less. A launch whose
+  recorded workspace still answers with the generation it was left on opens
+  that workspace directly, with no splash and no navigation, and reconciles
+  with the daemon behind it;
+- launch with a warm daemon but a cold shell: 2 seconds or less;
+- every launch appends its stage timings to `runtime/launch.log`, exposed as
+  the **Launch timing** diagnostics source. The targets above are claims that
+  have to be checkable, not felt;
+- a full quit never blocks the main thread for more than 5 seconds, and takes
+  its windows off screen before it starts;
 - idle CPU: below 1%;
 - idle guest core memory: at or below 2 GiB after ballooning;
 - public installed app: at most 25 MiB;
