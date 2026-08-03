@@ -1346,10 +1346,18 @@ fn query_process_identity(pid: &str) -> io::Result<Option<ProcessIdentity>> {
     if executable.starts_with('(') && executable.ends_with(')') {
         return Ok(None);
     }
-    let executable = Path::new(executable)
-        .canonicalize()?
-        .to_string_lossy()
-        .into_owned();
+    // The bracket is not the only shape that transient takes. `sh -c "…"`
+    // execs into the command it was given, and a name read across that
+    // boundary can be unbracketed and still name nothing that resolves. That
+    // is the same "not settled yet" the bracket means, so it retries too —
+    // propagating ENOENT here spent none of the 500ms settle budget and
+    // reported a starting child as one whose ownership could not be recorded.
+    // A child that never settles still fails, with the outer error that says
+    // so rather than a bare "No such file or directory".
+    let Ok(executable) = Path::new(executable).canonicalize() else {
+        return Ok(None);
+    };
+    let executable = executable.to_string_lossy().into_owned();
     let start_identity = String::from_utf8(started.stdout)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
         .trim()
