@@ -568,25 +568,12 @@ fn executable_search_paths() -> Vec<PathBuf> {
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from);
     if let Some(home) = home.as_ref() {
-        for relative in [
-            ".local/bin",
-            ".cargo/bin",
-            ".volta/bin",
-            ".asdf/shims",
-            ".local/share/mise/shims",
-            ".local/share/pnpm",
-            ".bun/bin",
-            ".npm-global/bin",
-        ] {
-            push_unique(&mut paths, &mut seen, home.join(relative));
+        for directory in home_executable_directories(home) {
+            push_unique(&mut paths, &mut seen, directory);
         }
-        #[cfg(target_os = "macos")]
-        push_unique(&mut paths, &mut seen, home.join("Library/pnpm"));
         for path in nvm_node_bins(home) {
             push_unique(&mut paths, &mut seen, path);
         }
-        #[cfg(windows)]
-        push_unique(&mut paths, &mut seen, home.join("AppData/Roaming/npm"));
     }
 
     #[cfg(unix)]
@@ -594,6 +581,41 @@ fn executable_search_paths() -> Vec<PathBuf> {
         push_unique(&mut paths, &mut seen, PathBuf::from(path));
     }
     paths
+}
+
+/// Where an agent lives when it is installed under a user's home directory.
+///
+/// Two kinds of directory. Most are toolchain and package-manager `bin` paths —
+/// where an agent lands when installed *by* something. The rest are what these
+/// agents' own installers create, which no package manager knows about:
+/// `OpenCode`'s script writes to `~/.opencode/bin` and Claude Code's local
+/// install uses `~/.claude/local`.
+///
+/// This list is the whole of detection in practice. The Agent Host is a sidecar
+/// of a GUI app, so it inherits `/usr/bin:/bin:/usr/sbin:/sbin` and nothing
+/// else — never a login shell's `PATH` — and none of these are on it.
+fn home_executable_directories(home: &Path) -> Vec<PathBuf> {
+    let mut directories: Vec<PathBuf> = [
+        ".local/bin",
+        ".cargo/bin",
+        ".volta/bin",
+        ".asdf/shims",
+        ".local/share/mise/shims",
+        ".local/share/pnpm",
+        ".bun/bin",
+        ".npm-global/bin",
+        ".opencode/bin",
+        ".claude/local",
+        ".codex/bin",
+    ]
+    .iter()
+    .map(|relative| home.join(relative))
+    .collect();
+    #[cfg(target_os = "macos")]
+    directories.push(home.join("Library/pnpm"));
+    #[cfg(windows)]
+    directories.push(home.join("AppData/Roaming/npm"));
+    directories
 }
 
 fn nvm_node_bins(home: &Path) -> Vec<PathBuf> {
@@ -709,6 +731,26 @@ mod tests {
             resolve_executable_in("codex", [root.path().to_path_buf()]),
             Some(executable)
         );
+    }
+
+    #[test]
+    fn detection_covers_the_directories_these_agents_install_themselves_into() {
+        // The Agent Host is a sidecar of a GUI app, so it inherits
+        // /usr/bin:/bin:/usr/sbin:/sbin and nothing else — not a login shell's
+        // PATH. Every agent people actually run is therefore invisible unless
+        // this list names where it lives, and the ones shipping their own
+        // installer are easiest to miss: OpenCode was reported as "adapter
+        // executable opencode was not found" on a machine that had it at
+        // ~/.opencode/bin/opencode.
+        let home = Path::new("/home/example");
+        let directories = home_executable_directories(home);
+
+        for expected in [".opencode/bin", ".claude/local", ".local/bin"] {
+            assert!(
+                directories.contains(&home.join(expected)),
+                "{expected} must be searched; it is where an agent's own installer puts it",
+            );
+        }
     }
 
     #[test]

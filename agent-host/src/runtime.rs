@@ -29,6 +29,15 @@ use crate::protocol::{
 };
 
 const HARNESS_REFRESH_INTERVAL: Duration = Duration::from_secs(15 * 60);
+/// How soon to try again when publishing harnesses fails.
+///
+/// The refresh interval is tuned for "has anything about the installed agents
+/// changed", which is rarely. It is the wrong interval for a failure: the
+/// backend restarts whenever its configuration changes, and a publish that
+/// happened to land during one used to leave this host with nothing published
+/// for the next fifteen minutes — during which every command was rejected for
+/// referencing a harness it had never announced.
+const HARNESS_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 /// How long a queued command waits for the first harness publish before it is
 /// rejected. Generous: probing every adapter can genuinely take this long.
 const FIRST_HARNESS_WAIT: Duration = Duration::from_secs(60);
@@ -336,8 +345,8 @@ struct TargetWorker {
     /// Enriched harnesses from probes that ran off the poll loop's critical
     /// path. Drained each iteration so a slow probe never delays a heartbeat.
     probed: (
-        mpsc::UnboundedSender<ProbedHarnesses>,
-        mpsc::UnboundedReceiver<ProbedHarnesses>,
+        mpsc::UnboundedSender<Option<ProbedHarnesses>>,
+        mpsc::UnboundedReceiver<Option<ProbedHarnesses>>,
     ),
 }
 
@@ -397,8 +406,14 @@ impl TargetWorker {
             }
             self.reap_finished().await;
             self.apply_local_controls()?;
-            while let Ok(published) = self.probed.1.try_recv() {
-                self.store_published(published);
+            while let Ok(outcome) = self.probed.1.try_recv() {
+                match outcome {
+                    Some(published) => self.store_published(published),
+                    // Come back in seconds rather than a quarter of an hour.
+                    None => {
+                        self.refresh_due = std::time::Instant::now() + HARNESS_RETRY_INTERVAL;
+                    }
+                }
             }
             if self.refresh_due <= std::time::Instant::now() {
                 self.refresh_harnesses();
@@ -514,10 +529,24 @@ impl TargetWorker {
         if !self.harnesses.is_empty() {
             return;
         }
+        // Ask, rather than only wait. Arriving here means a command needs a
+        // harness we have not published, which is exactly the moment to try
+        // again — waiting alone would sit out whatever remains of the retry or
+        // refresh interval and then reject the command for nothing.
+        self.refresh_harnesses();
+        self.refresh_due = std::time::Instant::now() + HARNESS_REFRESH_INTERVAL;
+
         let deadline = tokio::time::Instant::now() + FIRST_HARNESS_WAIT;
         while self.harnesses.is_empty() {
             match tokio::time::timeout_at(deadline, self.probed.1.recv()).await {
-                Ok(Some(published)) => self.store_published(published),
+                Ok(Some(Some(published))) => self.store_published(published),
+                // A publish failed while we were waiting. Retry within the
+                // deadline we are already holding rather than giving up on it.
+                Ok(Some(None)) => {
+                    self.refresh_due = std::time::Instant::now() + HARNESS_RETRY_INTERVAL;
+                    tokio::time::sleep(HARNESS_RETRY_INTERVAL).await;
+                    self.refresh_harnesses();
+                }
                 Ok(None) => return,
                 Err(_) => {
                     tracing::warn!("no harnesses published yet; the command will be rejected");
@@ -603,6 +632,9 @@ impl TargetWorker {
         let permissions = self.permissions.clone();
         let events_ready = Arc::clone(&self.events_ready);
         let run_id = spec.agent_run_id;
+        // Captured before the task takes ownership of `adapter`, so a failure
+        // can name the agent rather than describing it as an internal error.
+        let adapter_name = adapter.spec.display_name.clone();
         let handle = tokio::spawn(async move {
             let _permit = permit;
             let lease_epoch = journal
@@ -632,10 +664,13 @@ impl TargetWorker {
                 )?;
                 return Ok(());
             }
-            let scratch = scratch_directory(&paths, target_id, run_id);
+            let scratch = scratch_directory(&paths, target_id, spec.conversation_id);
+            if let Some(parent) = scratch.parent() {
+                prune_stale_scratch(parent);
+            }
             std::fs::create_dir_all(&scratch)?;
             let mcp_server = McpServer::Stdio(
-                McpServerStdio::new("lemma", mcp_bridge_executable)
+                McpServerStdio::new(crate::acp::SCOPED_MCP_SERVER, mcp_bridge_executable)
                     .args(vec![
                         "--data-dir".to_owned(),
                         paths.root.to_string_lossy().into_owned(),
@@ -679,7 +714,9 @@ impl TargetWorker {
                     "could not publish a generated image artifact"
                 );
             }
-            let _ = std::fs::remove_dir_all(&scratch);
+            // Deliberately kept. It is the conversation's working directory, and
+            // the next turn resumes the session that lives in it; deleting it
+            // here is what made every resumption fail.
             match outcome {
                 Ok(Ok(outcome)) => {
                     let mut payload = JsonMap::new();
@@ -710,13 +747,17 @@ impl TargetWorker {
                     } else {
                         RunState::Failed
                     };
+                    let raw = error.to_string();
+                    let message = authentication_hint(&adapter_name, &raw)
+                        .or_else(|| adapter_failure_message(&adapter_name, &redact_error(&raw)))
+                        .unwrap_or_else(|| redact_error(&raw));
                     terminal_failure(
                         &journal,
                         target_id,
                         run_id,
                         lease_epoch,
                         state,
-                        &redact_error(&error.to_string()),
+                        &message,
                     )?;
                 }
                 Err(_) => {
@@ -866,8 +907,19 @@ impl TargetWorker {
                             snapshot.config_revision = snapshot_revision(&snapshot);
                         }
                         Ok(Err(error)) => {
-                            snapshot.health = HarnessHealth::ProbeFailed;
-                            snapshot.stale_reason = Some(redact_error(&error.to_string()));
+                            let raw = error.to_string();
+                            // An agent that is installed but not signed in is a
+                            // different thing from one that could not start, and
+                            // the workspace already knows how to say so —
+                            // "Sign-in needed", with the fix. It just never got
+                            // told, because every probe failure looked alike.
+                            if let Some(hint) = authentication_hint(&snapshot.display_name, &raw) {
+                                snapshot.health = HarnessHealth::AuthRequired;
+                                snapshot.stale_reason = Some(hint);
+                            } else {
+                                snapshot.health = HarnessHealth::ProbeFailed;
+                                snapshot.stale_reason = Some(redact_error(&raw));
+                            }
                         }
                         Err(_) => {
                             snapshot.health = HarnessHealth::ProbeFailed;
@@ -900,12 +952,19 @@ impl TargetWorker {
                 .collect();
             match client.publish_harnesses(enriched).await {
                 Ok(published) => {
-                    let _ = sender.send(ProbedHarnesses {
+                    let _ = sender.send(Some(ProbedHarnesses {
                         published,
                         capabilities,
-                    });
+                    }));
                 }
-                Err(error) => tracing::warn!(%error, "publishing probed harnesses failed"),
+                Err(error) => {
+                    tracing::warn!(%error, "publishing probed harnesses failed");
+                    // Tell the loop, so it can try again soon. Without this the
+                    // next attempt is a full refresh interval away and every
+                    // command in between is rejected for referencing a harness
+                    // this host never got to publish.
+                    let _ = sender.send(None);
+                }
             }
         });
     }
@@ -1478,12 +1537,23 @@ fn terminal_failure(
     Ok(())
 }
 
-fn scratch_directory(paths: &HostPaths, target_id: Uuid, run_id: Uuid) -> PathBuf {
+/// The working directory a conversation's provider session lives in.
+///
+/// Keyed on the conversation, not the run. ACP's `session/load` takes a working
+/// directory, and a per-run directory is deleted the moment its run ends — so
+/// every follow-up turn asked the agent to resume a session whose cwd no longer
+/// existed. Resumption could therefore never succeed, and for OpenCode the
+/// failed load left the connection unable to open a new session either, which
+/// is why the first message answered and the second one did not.
+///
+/// One directory per conversation also matches what the comment in `acp.rs`
+/// already claims: "a Lemma conversation is one provider session".
+fn scratch_directory(paths: &HostPaths, target_id: Uuid, conversation_id: Uuid) -> PathBuf {
     paths
         .root
         .join("scratch")
         .join(target_id.to_string())
-        .join(run_id.to_string())
+        .join(conversation_id.to_string())
 }
 
 fn publish_generated_images(
@@ -1493,7 +1563,37 @@ fn publish_generated_images(
     for (object_id, payload) in generated_image_payloads(scratch_directory)? {
         callbacks.event(EventType::AgentMessageChunk, Some(object_id), payload)?;
     }
+    // Cleared once published, because the directory around it now outlives the
+    // run: it belongs to the conversation so the next turn can resume the
+    // session in it. Leaving artifacts behind would republish this turn's
+    // images on every later turn.
+    let _ = std::fs::remove_dir_all(scratch_directory.join(GENERATED_ARTIFACT_DIRECTORY));
     Ok(())
+}
+
+/// How long a conversation's working directory outlives its last turn.
+const SCRATCH_RETENTION: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
+/// Drop conversation directories nothing has touched in a fortnight.
+///
+/// These used to be deleted after every run, so nothing needed pruning. Keeping
+/// them is what makes session resumption possible, and this is what keeps that
+/// from becoming an unbounded pile of working directories on someone's disk.
+fn prune_stale_scratch(target_root: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(target_root) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let stale = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .is_ok_and(|modified| {
+                modified.elapsed().is_ok_and(|age| age > SCRATCH_RETENTION)
+            });
+        if stale {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 fn generated_image_payloads(
@@ -1598,6 +1698,64 @@ fn capabilities_from_acp(value: &Value) -> HarnessCapabilities {
         // to replay after a crash.
         durable_session_recovery: false,
     }
+}
+
+/// Turn an adapter's failure into something the person reading it can act on.
+///
+/// A coding agent that is installed but not signed in is the single most common
+/// way a local run fails, and what it produces is the agent's own internal
+/// error — for Claude Code, `Internal error: Failed to authenticate: OAuth
+/// session expired and could not be refreshed: {"errorKind":
+/// "authentication_failed"}`. That is accurate and useless: it names no agent,
+/// suggests nothing to do, and reads like a defect in Lemma rather than a
+/// session that needs renewing.
+///
+/// Returns `None` when the failure is not recognisably an authentication one,
+/// so anything unfamiliar still travels verbatim rather than being flattened
+/// into a guess.
+fn authentication_hint(harness: &str, error: &str) -> Option<String> {
+    let normalized = error.to_ascii_lowercase();
+    let looks_like_auth = normalized.contains("authentication_failed")
+        || normalized.contains("failed to authenticate")
+        || normalized.contains("oauth session expired")
+        || normalized.contains("not logged in")
+        || normalized.contains("not authenticated")
+        || (normalized.contains("unauthorized") && normalized.contains("session"));
+    if !looks_like_auth {
+        return None;
+    }
+    Some(format!(
+        "{harness} is installed on this computer but not signed in. \
+         Open it in a terminal, sign in, and send the message again. \
+         Lemma runs it with your credentials and never sees them."
+    ))
+}
+
+/// Frame an adapter failure so it says which agent, and where to look.
+///
+/// Adapters report their own internals and the Agent Host forwarded them
+/// untouched: `Internal error: OpenCode service failure: {"service":
+/// "session"}` names no agent, points nowhere, and reads like a defect in
+/// Lemma. This does not try to interpret the failure — guessing would bury the
+/// one line that explains it — it just says whose failure it is and where the
+/// detail lives.
+///
+/// Returns `None` for anything that is not an adapter's internal error, so
+/// ordinary messages ("run deadline elapsed") stay exactly as they are.
+fn adapter_failure_message(harness: &str, error: &str) -> Option<String> {
+    let normalized = error.to_ascii_lowercase();
+    let is_adapter_internal = normalized.contains("internal error")
+        || normalized.contains("service failure")
+        || normalized.contains("\"service\"");
+    if !is_adapter_internal {
+        return None;
+    }
+    Some(format!(
+        "{harness} failed to start a session on this computer. \
+         Check that it runs on its own in a terminal, then try again. \
+         Its own error was: {}",
+        error.trim()
+    ))
 }
 
 fn redact_error(value: &str) -> String {
@@ -2459,6 +2617,120 @@ mod capability_tests {
         assert_eq!(
             STANDARD.decode(content["data"].as_str().unwrap()).unwrap(),
             png
+        );
+    }
+}
+
+#[cfg(test)]
+mod adapter_failure_message_tests {
+    use super::authentication_hint;
+
+    #[test]
+    fn a_signed_out_agent_is_told_to_sign_in_rather_than_reported_as_internal() {
+        // Verbatim from Claude Code. Accurate and useless: it names no agent,
+        // suggests nothing to do, and reads like a defect in Lemma rather than
+        // a session that needs renewing.
+        let raw = concat!(
+            "Internal error: Failed to authenticate: OAuth session expired and ",
+            r#"could not be refreshed: {"errorKind": "authentication_failed"}"#
+        );
+        let hint = authentication_hint("Claude Code", raw).expect("recognised as an auth failure");
+
+        assert!(hint.contains("Claude Code"), "name the agent that needs signing in");
+        assert!(hint.contains("sign in") || hint.contains("signed in"));
+        assert!(!hint.contains("errorKind"), "no adapter internals");
+    }
+
+    #[test]
+    fn other_phrasings_of_the_same_failure_are_recognised() {
+        for raw in [
+            "authentication_failed",
+            "Error: not logged in",
+            "request failed: 401 unauthorized, session invalid",
+        ] {
+            assert!(
+                authentication_hint("OpenCode", raw).is_some(),
+                "{raw:?} is an authentication failure",
+            );
+        }
+    }
+
+    #[test]
+    fn a_conversation_keeps_one_working_directory_across_turns() {
+        // ACP's session/load takes a working directory. Keying this on the run
+        // meant every follow-up turn asked the agent to resume a session whose
+        // cwd had just been deleted — so resumption could never succeed, and
+        // for OpenCode the failed load left the connection unable to open a new
+        // session either. First message answered, second did not.
+        let paths = super::HostPaths::under("/tmp/example");
+        let target = uuid::Uuid::from_u128(1);
+        let conversation = uuid::Uuid::from_u128(2);
+
+        let first = super::scratch_directory(&paths, target, conversation);
+        let second = super::scratch_directory(&paths, target, conversation);
+        assert_eq!(first, second, "both turns share the conversation's directory");
+
+        let other = super::scratch_directory(&paths, target, uuid::Uuid::from_u128(3));
+        assert_ne!(first, other, "different conversations stay isolated");
+    }
+
+    #[test]
+    fn an_adapter_internal_error_says_whose_it_is() {
+        // Verbatim from OpenCode. Names no agent, points nowhere, and reads
+        // like a defect in Lemma rather than a session that would not start.
+        let raw = r#"Internal error: OpenCode service failure: {"service": "session"}"#;
+        let framed = super::adapter_failure_message("OpenCode", raw).expect("framed");
+
+        assert!(framed.starts_with("OpenCode failed to start a session"));
+        // The adapter's own words survive: they are the only thing that
+        // explains an unfamiliar failure.
+        assert!(framed.contains(raw));
+    }
+
+    #[test]
+    fn an_ordinary_failure_is_not_dressed_up_as_an_adapter_fault() {
+        for raw in [
+            "Agent Host run deadline elapsed; the provider process was terminated",
+            "adapter executable opencode was not found",
+        ] {
+            assert!(super::adapter_failure_message("OpenCode", raw).is_none(), "{raw:?}");
+        }
+    }
+
+    #[test]
+    fn an_unfamiliar_failure_is_left_exactly_as_it_came() {
+        // Guessing would bury the one line that explains an unknown failure.
+        for raw in [
+            "adapter executable opencode was not found",
+            "provider process exited with status 1",
+            "ACP probe timed out",
+        ] {
+            assert!(authentication_hint("OpenCode", raw).is_none(), "{raw:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod harness_publish_scheduling_tests {
+    use super::{FIRST_HARNESS_WAIT, HARNESS_REFRESH_INTERVAL, HARNESS_RETRY_INTERVAL};
+
+    #[test]
+    fn a_failed_publish_is_retried_in_seconds_not_a_quarter_of_an_hour() {
+        // The refresh interval answers "have the installed agents changed",
+        // which is rarely. It is the wrong answer to "the publish failed":
+        // the backend restarts whenever its configuration changes, and a
+        // publish that landed during one used to leave this host with nothing
+        // published until the next refresh — rejecting every command in
+        // between for referencing a harness it had never announced.
+        assert!(
+            HARNESS_RETRY_INTERVAL * 6 <= HARNESS_REFRESH_INTERVAL,
+            "a failure must not wait anything like a full refresh",
+        );
+        // And a command already in hand has to be able to outlast a retry,
+        // otherwise waiting for one is pointless.
+        assert!(
+            HARNESS_RETRY_INTERVAL < FIRST_HARNESS_WAIT,
+            "a command's wait must cover at least one retry",
         );
     }
 }
