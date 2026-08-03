@@ -9835,7 +9835,7 @@ var LemmaClient = (() => {
   }
 
   // src/version.ts
-  var SDK_VERSION = "0.7.0";
+  var SDK_VERSION = "0.7.3";
   var CLIENT_HEADER_NAME = "X-Lemma-Client";
   var CLIENT_HEADER_VALUE = `lemma-sdk-ts/${SDK_VERSION}`;
   function shouldSendClientHeader(apiUrl, method) {
@@ -10243,7 +10243,7 @@ var LemmaClient = (() => {
   // src/openapi_client/core/OpenAPI.ts
   var OpenAPI = {
     BASE: "",
-    VERSION: "0.7.1",
+    VERSION: "0.7.3",
     WITH_CREDENTIALS: false,
     CREDENTIALS: "include",
     TOKEN: void 0,
@@ -15878,6 +15878,33 @@ var LemmaClient = (() => {
   // src/openapi_client/services/WorkflowsService.ts
   var WorkflowsService = class {
     /**
+     * List Workflow Runs In Pod
+     * Recent runs across every workflow in the pod, newest first. Exists so an index that wants 'what has been happening here' makes one request instead of one per workflow. Filter with `status` (repeatable).
+     * @param podId
+     * @param limit
+     * @param status
+     * @param pageToken
+     * @returns WorkflowRunListResponse Successful Response
+     * @throws ApiError
+     */
+    static workflowRunListForPod(podId, limit = 50, status, pageToken) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/workflow-runs",
+        path: {
+          "pod_id": podId
+        },
+        query: {
+          "limit": limit,
+          "status": status,
+          "page_token": pageToken
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
      * List Workflow Runs Waiting For Current User
      * The current user's approval queue: active form waits assigned to them, with the owning run.
      * @param podId
@@ -15963,6 +15990,27 @@ var LemmaClient = (() => {
         },
         body: requestBody,
         mediaType: "application/json",
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Stream Workflow Run
+     * Server-sent events carrying the run's state as it advances. The first frame is the current run, so a client needs no separate GET; each later frame is the whole run again rather than a diff, which makes reconnecting a matter of replacing state. A `completed` frame is sent when the run reaches a terminal status, after which the stream closes. Polling remains a valid fallback.
+     * @param podId
+     * @param runId
+     * @returns any Successful Response
+     * @throws ApiError
+     */
+    static workflowRunStream(podId, runId) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/pods/{pod_id}/workflow-runs/{run_id}/stream",
+        path: {
+          "pod_id": podId,
+          "run_id": runId
+        },
         errors: {
           422: `Validation Error`
         }

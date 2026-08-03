@@ -33,7 +33,7 @@ dependencies = [
   # >= the version that has the endpoints the current commands use, so a fresh
   # `uv tool install` upgrades an already-installed older lemma-sdk. The release
   # workflow rewrites this to the release version on every tagged build.
-  "lemma-sdk>=0.7.2",
+  "lemma-sdk>=0.7.3",
   # Shared pod bundle format vocabulary (layout/jsonc/diff/portability/
   # normalize/archive), extracted so the backend can consume the same format.
   "lemma-pod-bundle>=0.1.0",
