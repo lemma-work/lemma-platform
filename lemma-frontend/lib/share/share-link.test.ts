@@ -66,6 +66,18 @@ describe('share links', () => {
         expect(resolveShareName({ segments: ['pod', 'p1'] })).toBe('P1');
     });
 
+    it('names a table from the same query key the target is addressed by', () => {
+        // `resolveShareTarget` reads a table's name from `tab`; this used to look
+        // for `table`, so a table link silently fell back to its path slug.
+        const query = { tab: 'open_orders' };
+        expect(resolveShareTarget('table', ['pod', 'p1', 'tables'], query)).toEqual({
+            podId: 'p1',
+            resourceType: 'datastore_table',
+            resourceName: 'open_orders',
+        });
+        expect(resolveShareName({ segments: ['pod', 'p1', 'tables'], query })).toBe('Open Orders');
+    });
+
     it('prettifies slugs without dragging extensions along', () => {
         expect(prettifySlug('quarterly-report.md')).toBe('Quarterly Report');
         expect(prettifySlug('notes/meeting_minutes')).toBe('Meeting Minutes');

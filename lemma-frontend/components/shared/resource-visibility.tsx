@@ -32,14 +32,14 @@ import { cn } from '@/lib/utils';
 // `ResourceVisibilityValue` / `normalizeResourceVisibility` are unaffected.
 import {
     normalizeResourceVisibility,
-    REACHES_OUTSIDE_POD,
+    reachesOutsidePod,
     VISIBILITY_VALUES,
     type ResourceVisibilityValue,
 } from '@/lib/share/resource-visibility';
 
 export {
     normalizeResourceVisibility,
-    REACHES_OUTSIDE_POD,
+    reachesOutsidePod,
     VISIBILITY_VALUES,
     type ResourceVisibilityValue,
 };
@@ -169,7 +169,7 @@ export function getResourceVisibilityCopy(
         return {
             value: visibility,
             // Not anonymous: authorization still runs against a signed-in
-            // principal, so this waives org scope rather than opening the
+            // principal, so this waives pod scope rather than opening the
             // resource to the open internet. The copy has to say so.
             label: 'Anyone signed in',
             shortDescription: 'Anyone with a Lemma account',
@@ -479,7 +479,7 @@ export function ResourceShareButton({
      */
     const outsidePodShareUrl = useMemo(() => {
         if (!shareUrl || !resourceType) return null;
-        if (!REACHES_OUTSIDE_POD.includes(draftVisibility)) return null;
+        if (!reachesOutsidePod(draftVisibility)) return null;
         return buildShareLink({
             kind: shareKindForResourceType(resourceType),
             canonicalUrl: shareUrl,
@@ -488,9 +488,9 @@ export function ResourceShareButton({
     }, [shareUrl, resourceType, resourceName, draftVisibility]);
 
     const linkToShare = outsidePodShareUrl ?? shareUrl;
-    // Only a genuinely public resource gets a card. An org-visible one would
-    // unfurl its name into whatever timeline the link was pasted into.
-    const canShowCard = Boolean(cardVariant && outsidePodShareUrl && draftVisibility === 'PUBLIC');
+    // A card only exists where a link reaches past the pod — anything narrower
+    // has no `/s/…` URL to unfurl in the first place.
+    const canShowCard = Boolean(cardVariant && outsidePodShareUrl);
 
     const saveSharing = useMutation({
         mutationFn: async () => {

@@ -220,7 +220,7 @@ export function DocumentSpace({ podId }: { podId: string }) {
     const { mutateAsync: createFolder, isPending: isCreatingFolder } = useCreateDatastoreFolder();
     const { mutateAsync: deleteFile, isPending: isDeletingFile } = useDeleteDatastoreFile();
     const { mutate: searchFiles, isPending: isSearchingFiles } = useSearchDatastoreFiles();
-    const [isCopyingAcrossNamespace, setIsCopyingAcrossNamespace] = useState(false);
+    const [isPromotingToPodDocs, setIsPromotingToPodDocs] = useState(false);
     const [isDocsDragActive, setIsDocsDragActive] = useState(false);
     const [dragFileCount, setDragFileCount] = useState(0);
     const [docsUploadStatus, setDocsUploadStatus] = useState<DocsUploadStatus | null>(null);
@@ -436,25 +436,48 @@ export function DocumentSpace({ podId }: { podId: string }) {
     /**
      * The one gesture personal files need that pod docs do not: this stops
      * being mine and starts being ours.
+     *
+     * A move, not a copy. This is the only way to share a personal file — `/me`
+     * is an alias for whoever is reading, so a personal file has no address that
+     * means the same thing to anyone else — and a copy would leave the original
+     * behind as the one the owner keeps editing, while everyone they shared with
+     * reads a snapshot that silently stops matching. One file, one address.
+     *
+     * `new_path` and `visibility` move together: the path alone would leave the
+     * file PERSONAL at a pod address, readable to nobody but absent from no
+     * listing either.
      */
-    const handleCopyToPodDocs = async (filePath: string) => {
+    const handlePromoteToPodDocs = async (filePath: string) => {
         if (!isPersonalPath(filePath)) return;
-        setIsCopyingAcrossNamespace(true);
+        setIsPromotingToPodDocs(true);
+        const filename = getFileNameFromPath(filePath);
+        const destination = `/${filename}`;
         try {
-            const blob = await getLemmaClient(podId).files.download(filePath);
-            const filename = getFileNameFromPath(filePath);
-            const file = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
-            await uploadFile({
-                podId,
-                datastoreName: DATASTORE_NAME,
-                file,
-                directory_path: '/',
+            await getLemmaClient(podId).files.update(filePath, {
+                newPath: destination,
+                visibility: 'POD',
             });
-            toast.success('Duplicated to pod docs');
-        } catch {
-            toast.error('Failed to duplicate document');
+            queryClient.invalidateQueries({ queryKey: ['datastore-files', podId, DATASTORE_NAME] });
+            // The path this view navigates by just changed underneath it. Follow
+            // the file rather than leaving the viewer pointed at a path that no
+            // longer resolves.
+            if (selectedFilePath === filePath) {
+                updateQuery({ file: destination });
+            }
+            toast.success('Moved to pod docs');
+        } catch (error) {
+            // A name already taken in pod docs is the one failure the owner can
+            // actually act on, so it says so instead of "something went wrong".
+            const conflict = String((error as { message?: string })?.message || '')
+                .toLowerCase()
+                .includes('already');
+            toast.error(
+                conflict
+                    ? `Pod docs already has a file named ${filename}. Rename it first.`
+                    : 'Failed to move document to pod docs',
+            );
         } finally {
-            setIsCopyingAcrossNamespace(false);
+            setIsPromotingToPodDocs(false);
         }
     };
 
@@ -757,16 +780,26 @@ export function DocumentSpace({ podId }: { podId: string }) {
                     {isPersonal ? (
                         !folder ? (
                             <DropdownMenuItem
-                                disabled={isCopyingAcrossNamespace}
+                                disabled={isPromotingToPodDocs}
                                 onSelect={(event) => {
                                     event.preventDefault();
-                                    void handleCopyToPodDocs(path);
+                                    void handlePromoteToPodDocs(path);
                                 }}
                             >
                                 <Files className="mr-2 h-4 w-4" />
                                 Share to pod docs
                             </DropdownMenuItem>
-                        ) : null
+                        ) : (
+                            // A personal *folder* cannot promote the way a file
+                            // can: moving it would carry its children to pod
+                            // paths while they stay PERSONAL — authorized to
+                            // nobody, listed for nobody. Say why, rather than
+                            // leaving a menu whose only entry is Delete.
+                            <DropdownMenuItem disabled>
+                                <Files className="mr-2 h-4 w-4" />
+                                Share files individually
+                            </DropdownMenuItem>
+                        )
                     ) : (
                         <ResourceShareButton
                             value={getDocEntryVisibility(entry)}
@@ -1252,11 +1285,11 @@ export function DocumentSpace({ podId }: { podId: string }) {
                             variant="quiet"
                             size="icon"
                             className="h-8 w-8 rounded"
-                            disabled={isCopyingAcrossNamespace}
-                            onClick={() => void handleCopyToPodDocs(selectedFilePath)}
+                            disabled={isPromotingToPodDocs}
+                            onClick={() => void handlePromoteToPodDocs(selectedFilePath)}
                             aria-label="Share to pod docs"
                         >
-                            {isCopyingAcrossNamespace ? (
+                            {isPromotingToPodDocs ? (
                                 <StepLoader size="sm" />
                             ) : (
                                 <Files className="h-4 w-4" />

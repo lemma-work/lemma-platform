@@ -25,7 +25,7 @@ export const VISIBILITY_VALUES: ResourceVisibilityValue[] = [
  * permits. Everything narrower stops at pod membership, so a workspace URL is
  * the right link for it.
  */
-export const REACHES_OUTSIDE_POD: ResourceVisibilityValue[] = ['PUBLIC'];
+const REACHES_OUTSIDE_POD: ResourceVisibilityValue[] = ['PUBLIC'];
 
 /** Spellings accepted from older payloads and bundles, per canonical level. */
 const VISIBILITY_ALIASES: Record<string, ResourceVisibilityValue> = {

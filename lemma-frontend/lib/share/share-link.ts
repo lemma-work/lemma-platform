@@ -236,8 +236,13 @@ export function resolveShareName(input: {
     const explicit = input.name?.replace(/\s+/g, ' ').trim();
     if (explicit) return explicit.slice(0, 120);
 
-    // Apps and tables keep their identity in the query rather than the path.
-    for (const key of ['page', 'table', 'file', 'folder']) {
+    // Apps, tables and folders keep their identity in the query rather than the
+    // path. Read the keys off the same table `resolveShareTarget` addresses by,
+    // so the two cannot drift — they already had, on `tab` vs `table`, which
+    // left every table link falling back to its URL slug for a display name.
+    // `file` is appended for legacy path-shaped document links; `fileId` is
+    // deliberately absent, being an id rather than anything worth printing.
+    for (const key of [...Object.values(NAME_QUERY_KEY_BY_KIND), 'file']) {
         const value = input.query?.[key];
         const candidate = Array.isArray(value) ? value[0] : value;
         if (candidate) return prettifySlug(candidate);
