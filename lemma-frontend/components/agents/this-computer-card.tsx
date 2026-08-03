@@ -15,6 +15,7 @@ import {
 import { DestructiveConfirmationDialog } from '@/components/shared/destructive-confirmation-dialog';
 import { getLemmaApiBaseUrl } from '@/lib/sdk/lemma-client';
 import { useCreateAgentHostPairing } from '@/lib/hooks/use-agent-runtime';
+import { allowAutoConnect, declineAutoConnect } from '@/lib/desktop/auto-connect';
 import { cn } from '@/lib/utils';
 
 export type ThisComputerState = {
@@ -136,6 +137,8 @@ export function ThisComputerCard({
                 const name = displayName.trim() || 'This computer';
                 const pairing = await createPairing.mutateAsync({ displayName: name });
                 await agentHostBridge.pair(getLemmaApiBaseUrl(), pairing.pairing_code, name);
+                // Connecting by hand overrides any earlier "no".
+                allowAutoConnect();
                 onPaired?.();
             },
             'This computer is connected',
@@ -145,6 +148,9 @@ export function ThisComputerCard({
         void run(
             'unpair',
             async () => {
+                // Explicit, so it has to stick: without this the next page load
+                // pairs this computer straight back and Disconnect looks broken.
+                declineAutoConnect();
                 await agentHostBridge.unpair(target?.target_id ?? null);
                 onPaired?.();
             },
@@ -179,7 +185,12 @@ export function ThisComputerCard({
                         size="sm"
                         loading={busy === 'toggle'}
                         onClick={() =>
-                            void run('toggle', () => agentHostBridge.setEnabled(!status.running))
+                            void run('toggle', () => {
+                                // Turning it off is a decision too.
+                                if (status.running) declineAutoConnect();
+                                else allowAutoConnect();
+                                return agentHostBridge.setEnabled(!status.running);
+                            })
                         }
                     >
                         {status.running ? 'Turn off' : 'Turn on'}
