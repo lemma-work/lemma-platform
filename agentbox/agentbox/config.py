@@ -1,7 +1,25 @@
 from __future__ import annotations
 
-from pydantic import AliasChoices, Field, model_validator
+import json
+
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class RetainedWorkspaceProfile(BaseModel):
+    """A previously shipped workspace profile that live sandboxes may still run.
+
+    A workspace keeps its existing profile when the current digest changes, so
+    that profile's artifacts must stay resolvable until the workspace is
+    recreated from scratch. Without the matching entry here, AgentBox cannot
+    validate or reconnect to sandboxes created by the previous release.
+    """
+
+    name: str
+    digest: str
+    image: str | None = None
+    e2b_template: str | None = None
+    e2b_build_id: str | None = None
 
 
 class Settings(BaseSettings):
@@ -87,6 +105,20 @@ class Settings(BaseSettings):
     agentbox_workspace_profile_name: str = "workspace-python-v1"
     agentbox_workspace_profile_digest: str = f"sha256:{'1' * 64}"
     agentbox_workspace_image: str = "agentbox-workspace:dev"
+    agentbox_workspace_retained_profiles: str = Field(
+        default="",
+        description=(
+            "JSON array of previously shipped workspace profiles that existing "
+            "sandboxes may still be running, for example: "
+            '[{"name": "workspace-python-v1", "digest": "sha256:<64 hex>", '
+            '"image": "agentbox-workspace:1.2.3", '
+            '"e2b_template": "<template>", "e2b_build_id": "<build>"}]. '
+            "Changing the workspace profile digest no longer replaces sandboxes "
+            "that already hold user files, so the previous release's artifacts "
+            "must remain resolvable until those workspaces are recreated. Keep "
+            "at least the immediately preceding release listed here."
+        ),
+    )
     agentbox_function_profile_name: str = "function-python-v1"
     agentbox_function_profile_digest: str = f"sha256:{'2' * 64}"
     agentbox_function_image: str = "agentbox-function:dev"
@@ -212,6 +244,33 @@ class Settings(BaseSettings):
                 "by at least two cleanup intervals"
             )
         return self
+
+    @property
+    def agentbox_retained_workspace_profiles(
+        self,
+    ) -> tuple[RetainedWorkspaceProfile, ...]:
+        """Parse retained workspace profiles, excluding the current digest.
+
+        The current profile is always built separately, and the registry rejects
+        duplicate digests, so an operator listing the current release here is
+        tolerated rather than fatal.
+        """
+
+        raw = self.agentbox_workspace_retained_profiles.strip()
+        if not raw:
+            return ()
+        entries = json.loads(raw)
+        if not isinstance(entries, list):
+            raise ValueError(
+                "AGENTBOX_WORKSPACE_RETAINED_PROFILES must be a JSON array"
+            )
+        return tuple(
+            profile
+            for profile in (
+                RetainedWorkspaceProfile.model_validate(entry) for entry in entries
+            )
+            if profile.digest != self.agentbox_workspace_profile_digest
+        )
 
     @property
     def agentbox_e2b_function_allow_out_hosts(self) -> tuple[str, ...]:

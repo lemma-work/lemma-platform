@@ -548,7 +548,7 @@ async def test_real_e2b_missing_workspace_is_fenced_and_recreated(
         await database.dispose()
 
 
-async def test_real_e2b_hard_expiry_allows_fresh_workspace(
+async def test_real_e2b_expiry_recreates_but_profile_change_preserves_disk(
     tmp_path: Path,
 ) -> None:
     profile = _workspace_profile()
@@ -577,6 +577,7 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
         function_idle_seconds=0,
         batch_size=1,
     )
+    filesystem = FilesystemService(database, adapter)
     key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
     deadline = datetime.now(timezone.utc) + timedelta(minutes=6)
     original_provider_id: str | None = None
@@ -608,6 +609,18 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
         assert fresh_provider_id is not None
         assert fresh_provider_id != original_provider_id
 
+        # Shipping a new workspace profile must never cost the user their
+        # files. E2B workspace storage is the sandbox itself, so replacing the
+        # allocation to adopt a new digest would delete everything the agent
+        # has written. The workspace keeps running its existing profile until
+        # it is recreated from scratch.
+        await filesystem.write(
+            key,
+            "/workspace/survives-profile-change",
+            b"kept",
+            expected_sha256=None,
+            deadline_at=deadline,
+        )
         replacement = await lifecycle.ensure(
             key,
             replacement_profile.ref,
@@ -617,8 +630,16 @@ async def test_real_e2b_hard_expiry_allows_fresh_workspace(
         )
         replacement_provider_id = await _provider_id(database, key)
         assert replacement.ready is True
-        assert replacement_provider_id is not None
-        assert replacement_provider_id != fresh_provider_id
+        assert replacement_provider_id == fresh_provider_id
+        assert (
+            await filesystem.read(
+                key,
+                "/workspace/survives-profile-change",
+                ByteRange(offset=0, length=None),
+                deadline_at=deadline,
+            )
+            == b"kept"
+        )
         assert await lifecycle.destroy(key, deadline_at=deadline)
     finally:
         await _kill_exact(original_provider_id)

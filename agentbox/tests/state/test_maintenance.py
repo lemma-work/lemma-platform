@@ -134,6 +134,54 @@ async def _ensure(
     )
 
 
+async def test_workspace_without_a_disk_adopts_the_new_profile(
+    database: StateDatabase,
+) -> None:
+    """Profile drift tolerance only protects a workspace that holds files.
+
+    A workspace keeps its existing profile while it owns a disk, but once
+    retention expiry has removed the allocation and its storage there is
+    nothing left to preserve, so the next ensure adopts the newly shipped
+    profile and the workspace catches up.
+    """
+
+    provider = Provider(database)
+    lifecycle = SandboxLifecycleService(
+        database,
+        provider,
+        workspace_retention_seconds=0,
+    )
+    worker = SandboxMaintenanceWorker(
+        database,
+        lifecycle,
+        workspace_idle_seconds=0,
+        function_idle_seconds=0,
+        batch_size=1,
+    )
+    key = SandboxKey(WorkloadKind.WORKSPACE, uuid4())
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=30)
+    replacement = SandboxProfileRef("workspace-python-v2", f"sha256:{'d' * 64}")
+
+    await _ensure(lifecycle, key)
+    # Release, then hard retention expiry: the disk is gone.
+    assert await worker.run_once(deadline_at=deadline) == 1
+    assert await worker.run_once(deadline_at=deadline) == 1
+
+    handle = await lifecycle.ensure(
+        key,
+        replacement,
+        admission_class=AdmissionClass.INTERACTIVE,
+        deadline_at=deadline,
+    )
+
+    assert handle.ready is True
+    async with database.uow() as uow:
+        logical = await uow.repository.get_logical(key)
+        await uow.commit()
+    assert logical is not None
+    assert logical.profile == replacement
+
+
 async def test_workspace_release_then_hard_expiry_recreates_fresh(
     database: StateDatabase,
 ) -> None:

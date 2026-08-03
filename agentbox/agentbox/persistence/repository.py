@@ -130,19 +130,48 @@ class AgentBoxRepository:
                 status_code=409,
                 retry_after_ms=1000,
             )
+        profile_changed = row.profile_digest != profile.digest
+        # A workspace's durable disk is co-located with its allocation on
+        # providers whose storage is sandbox-native, so replacing the allocation
+        # to adopt a new profile digest would delete the user's files. When the
+        # workspace already owns an adoptable disk, the digest change is
+        # recorded as drift instead: the existing profile stays effective and no
+        # generation fence is raised, because nothing is being replaced. The new
+        # profile is adopted the next time the workspace is created from
+        # scratch (retention expiry, explicit reset, or operator drain).
+        profile_drift = profile_changed and await self._workspace_disk_is_adoptable(row)
+        adopt_profile = profile_changed and not profile_drift
         desired_changed = (
-            row.desired_state != SandboxDesiredState.PRESENT.value
-            or row.profile_digest != profile.digest
+            row.desired_state != SandboxDesiredState.PRESENT.value or adopt_profile
         )
         if desired_changed:
             row.resource_generation += 1
-        if row.profile_digest != profile.digest:
+        if adopt_profile:
             row.profile_name = profile.name
             row.profile_digest = profile.digest
         row.desired_state = SandboxDesiredState.PRESENT.value
         row.last_used_at = timestamp
         row.updated_at = timestamp
         return self._logical(row)
+
+    async def _workspace_disk_is_adoptable(self, row: LogicalSandboxRow) -> bool:
+        """True when this workspace already owns a disk worth preserving.
+
+        Only ``ACTIVE`` and ``RELEASED`` allocations hold user files: a
+        ``RELEASED`` workspace is paused with its filesystem snapshotted, and an
+        ``ACTIVE`` one is running. Allocations still being created hold nothing,
+        so replacing them costs nothing.
+        """
+
+        if row.workload_kind != WorkloadKind.WORKSPACE.value:
+            return False
+        if row.current_allocation_id is None:
+            return False
+        allocation = await self._session.get(AllocationRow, row.current_allocation_id)
+        return allocation is not None and allocation.state in {
+            AllocationState.ACTIVE.value,
+            AllocationState.RELEASED.value,
+        }
 
     async def get_logical(
         self, key: SandboxKey, *, for_update: bool = False

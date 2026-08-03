@@ -275,21 +275,16 @@ def _database_url() -> str:
     return f"sqlite+aiosqlite:///{settings.agentbox_state_db_path}"
 
 
-def _profiles() -> ProfileRegistry:
-    workspace_e2b = (
-        E2BProfileArtifact(
-            template_id=settings.agentbox_e2b_workspace_template,
-            build_id=settings.agentbox_e2b_workspace_build_id,
-        )
-        if settings.agentbox_e2b_workspace_template
-        and settings.agentbox_e2b_workspace_build_id
-        else None
-    )
-    workspace = SandboxProfile(
-        ref=SandboxProfileRef(
-            settings.agentbox_workspace_profile_name,
-            settings.agentbox_workspace_profile_digest,
-        ),
+def _workspace_profile(
+    *,
+    name: str,
+    digest: str,
+    image: str,
+    e2b_template: str | None,
+    e2b_build_id: str | None,
+) -> SandboxProfile:
+    return SandboxProfile(
+        ref=SandboxProfileRef(name, digest),
         workload_kind=WorkloadKind.WORKSPACE,
         # The portable ABI is semantic; every provider runs the profile-owned
         # Python 3.14 environment behind its native session implementation.
@@ -306,13 +301,40 @@ def _profiles() -> ProfileRegistry:
         ),
         allowed_roots=("/workspace", "/tmp"),
         docker=DockerProfileArtifact(
-            image=settings.agentbox_workspace_image,
+            image=image,
             command=(),
             readiness_argv=(),
             published_ports=(8080, 4848),
             runtime_port=8080,
         ),
-        e2b=workspace_e2b,
+        e2b=(
+            E2BProfileArtifact(template_id=e2b_template, build_id=e2b_build_id)
+            if e2b_template and e2b_build_id
+            else None
+        ),
+    )
+
+
+def _profiles() -> ProfileRegistry:
+    workspace = _workspace_profile(
+        name=settings.agentbox_workspace_profile_name,
+        digest=settings.agentbox_workspace_profile_digest,
+        image=settings.agentbox_workspace_image,
+        e2b_template=settings.agentbox_e2b_workspace_template,
+        e2b_build_id=settings.agentbox_e2b_workspace_build_id,
+    )
+    # Workspaces that already hold user files keep running their existing
+    # profile instead of being replaced when the digest changes, so the previous
+    # release's artifacts must stay resolvable for them.
+    retained = tuple(
+        _workspace_profile(
+            name=entry.name,
+            digest=entry.digest,
+            image=entry.image or settings.agentbox_workspace_image,
+            e2b_template=entry.e2b_template,
+            e2b_build_id=entry.e2b_build_id,
+        )
+        for entry in settings.agentbox_retained_workspace_profiles
     )
     function_e2b = (
         E2BProfileArtifact(
@@ -348,7 +370,7 @@ def _profiles() -> ProfileRegistry:
         ),
         e2b=function_e2b,
     )
-    return ProfileRegistry((workspace, function))
+    return ProfileRegistry((workspace, function, *retained))
 
 
 def _runtime_key() -> bytes:

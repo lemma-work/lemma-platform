@@ -89,13 +89,6 @@ class SandboxLifecycleService:
         verify_ready: bool = False,
     ) -> SandboxHandle:
         self._check_deadline(deadline_at)
-        request_hash = self._create_request_hash(
-            key,
-            profile,
-            provider_name=self._provider.name,
-            provider_scope=self._provider.scope,
-            admission_class=admission_class,
-        )
 
         # Transaction 1: durable logical resource and one allocation intent.
         decision: ProviderAdmissionDecision
@@ -107,6 +100,23 @@ class SandboxLifecycleService:
         try:
             async with self._database.uow() as uow:
                 logical = await uow.repository.ensure_logical(key, profile)
+                # `ensure_logical` is the authority on which profile is actually
+                # in force. A workspace that already owns a disk keeps its
+                # existing profile rather than being replaced to adopt a new
+                # digest, so every downstream decision - admission hash,
+                # allocation, provider create, and readiness validation - must
+                # use the effective profile, not the requested one. Passing the
+                # requested digest here would fail provider metadata validation
+                # against the existing sandbox and cascade back into the
+                # replacement this drift tolerance exists to prevent.
+                profile = logical.profile
+                request_hash = self._create_request_hash(
+                    key,
+                    profile,
+                    provider_name=self._provider.name,
+                    provider_scope=self._provider.scope,
+                    admission_class=admission_class,
+                )
                 if key.workload_kind == WorkloadKind.WORKSPACE:
                     storage = await uow.repository.ensure_workspace_storage(
                         key,
