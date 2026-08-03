@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+import app.modules.agent.tools.snooze.pydantic_adapter as adapter
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
@@ -19,6 +21,7 @@ from app.modules.agent.tools.snooze.models import (
     SnoozeRequest,
 )
 from app.modules.agent.tools.snooze.pydantic_adapter import snooze
+from app.modules.agent.tools.tool_errors import AgentInputRequired
 
 
 def _wait(**overrides) -> AgentConversationWaitEntity:
@@ -37,6 +40,7 @@ def _ctx(*, supports_pause_signal: bool = True, tool_call_id: str = "tc-1"):
             conversation_id=uuid4(),
             agent_run_id=uuid4(),
             pod_id=uuid4(),
+            user_id=uuid4(),
             supports_pause_signal=supports_pause_signal,
         ),
         tool_call_id=tool_call_id,
@@ -135,3 +139,87 @@ async def test_snooze_requires_a_durable_tool_call_id():
 
 def test_ceiling_is_a_day():
     assert MAX_SNOOZE_SECONDS == 24 * 60 * 60
+
+
+# -- the suspend path ----------------------------------------------------------
+
+
+@pytest.fixture
+def suspend_harness(monkeypatch):
+    """Stub the two side effects of a successful snooze: the timer and the row."""
+    scheduled: list[dict] = []
+    created: list[AgentConversationWaitEntity] = []
+
+    class _FakeScheduler:
+        async def schedule_once_job(self, **kwargs):
+            scheduled.append(kwargs)
+
+    class _FakeRepo:
+        def __init__(self, uow):
+            pass
+
+        async def create(self, wait):
+            created.append(wait)
+            return wait
+
+    class _FakeUow:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            pass
+
+    monkeypatch.setattr(adapter, "SchedulerAPIClient", lambda: _FakeScheduler())
+    monkeypatch.setattr(adapter, "AgentConversationWaitRepository", _FakeRepo)
+    monkeypatch.setattr(
+        adapter, "SessionUnitOfWorkFactory", lambda maker: lambda: _FakeUow()
+    )
+    return SimpleNamespace(scheduled=scheduled, created=created)
+
+
+@pytest.mark.asyncio
+async def test_snooze_schedules_a_timer_and_pauses_the_run(suspend_harness):
+    """The success path: one timer, one ACTIVE wait, and the pause signal.
+
+    Guards the scheduler call shape. ``schedule_once_job`` requires ``user_id``,
+    and nothing else here would notice if the call drifted — the tool raises
+    before returning, so a TypeError would surface only in production.
+    """
+    ctx = _ctx()
+    with pytest.raises(AgentInputRequired) as raised:
+        await snooze(ctx, SnoozeRequest(reason="waiting for the build", seconds=600))
+
+    assert raised.value.tool_call_id == "tc-1"
+    assert raised.value.kind == "snooze"
+
+    (job,) = suspend_harness.scheduled
+    assert job["user_id"] == ctx.deps.user_id
+    assert job["payload"]["conversation_id"] == str(ctx.deps.conversation_id)
+    # The wake path resolves the fired timer through wait_ref, so it must match
+    # the wait's external_ref exactly.
+    (wait,) = suspend_harness.created
+    assert job["payload"]["wait_ref"] == wait.external_ref
+    assert wait.status is AgentWaitStatus.ACTIVE
+    assert wait.tool_call_id == "tc-1"
+    assert wait.spec["note_to_self"] is None
+
+
+@pytest.mark.asyncio
+async def test_snooze_clamps_an_over_long_request(suspend_harness):
+    """The ceiling is policy, not a misunderstanding, so it clamps rather than errors."""
+    ctx = _ctx()
+    with pytest.raises(AgentInputRequired):
+        await snooze(
+            ctx, SnoozeRequest(reason="waiting", seconds=MAX_SNOOZE_SECONDS * 10)
+        )
+
+    (wait,) = suspend_harness.created
+    slept = (
+        wait.scheduled_at - datetime.fromisoformat(wait.spec["started_at"])
+    ).total_seconds()
+    assert slept == pytest.approx(MAX_SNOOZE_SECONDS, abs=1)
+    # The unclamped ask is kept so the wake can see what the model actually wanted.
+    assert wait.spec["requested_seconds"] == MAX_SNOOZE_SECONDS * 10

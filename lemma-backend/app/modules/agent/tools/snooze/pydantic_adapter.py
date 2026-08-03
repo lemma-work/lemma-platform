@@ -115,6 +115,7 @@ async def snooze(
     timer_id = uuid4()
     await SchedulerAPIClient().schedule_once_job(
         schedule_id=timer_id,
+        user_id=deps.user_id,
         run_date=wake_at,
         payload={
             "conversation_id": str(deps.conversation_id),

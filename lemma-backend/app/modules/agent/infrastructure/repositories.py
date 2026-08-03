@@ -59,7 +59,6 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.domain.wait import (
     AgentConversationWaitEntity,
     AgentWaitStatus,
-    AgentWaitType,
 )
 from app.modules.agent.infrastructure.models import (
     AgentApprovalDecisionModel,

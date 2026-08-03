@@ -110,7 +110,9 @@ class SnoozeWakeService:
                 started = datetime.fromisoformat(started_raw)
                 if started.tzinfo is None:
                     started = started.replace(tzinfo=timezone.utc)
-                slept = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+                slept = max(
+                    0, int((datetime.now(timezone.utc) - started).total_seconds())
+                )
             except ValueError:
                 logger.debug("agent.snooze.bad_started_at", wait_id=str(wait.id))
         message = {
