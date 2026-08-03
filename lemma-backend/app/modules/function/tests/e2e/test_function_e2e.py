@@ -1602,7 +1602,15 @@ async def {function_name}(ctx: FunctionContext, data: TimeoutInput) -> TimeoutRe
     )
     assert final_run["status"] == "FAILED", final_run
     assert final_run["error"]
-    assert "timed out" in final_run["error"].lower()
+    # Two terminal messages are both correct here, and which one wins is a race
+    # the dispatcher cannot break: it reads with a timeout of exactly the
+    # deadline it asked the runtime to enforce, so the runtime's own
+    # TimeoutError and the backend's ReadTimeout come due at the same instant.
+    # Losing that race yields InvocationOutcomeUnconfirmed, which still cancels
+    # the sandbox and fails the run without retrying. Pinning the assertion to
+    # one branch tests the scheduler, not the deadline.
+    error = final_run["error"].lower()
+    assert "timed out" in error or "was not confirmed" in error, final_run
 
     await asyncio.sleep(4)
 
