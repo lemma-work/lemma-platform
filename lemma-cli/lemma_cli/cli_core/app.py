@@ -57,7 +57,6 @@ LAZY_GROUPS: dict[str, LazyEntry] = {
     "surfaces": (f"{_CMD}.surfaces", "app", "Agent surface commands for Slack, Teams, Telegram, WhatsApp, Gmail, and Outlook.", False),
     "profile": (f"{_CMD}.profile", "app", "View and edit the current user's Lemma profile.", False),
     "me": (f"{_CMD}.profile", "app", "View and edit the current user's Lemma profile.", False),
-    "tools": (f"{_CMD}.tools", "app", "Standalone Lemma tool commands.", False),
     "workflow": (f"{_CMD}.workflows", "app", "Workflow commands.", False),
     "workflows": (f"{_CMD}.workflows", "app", "Workflow commands.", False),
     "skill": (f"{_CMD}.skills", "app", "Install bundled Lemma agent skills into your coding agent (Claude Code, Codex, OpenCode, Cursor).", False),
@@ -68,7 +67,7 @@ LazyRootGroup.registry = LAZY_GROUPS
 app = typer.Typer(
     name="lemma",
     cls=LazyRootGroup,
-    help="Lemma CLI for pods, agents, functions, schedules, apps, conversations, files, data, connectors, surfaces, and tools.",
+    help="Lemma CLI for pods, agents, functions, schedules, apps, conversations, files, data, connectors, and surfaces.",
     no_args_is_help=True,
     rich_markup_mode="rich",
 )
@@ -189,6 +188,30 @@ def version_cmd(ctx: typer.Context) -> None:
     from .commands import system
 
     system.run_version(ctx)
+
+
+@app.command("feedback")
+def feedback_cmd(
+    ctx: typer.Context,
+    category: str = typer.Option(..., "--category", help="cli, skill, platform, docs, …"),
+    subject: str = typer.Option(..., "--subject", help="One-line summary."),
+    issue_encountered: str = typer.Option(..., "--issue-encountered"),
+    expected_behavior: str = typer.Option(..., "--expected-behavior"),
+    actual_behavior: str = typer.Option(..., "--actual-behavior"),
+    suggested_next_steps: str | None = typer.Option(None, "--suggested-next-steps"),
+) -> None:
+    """Report a problem with the CLI, a skill, or the platform."""
+    from .commands import system
+
+    system.run_feedback(
+        ctx,
+        category=category,
+        subject=subject,
+        issue_encountered=issue_encountered,
+        expected_behavior=expected_behavior,
+        actual_behavior=actual_behavior,
+        suggested_next_steps=suggested_next_steps,
+    )
 
 
 @app.command("doctor")

@@ -22,7 +22,7 @@ from lemma_cli.cli_core.commands import (
     pods,
     schedules,
     surfaces,
-    tools,
+    system,
     workflows,
 )
 from lemma_cli.cli_core.chat import iter_sse_events
@@ -106,8 +106,10 @@ def test_help_exposes_new_surface_only():
     assert "connectors" in result.stdout
     assert "orgs" in result.stdout
     assert "surfaces" in result.stdout
-    assert "tools" in result.stdout
     assert "servers" in result.stdout
+    # `tools` is retired: web-search left the CLI and report-feedback became the
+    # top-level `feedback` command.
+    assert "tools" not in result.stdout
     assert "ctx" not in result.stdout
     assert "│ use " not in result.stdout
     assert "assistant" not in result.stdout
@@ -2245,29 +2247,49 @@ def test_profile_update_dispatches_user_profile(monkeypatch):
     }
 
 
-def test_tools_run_web_search_dispatches_tool_api(monkeypatch):
+def test_feedback_dispatches_the_tool_api(monkeypatch):
+    """`lemma tools report-feedback` became top-level `lemma feedback`.
+
+    The `tools` group wrapped two unrelated commands behind a list/run sequence
+    that read to an agent like a namespace worth exploring. Reporting a problem
+    is a first-class action, so it is a first-class command.
+    """
     captured: dict[str, object] = {}
 
     class FakeTools:
-        def web_search(self, *, query, max_results):
-            captured["query"] = query
-            captured["max_results"] = max_results
+        def report_feedback(self, **kwargs):
+            captured.update(kwargs)
             return {"success": True}
 
     fake_client = SimpleNamespace(tools=FakeTools())
 
-    def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={}))
-
-    monkeypatch.setattr(tools, "run_with_client", fake_run_with_client)
+    monkeypatch.setattr(
+        system,
+        "run_with_client",
+        lambda ctx, fn: fn(fake_client, SimpleNamespace(config={}, output="pretty")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "lemma_cli.cli_core.state.run_with_client",
+        lambda ctx, fn: fn(fake_client, SimpleNamespace(config={}, output="pretty")),
+    )
 
     result = runner.invoke(
         app,
-        ["tools", "run", "web-search", "--data", '{"query":"docs","max_results":2}'],
+        [
+            "feedback",
+            "--category", "cli",
+            "--subject", "import aborts mid-write",
+            "--issue-encountered", "dry-run passed, import died on step 12",
+            "--expected-behavior", "dry-run catches it",
+            "--actual-behavior", "422 with no file named",
+        ],
     )
 
-    assert result.exit_code == 0, result.stdout
-    assert captured == {"query": "docs", "max_results": 2}
+    assert result.exit_code == 0, result.output
+    assert captured["category"] == "cli"
+    assert captured["subject"] == "import aborts mid-write"
+    assert captured["suggested_next_steps"] is None
 
 
 def test_apps_init_rejects_non_empty_directory(tmp_path):

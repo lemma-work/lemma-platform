@@ -544,6 +544,41 @@ def _fetch_server_api_version(state) -> tuple[str | None, str | None]:  # type: 
         return None, str(exc)
 
 
+def run_feedback(
+    ctx: typer.Context,
+    *,
+    category: str,
+    subject: str,
+    issue_encountered: str,
+    expected_behavior: str,
+    actual_behavior: str,
+    suggested_next_steps: str | None,
+) -> None:
+    """Send product feedback.
+
+    This was `lemma tools report-feedback`, behind a two-command `tools` group
+    that wrapped exactly two unrelated things and read like a namespace worth
+    exploring. Reporting a problem is a first-class action, so it is a
+    first-class command.
+    """
+    from ..state import run_with_client
+
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.tools.report_feedback(
+            category=category,
+            subject=subject,
+            issue_encountered=issue_encountered,
+            expected_behavior=expected_behavior,
+            actual_behavior=actual_behavior,
+            suggested_next_steps=suggested_next_steps,
+        ),
+    )
+    if result is not None:
+        emit(state, result)
+
+
 def run_version(ctx: typer.Context) -> None:
     """Show CLI, SDK, and bundled API-schema versions."""
     from ..state import console

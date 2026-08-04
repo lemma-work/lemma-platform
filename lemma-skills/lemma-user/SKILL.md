@@ -246,14 +246,13 @@ An agent acts under your delegated identity — it sees exactly what you'd see (
 RLS rows, your `/me`, your connected accounts), plus only the resource grants its
 builder gave it.
 
-## First-party tools and connectors
+## Connectors
 
-First-party tools (no third-party account needed):
+Hit a CLI, skill, or platform problem worth reporting? One command:
 
 ```bash
-lemma tools list
-lemma tools web-search "latest API docs" --limit 5
-lemma tools report-feedback "..."                    # the tool set is: web-search, report-feedback
+lemma feedback --category cli --subject "…" \
+  --issue-encountered "…" --expected-behavior "…" --actual-behavior "…"
 ```
 
 Third-party connector operations — **`run` does the whole thing in one call**:
