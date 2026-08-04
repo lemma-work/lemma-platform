@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
     AgentHostHarnessResponse,
     AgentHostPairingCreated,
@@ -72,6 +72,35 @@ export const useAgentHostHarnesses = (hostId?: string | null) => {
                 ? SETTLING_REFETCH_MS
                 : SETTLED_REFETCH_MS,
     });
+};
+
+/**
+ * Which computer each published harness was found on.
+ *
+ * A saved coding agent carries only its `harness_id`, so a model list has no
+ * way to say where it runs — and "Claude Code" with no machine beside it is the
+ * one thing a person needs to know before picking it in a chat. Same query keys
+ * as `useAgentHostHarnesses`, so the per-computer cards and this share one
+ * request rather than doubling them.
+ */
+export const useAgentHostHarnessOwners = (hosts: readonly AgentHost[]) => {
+    const results = useQueries({
+        queries: hosts.map((host) => ({
+            queryKey: agentHostHarnessesQueryKey(host.id),
+            queryFn: () => getLemmaClient().agentHost.listHarnesses(host.id),
+            staleTime: 2000,
+        })),
+    });
+
+    const owners = new Map<string, string>();
+    results.forEach((result, index) => {
+        const host = hosts[index];
+        if (!host) return;
+        for (const harness of result.data?.items ?? []) {
+            owners.set(harness.id, host.display_name);
+        }
+    });
+    return owners;
 };
 
 // A paired computer belongs to the person who paired it, not to a workspace:
