@@ -788,11 +788,10 @@ impl HostProcessManager {
         }
 
         let spec = self.process_spec_for_spawn(id)?;
-        #[allow(unused_mut)]
         let mut child = spawn_process(&spec, &self.log_dir)?;
         #[cfg(windows)]
         assign_child_to_windows_job(self.windows_job, &mut child)?;
-        if let Err(error) = self.record_child(id, &child) {
+        if let Err(error) = self.record_child(id, &mut child) {
             if let Some(status) = child.try_wait()? {
                 let excerpt = tail_log(&self.log_dir.join(format!("{id}.log")), 8 * 1024);
                 let suffix = excerpt
@@ -1115,12 +1114,12 @@ impl HostProcessManager {
         excerpt
     }
 
-    fn record_child(&self, id: &str, child: &Child) -> io::Result<()> {
+    fn record_child(&self, id: &str, child: &mut Child) -> io::Result<()> {
         let _guard = self
             .process_ledger_lock
             .lock()
             .expect("process ledger lock poisoned");
-        let identity = process_identity(child.id())?;
+        let identity = settled_process_identity(child)?;
         let generation = self
             .runtime_generation
             .lock()
@@ -1321,6 +1320,10 @@ fn reclaim_verified_processes(
 const IDENTITY_SETTLE_ATTEMPTS: u32 = 20;
 #[cfg(unix)]
 const IDENTITY_SETTLE_INTERVAL: Duration = Duration::from_millis(25);
+/// The backstop for `settled_process_identity`, which normally stops on one of
+/// the two things it is actually watching for rather than on the clock.
+#[cfg(unix)]
+const IDENTITY_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// One `ps` query. `Ok(None)` means the process exists but has not yet reported
 /// a usable executable name, so the caller should look again.
@@ -1386,6 +1389,45 @@ pub(crate) fn process_identity(pid: u32) -> io::Result<ProcessIdentity> {
         io::ErrorKind::NotFound,
         "process never reported an executable path",
     ))
+}
+
+/// The identity of a child this daemon just spawned, waited for rather than
+/// sampled a fixed number of times.
+///
+/// Two things end the window in which a fresh child has no path to report: it
+/// finishes `exec`, or it exits. Both are observable, so both are what this
+/// waits on. Counting samples instead meant a child that exited immediately
+/// still cost the whole settle budget before reporting the one thing worth
+/// knowing about it — that it had already died, and with what status.
+#[cfg(unix)]
+fn settled_process_identity(child: &mut Child) -> io::Result<ProcessIdentity> {
+    let pid = child.id().to_string();
+    let deadline = Instant::now() + IDENTITY_SETTLE_TIMEOUT;
+    loop {
+        if let Some(identity) = query_process_identity(&pid)? {
+            return Ok(identity);
+        }
+        if child.try_wait()?.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "process exited before reporting an executable path",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "process never reported an executable path",
+            ));
+        }
+        thread::sleep(IDENTITY_SETTLE_INTERVAL);
+    }
+}
+
+/// Windows names a process's image at creation, so there is no window to wait
+/// out and nothing a live child can report that a query would miss.
+#[cfg(windows)]
+fn settled_process_identity(child: &mut Child) -> io::Result<ProcessIdentity> {
+    process_identity(child.id())
 }
 
 #[cfg(unix)]
@@ -1983,11 +2025,26 @@ mod tests {
         }
     }
 
-    /// A health endpoint that keeps answering, but not before `delay_ms`.
+    /// A service process that stays up until it is asked to stop.
     ///
-    /// Two of these started at once finish in about one delay; started one
-    /// after the other they cost two. That difference is the whole point of
-    /// spawning services concurrently, so the test measures it directly.
+    /// Spawned by absolute path and not through a shell, because the manager
+    /// identifies a process by the executable `ps` reports for it. `sh -c
+    /// "sleep 30"` replaces the shell with `sleep`, whose `argv[0]` is the bare
+    /// word the shell resolved on `PATH` — and a bare word is not a path that
+    /// canonicalizes, so ownership could only be recorded in the window before
+    /// the child exec'd. That is a race against the child, and a loaded machine
+    /// loses it.
+    #[cfg(unix)]
+    fn long_running_command() -> Vec<String> {
+        vec!["/bin/sleep".into(), "30".into()]
+    }
+
+    /// A health endpoint that answers only after `delay_ms` of being asked, and
+    /// reports when it first said yes.
+    ///
+    /// The delay runs from the first probe rather than from construction, so it
+    /// models a service that takes a moment to come up rather than a deadline
+    /// the test itself has to beat.
     ///
     /// The body is shared because the manager mints the runtime generation and
     /// rewrites every health spec's expected body to it, so what counts as
@@ -1995,20 +2052,29 @@ mod tests {
     fn slow_response(
         delay_ms: u64,
         body: Arc<Mutex<String>>,
-    ) -> (HttpHealthSpec, thread::JoinHandle<()>) {
+    ) -> (
+        HttpHealthSpec,
+        Arc<Mutex<Option<Instant>>>,
+        thread::JoinHandle<()>,
+    ) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
-        let ready_at = Instant::now() + Duration::from_millis(delay_ms);
         let served = Arc::clone(&body);
+        let healthy_at = Arc::new(Mutex::new(None));
+        let observed = Arc::clone(&healthy_at);
         let server = thread::spawn(move || {
+            let mut ready_at = None;
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
-                if Instant::now() < ready_at {
+                let ready =
+                    *ready_at.get_or_insert(Instant::now() + Duration::from_millis(delay_ms));
+                if Instant::now() < ready {
                     // Refuse rather than answer: the prober retries, which is
                     // what a service that has not finished booting looks like.
                     drop(stream);
                     continue;
                 }
+                observed.lock().unwrap().get_or_insert_with(Instant::now);
                 let payload = served.lock().unwrap().clone();
                 let _ = stream.write_all(
                     format!(
@@ -2027,6 +2093,7 @@ mod tests {
                 expected_body: Some("placeholder".into()),
                 stabilization_seconds: 0,
             },
+            healthy_at,
             server,
         )
     }
@@ -2478,16 +2545,21 @@ mod tests {
         // The frontend used to be spawned only after the backend passed its
         // full health gate, which put its entire boot on the critical path for
         // no reason: `next start` serves a prebuilt app and does not wait on
-        // the backend. Two services that each take a moment to answer must now
-        // overlap, so the total is about the slower one rather than the sum.
+        // the backend. What that cost is not a number of milliseconds but an
+        // ordering — the second service could not begin until the first had
+        // finished — so that is what this asserts. A total-elapsed budget would
+        // instead be a claim about the machine, and this suite runs its tests
+        // against each other.
         let body = Arc::new(Mutex::new(String::new()));
-        let (backend_health, backend_server) = slow_response(700, Arc::clone(&body));
-        let (frontend_health, frontend_server) = slow_response(700, Arc::clone(&body));
+        let (backend_health, backend_healthy_at, backend_server) =
+            slow_response(700, Arc::clone(&body));
+        let (frontend_health, frontend_healthy_at, frontend_server) =
+            slow_response(700, Arc::clone(&body));
         let mut backend = service("backend", &[]);
-        backend.command = vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()];
+        backend.command = long_running_command();
         backend.health = Some(backend_health);
         let mut frontend = service("frontend", &["backend"]);
-        frontend.command = vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()];
+        frontend.command = long_running_command();
         frontend.health = Some(frontend_health);
 
         let root = tempdir().unwrap();
@@ -2498,31 +2570,42 @@ mod tests {
         // health spec is rewritten to expect it.
         *body.lock().unwrap() = manager.prepare_runtime_generation().unwrap();
 
-        let started = Instant::now();
-        manager.start_all().unwrap();
-        let elapsed = started.elapsed();
+        // The manager announces each service as it reaches it, which is the
+        // only account of when a boot began that does not depend on guessing.
+        let mut boot_started = HashMap::new();
+        manager
+            .start_all_with_progress(|stage| {
+                boot_started.insert(stage.to_owned(), Instant::now());
+            })
+            .unwrap();
         manager.stop_all().unwrap();
         drop(backend_server);
         drop(frontend_server);
 
-        assert!(
-            elapsed < Duration::from_millis(1300),
-            "serialized boot would have cost both delays; took {elapsed:?}",
-        );
+        // The first health gate to pass is the earliest moment any service can
+        // be said to have finished booting. Both had to be under way by then.
+        let first_healthy = [&backend_healthy_at, &frontend_healthy_at]
+            .into_iter()
+            .filter_map(|healthy_at| *healthy_at.lock().unwrap())
+            .min()
+            .expect("a service answered its health gate");
+        for id in REQUIRED_SERVICES {
+            let started = boot_started[id];
+            assert!(
+                started < first_healthy,
+                "{id} only began booting {:?} after another service was already healthy",
+                started.saturating_duration_since(first_healthy),
+            );
+        }
     }
 
     #[cfg(unix)]
     #[test]
     fn backend_config_restart_keeps_the_frontend_process_running() {
-        let command = vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            "trap 'exit 0' TERM; while :; do sleep 1; done".into(),
-        ];
         let mut backend = service("backend", &[]);
-        backend.command = command.clone();
+        backend.command = long_running_command();
         let mut frontend = service("frontend", &["backend"]);
-        frontend.command = command;
+        frontend.command = long_running_command();
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
@@ -2552,42 +2635,90 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn process_status(manager: &HostProcessManager, id: &str) -> HostProcessStatus {
+        manager
+            .status()
+            .into_iter()
+            .find(|process| process.id == id)
+            .unwrap_or_else(|| panic!("{id} is not a managed service"))
+    }
+
+    /// Kills a running service the way a crash takes one: no notice, no chance
+    /// to shut down. The whole process group goes, so nothing of it survives to
+    /// be reported as still running.
+    #[cfg(unix)]
+    fn crash(manager: &HostProcessManager, id: &str) {
+        let pid = process_status(manager, id)
+            .pid
+            .unwrap_or_else(|| panic!("{id} is not running"));
+        let group = -i32::try_from(pid).expect("process id fits a signed integer");
+        // SAFETY: the pid names a child this manager spawned into its own
+        // process group and has not yet reaped, so the group is still ours.
+        assert_eq!(
+            unsafe { libc::kill(group, libc::SIGKILL) },
+            0,
+            "could not crash {id}: {}",
+            io::Error::last_os_error()
+        );
+    }
+
+    /// Blocks until the supervisor has recorded that `id` exited.
+    ///
+    /// Reporting status is what reaps an exited child, so this is the same
+    /// observation the supervision loop makes — waited for, rather than assumed
+    /// to have happened by the end of a sleep that a loaded machine outruns.
+    #[cfg(unix)]
+    fn wait_for_recorded_exit(manager: &HostProcessManager, id: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while process_status(manager, id).running {
+            assert!(
+                Instant::now() < deadline,
+                "{id} never reported the exit it was killed for"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn opens_restart_circuit_after_crash_budget_is_exhausted() {
         let mut backend = service("backend", &[]);
-        backend.command = vec!["/bin/sh".into(), "-c".into(), "exit 17".into()];
+        backend.command = long_running_command();
         backend.restart = RestartSpec {
             max_restarts: 1,
             window_seconds: 60,
             backoff_seconds: 0,
         };
         let mut frontend = service("frontend", &["backend"]);
-        frontend.command = vec![
-            "/bin/sh".into(),
-            "-c".into(),
-            "trap 'exit 0' TERM; while :; do sleep 1; done".into(),
-        ];
+        frontend.command = long_running_command();
         let root = tempdir().unwrap();
         let mut value = manifest(vec![frontend, backend]);
         value.setup[0].command = vec!["/usr/bin/true".into()];
         let manager = HostProcessManager::new(value, root.path().into()).unwrap();
 
         manager.start_all().unwrap();
-        thread::sleep(Duration::from_millis(50));
-        manager.reconcile_crashes();
-        manager.reconcile_crashes();
-        thread::sleep(Duration::from_millis(50));
+
+        // One restart is budgeted, so it takes two crashes to exhaust it. Each
+        // crash is followed by the supervisor actually observing the exit,
+        // because reconciling one it has not seen yet is a no-op, and a run
+        // that does that silently ends up asserting against a supervisor still
+        // a step behind.
+        crash(&manager, "backend");
+        wait_for_recorded_exit(&manager, "backend");
+        manager.reconcile_crashes(); // spends the budgeted restart
+        manager.reconcile_crashes(); // and performs it
+        assert!(process_status(&manager, "backend").running);
+
+        crash(&manager, "backend");
+        wait_for_recorded_exit(&manager, "backend");
         manager.reconcile_crashes();
 
-        let backend = manager
-            .status()
-            .into_iter()
-            .find(|process| process.id == "backend")
-            .unwrap();
+        let backend = process_status(&manager, "backend");
         assert!(!backend.running);
         assert!(backend.circuit_open);
         assert_eq!(backend.restart_count, 1);
         assert!(backend.last_exit.is_some());
+        assert!(process_status(&manager, "frontend").running);
         manager.stop_all().unwrap();
     }
 }
