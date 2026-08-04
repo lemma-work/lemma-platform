@@ -1946,6 +1946,7 @@ fn is_loopback(address: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::port_reservation::PortReservation;
     use std::net::{Ipv4Addr, TcpListener};
     use tempfile::tempdir;
 
@@ -2299,9 +2300,8 @@ mod tests {
     #[test]
     fn migration_setup_waits_for_its_exact_database_route() {
         let root = tempdir().unwrap();
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
+        let reservation = PortReservation::ephemeral().unwrap();
+        let address = reservation.address();
         let mut value = manifest(vec![
             service("frontend", &["backend"]),
             service("backend", &[]),
@@ -2321,7 +2321,12 @@ mod tests {
         // minutes of a CI runner before it was cancelled rather than failing.
         let route = thread::spawn(move || {
             thread::sleep(Duration::from_millis(150));
-            let listener = TcpListener::bind(address).unwrap();
+            // The port stays reserved for the whole wait, so no other test in
+            // this binary can be handed it. Until this line the reservation is
+            // bound but not listening, so `run_setups` is refused exactly as an
+            // absent route would refuse it; here the same socket starts
+            // listening, so the route opens without the port ever being free.
+            let listener = reservation.listen().unwrap();
             listener.set_nonblocking(true).unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
             while Instant::now() < deadline {

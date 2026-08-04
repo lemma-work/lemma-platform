@@ -770,13 +770,15 @@ mod tests {
         drop(forwarder);
 
         // `local` is an ephemeral port, so its number is back in the machine's
-        // pool the instant Drop returns, and this binary hands ephemeral port
-        // numbers around and re-binds them later (`reserve_loopback_port`,
-        // `ports_available`) - one of those can and does take `local` in the
-        // microseconds that follow. "Nothing can bind `local`" is therefore a
-        // claim about the whole test binary rather than about this forwarder,
-        // and asserting it is what made this test flake. Assert instead what is
-        // only ever true of the forwarder: it stopped serving that port.
+        // pool the instant Drop returns, and this binary keeps taking ephemeral
+        // ports - every `PortReservation::ephemeral` and every test that binds
+        // port 0 - so one of them can and does take `local` in the microseconds
+        // that follow. "Nothing can bind `local`" is therefore a claim about the
+        // whole test binary rather than about this forwarder, and asserting it
+        // is what made this test flake. Assert instead what is only ever true of
+        // the forwarder: it stopped serving that port. A reservation that took
+        // the number lands in the refused branch below, since reservations bind
+        // without listening.
         target.set_nonblocking(true).unwrap();
         match TcpStream::connect_timeout(&local, Duration::from_secs(5)) {
             Err(error) => assert_eq!(
