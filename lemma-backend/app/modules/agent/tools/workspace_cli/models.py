@@ -7,47 +7,32 @@ from pydantic import BaseModel, Field
 from app.modules.agent.tools.context import BaseToolResponse
 
 
-WORKSPACE_TOOL_COMMENT_DESC = "Short, one-line goal statement for this tool call to show users what is being worked on."
+WORKSPACE_TOOL_COMMENT_DESC = "One-line statement of intent, shown to the user."
 
 
 class ExecCommandRequest(BaseModel):
-    cmd: str = Field(
-        description=(
-            "Exact shell command to execute. Include the full command string as you "
-            "would run it in a terminal. This runs inside an isolated workspace; "
-            "`localhost` is the workspace container, not the host Lemma app. Use "
-            "the injected Lemma CLI environment for pod operations."
-        )
-    )
+    cmd: str = Field(description="Shell command to run, exactly as in a terminal.")
     comment: Optional[str] = Field(
         default=None,
         description=WORKSPACE_TOOL_COMMENT_DESC,
     )
     max_output_tokens: int = Field(
         default=10000,
-        description=(
-            "Maximum output tokens to return before truncating stdout/stderr for "
-            "this call. Defaults to 10000."
-        ),
+        description="Truncate stdout/stderr past this many tokens.",
     )
     tty: bool = Field(
         default=False,
         description=(
-            "Set true to allocate an interactive terminal session. Required for "
-            "commands that stay alive or wait for input (for example `npm run dev`, "
-            "`python`, `bash`). An interactive process does not survive the "
-            "sandbox being paused while you are idle, so treat it as belonging "
-            "to the current stretch of work."
+            "Allocate an interactive terminal. Required for commands that stay "
+            "alive or wait for input (`npm run dev`, `python`). Such a process "
+            "does not survive an idle pause."
         ),
     )
     cols: int = Field(
         default=120,
         ge=20,
         le=500,
-        description=(
-            "Terminal width for `tty` commands. Widen it for programs that "
-            "render tables or wide output."
-        ),
+        description="Terminal width for `tty` commands; widen for wide output.",
     )
     rows: int = Field(
         default=40,
@@ -57,28 +42,19 @@ class ExecCommandRequest(BaseModel):
     )
     workdir: Optional[str] = Field(
         default=None,
-        description=(
-            "Working directory for the command. Relative paths are resolved inside "
-            "the workspace."
-        ),
+        description="Working directory; relative paths resolve inside the workspace.",
     )
     yield_time_ms: Optional[int] = Field(
         default=None,
-        description=(
-            "How long to wait for output before returning, in milliseconds. Lower "
-            "values stream progress faster; higher values batch more output."
-        ),
+        description="Milliseconds to wait for output before returning.",
     )
     timeout_seconds: Optional[int] = Field(
         default=None,
         ge=10,
         le=300,
         description=(
-            "Set a blocking timeout in seconds instead of the default 30-second yield window. "
-            "When set, the command blocks until completion or the timeout expires — "
-            "`completed: true` is always returned (no `process_id`). "
-            "Use for commands expected to take longer than 30 s, e.g. large data fetches. "
-            "Omit to use the default 30-second yield behavior."
+            "Block up to this many seconds instead of the default 30s yield "
+            "window; always returns `completed: true` with no `process_id`."
         ),
     )
 
@@ -141,47 +117,28 @@ class ManageProcessRequest(BaseModel):
     """Drive a process started by `exec_command` (interactive or long-running)."""
 
     action: Literal["input", "kill", "list", "resize"] = Field(
-        description=(
-            "'input' = send chars to (or poll output from) a running process; "
-            "'kill' = stop a process; 'list' = list tracked processes; "
-            "'resize' = change an interactive terminal's size."
-        )
+        description="What to do with the process."
     )
     process_id: Optional[str] = Field(
         default=None,
-        description=(
-            "Process ID from `exec_command`. Required for 'input', 'kill', and "
-            "'resize'."
-        ),
+        description="From `exec_command`. Required for every action but 'list'.",
     )
     chars: Optional[str] = Field(
         default=None,
         description=(
-            'For action="input": characters to send to stdin. Use `""` to poll '
-            "output without sending input. Include `\\n` to press Enter. "
-            "Control keys are sent as characters: `\\u0003` interrupts (Ctrl-C) "
-            "and `\\u0004` sends EOF (Ctrl-D) to leave a REPL."
+            'Stdin for action="input"; `""` polls output without sending. Include '
+            "`\\n` for Enter. `\\u0003` is Ctrl-C, `\\u0004` is Ctrl-D."
         ),
     )
-    cols: int = Field(
-        default=120,
-        ge=20,
-        le=500,
-        description='For action="resize": new terminal width in columns.',
-    )
-    rows: int = Field(
-        default=40,
-        ge=5,
-        le=200,
-        description='For action="resize": new terminal height in rows.',
-    )
+    cols: int = Field(default=120, ge=20, le=500, description="Width, for 'resize'.")
+    rows: int = Field(default=40, ge=5, le=200, description="Height, for 'resize'.")
     max_output_tokens: int = Field(
         default=10000,
-        description='For action="input": max output tokens to return. Defaults to 10000.',
+        description="Truncate returned output past this many tokens.",
     )
     yield_time_ms: Optional[int] = Field(
         default=None,
-        description='For action="input": how long to wait for new output, in ms.',
+        description="Milliseconds to wait for new output.",
     )
     comment: Optional[str] = Field(
         default=None,
@@ -207,19 +164,15 @@ class ViewImageRequest(BaseModel):
     pod_file_path: Optional[str] = Field(
         default=None,
         description=(
-            "Path to an image file in the pod datastore, e.g. `/me/photo.jpg`. "
-            "These are user-uploaded or ingested files; use `pod_list_files` or "
-            "`pod_search_files` to discover exact paths. Set this OR "
+            "Image in the pod datastore, e.g. `/me/photo.jpg`. Set this or "
             "`workspace_file_path`, not both."
         ),
     )
     workspace_file_path: Optional[str] = Field(
         default=None,
         description=(
-            "Path to an image file in the conversation workspace sandbox — a "
-            "relative path such as `images/output.png` or one under `/workspace/`. "
-            "Use for artifacts the agent just produced (screenshots, charts). Set "
-            "this OR `pod_file_path`, not both."
+            "Image in the workspace sandbox, e.g. `images/output.png` — for "
+            "artifacts you just produced. Set this or `pod_file_path`, not both."
         ),
     )
     # NB: the "exactly one path" rule is enforced in view_image_internal, not via a

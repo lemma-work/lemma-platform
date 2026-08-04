@@ -102,22 +102,30 @@ Rules:
 - The header comment lines are **required and validated**: `#input_type_name`,
   `#output_type_name`, `#function_name` (must equal the resource/folder name), and
   `#config_type_name` when the code defines a config model. An optional
-  `#python_packages` header (see below) declares pip dependencies. They must be the
-  first lines of the file.
+  `#python_packages` header (see below) declares pip dependencies. Only the
+  **first 8 lines** are scanned, and scanning stops at the first line that isn't a
+  `#key: value` comment — a header below that is silently ignored, and you get
+  *"Missing function code header(s)"*.
 - Handler signature is `(ctx: FunctionContext, data: <InputModel>) -> <OutputModel>`,
   async or sync.
 - `FunctionContext` fields: `ctx.pod_id`, `ctx.function_id`, `ctx.user_id`,
-  `ctx.user_email` (the **invoking** user — your delegated identity), `ctx.config`.
+  `ctx.user_email` (the **invoking** user — your delegated identity), `ctx.config`,
+  and `ctx.pod` (a ready `Pod` client — see below).
 - Keep input/output models small and JSON-serializable. Return ids and compact
   summaries, not big record lists.
+- A function is only runnable once it reaches **`READY`**, which happens when it is
+  imported *with code*. A function row created without `code` stays `DRAFT` and
+  every run fails with *"Function has no ready executable revision"*.
 
 ## Python package dependencies
 
-Common data packages — `numpy`, `pandas`, `matplotlib`, `openpyxl`, `pillow`,
-`requests`, `tabulate` — are pre-installed. To use any other PyPI package, declare
-it in a `#python_packages:` header line (with the other headers). The executor
-installs declared packages before the function runs, so you can import them
-normally:
+The function sandbox is **deliberately minimal**: `httpx`, `lemma-sdk`, `pydantic`,
+`starlette`, `uvicorn`, and OpenTelemetry. `pandas`, `numpy`, `matplotlib` and
+friends are **not** there — that list belongs to the *workspace* (agent code
+execution) image, which is a different environment. `import pandas` in a function
+with no `#python_packages` fails at run time.
+
+To use any other PyPI package, declare it in a `#python_packages:` header line:
 
 ```python
 #input_type_name: ScrapeInput
@@ -131,23 +139,42 @@ from pydantic import BaseModel, ...
 
 - Each entry is a PyPI name with an optional `[extras]` and version specifier —
   e.g. `pandas`, `pandas==2.2`, `requests[socks]`, `numpy>=1.0,<2.0`. Entries are
-  separated by spaces or commas. URLs, paths, pip flags, and spaces *inside* an
-  entry are rejected.
-- Packages install on the **first** run after a code change (then they're cached),
-  so that first call is slower; for heavy packages, raise the caller's
-  `timeout_seconds`. The install is shared with `execute_python` — no virtualenv to
-  manage.
+  split on **whitespace** (a trailing comma is tolerated, so `pandas, numpy` is
+  fine — but `pandas,numpy` with no space is one invalid token and is rejected).
+  URLs, paths, and pip flags are rejected. Max 30 packages, 128 chars each.
+- **Packages are installed at import time, not at run time.** `lemma pods import`
+  resolves and vendors them into an immutable, content-addressed artifact, so the
+  slow step is the import; runs just download and cache that artifact. A bad
+  package name therefore fails your **import**, not your first call.
+- Wheels only (`--no-build`), targeting Python 3.14 / `x86_64-manylinux_2_28`. A
+  package that ships only a source distribution cannot be installed.
+- This environment is **not** shared with `execute_python`, which lives in the
+  workspace container. Two separate environments.
 
-## The in-function SDK — `Pod.from_env()`
+## The in-function SDK — `ctx.pod`
 
-The sandbox has the `lemma_sdk` package installed and injects `LEMMA_TOKEN` (the
-workload token carrying this function's grants, scoped to the invoking user) and
-`LEMMA_POD_ID`. So:
+The sandbox binds a client to the invocation, so the shortest path is the context
+you were handed:
+
+```python
+async def execute(context, data: Input) -> Output:
+    pod = context.pod          # already authenticated for this invocation
+```
+
+`Pod.from_env()` is equivalent and is what you want in a helper that doesn't have
+`ctx` to hand. The runtime also exports `LEMMA_TOKEN`, `LEMMA_BASE_URL`,
+`LEMMA_POD_ID`, `LEMMA_ORG_ID`, `LEMMA_USER_ID`, and `LEMMA_USER_EMAIL`.
 
 ```python
 from lemma_sdk import Pod
 pod = Pod.from_env()        # authenticated as the invoking user, with this function's grants
 ```
+
+**What that identity means** is the part people get wrong. The call runs as the
+**invoking user**, so RLS tables scope to *their* rows and `/me` is *their* tree —
+but authorization is **grant-first**: the user's own roles do **not** carry over.
+The function needs its own explicit grant on every table, folder, and connector it
+touches, or the call comes back 403 even though the user could do it by hand.
 
 `Pod` exposes resource facades (all synchronous): `pod.records` / `pod.table(name)`,
 `pod.files`, `pod.connectors`, `pod.workflows`, `pod.agents`, `pod.conversations`,
@@ -155,10 +182,12 @@ and `pod.query(sql)`. Single-record helpers return plain dicts; list/query helpe
 return typed response objects — call `.to_dict()` on those to get plain data. Errors
 raise `LemmaAPIError` with `.status_code`, `.message`, `.code`.
 
-> **Read the SDK source when unsure.** The full Python SDK ships in the sandbox at
-> **`/sdk/lemma-python`** (and the TypeScript SDK at `/sdk/lemma-typescript`). When
-> you need an exact method signature, argument name, or response shape, read it
-> directly instead of guessing or trial-running:
+> **Read the SDK source when unsure.** The full Python SDK is readable at
+> **`/sdk/lemma-python`** (and the TypeScript SDK at `/sdk/lemma-typescript`) **in
+> the agent workspace** — that is where you author and inspect it. (The function
+> sandbox itself has no `/sdk` mount; don't shell out to these paths from function
+> code.) When you need an exact method signature, argument name, or response
+> shape, read it directly instead of guessing:
 > ```bash
 > cat /sdk/lemma-python/lemma_sdk/resources/data.py        # tables, records, queries
 > cat /sdk/lemma-python/lemma_sdk/resources/files.py       # files
@@ -295,7 +324,7 @@ from the CLI first (`lemma connectors operations search/details …` — see
 # Send an email via Gmail (then send a public file link from above)
 sent = pod.connectors.execute(
     "workspace-gmail",                  # the AUTH CONFIG name (not the bare connector id)
-    "GMAIL_SEND_EMAIL",                 # operation id from `operations search`
+    "gmail_send_email",                 # operation id from `operations search`
     {
         "recipient_email": data.to,
         "subject": "Your report is ready",
@@ -306,13 +335,14 @@ sent = pod.connectors.execute(
 # List the next calendar events
 events = pod.connectors.execute(
     "workspace-gcal",
-    "GOOGLECALENDAR_EVENTS_LIST",
+    "googlecalendar_events_list",
     {"calendarId": "primary", "maxResults": 10, "singleEvents": True, "orderBy": "startTime"},
 ).to_dict()["result"]
 ```
 
-Operation ids and payload keys differ between the `LEMMA` and `COMPOSIO` providers —
-always confirm with `operations details` for the provider your org installed. Don't
+Operation ids and payload keys differ between connector **kinds** (`package` vs
+`composio`) — always confirm with `operations details` for the kind your org
+installed. Don't
 resolve or pass `account_id` in code unless you must pin a specific account: the
 backend selects the configured fixed account or the **invoking user's** connected
 account from the workload token. The connector must be granted to the function
@@ -356,6 +386,12 @@ whatever pod you import into):
 | `datastore_table` | the table name | `expenses` |
 | `folder` | the **stored folder path, no prefix** | `/reports`, `/knowledge` |
 | `connector` | the connector id | `gmail` |
+| `connector_account` | a specific connected account | pin a shared account |
+
+`connector` is what you want almost always: the workload resolves the *invoking
+user's* own account. `connector_account` is the exception — it pins one shared
+account (a team inbox, a bot token) so every caller acts through it regardless of
+who invoked. See `authorization-model.md` §8.
 
 > **File grants take the bare path.** The grant `resource_name` for a folder is the
 > path as stored — `/knowledge`, `/reports` — with **no** `/pod` (or any) prefix.
@@ -461,8 +497,8 @@ lemma functions run save_expense --data '{"merchant":"Delta","amount":420.0}'
 lemma functions run save_expense --file payloads/save_expense.input.json
 lemma --output json functions run save_expense --data '{...}'   # parse output_data/status/logs
 
-# API-type runs block and return the result; JOB-type runs are async — start
-# with --no-wait, then inspect past runs while debugging:
+# `run` waits by default for API *and* JOB; pass --no-wait to fire and inspect
+# later (--wait-timeout defaults to 180s). To debug past runs:
 lemma functions runs list save_expense          # recent runs (latest first)
 lemma functions runs get save_expense <run-id>  # status, input, output, logs, error
 ```
@@ -473,9 +509,10 @@ make past runs inspectable, so debugging is not a black box.
 
 ## Limits & gotchas
 
-- **Schemas are immutable after create.** Changing the Pydantic models in code does
-  **not** update `input_schema`/`output_schema` on upsert. Delete and recreate the
-  function (or version the name) for schema changes.
+- **Schemas follow the code.** `input_schema`, `output_schema`, and `config_schema`
+  are re-extracted from your Pydantic models on **every** code-bearing create or
+  update, import included. Edit the models and re-import; there is no need to
+  delete, recreate, or version the name.
 - **Zero default access.** A function with code but no grants fails at the first
   table/file/connector touch with `MISSING_WORKLOAD_RESOURCE_GRANT` — grant exactly
   what the named resource asks for. Grants are replaced wholesale on import.

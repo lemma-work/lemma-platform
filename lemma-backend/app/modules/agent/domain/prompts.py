@@ -27,6 +27,7 @@ _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
+_AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 
 # Per-toolset prompt fragments, in the order they should appear in the system
 # prompt. Only the visible/core toolsets that carry usage guidance are listed;
@@ -76,6 +77,11 @@ def load_todo_prompt() -> str:
 
 def load_speech_prompt() -> str:
     return _read_required_prompt(_SPEECH_PROMPT_PATH)
+
+
+def load_agent_host_runtime_prompt() -> str:
+    """Runtime guidance for a run driven through Agent Host (remote harness)."""
+    return _read_required_prompt(_AGENT_HOST_RUNTIME_PROMPT_PATH)
 
 
 def load_toolset_fragment(toolset: AgentToolset) -> str | None:
@@ -179,38 +185,17 @@ def _workspace_directory_section(
     cwd = _workspace_cwd(ctx, conversation)
     return (
         "# Working Directory\n"
-        f"Your working directory in the workspace sandbox is `{cwd}`. The whole "
-        "sandbox is yours: do all of your work here by default and create "
-        "subfolders under it as you need them. Never create a parallel project "
-        "root directly under `/workspace`. Files you write here are private to "
-        "you — the user does not see them.\n\n"
-        "Each conversation gets its own directory under `/workspace/c/`, and "
-        "your sandbox keeps them all. So an empty working directory means this "
-        "is a new conversation — it does NOT mean the sandbox was reset or your "
-        "earlier work was lost. Earlier work is still on disk under another "
-        "`/workspace/c/<date>/<slug>` directory; list `/workspace/c/` to find "
-        "it. If a tool result explicitly tells you the workspace was recreated, "
-        "then and only then treat prior files as gone.\n\n"
-        "What persists: files under `/workspace` survive across the sandbox "
-        "being paused while you are idle. What does not: running processes and "
-        "your `execute_python` kernel are ephemeral and are lost on a pause, so "
-        "don't build a plan around a long-running background process staying "
-        "alive between turns. Prefer `/workspace` over `/tmp` so your work sits "
-        "with the rest of it.\n\n"
-        "Your `execute_python` kernel and `exec_command` shell both start in "
-        "this directory, so write to relative paths (e.g. `chart.png`, "
-        "`data/out.csv`) to keep files here. A `cd` inside one `exec_command` "
-        "does not carry over to the next call; pass `workdir` or use paths "
-        "relative to this directory instead. To use a Python package that isn't "
-        "installed yet, run `pip install <package>` (via `exec_command`), then "
-        "import it in `execute_python`; use plain `pip install`, not "
-        "`uv pip install`. If the import still fails right after installing, "
-        "restart your kernel and import again.\n\n"
-        "When you produce a deliverable for the user, save it into the pod file "
-        "system with the `lemma` CLI — default to the user's personal files at "
-        "`/me/<topic-folder>/...` (e.g. `lemma files upload ./report.md "
-        "/me/reports/report.md`) — and share that pod path, not the private "
-        "sandbox path."
+        f"Your working directory is `{cwd}`. Files you write here are private "
+        "to you until you upload them to pod files.\n\n"
+        "An empty working directory means this is a **new conversation**, not a "
+        "reset sandbox. Earlier conversations' work is still on disk under "
+        "another `/workspace/c/<date>/<slug>`; list `/workspace/c/` to find it. "
+        "Treat prior files as gone only if a tool result says the workspace was "
+        "recreated.\n\n"
+        "Files under `/workspace` survive an idle pause; running processes and "
+        "your `execute_python` kernel do not, so don't plan around a background "
+        "process living between turns. A `cd` in one `exec_command` does not "
+        "carry to the next — pass `workdir` or use relative paths."
     )
 
 

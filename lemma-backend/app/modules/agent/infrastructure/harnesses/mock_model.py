@@ -92,9 +92,15 @@ def _current_run_turn_index(messages: Sequence[ModelMessage]) -> int:
 
 
 def _last_user_text(messages: Sequence[ModelMessage]) -> str:
+    """The user's own last message.
+
+    Parts are scanned in reverse as well as messages: a request can carry more
+    than one ``UserPromptPart`` — the runtime-notes block is prepended to the
+    user's turn — and the *user's* text is the last of them, not the first.
+    """
     for message in reversed(messages):
         if isinstance(message, ModelRequest):
-            for part in message.parts:
+            for part in reversed(message.parts):
                 if isinstance(part, UserPromptPart):
                     content = part.content
                     return content.strip() if isinstance(content, str) else str(content)

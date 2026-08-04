@@ -23,15 +23,28 @@ A workflow is a graph; a **run** is one execution with a durable context. The po
 rules that matter here are about *whose identity each step runs under* and *how that
 scopes data*:
 
-- **Every run has one delegated identity.** A run is owned by the user who started it
-  (the human who called `workflows run`, the schedule's configured user, the
-  event/datastore trigger's user). **`FUNCTION` and `AGENT` nodes run as that
-  identity** — they are workloads delegated to the run owner, exactly like a directly
-  invoked function or agent. So on an RLS table a node reads only the **run owner's**
-  rows and stamps writes with **their** id; `/me` is the run owner's tree; a connector
-  call goes through the run owner's connected account. A `FUNCTION`/`AGENT` node never
-  sees more rows than the run owner would. (Plan RLS accordingly: a workflow that must
-  read *all* members' rows needs **shared** tables, not RLS — see `tables.md`.)
+- **Every run has one delegated identity.** Who that is depends on how the run
+  started:
+  - `workflows run` — the human who called it.
+  - A **`TIME`** or **`WEBHOOK`** schedule — the schedule's configured user.
+  - A **`DATASTORE`** schedule on an **RLS** table — the **owner of the row that
+    changed**, not the schedule's creator. (A datastore fire that somehow carries
+    no owner is an error, not a fallback.)
+  - A **`DATASTORE`** schedule on a **shared** table — no row has an owner there,
+    so it falls back to the schedule's creator.
+
+  **`FUNCTION` and `AGENT` nodes run as that identity** — they are workloads
+  delegated to the run owner, exactly like a directly invoked function or agent.
+  So on an RLS table a node reads only the **run owner's** rows and stamps writes
+  with **their** id; `/me` is the run owner's tree; a connector call goes through
+  the run owner's connected account. A `FUNCTION`/`AGENT` node never sees more
+  rows than the run owner would.
+
+  Plan RLS around both directions of that: a workflow that must read *all*
+  members' rows needs **shared** tables (see `tables.md`) — but a workflow that
+  should run *as each member, over their own rows* wants an **RLS** table plus a
+  `DATASTORE` trigger, which is the per-user agentic pattern in
+  `app-recipes/rls-table.md`.
 - **Zero access by default still applies — per node's workload.** A `FUNCTION` node's
   function and an `AGENT` node's agent each need their **own** name-based grants for
   the tables/files/connectors they touch; the workflow does not lend them access. A
@@ -166,7 +179,7 @@ in (see `agents.md`).
 }
 ```
 
-Use for validation, calculations, reliable writes, external API calls. Async (`JOB`) functions suspend on a FUNCTION wait until the run finishes. Like the AGENT node, a FUNCTION node runs **as the run's owner** with **the function's own grants** — RLS-scoped to that user; grant every table/file/connector the function touches (see `functions.md`).
+Use for validation, calculations, reliable writes, external API calls. A FUNCTION node dispatches **asynchronously for `API` and `JOB` alike** and suspends on a FUNCTION wait until the run finishes, so the node's own type doesn't change how the workflow waits. Like the AGENT node, a FUNCTION node runs **as the run's owner** with **the function's own grants** — RLS-scoped to that user; grant every table/file/connector the function touches (see `functions.md`).
 
 ### DECISION — branching
 
@@ -273,7 +286,7 @@ Intake form → agent parse → second-reviewer approval → branch → per-item
   "nodes": [
     { "id": "intake", "type": "FORM", "label": "Reviewer A intake",
       "config": {
-        "assignee_pod_member_id": "POD_MEMBER_ID_A",
+        "assignee_pod_member_id": "${reviewer}",
         "input_schema": { "type": "object",
           "properties": { "raw": { "type": "string" } }, "required": ["raw"] } } },
     { "id": "parse", "type": "AGENT", "label": "Parse input",

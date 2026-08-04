@@ -27,38 +27,15 @@ async def exec_command(
     """
     Run a shell command in the private conversation workspace.
 
-    Use this for repo inspection, builds, tests, and file edits through standard CLI commands.
-    The workspace injects Lemma environment variables for the current user/pod, so
-    `lemma ...` CLI commands may be used for pod operations when the task calls for
-    them. Do not use raw localhost probes to diagnose host Lemma API/Auth
-    availability: the command runs inside an isolated workspace, so `localhost` is
-    the workspace container, not the host backend.
-    The workspace is a sandbox: files created here are not directly visible to the
-    user. Upload final deliverables to pod files under `/me/...` with `lemma files
-    upload` before presenting or referencing them as user-accessible files.
+    Use it for repo inspection, builds, tests, file edits, and `lemma` CLI calls
+    (pod credentials are pre-injected). `localhost` is this container, not the
+    Lemma backend.
 
-    Modes:
-    - One-shot (`tty=false`, default): returns after a short initial wait. Quick commands complete normally;
-      long-running commands return `process_id` instead of blocking the agent.
-    - Interactive (`tty=true`): starts a real TTY terminal process and returns `process_id` for follow-up input.
-    - Commands run in the workspace container directly; no sandbox/escalation fields are used here.
-
-    Interactive workflow (for commands like `npm run dev`):
-    1) Start with `tty=true`:
-       `{"cmd":"npm run dev","tty":true,"yield_time_ms":1000}`
-    2) Continue with `manage_process` using the returned `process_id`:
-       - poll output: `{"action":"input","process_id":"...","chars":"","yield_time_ms":1000}`
-       - send input: `{"action":"input","process_id":"...","chars":"q\\n"}`
-       - stop it: `{"action":"kill","process_id":"..."}`
-
-    Use `manage_process` with `{"action":"list"}` before starting another
-    long-running server or when you need to find a process started earlier.
-
-    Editing files via CLI example:
-    - Overwrite file:
-      `{"cmd":"cat > src/config.json <<'EOF'\\n{\\\"mode\\\":\\\"dev\\\"}\\nEOF"}`
-    - Append line:
-      `{"cmd":"echo 'export DEBUG=1' >> .env.local"}`
+    Default (`tty=false`) returns after a short wait; a command still running
+    returns a `process_id` instead of blocking. `tty=true` starts a real terminal
+    for interactive commands. Either way, drive the process afterwards with
+    `manage_process` — poll or send input with `action="input"`, stop it with
+    `action="kill"`, and use `action="list"` to find processes started earlier.
     """
     return await workspace_cli.exec_command(ctx.deps, request)
 
@@ -68,20 +45,12 @@ async def manage_process(
     request: ManageProcessRequest,
 ) -> Any:
     """
-    Drive a process started by `exec_command` (interactive or long-running).
+    Drive a process started by `exec_command`.
 
-    One tool, three actions:
-    - `action="input"` — send characters to (or just poll output from) a running
-      process. Needs `process_id`. Poll logs with `chars=""`; respond to a prompt
-      with `chars="y\\n"`; run another command in the same shell with
-      `chars="npm test\\n"`.
-    - `action="kill"` — stop a process by `process_id` (servers, REPLs, watchers,
-      or anything started accidentally).
-    - `action="list"` — list tracked shell processes in this workspace (find dev
-      servers/REPLs before polling, stopping, or starting another).
-    - `action="resize"` — change an interactive terminal's `cols`/`rows` when
-      output is wrapping badly or a full-screen UI is clipped, then poll with
-      `action="input"`, `chars=""` to read the redrawn screen.
+    `input` sends characters to a running process, or polls its output when
+    `chars=""`. `kill` stops it. `list` shows tracked processes in this
+    workspace. `resize` changes an interactive terminal's `cols`/`rows`. All but
+    `list` need `process_id`.
     """
     if request.action == "list":
         return await workspace_cli.list_processes(
@@ -130,14 +99,11 @@ async def execute_python(
     request: ExecutePythonRequest,
 ) -> Any:
     """
-    Execute Python code in the shared conversation-scoped IPython kernel.
+    Run Python in the conversation's shared IPython kernel.
 
-    Use this for structured data analysis, transformations, parsing, and calculations
-    that are awkward in pure shell commands. Put the entire code snippet in
-    `request.code`. The kernel state persists across calls in the same conversation session.
-    Variables, imports, and in-memory objects from earlier executions remain available
-    for later executions, so use it for stepwise analysis when helpful.
-    Include a short `request.comment` to show the user-facing intent.
+    Use it for data analysis, transformations, and calculations that are awkward
+    in shell. Kernel state — imports, variables, objects — persists across calls,
+    so build up an analysis stepwise instead of repeating setup.
     """
     return await workspace_cli.execute_python(ctx.deps, request)
 

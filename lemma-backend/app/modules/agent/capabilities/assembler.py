@@ -39,6 +39,7 @@ from app.modules.agent.capabilities.todo import TODO_TOOLSET_ID, TodoCapability
 from app.modules.agent.capabilities.web_search import WebSearchCapability
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent
+from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
 from app.modules.agent.domain.prompts import (
     load_skills_prompt,
     load_speech_prompt,
@@ -169,6 +170,7 @@ async def build_lemma_harness_tooling(
     agent_run_id: object,
     model_name: str,
     enable_prompt_caching: bool,
+    protocol: RuntimeProfileProtocol = RuntimeProfileProtocol.OPENAI_COMPATIBLE,
 ) -> list[object]:
     """Return the full capability list for the in-process LEMMA harness."""
     # agent/uow_factory/run-id reserved: tool selection (incl. todo) now happens in
@@ -193,7 +195,9 @@ async def build_lemma_harness_tooling(
 
     if enable_prompt_caching:
         capabilities.append(
-            _caching_capability_cls(conversation_id=ctx.conversation_id)
+            _caching_capability_cls(
+                conversation_id=ctx.conversation_id, protocol=protocol
+            )
         )
 
     if extra:

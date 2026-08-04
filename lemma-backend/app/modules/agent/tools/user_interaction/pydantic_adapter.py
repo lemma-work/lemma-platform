@@ -26,46 +26,22 @@ async def display_resource(
     request: DisplayResourceRequest,
 ) -> DisplayResourceResponse:
     """
-    Display a user-facing resource or richer interaction.
+    Show a pod resource or a rendered view to the user.
 
-    Prefer this tool whenever the useful answer is more than short prose. Text is
-    for a single fact, a short explanation, or narration around a concrete surface:
-    - asking a multiple-choice question: use the `ask_user` tool. For free-form
-      input, ask clearly in prose and continue from the user's next message.
-    - showing several values, records, statuses, steps, comparisons, a timeline,
-      compact table, preview, or chart: render a WIDGET instead of describing the
-      structure in prose.
-    - creating or updating pod resources: display the created or changed AGENT,
-      FUNCTION, WORKFLOW, APP, SCHEDULE, TABLE, or FILE instead of only saying
-      that it was created.
-    - showing datastore records or resource lists: display the TABLE or resource
-      directly so the user can inspect it.
+    Reach for this whenever the useful answer is more than short prose: several
+    values, records, statuses, comparisons, a timeline, or a chart render as a
+    WIDGET instead of being described. After creating or changing a pod resource,
+    display it rather than only saying it was created.
 
-    Use this for every "show this to the user" action: pod files, datastore
-    tables, agents, functions, workflows, apps, schedules, and widgets.
+    Set `type` and, for most types, a `name` — omit `name` to show all resources
+    of that type. FILE takes a pod `path`, so upload sandbox deliverables with
+    `lemma files upload` first and never pass a workspace path. WIDGET takes
+    exactly one of `content` or `public_url`; load the `lemma-widget` skill before
+    your first widget, and build an app instead when the UI needs React, routing,
+    or real state.
 
-    Examples:
-    - BROWSER: set type="BROWSER" only. This returns the same short-lived browser
-      URL so the user can see the browser backed by the same user sandbox the agent controls with browser CLI
-      commands.
-    - FILE: set type="FILE" and path="/me/reports/report.pdf".
-      First upload sandbox deliverables into pod files using `lemma files upload`.
-      Do not pass private workspace paths.
-    - TABLE: set type="TABLE", name="<table_name>", and optional filters. Omit
-      name to display all tables. Use query only for read-only SQL against
-      RLS-disabled tables.
-    - AGENT/FUNCTION/WORKFLOW/APP/SCHEDULE: set type and optional name. Name is
-      the unique pod resource name within that type. Omit name to display all
-      resources of that type.
-    - WIDGET: set type="WIDGET" and provide exactly one of public_url or content.
-      Before your first widget in a conversation, silently load the `lemma-widget`
-      skill and follow its guidance. Inline widgets use plain HTML/CSS/JS or SVG;
-      if the UI needs React, routing, or substantial application state, build a Vite
-      app instead. Widgets are display surfaces; use `ask_user` or a normal
-      conversational turn when you need input from the user.
-
-    This tool only displays or requests user-facing resources. User approval for
-    potentially sensitive local harness actions remains the separate approval flow.
+    This tool only displays. Use `ask_user` for choices and `request_approval` for
+    permission.
     """
     # Semantic payload validation runs here (not as a raising pydantic validator)
     # so an invalid request comes back as a uniform success:false/error result the
@@ -189,37 +165,23 @@ async def request_approval(
     permission_ids: list[str] | None = None,
 ) -> RequestApprovalResponse:
     """
-    Ask the user to approve running a tool you lack permission for, then run it.
+    Ask the user to approve an action you lack permission for, then run it.
 
-    This is a higher-order gate for sensitive or ungranted actions. When one of
-    your tool/CLI/python calls fails with a permission error (403), or you know
-    an action needs the user's authority (deleting data, sending email, running
-    a privileged command), call this tool with the FULL action you want
-    performed. State everything needed to run it — do not rely on prior context.
+    Call this when a tool fails with a permission error (403) or the action needs
+    the user's authority — deleting data, sending email, a privileged command.
+    Describe the FULL action; do not rely on prior context. The run pauses for an
+    approval card, and on approval the backend executes the tool with the *user's*
+    authority and returns its result here. On denial nothing runs.
 
-    The run pauses and the client renders an approval card. If the user approves,
-    the backend executes the named tool with the *user's* authority (for CLI and
-    python, in a fresh workspace session minted with the user's token in the same
-    working directory; for other tools, under the user's permissions) and returns
-    the tool's result here. If the user denies, nothing runs.
-
-    Arguments:
-    - `tool_name`: the tool to run on approval, e.g. "exec_command",
-      "execute_python", "pod_write_record". Must be a tool you already have.
-    - `args`: the complete arguments for that tool, e.g.
-      {"cmd": "lemma records delete orders --id 42"} or {"code": "..."}.
-    - `title`: concise user-facing title for the approval card.
-    - `reason`: optional explanation of why this needs approval.
-    - `payload`: optional extra structured details for rendering/audit.
-    - `permission_ids`: when the action failed with a permission error, copy the
-      `approval.permission_ids` list from that failed tool result verbatim. If
-      the user picks "approve for session", these action types stay approved for
-      you for the rest of this conversation instead of re-prompting every time.
-
-    If the user previously picked "approve for session" for this EXACT
-    `tool_name` + `args` pair (not just a similar one — the arguments must match
-    verbatim), this call runs immediately with no prompt and no pause: you get
-    the result back right away, same as if the user had just approved it again.
+    Args:
+        tool_name: Tool to run on approval, e.g. "exec_command". Must be one you have.
+        args: Complete arguments for that tool, e.g. {"cmd": "lemma records delete orders --id 42"}.
+        title: Short user-facing title for the approval card.
+        reason: Why this needs approval.
+        payload: Extra structured detail for rendering or audit.
+        permission_ids: Copy `approval.permission_ids` verbatim from the failed tool
+            result. Lets "approve for session" cover these actions for the rest of the
+            conversation instead of re-prompting.
     """
     del payload  # rendered from the persisted tool call; not needed at runtime
     del permission_ids  # read from the persisted tool call on resolution
@@ -355,18 +317,13 @@ async def ask_user(
     """
     Ask the user one or more multiple-choice questions and wait for their answers.
 
-    Use this to get a decision or clarification you genuinely cannot infer — for
-    example which of several approaches to take, or a missing preference. Present a
-    short series of questions, each with 2-4 concrete options, and mark the option
-    you recommend (`recommended: true`). The run pauses while the client renders
-    the questions; the user picks an option per question (or types their own answer
-    via an always-available "Other"), and the chosen answers come back in
-    `answers`, keyed by each question's `header`.
+    Use it for a decision you genuinely cannot infer. Each question carries 2-4
+    concrete options; mark the one you recommend. The run pauses, and answers come
+    back in `answers` keyed by each question's `header`.
 
     Prefer this over a prose question whenever the answer is a choice among known
-    options. For free-form input, ask clearly in prose and end your turn so the
-    user's next message can answer. Only ask when it changes what you do next —
-    don't ask about things with an obvious default; just proceed.
+    options. For free-form input, ask in prose and end your turn. Only ask when it
+    changes what you do next — otherwise take the obvious default and proceed.
     """
     if not request.questions:
         return AskUserResponse(

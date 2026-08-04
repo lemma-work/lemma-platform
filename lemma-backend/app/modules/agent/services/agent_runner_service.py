@@ -311,11 +311,17 @@ class AgentRunnerService:
                     full_toolsets=full_toolsets,
                     agent_run_id=agent_run_id,
                     model_name=resolved_runtime.model_name_for_harness,
+                    # Both protocols cache, by different mechanisms — see
+                    # PromptCachingCapability.
                     enable_prompt_caching=(
                         resolved_runtime.profile.protocol
-                        == RuntimeProfileProtocol.OPENAI_COMPATIBLE
+                        in (
+                            RuntimeProfileProtocol.OPENAI_COMPATIBLE,
+                            RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE,
+                        )
                         and settings.lemma_llm_caching_enabled
                     ),
+                    protocol=resolved_runtime.profile.protocol,
                 )
                 harness_toolsets = []
             usage_reservation = await self.usage_recorder.reserve(

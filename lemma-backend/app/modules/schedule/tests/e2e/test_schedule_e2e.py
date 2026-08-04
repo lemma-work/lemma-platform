@@ -154,7 +154,7 @@ async def _seed_connector_trigger(
             Connector(
                 id=connector_id,
                 title=connector_id.replace("_", " ").title(),
-                provider_capabilities=[{"provider": "LEMMA", "auth_scheme": "OAUTH2"}],
+                kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )
@@ -336,11 +336,15 @@ def _composio_log_payload() -> dict:
     }
 
 
-async def _create_datastore_table(client: AsyncClient, pod_id: str) -> None:
+async def _create_datastore_table(
+    client: AsyncClient,
+    pod_id: str,
+    table_name: str = "schedule_records",
+) -> None:
     response = await client.post(
         f"/pods/{pod_id}/datastore/tables",
         json={
-            "table_name": "schedule_records",
+            "table_name": table_name,
             "primary_key_column": "id",
             "columns": [
                 {"name": "source", "type": "TEXT"},
@@ -768,9 +772,18 @@ async def test_cron_schedule_fires_workflow(
     authenticated_client: AsyncClient,
     fixed_test_org,
     worker,
+    monkeypatch,
 ):
     """A recurring CRON schedule fires its workflow live via the scheduler."""
     _ = worker
+    # The product floor is 15 minutes, which no test can wait out. Lower it so
+    # this can watch a real fire at the next minute boundary; the floor itself is
+    # covered by test_time_schedule_policy.
+    monkeypatch.setattr(
+        "app.modules.schedule.services.time_schedule_policy."
+        "schedule_settings.schedule_minimum_interval_minutes",
+        1,
+    )
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
     workflow = await _create_workflow(
         authenticated_client,
@@ -1923,6 +1936,9 @@ async def test_matcher_skips_invalid_or_empty_operations(
     from app.core.infrastructure.db.uow import SqlAlchemyUnitOfWork
 
     pod_id = await _create_pod(authenticated_client, fixed_test_org["id"])
+    # Creating a DATASTORE schedule requires table-update permission on the
+    # watched table, so the table has to exist first.
+    await _create_datastore_table(authenticated_client, pod_id, "corrupt_records")
     workflow = await _create_workflow(
         authenticated_client,
         pod_id,

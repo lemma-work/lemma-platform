@@ -25,19 +25,15 @@ MIN_SNOOZE_SECONDS = 30
 class SnoozeRequest(BaseModel):
     reason: str = Field(
         description=(
-            "One short line, shown to the user while you sleep. Say what you are "
-            "waiting on, specifically: 'waiting for the nightly build' beats "
-            "'waiting'. They read this to understand what you're doing without "
-            "having to ask."
+            "One line shown to the user while you sleep. Be specific: 'waiting "
+            "for the nightly build' beats 'waiting'."
         )
     )
     seconds: int = Field(
         description=(
-            "How long to sleep. Choose it from what you are actually waiting for, "
-            "not out of habit — a build that takes about eight minutes deserves "
-            f"one ~500s check, not eight 60s ones. Under {MIN_SNOOZE_SECONDS}s is "
-            f"rejected, not clamped; over {MAX_SNOOZE_SECONDS}s ({MAX_SNOOZE_SECONDS // 3600}h) "
-            "is clamped down."
+            "How long to sleep, chosen from what you are waiting for — an "
+            f"eight-minute build wants one ~500s check. Under {MIN_SNOOZE_SECONDS}s "
+            f"is rejected; over {MAX_SNOOZE_SECONDS // 3600}h is clamped."
         )
     )
     note_to_self: str | None = Field(

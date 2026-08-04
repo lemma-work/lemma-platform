@@ -1,5 +1,6 @@
 //! Generic ACP v1 adapter driver.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -134,6 +135,10 @@ impl AgentDriver for AcpDriver {
         let scratch_directory = request.scratch_directory;
         let mcp_server = request.mcp_server;
         let has_scoped_mcp_server = mcp_server.is_some();
+        // Lemma tells us, in the run-scoped MCP config, exactly which tools it
+        // serves. That is an exact answer to "is this one of ours?", which the
+        // name-shape heuristic below can only approximate.
+        let scoped_mcp_tools = Arc::new(scoped_mcp_tool_names(&run_spec.mcp));
         let resume_session_id = session_to_resume(&run_spec, can_load_session);
         // `session/load` replays the whole conversation back as session updates
         // before it returns. Those are turns Lemma already has, so forwarding
@@ -165,7 +170,9 @@ impl AgentDriver for AcpDriver {
             )
             .on_receive_request(
                 async move |request: RequestPermissionRequest, responder, _connection| {
-                    if has_scoped_mcp_server && is_scoped_mcp_tool_approval(&request) {
+                    if has_scoped_mcp_server
+                        && is_scoped_mcp_tool_approval(&request, &scoped_mcp_tools)
+                    {
                         let outcome = request
                             .options
                             .iter()
@@ -521,12 +528,22 @@ pub(crate) const SCOPED_MCP_SERVER: &str = "lemma";
 /// workspace, so prompting for each one is noise the user has to click through
 /// on every single call.
 ///
-/// Two ways to tell, because one is not enough. The `_meta` flag is a Claude
-/// Code convention; an agent that does not set it — `OpenCode` does not — had
-/// every Lemma tool call raise an approval card. So the tool name is checked
-/// too, against the server name we registered ourselves, in the shapes agents
-/// actually namespace MCP tools with.
-fn is_scoped_mcp_tool_approval(request: &RequestPermissionRequest) -> bool {
+/// Three ways to tell, because no one of them is enough.
+///
+/// The `_meta` flag is a Claude Code convention; an agent that does not set it —
+/// `OpenCode` does not — had every Lemma tool call raise an approval card. The
+/// tool name is checked too, against the server name we registered ourselves, in
+/// the shapes agents actually namespace MCP tools with.
+///
+/// Both of those can still miss: ACP's `ToolCall` carries no tool-name field at
+/// all (only `title`, which the agent writes for humans), so an adapter that
+/// reports `"Read table"` and no `_meta` matches neither. The third check closes
+/// that: Lemma publishes the exact tool names it serves in the run's MCP
+/// configuration, so a title that *is* one of those names is ours.
+fn is_scoped_mcp_tool_approval(
+    request: &RequestPermissionRequest,
+    scoped_tools: &HashSet<String>,
+) -> bool {
     let Ok(value) = serde_json::to_value(request) else {
         return false;
     };
@@ -535,7 +552,58 @@ fn is_scoped_mcp_tool_approval(request: &RequestPermissionRequest) -> bool {
         .and_then(|meta| meta.get("is_mcp_tool_approval"))
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    flagged || names_scoped_mcp_tool(&value)
+    flagged || names_scoped_mcp_tool(&value) || names_known_scoped_tool(&value, scoped_tools)
+}
+
+/// The tool names Lemma said it serves on this run's MCP endpoint.
+///
+/// Absent for an older control plane that does not publish them, in which case
+/// this check simply contributes nothing and the other two still apply.
+fn scoped_mcp_tool_names(mcp: &Value) -> HashSet<String> {
+    mcp.get("tool_names")
+        .and_then(Value::as_array)
+        .map(|names| {
+            names
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|name| name.trim().to_ascii_lowercase())
+                .filter(|name| !name.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Does the request name a tool Lemma told us it serves?
+///
+/// Exact match against the published set, after stripping whatever namespacing
+/// the agent added, so this cannot sweep in a same-named tool of the user's.
+fn names_known_scoped_tool(value: &Value, scoped_tools: &HashSet<String>) -> bool {
+    if scoped_tools.is_empty() {
+        return false;
+    }
+    permission_tool_candidates(value).any(|name| {
+        let name = name.trim().to_ascii_lowercase();
+        let bare = name
+            .rsplit_once("__")
+            .map_or(name.as_str(), |(_, tail)| tail)
+            .trim();
+        scoped_tools.contains(name.as_str()) || scoped_tools.contains(bare)
+    })
+}
+
+/// Every field of a permission request that might carry the tool's identity.
+fn permission_tool_candidates(value: &Value) -> impl Iterator<Item = &str> {
+    [
+        value.pointer("/toolCall/title").and_then(Value::as_str),
+        value.pointer("/toolCall/toolName").and_then(Value::as_str),
+        value.pointer("/toolCall/name").and_then(Value::as_str),
+        value
+            .pointer("/toolCall/toolCallId")
+            .and_then(Value::as_str),
+        value.get("toolName").and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 /// Does the tool being requested belong to Lemma's own MCP server?
@@ -546,16 +614,7 @@ fn is_scoped_mcp_tool_approval(request: &RequestPermissionRequest) -> bool {
 /// convention. Anchored at the start so a user's tool that merely mentions
 /// "lemma" somewhere does not get silently auto-approved.
 fn names_scoped_mcp_tool(value: &Value) -> bool {
-    let candidates = [
-        value.pointer("/toolCall/title").and_then(Value::as_str),
-        value.pointer("/toolCall/toolName").and_then(Value::as_str),
-        value.pointer("/toolCall/name").and_then(Value::as_str),
-        value
-            .pointer("/toolCall/toolCallId")
-            .and_then(Value::as_str),
-        value.get("toolName").and_then(Value::as_str),
-    ];
-    candidates.into_iter().flatten().any(|name| {
+    permission_tool_candidates(value).any(|name| {
         let name = name.trim().to_ascii_lowercase();
         // `mcp__` is the common prefix agents add before the server name.
         let name = name.strip_prefix("mcp__").unwrap_or(&name);
@@ -868,7 +927,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert!(is_scoped_mcp_tool_approval(&request));
+        assert!(is_scoped_mcp_tool_approval(&request, &HashSet::new()));
     }
 
     #[test]
@@ -892,7 +951,7 @@ mod tests {
         }))
         .unwrap();
 
-        assert!(!is_scoped_mcp_tool_approval(&request));
+        assert!(!is_scoped_mcp_tool_approval(&request, &HashSet::new()));
     }
 
     #[test]
@@ -929,8 +988,12 @@ mod tests {
 
 #[cfg(test)]
 mod scoped_mcp_approval_tests {
-    use super::names_scoped_mcp_tool;
+    use std::collections::HashSet;
+
+    use agent_client_protocol::schema::v1::RequestPermissionRequest;
     use serde_json::json;
+
+    use super::{is_scoped_mcp_tool_approval, names_scoped_mcp_tool, scoped_mcp_tool_names};
 
     #[test]
     fn lemmas_own_tools_are_recognised_however_the_agent_namespaces_them() {
@@ -967,5 +1030,85 @@ mod scoped_mcp_approval_tests {
                 "{name} is not ours to approve",
             );
         }
+    }
+
+    fn permission_request_titled(title: &str) -> RequestPermissionRequest {
+        serde_json::from_value(json!({
+            "sessionId": "session",
+            "toolCall": {
+                "kind": "execute",
+                "status": "pending",
+                "toolCallId": "call-1",
+                "title": title
+            },
+            "options": [
+                {"kind": "allow_once", "name": "Allow", "optionId": "allow_once"},
+                {"kind": "reject_once", "name": "Decline", "optionId": "decline"}
+            ]
+        }))
+        .unwrap()
+    }
+
+    fn published(names: &[&str]) -> HashSet<String> {
+        scoped_mcp_tool_names(&json!({"tool_names": names}))
+    }
+
+    #[test]
+    fn a_tool_lemma_published_is_approved_even_titled_for_a_human() {
+        // The gap this closes. ACP's ToolCall has no tool-name field, so an
+        // adapter that reports only a human-readable title matches neither the
+        // `_meta` flag nor the name-shape check — and every Lemma tool call
+        // raised an approval card the user had to clear.
+        let request = permission_request_titled("lemma_read_table");
+        let scoped = published(&["lemma_read_table", "lemma_write_record"]);
+
+        assert!(is_scoped_mcp_tool_approval(&request, &scoped));
+    }
+
+    #[test]
+    fn a_published_tool_is_recognised_through_the_agents_namespacing() {
+        let scoped = published(&["lemma_final_answer"]);
+        for title in [
+            "lemma_final_answer",
+            "mcp__lemma__lemma_final_answer",
+            "LEMMA_FINAL_ANSWER",
+        ] {
+            assert!(
+                is_scoped_mcp_tool_approval(&permission_request_titled(title), &scoped),
+                "{title} is ours",
+            );
+        }
+    }
+
+    #[test]
+    fn a_tool_lemma_never_published_still_needs_a_human() {
+        // The published list must not become a blanket approval: a native tool
+        // is exactly what the approval card exists for.
+        let scoped = published(&["lemma_read_table"]);
+
+        assert!(!is_scoped_mcp_tool_approval(
+            &permission_request_titled("Run shell command"),
+            &scoped
+        ));
+        assert!(!is_scoped_mcp_tool_approval(
+            &permission_request_titled("bash"),
+            &scoped
+        ));
+    }
+
+    #[test]
+    fn an_absent_published_list_falls_back_to_the_other_checks() {
+        // An older control plane does not publish tool_names; the name-shape
+        // check still has to carry the common case.
+        let empty = HashSet::new();
+
+        assert!(is_scoped_mcp_tool_approval(
+            &permission_request_titled("mcp__lemma__read_table"),
+            &empty
+        ));
+        assert!(!is_scoped_mcp_tool_approval(
+            &permission_request_titled("bash"),
+            &empty
+        ));
     }
 }

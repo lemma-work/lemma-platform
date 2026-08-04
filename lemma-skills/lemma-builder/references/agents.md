@@ -15,8 +15,10 @@ granted capabilities a function would — but it chooses *when and how* at runti
 Like a function, an agent never runs "as itself." The same two pod-model rules govern
 everything it can do:
 
-- **Delegated identity.** An agent run is **owned by the user who invoked it** (the
-  chatter, the workflow's run identity, the schedule's configured user). Its `POD`
+- **Delegated identity.** An agent run is **owned by the user who invoked it** — the
+  chatter, the workflow's run identity, a `TIME`/`WEBHOOK` schedule's configured
+  user, or (for a `DATASTORE` schedule on an RLS table) the **owner of the row that
+  changed**. See `schedules-and-triggers.md`. Its `POD`
   tools authenticate as that user: RLS tables return only **their** rows, writes are
   stamped with **their** id, `/me/...` is **their** private tree, and a connector
   call goes through **their** connected account. There is no agent-private space and
@@ -172,8 +174,13 @@ Grants are **name-based** and **portable**:
 | `datastore_table` | the table name | `tickets` |
 | `folder` | the **stored folder path, no prefix** | `/knowledge` |
 | `connector` | the connector id | `gmail` |
+| `connector_account` | a specific connected account | pin a shared account |
 | `function` | a function name (exposes it as a tool) | `save_expense` |
 | `agent` | another agent's name (exposes it as a tool) | `triage-agent` |
+
+`connector` resolves the *invoking user's* own account and is what you want
+almost always; `connector_account` pins one shared account (a team inbox, a bot
+token) for every caller. See `authorization-model.md` §8.
 
 They round-trip in bundles: export embeds the agent's current grants under
 `permissions.grants`, and import **replaces** the agent's grants with that list on

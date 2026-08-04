@@ -163,7 +163,8 @@ TODO: one or two sentences on exactly what this agent is responsible for — and
 what it is *not* responsible for. Keep it narrow.
 
 ## Pod resources you use
-TODO: name the tables you read/write and the `/pod` folders that hold knowledge.
+TODO: name the tables you read/write and the shared folders (e.g. `/knowledge`)
+that hold reference material. There is no `/pod` prefix.
 Agents do not discover these reliably on their own — spell them out.
 
 ## How to respond
@@ -238,7 +239,7 @@ lemma pods import ./__NAME__             # upsert by resource name
 ```
 
 ## Non-bundled setup (do these after import)
-- Upload any required files: `lemma files upload ./doc.pdf /pod/knowledge/doc.pdf`
+- Upload any required files: `lemma files upload ./doc.pdf /knowledge/doc.pdf`
 - Connect connectors/accounts: `lemma connectors ...`
 - Flip schedules/surfaces to active once their targets exist.
 

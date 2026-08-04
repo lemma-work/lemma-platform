@@ -14,7 +14,7 @@ You address operations by the **auth-config name**, which you find with
 ## Discover, then execute
 
 ```ts
-// 1. operations available for an installed auth config (provider-specific):
+// 1. operations available for an installed auth config (kind-specific):
 const ops = await client.connectors.operations.list({ authConfigName: "my-gmail" });
 
 // 2. the operation's input schema (drive your form / validate the payload):
@@ -32,7 +32,7 @@ const result = await client.connectors.operations.execute({
 ## Make it a safe action
 
 - **Discover, don't guess** operation names — list/search first; names are
-  provider-specific (LEMMA vs COMPOSIO differ).
+  kind-specific (`package` and `composio` differ).
 - **Confirm side-effects.** An operation that sends/posts/charges is irreversible —
   gate it behind an explicit confirm and show what will happen.
 - **Handle the no-account case.** If the user hasn't connected an account, the call

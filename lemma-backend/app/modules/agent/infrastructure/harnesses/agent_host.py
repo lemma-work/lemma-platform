@@ -23,6 +23,7 @@ from app.core.crypto import get_secret_cipher
 from app.core.infrastructure.db.uow_factory import UnitOfWorkFactory
 from app.core.log.log import get_logger
 from app.modules.agent.domain.agent_host import (
+    AgentHostEventType,
     AgentHostRunSpec,
     AgentHostRunState,
 )
@@ -35,6 +36,7 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     JsonObject,
 )
+from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 from app.modules.agent.infrastructure.agent_host_channels import poke_host
 from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
     AgentHostDispatchRepository,
@@ -74,10 +76,19 @@ from app.modules.agent.infrastructure.harnesses.agent_host_stream_reader import 
     StreamReader,
     StreamUnavailable,
 )
+from app.modules.agent.infrastructure.agent_host_final_answer import (
+    adopt_recorded_final_answer,
+)
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
     mcp_payload,
     run_start_payload,
     token_expires_at,
+)
+from app.modules.agent.infrastructure.mcp import exported_tool_name
+from app.modules.agent.tools.final_answer.final_answer_toolset import (
+    FINAL_ANSWER_TOOL_NAME,
+    agent_output_schema,
+    final_answer_expected,
 )
 
 logger = get_logger(__name__)
@@ -89,22 +100,6 @@ DEFAULT_STREAM_BLOCK_MS = 1_000
 DEFAULT_LEASE_CHECK_SECONDS = 5.0
 DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
 
-_AGENT_HOST_RUNTIME_INSTRUCTIONS = (
-    "# Runtime\n"
-    "You are running through Lemma Agent Host. Use the Lemma MCP tools "
-    "(the lemma_* tools) for file and command execution; they run in the "
-    "conversation workspace. The provider process directory is private host "
-    "scratch space and must not be treated as the Lemma workspace.\n\n"
-    "# Native image generation\n"
-    "When running as Codex and the user asks to generate or edit an image, "
-    "use Codex's built-in `$imagegen` capability. Do not substitute Pillow, "
-    "SVG, canvas, Python, shell scripts, or an external image CLI unless the "
-    "user explicitly requests that implementation. Copy each final generated "
-    "image into the `.lemma-artifacts` directory in the provider scratch "
-    "workspace. Agent Host publishes files from that directory into the "
-    "conversation's pod files; do not call the Lemma CLI to upload a private "
-    "host path."
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +202,7 @@ class RemoteHarness:
         try:
             async for event in self._consume(
                 agent_run_id=agent_run_id,
+                agent=agent,
                 ctx=ctx,
                 conversation=conversation,
                 options=options,
@@ -223,6 +219,7 @@ class RemoteHarness:
         self,
         *,
         agent_run_id: UUID,
+        agent: Agent,
         ctx: AgentContext,
         conversation: Conversation,
         options: HarnessOptions,
@@ -238,6 +235,10 @@ class RemoteHarness:
             agent_run_id=agent_run_id,
             model_name=options.model_name,
             harness_key=dispatch.harness_key,
+            structured_expected=final_answer_expected(
+                agent=agent, conversation=conversation
+            ),
+            output_schema=agent_output_schema(agent),
         )
         loop = asyncio.get_running_loop()
         deadline = loop.time() + dispatch.event_timeout_seconds
@@ -306,6 +307,12 @@ class RemoteHarness:
             terminal_checkpoint_seen_at = outcome.seen_at
 
             if outcome.terminal_state is not None:
+                # The run reached a terminal state without a terminal event, so
+                # this is the only chance to pick up a final answer the tool
+                # recorded before the stream went quiet.
+                await adopt_recorded_final_answer(
+                self.uow_factory, normalizer, agent_run_id=agent_run_id
+            )
                 for event in normalizer.finish_without_terminal(
                     state=outcome.terminal_state
                 ):
@@ -399,6 +406,10 @@ class RemoteHarness:
                         sequence=entry.sequence,
                     )
                 )
+        if entry.type == AgentHostEventType.TERMINAL.value:
+            await adopt_recorded_final_answer(
+                self.uow_factory, normalizer, agent_run_id=agent_run_id
+            )
         events.extend(normalizer.normalize(envelope, payload_override=payload_override))
         return events
 
@@ -470,7 +481,7 @@ class RemoteHarness:
             options=options,
             agent_run_id=agent_run_id,
             harness_kind=self.kind,
-            runtime_instructions=_AGENT_HOST_RUNTIME_INSTRUCTIONS,
+            runtime_instructions=load_agent_host_runtime_prompt(),
         )
         prompt = _json_object(payload.get("prompt"))
         mcp = await mcp_payload(
@@ -479,6 +490,14 @@ class RemoteHarness:
             ctx=ctx,
             options=options,
             prompt=_joined_prompt(prompt),
+            # final_answer is served by the MCP route but is not in
+            # options.toolsets (the in-process harness gets it via output_type),
+            # so name it explicitly.
+            extra_tool_names=(
+                [exported_tool_name(FINAL_ANSWER_TOOL_NAME)]
+                if final_answer_expected(agent=agent, conversation=conversation)
+                else []
+            ),
         )
         encrypted_mcp = await get_secret_cipher().encrypt_json_async(mcp)
         if encrypted_mcp is None:

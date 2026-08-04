@@ -323,6 +323,14 @@ class FunctionDispatcher:
                     read=max(0.1, remaining),
                 ),
             )
+        except httpx.TimeoutException as exc:
+            # Our own deadline expired. Still unconfirmed — the sandbox may be
+            # mid-execution, so this must not be replayed — but the run's error
+            # should name the deadline, which is the cause the caller can act on,
+            # rather than the generic "response was lost".
+            raise InvocationOutcomeUnconfirmed(
+                "function invocation exceeded its deadline"
+            ) from exc
         except httpx.TransportError as exc:
             raise InvocationOutcomeUnconfirmed(
                 "function invocation response was lost"
@@ -443,6 +451,13 @@ class FunctionDispatcher:
     @staticmethod
     def _execution_error(exc: BaseException) -> str:
         if isinstance(exc, InvocationOutcomeUnconfirmed):
+            if isinstance(exc.__cause__, (httpx.TimeoutException, TimeoutError)):
+                # Report the deadline (what the caller can change) while keeping
+                # the "may have run" caveat (what they must not assume away).
+                return (
+                    "Function execution timed out (deadline exceeded); execution "
+                    "may have started and was not retried"
+                )
             return (
                 "Function runtime response was not confirmed; execution may have "
                 "started and was not retried"

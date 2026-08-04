@@ -1042,9 +1042,10 @@ class Settings(BaseSettings):
     lemma_llm_caching_enabled: bool = Field(
         default=False,
         description=(
-            "Enable conversation-id-based LLM prompt caching (session affinity). "
-            "Set to true when using a provider that supports it (e.g. Fireworks via "
-            "lemma-cloud). Activates PromptCachingCapability for OPENAI_COMPATIBLE profiles."
+            "Enable LLM prompt caching. Activates PromptCachingCapability, which "
+            "applies conversation-id session affinity on OPENAI_COMPATIBLE profiles "
+            "(e.g. Fireworks via lemma-cloud) and an explicit instruction cache "
+            "breakpoint on ANTHROPIC_COMPATIBLE profiles."
         ),
     )
     embedding_provider: Literal["auto", "local", "openai_compat"] = Field(

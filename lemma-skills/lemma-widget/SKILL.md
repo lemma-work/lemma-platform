@@ -33,8 +33,8 @@ Widgets are display surfaces. They do not submit values into the conversation. U
 1. If the widget uses pod data, inspect the real table and column names first:
 
    ```bash
-   lemma pods describe
    lemma tables list
+   lemma tables get <table>          # exact columns; `pods describe` folds them
    lemma query run "select * from <table> limit 5"
    ```
 
@@ -57,6 +57,19 @@ Widgets are display surfaces. They do not submit values into the conversation. U
 
 The backend rejects unresolved placeholders and broken SDK loaders before display.
 
+## The `display_resource` call
+
+`type="WIDGET"` takes **exactly one** of:
+
+- `content` — your inline HTML/SVG fragment (the usual case), or
+- `public_url` — a URL to embed instead.
+
+Passing both, or neither, is rejected. Two more WIDGET-only fields:
+
+- `loading_messages` — up to **4** short lines shown while the widget renders.
+  They are WIDGET-only; setting them on any other resource type is rejected.
+- `name` / `path` / `filters` / `query` belong to other types and don't apply.
+
 ## Fixed contract
 
 - Send an HTML/SVG **fragment**, never `<!doctype>`, `<html>`, `<head>`, or `<body>`.
@@ -66,14 +79,25 @@ The backend rejects unresolved placeholders and broken SDK loaders before displa
 - Show deliberate loading, empty, error, and narrow-screen states.
 - Escape values before inserting them with `innerHTML`; prefer `textContent`.
 - Keep the view compact: no fixed positioning or nested scrolling.
+- **Height is capped.** The inline view clips at **480px** with a fade and an
+  Expand control, and a self-reported height above 2400px is ignored. Design for
+  the fold: put the answer at the top, not below a long table.
+- Widgets are **display-only** — they cannot send anything back into the
+  conversation. The host accepts one message from the frame, a height report.
+  Use `ask_user` when you need an answer.
 
 The starters are platform-themed and system-aware by default. Preserve their
-`prefers-color-scheme: dark` rules and semantic fallbacks. They consume the small
-public token layer `--lemma-widget-bg`, `surface`, `subtle`, `text`, `muted`,
-`border`, `accent`, `danger`, `radius`, `font`, and `color-scheme` (each with the full
-`--lemma-widget-` prefix). Chart starters also expose `chart-1` through `chart-5`.
-Use only the tokens the widget needs; do not copy Lemma's full frontend token file.
-Never reference frontend-only variables such as `--text-primary` directly.
+`prefers-color-scheme: dark` rules and semantic fallbacks. They consume the
+public token layer — `--lemma-widget-bg`, `surface`, `subtle`, `text`, `muted`,
+`border`, `accent`, `danger`, `danger-soft`, `radius`, `font`, and `color-scheme`
+(each with the full `--lemma-widget-` prefix). Chart starters also expose
+`chart-1` through `chart-5`.
+
+That list is **exhaustive** — the host injects only these. The frontend posts a
+larger palette (`success`, `warning`, `info`, `accent-hover`, …), but anything
+outside the published set is filtered out before it reaches your iframe, so a
+reference to `--lemma-widget-success` silently falls back. Use only the tokens
+above, and never reference frontend-only variables such as `--text-primary`.
 
 For a data-backed widget, preserve the starter's browser SDK loader:
 
@@ -82,6 +106,11 @@ For a data-backed widget, preserve the starter's browser SDK loader:
 - Construct `new window.LemmaClient.LemmaClient()` with no arguments.
 - Call `client.initialize()` and handle a non-authenticated state.
 - SDK calls run as the signed-in user under normal RLS and grants.
+- **`unauthenticated` does not mean "signed out."** The widget is a cross-site
+  iframe and the browser SDK authenticates by cookie, which some browsers and
+  local HTTP setups withhold. So write that branch as "this view can't load your
+  data here", not "sign in to Lemma" — the user usually *is* signed in. Keep the
+  widget useful without data where you can.
 - Shared files use `/…`; personal files use `/me`; never use `/pod/...`.
 
 Common calls:
@@ -99,8 +128,19 @@ await client.files.children.content(
 );
 ```
 
-Prefer `datastore.query` for aggregates. Never poll with `setInterval`; if a widget
-must stay live, use `client.datastore.watchChanges`.
+Prefer `datastore.query` for aggregates. Never poll with `setInterval` — if a
+widget must stay live, open the change stream:
+
+```js
+const handle = client.datastore.watchChanges({
+  table: "tickets",              // options object is required
+  onChange: (f) => { /* f.operation, f.record_id, f.payload */ },
+});
+// later: handle.close();
+```
+
+It is a WebSocket with its own auth, so it is subject to the same cross-site
+constraint as `initialize()` above — always keep the non-live render working.
 
 ## Visual standard
 

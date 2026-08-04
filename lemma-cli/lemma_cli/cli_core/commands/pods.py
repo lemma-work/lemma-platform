@@ -31,6 +31,16 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
+# `describe` is an overview, and the API returns the pod's *entire* file tree
+# with no depth parameter — so the bound is ours to apply. Two levels shows the
+# shape (top-level folders and what is directly under them) without burying the
+# resource tables under a full recursive listing.
+DEFAULT_DESCRIBE_TREE_DEPTH = 2
+
+# Synthetic overlay of read-only system skill files spliced in at the pod root.
+# It is not pod data and is identical in every pod, so it is noise here.
+SYSTEM_SKILLS_ROOT_PATH = "/skills"
+
 
 def _is_uuid(value: str) -> bool:
     import uuid
@@ -317,6 +327,17 @@ def describe_pod(
     ctx: typer.Context,
     pod: str | None = typer.Argument(None),
     limit: int = typer.Option(50, "--limit", help="Maximum rows per resource table."),
+    depth: int = typer.Option(
+        DEFAULT_DESCRIBE_TREE_DEPTH,
+        "--depth",
+        min=1,
+        help="Folder levels of the file tree to show. --full shows every level.",
+    ),
+    skills: bool = typer.Option(
+        False,
+        "--skills",
+        help="Include the read-only /skills overlay in the file tree.",
+    ),
 ) -> None:
     """Show a pod (by id or name) with all its resources."""
     state = state_from_ctx(ctx)
@@ -338,9 +359,15 @@ def describe_pod(
     if result is None:
         return
     if state.output == "json":
+        # JSON is a machine format: never elided.
         emit(state, result)
         return
-    _render_pod_description(to_plain(result))
+    _render_pod_description(
+        to_plain(result),
+        # --full means "expand what was folded", which covers the tree too.
+        tree_depth=None if state.full else depth,
+        include_skills=skills or state.full,
+    )
 
 
 @app.command("doctor")
@@ -804,7 +831,12 @@ def _workflow_node_count(workflow: dict[str, Any]) -> str:
     return _count(workflow.get("nodes"))
 
 
-def _render_pod_description(data: dict[str, Any]) -> None:
+def _render_pod_description(
+    data: dict[str, Any],
+    *,
+    tree_depth: int | None = DEFAULT_DESCRIBE_TREE_DEPTH,
+    include_skills: bool = False,
+) -> None:
     pod = data.get("pod") if isinstance(data.get("pod"), dict) else {}
     pod_title = str(pod.get("name") or pod.get("id") or "Pod")
     pod_lines = [
@@ -862,29 +894,84 @@ def _render_pod_description(data: dict[str, Any]) -> None:
         schedules,
         [("ID", "id"), ("Type", "schedule_type"), ("Target", "target"), ("Active", "is_active")],
     )
-    _render_file_tree(data.get("files"))
+    _render_file_tree(
+        data.get("files"),
+        max_depth=tree_depth,
+        include_skills=include_skills,
+    )
 
 
-def _render_file_tree(files_payload: Any) -> None:
+def _render_file_tree(
+    files_payload: Any,
+    *,
+    max_depth: int | None = DEFAULT_DESCRIBE_TREE_DEPTH,
+    include_skills: bool = False,
+) -> None:
     tree_payload = files_payload.get("tree") if isinstance(files_payload, dict) else None
     if not isinstance(tree_payload, dict):
         console.print(Panel("No file tree available.", title="Pod Files", box=box.ROUNDED))
         return
     root = Tree("[bold]/[/bold]")
-    _add_file_tree_children(root, tree_payload)
-    console.print(Panel(root, title="Pod Files", box=box.ROUNDED))
+    _add_file_tree_children(
+        root,
+        tree_payload,
+        max_depth=max_depth,
+        include_skills=include_skills,
+        depth=0,
+    )
+    title = "Pod Files"
+    if max_depth is not None:
+        title = f"Pod Files (depth {max_depth}; --full for everything)"
+    console.print(Panel(root, title=title, box=box.ROUNDED))
 
 
-def _add_file_tree_children(view: Tree, node: dict[str, Any]) -> None:
+def _add_file_tree_children(
+    view: Tree,
+    node: dict[str, Any],
+    *,
+    max_depth: int | None,
+    include_skills: bool,
+    depth: int,
+) -> None:
     children = node.get("children") or []
     if not isinstance(children, list):
         return
     for child in children:
         if not isinstance(child, dict):
             continue
-        name = str(child.get("name") or child.get("path") or "")
+        path = str(child.get("path") or "")
+        # /skills is a synthetic overlay of read-only system skill files, not
+        # pod data — dozens of nodes that push the pod's own folders off screen.
+        if not include_skills and path == SYSTEM_SKILLS_ROOT_PATH:
+            continue
+        name = str(child.get("name") or path)
         kind = str(child.get("kind") or "").upper()
         label = f"[cyan]{name}/[/cyan]" if kind == "FOLDER" else name
-        child_view = view.add(label)
-        if kind == "FOLDER":
-            _add_file_tree_children(child_view, child)
+        if kind != "FOLDER":
+            view.add(label)
+            continue
+        if max_depth is not None and depth + 1 >= max_depth:
+            hidden = _descendant_count(child)
+            if hidden:
+                label = f"{label} [dim]({hidden} more)[/dim]"
+            view.add(label)
+            continue
+        _add_file_tree_children(
+            view.add(label),
+            child,
+            max_depth=max_depth,
+            include_skills=include_skills,
+            depth=depth + 1,
+        )
+
+
+def _descendant_count(node: dict[str, Any]) -> int:
+    """How much of the tree a depth cut is hiding, so the elision is honest."""
+    children = node.get("children") or []
+    if not isinstance(children, list):
+        return 0
+    total = 0
+    for child in children:
+        if isinstance(child, dict):
+            total += 1 + _descendant_count(child)
+    return total

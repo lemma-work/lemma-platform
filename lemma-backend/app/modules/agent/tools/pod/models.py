@@ -70,13 +70,9 @@ class PodWriteRecordRequest(BaseModel):
     data: JsonObject | str | None = Field(
         default=None,
         description=(
-            "The row's column name -> value mapping. Pass EITHER a JSON object, "
-            'e.g. {"title": "Q3 report", "amount": 42, "tags": ["a", "b"]}, OR a '
-            "JSON-encoded string of that same object if you cannot emit a "
-            'populated object directly, e.g. "{\\"title\\": \\"Q3 report\\", '
-            '\\"amount\\": 42}". Values may be scalars, nested objects, or '
-            "arrays. REQUIRED and must be non-empty for 'create' and 'update' — "
-            "an empty object writes nothing and is rejected."
+            "Column -> value mapping, e.g. {\"title\": \"Q3 report\", \"amount\": 42}, "
+            "or a JSON-encoded string of it. Required and non-empty for 'create' "
+            "and 'update'."
         ),
     )
 
@@ -129,17 +125,13 @@ class PodListFilesRequest(BaseModel):
     path: str = Field(
         default="/",
         description=(
-            "Folder path, e.g. /pod or /me. An absolute path is used as-is; a "
-            "relative path (e.g. '' or 'notes') is resolved against your "
-            "default pod working directory (`/me/c/{date}/{slug}`)."
+            "Folder path, e.g. `/me` or a shared folder like `/knowledge`. A "
+            "relative path resolves against `/me/c/{date}/{slug}`."
         ),
     )
     recursive: bool = Field(
         default=False,
-        description=(
-            "False (default) = immediate files/folders in `path`. True = a file "
-            "tree rooted at `path` (folders + sample files per directory)."
-        ),
+        description="True returns a tree rooted at `path` instead of its children.",
     )
     limit: int = Field(
         default=100, ge=1, le=500, description="Max entries when not recursive."
@@ -153,16 +145,13 @@ class PodWriteFileRequest(BaseModel):
     path: str = Field(
         ...,
         description=(
-            "Pod file path to write. An absolute path (e.g. /me/report.md) is "
-            "used as-is; a relative path (e.g. report.md) is resolved against "
-            "your default pod working directory (`/me/c/{date}/{slug}`) — write "
-            "there when you don't need a specific shared location."
+            "Pod file path. A relative path resolves against `/me/c/{date}/{slug}` "
+            "— write there unless a specific shared location is needed."
         ),
     )
     content: str = Field(..., description="UTF-8 text content to write.")
     overwrite: bool = Field(
-        default=True,
-        description="If false and the file already exists, the write is rejected instead of replacing it.",
+        default=True, description="If false, reject the write when the file exists."
     )
     description: str | None = Field(default=None, description="Optional file description.")
 
@@ -171,28 +160,24 @@ class PodReadFileRequest(BaseModel):
     path: str = Field(
         ...,
         description=(
-            "Pod file path to read. An absolute path (e.g. /pod/notes.txt) is "
-            "used as-is; a relative path is resolved against your default pod "
-            "working directory (`/me/c/{date}/{slug}`)."
+            "Pod file path. Absolute paths (e.g. `/knowledge/notes.txt`) are used "
+            "as-is; a relative path resolves against `/me/c/{date}/{slug}`."
         ),
     )
     format: Literal["text", "markdown"] = Field(
         default="text",
         description=(
-            "'text' = raw file text. 'markdown' = converted document text (PDF, "
-            "DOCX, ...); supports a page range. To SEE pages as images instead, "
-            "use pod_view_document_pages."
+            "'markdown' returns converted document text (PDF, DOCX) and supports "
+            "a page range; use `pod_view_document_pages` to see pages as images."
         ),
     )
     page_start: int | None = Field(
-        default=None,
-        ge=1,
-        description="markdown only: first page (1-based). Omit for the whole document.",
+        default=None, ge=1, description="markdown only: first page (1-based)."
     )
     page_end: int | None = Field(
         default=None,
         ge=1,
-        description="markdown only: last page (1-based, inclusive). Defaults to page_start.",
+        description="markdown only: last page, inclusive. Defaults to page_start.",
     )
     max_chars: int = Field(default=50000, ge=1, le=400000)
 
@@ -214,31 +199,21 @@ class GetFileUrlRequest(BaseModel):
     url_type: Literal["app", "public"] = Field(
         default="app",
         description=(
-            "'app' = authenticated in-app link for a signed-in pod member "
-            "(returns app_url + a short-lived download url). "
-            "'public' = a public, hit-capped signed link anyone can open without "
-            "logging in (returns signed_url) — use to email/message a file to "
-            "someone outside the pod."
+            "'app' = in-app link for a signed-in pod member. 'public' = hit-capped "
+            "signed link anyone can open — use to send a file outside the pod."
         ),
     )
     expires_seconds: int | None = Field(
         default=None,
         ge=1,
         le=86400,
-        description=(
-            "Link lifetime in seconds. 'app': lifetime of the download url "
-            "(default ~1 hour). 'public': lifetime of the signed link "
-            "(default 3 hours, max 24 hours)."
-        ),
+        description="Link lifetime. Default ~1h for 'app', 3h for 'public' (max 24h).",
     )
     max_hits: int | None = Field(
         default=None,
         ge=1,
         le=100,
-        description=(
-            "'public' links only: maximum downloads before the link stops working "
-            "(default 50, max 100). Bounds egress if the link leaks. Ignored for 'app'."
-        ),
+        description="'public' only: downloads before the link dies (default 50).",
     )
 
 

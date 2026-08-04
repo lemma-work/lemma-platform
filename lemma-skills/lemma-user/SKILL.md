@@ -44,7 +44,9 @@ leave the only copy in a local temp path.
 
 ```bash
 lemma pods list            # marks the currently active pod
-lemma pods describe        # full inventory: tables, agents, functions, workflows, schedules, apps
+lemma pods describe        # inventory: tables, agents, functions, workflows, schedules + a file tree
+                           # (apps are NOT in it — use `lemma apps list`)
+                           # tree shows 2 folder levels; --depth N / --full for more
 ```
 
 Workspace sessions inject `LEMMA_TOKEN`, `LEMMA_BASE_URL`, `LEMMA_ORG_ID`,
@@ -57,8 +59,9 @@ included) — prefer it; it costs far fewer tokens than JSON. Use `--output json
 only to pipe/save, and `--full` to expand folded fields. Pass payloads with
 `--data '<json>'` (`-d`) or `--file path.json` (`-f`); target another pod with
 `--pod <id-or-slug>`; add `--yes` for destructive commands in automation. CLI
-groups are plural (`lemma files`, `lemma tables`, `lemma records`, …); the
-singular alias (`lemma file`, `lemma table`) is the same command.
+groups are plural (`lemma files`, `lemma tables`, `lemma records`, …), and most
+have a singular alias (`lemma file`, `lemma table`). Not all: `tools`, `query`,
+`datastore`, `runtime`, `servers`, `auth`, and `config` exist only as written.
 
 For multi-step scripting prefer the Python SDK over chained CLI calls:
 
@@ -94,7 +97,8 @@ Results are ranked passages **with page numbers**, so you can jump straight to
 `cat … --pages N`. `--scope` + the default **SUBTREE** (folder and everything
 beneath) is your retrieval lever — scope a search to one knowledge folder to keep
 it tight. `--method` is `HYBRID` (default), `VECTOR` (semantic), or `TEXT`
-(keyword); `--direct` limits to a folder's immediate children. Reach for search
+(keyword); `--direct` limits to a folder's immediate children — it only takes
+effect alongside `--scope`, and is ignored without one. Reach for search
 before reading whole files or guessing.
 
 ### Read — `cat` is page- and mode-aware
@@ -197,10 +201,12 @@ the same way). To read across all users' rows on an RLS table you'd pass
 ```bash
 lemma functions list
 lemma functions run score_ticket --data '{"ticket_id":"..."}'   # check output_data / status / logs
-lemma functions runs list score_ticket                          # past runs (debug); runs get <id> for one
+lemma functions runs list score_ticket                          # past runs (debug)
+lemma functions runs get score_ticket <run-id>                   # NB: function AND run id
 
 lemma workflows list
-lemma workflows run intake --data '{"title":"..."}'             # creates the run; --data is submitted to the entry form
+lemma workflows run intake --data '{"title":"..."}'             # WAITS for the run by default (--no-wait to fire);
+                                                                # --data is submitted to the entry form
 lemma workflows runs list intake
 lemma workflows runs get <run-id>                               # status, current node, active_wait, step_history, errors
 lemma workflows runs waiting                                    # form waits assigned to you (your approval queue)
@@ -247,7 +253,7 @@ First-party tools (no third-party account needed):
 ```bash
 lemma tools list
 lemma tools web-search "latest API docs" --limit 5
-lemma tools connector-helper-agent "send tomorrow's calendar summary by email" --app googlecalendar --app gmail
+lemma tools report-feedback "..."                    # the tool set is: web-search, report-feedback
 ```
 
 Third-party connector operations — always check what's connected, then
@@ -255,32 +261,33 @@ Third-party connector operations — always check what's connected, then
 payloads:
 
 ```bash
-lemma connectors overview                            # every configured app: auth-config NAME, provider, connected accounts
+lemma connectors overview                            # every configured app: auth-config NAME, kind, connected accounts
 lemma connectors status                              # installed apps + your connected accounts
-lemma connectors describe gmail                      # per-app usage guide (provider-aware)
+lemma connectors describe gmail                      # per-app usage guide (kind-aware)
 lemma connectors operations search workspace-gmail "send email" --limit 5
-lemma connectors operations details workspace-gmail GMAIL_SEND_EMAIL
-lemma connectors operations execute workspace-gmail GMAIL_SEND_EMAIL \
+lemma connectors operations details workspace-gmail gmail_send_email
+lemma connectors operations execute workspace-gmail gmail_send_email \
   --data '{"payload": {"recipient_email": "a@b.com", "subject": "Hi", "body": "..."}}'
 ```
 
 Operations are addressed by the **auth-config name** (the first column of
 `connectors overview` / `auth-configs list`), not the app id — and names differ per
-provider (LEMMA vs COMPOSIO), so `overview` is the one place to find the exact one
-to pass. Workloads execute operations via the invoking user's connected account
+**kind** (`package`, `composio`, `http`, `sql`, `mcp`), so `overview` is the one
+place to find the exact one to pass. Workloads execute operations via the invoking user's connected account
 (delegated) — they never touch raw credentials. If no account is connected, create
 a connect request and hand the link to the user:
 `lemma connectors connect-requests create gmail --auth-config-id <id>`. If the goal
-is clear but the operation isn't, ask `connector-helper-agent` first.
+is clear but the operation isn't, search by intent — `operations search` ranks over
+descriptions as well as names.
 
 ## Workspace execution notes
 
 - Long-running processes (dev servers, watchers, REPLs): keep one persistent
   interactive session and reuse it; one-shot shell commands for everything else.
-- Local services are `http://127.0.0.1:<port>` inside the container; the shareable
-  preview URL is `https://port-<port>-${LEMMA_WORKSPACE_URL#https://}` (workspace
-  `https://abc.lemma.work` + port 3000 → `https://port-3000-abc.lemma.work`).
-  Confirm the port is listening before sharing.
+- Local services are `http://127.0.0.1:<port>` inside the container. There is no
+  user-constructible public preview URL for a workspace port — port access is a
+  signed, expiring link the platform mints. To show someone a running app, deploy
+  it (`lemma apps deploy`) rather than sharing a sandbox port.
 - To keep web sources, use the `browser` skill's `save-webpage <url> --formats
   markdown,pdf`; upload durable artifacts to `/me` or a shared folder.
 - Network errors (`Could not resolve host`, `ENOTFOUND`, TLS timeouts): check
@@ -299,7 +306,7 @@ is clear but the operation isn't, ask `connector-helper-agent` first.
   `MISSING_WORKLOAD_RESOURCE_GRANT` names a missing **workload grant** — a builder
   must add it (it never silently grants itself).
 - **Resource not found.** Confirm the active pod (`lemma pods list`) and exact
-  names (`lemma pods describe`).
+  names (`lemma pods describe`; `lemma apps list` for apps).
 - **ENUM rejected on a record write.** Read `lemma tables get <table>` and use one
   of the listed `options`.
 - **Fresh upload not in search.** Indexing lag — `files stat` for status, retry

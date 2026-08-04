@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.modules.agent.domain.context import AgentContext
 from app.modules.agent.domain.entities import Agent, Conversation, Message
 from app.modules.agent.domain.prompts import build_agent_instructions
-from app.modules.agent.domain.runtime_notes import append_runtime_notes
+from app.modules.agent.domain.runtime_notes import prepend_runtime_notes
 from app.modules.agent.domain.value_objects import (
     ConversationType,
     HarnessKind,
@@ -31,6 +31,9 @@ from app.modules.agent.domain.value_objects import (
 from app.modules.agent.infrastructure.mcp import (
     LEMMA_MCP_SERVER_NAME,
     exported_tool_name,
+)
+from app.modules.agent.tools.final_answer.final_answer_toolset import (
+    FINAL_ANSWER_TOOL_NAME,
 )
 
 
@@ -80,6 +83,7 @@ async def mcp_payload(
     ctx: AgentContext,
     options: HarnessOptions,
     prompt: str | None = None,
+    extra_tool_names: Sequence[str] = (),
 ) -> JsonObject:
     """Build the MCP endpoint the host's bridge will call back on.
 
@@ -125,6 +129,7 @@ async def mcp_payload(
             ctx=ctx,
             options=options,
             prompt=prompt,
+            extra_names=extra_tool_names,
         ),
     }
 
@@ -170,9 +175,10 @@ async def _exported_tool_names(
     ctx: AgentContext,
     options: HarnessOptions,
     prompt: str | None,
+    extra_names: Sequence[str] = (),
 ) -> list[str]:
     if not options.toolsets:
-        return []
+        return list(extra_names)
     run_ctx = RunContext(
         deps=ctx,
         model=None,  # type: ignore[arg-type]
@@ -195,6 +201,10 @@ async def _exported_tool_names(
         async with toolset:
             for original_name, tool in (await toolset.get_tools(run_ctx)).items():
                 names.append(exported_tool_name(tool.tool_def.name or original_name))
+    # Tools the MCP route serves that are not in `options.toolsets` — the MCP
+    # service re-assembles independently, so the two lists must be reconciled
+    # here or this one under-reports what the host can actually call.
+    names.extend(name for name in extra_names if name not in names)
     return names
 
 
@@ -218,12 +228,12 @@ def _prompt_payload(
     output_contract = _output_contract(agent=agent, conversation=conversation)
     if output_contract:
         sections.append(output_contract)
+    # No output_schema/structured keys: nothing downstream reads them. The run
+    # spec carries only system_prompt + user_prompt, and the schema reaches the
+    # agent as the `lemma_final_answer` tool's inputSchema over MCP.
     return {
-        "user_prompt": append_runtime_notes(_render_history(messages)),
+        "user_prompt": prepend_runtime_notes(_render_history(messages)),
         "system_prompt": "\n\n".join(section for section in sections if section),
-        "output_schema": agent.output_schema or {},
-        "structured": bool(agent.output_schema)
-        or conversation.type == ConversationType.TASK,
     }
 
 
@@ -250,24 +260,33 @@ def _workspace_cwd(ctx: AgentContext) -> str:
 
 
 def _output_contract(*, agent: Agent, conversation: Conversation) -> str:
+    """Tell the agent to end the task by calling the final-answer tool.
+
+    The schema also rides on the tool's own ``inputSchema`` over MCP, but ACP
+    adapters vary in how much of that reaches the model, so echoing it here is
+    cheap insurance. The plain-JSON fallback is what makes the normalizer's
+    whole-message-is-JSON parse a legitimate signal rather than a guess.
+    """
     if not agent.output_schema and conversation.type != ConversationType.TASK:
         return ""
-    output_schema = json.dumps(
-        to_json_value(agent.output_schema or {}),
-        indent=2,
-        sort_keys=True,
+    tool = exported_tool_name(FINAL_ANSWER_TOOL_NAME)
+    schema_block = (
+        "\n\nThe `output` value must match this JSON schema:\n```json\n"
+        + json.dumps(to_json_value(agent.output_schema), indent=2, sort_keys=True)
+        + "\n```"
+        if agent.output_schema
+        else ""
     )
     return (
-        "# Output Contract\n"
-        "Your final response must be a single JSON object with this shape:\n"
-        "{\n"
-        '  "status": "COMPLETED" | "FAILED" | "WAITING",\n'
-        '  "output": <data matching the agent output schema>,\n'
-        '  "error": null | "short error message"\n'
-        "}\n\n"
-        "Use WAITING when more user input is required. Use FAILED only when "
-        "the task cannot be completed. The output value must match this JSON "
-        f"schema:\n```json\n{output_schema}\n```"
+        "# Final Answer\n"
+        f"End this task by calling the `{tool}` tool with `status` "
+        '("COMPLETED", "FAILED", or "WAITING"), `output`, and an optional '
+        "`error`. Do not print that JSON as your reply — call the tool.\n\n"
+        "Use WAITING when you need more from the user, and FAILED only when the "
+        "task cannot be completed."
+        + schema_block
+        + f"\n\nIf `{tool}` is unavailable, then and only then reply with that "
+        "JSON object as your entire message and nothing else."
     )
 
 

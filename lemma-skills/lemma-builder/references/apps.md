@@ -174,7 +174,7 @@ pass `appName` only to override that identity in local development. Prefer **hoo
   `useForeignKeyOptions`, `useDatastoreQuery`, `useTables`
 - **Realtime**: `useLiveRecords` (a list that stays live via the table WebSocket —
   fetches once, merges deltas in place, no polling), `useWatchChanges` (raw subscription
-  for your own state/cache). Needs SDK ≥ 0.4.1.
+  for your own state/cache).
 - **Files**: `useFiles`, `useFile`, `useFileTree`, `useFileSearch`,
   `useFilePreview`, `useUploadFile`, `useCreateFolder`, `useDeleteFile`,
   `useUpdateFile`

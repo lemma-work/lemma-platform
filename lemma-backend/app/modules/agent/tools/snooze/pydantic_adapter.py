@@ -39,32 +39,22 @@ SNOOZE_TOOL_NAME = "snooze"
 async def snooze(
     ctx: RunContext[BaseAgentContext], request: SnoozeRequest
 ) -> SnoozeResponse:
-    """Suspend this turn for a while and pick it up later, where you left off.
+    """Suspend this turn and pick it up later, where you left off.
 
-    USE WHEN the work genuinely has a gap in the middle — you kicked off a build
-    and want to check back in ten minutes, you asked someone for an approval and
-    need to look again later, something needs time to settle. You wake up in the
-    same conversation, with the same history, as though this tool call simply
-    took a long time to return.
+    Use it when the work has a real gap — a build to check back on, something
+    that needs time to settle. You wake in the same conversation with the same
+    history.
 
-    CHOOSE `seconds` FROM WHAT YOU ARE WAITING FOR, not out of habit. A job that
-    takes about eight minutes deserves one ~500s check, not eight 60s ones. Don't
-    snooze in a tight loop to poll something — each wake replays this entire
-    conversation, so a poll loop costs far more than it saves. If you're unsure
-    how long something takes, prefer one longer sleep and check when you wake.
+    Three things that bite:
+    - **Your sandbox does not survive.** `/workspace`, background processes, and
+      your shell cwd are gone on wake. Write anything you need to the pod first.
+    - **Waking proves nothing happened.** `TIMER` means your time elapsed and
+      nothing more — check the thing you were waiting for.
+    - **Every wake replays the whole conversation**, so one longer sleep beats a
+      poll loop.
 
-    YOUR SANDBOX DOES NOT SURVIVE. The workspace container is reclaimed while you
-    sleep: files under /workspace, background processes, and your shell's working
-    directory are all gone when you wake. Anything you need on the other side must
-    be written to the pod (a table or a pod file) BEFORE you call this.
-
-    WAKING PROVES NOTHING HAPPENED. `woke_because` is `TIMER` — your time
-    elapsed, and that is all it means. Check the thing you were waiting for
-    before acting as though it is done.
-
-    Do NOT use this to wait on a person — ask them and end your turn, and their
-    reply starts a fresh run on its own. Do NOT use it to pad out a reply, or to
-    wait for something you could just check right now.
+    Don't use it to wait on a person — ask and end your turn; their reply starts
+    a fresh run.
     """
     deps = ctx.deps
 

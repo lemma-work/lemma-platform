@@ -37,12 +37,9 @@ from app.modules.agent.tools.context import BaseAgentContext
 class WriteTodosRequest(BaseModel):
     todos: list[str] = Field(
         description=(
-            "One markdown checklist line per task. Use '[ ]' for a task still to "
-            "do and '[x]' once it's done (e.g. '- [ ] Fetch the Q3 report'); a "
-            "line with no checkbox is treated as not-done. Send the whole list, "
-            "or just the single line you want to flip. Multiple lines replace the "
-            "current list; a single line is matched by text and preserves the rest. "
-            "The full, updated list is always returned."
+            "Markdown checklist lines, e.g. '- [ ] Fetch the Q3 report'; '[x]' "
+            "means done. Several lines replace the list; one line is matched by "
+            "text and flips just that task."
         )
     )
 

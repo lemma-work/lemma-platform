@@ -12,7 +12,13 @@ from uuid import uuid4
 import pytest
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import ToolSearch
-from pydantic_ai.messages import ModelResponse, SystemPromptPart, TextPart
+from pydantic_ai.messages import (
+    ModelResponse,
+    SystemPromptPart,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
@@ -129,6 +135,44 @@ async def test_assembler_returns_capabilities_for_every_visible_toolset():
     assert any(isinstance(c, _PC) for c in capabilities)
     # No extra tools → no ToolSearch capability.
     assert not any(type(c).__name__ == "ToolSearch" for c in capabilities)
+
+
+@pytest.mark.anyio
+async def test_caching_capability_uses_the_lever_its_protocol_understands():
+    """OpenAI gets session affinity; Anthropic gets an explicit cache breakpoint.
+
+    Anthropic caches nothing without a breakpoint, so an OpenAI-shaped setting
+    would leave every Anthropic run paying full price for the whole prefix.
+    """
+    from app.modules.agent.capabilities.assembler import build_lemma_harness_tooling
+    from app.modules.agent.capabilities.prompt_caching import (
+        PromptCachingCapability as _PC,
+    )
+    from app.modules.agent.domain.runtime_profiles import RuntimeProfileProtocol
+
+    async def settings_for(protocol: RuntimeProfileProtocol) -> dict[str, object]:
+        capabilities = await build_lemma_harness_tooling(
+            uow_factory=None,
+            agent=SimpleNamespace(toolsets=[AgentToolset.WEB_SEARCH]),
+            ctx=SimpleNamespace(conversation_id=uuid4(), is_pod_default_agent=True),
+            full_toolsets=[web_search_toolset],
+            agent_run_id=uuid4(),
+            model_name="m",
+            enable_prompt_caching=True,
+            protocol=protocol,
+        )
+        caching = next(c for c in capabilities if isinstance(c, _PC))
+        return caching.get_model_settings()
+
+    openai_settings = await settings_for(RuntimeProfileProtocol.OPENAI_COMPATIBLE)
+    assert "openai_prompt_cache_key" in openai_settings
+    assert "anthropic_cache_instructions" not in openai_settings
+
+    anthropic_settings = await settings_for(
+        RuntimeProfileProtocol.ANTHROPIC_COMPATIBLE
+    )
+    assert anthropic_settings["anthropic_cache_instructions"] == "5m"
+    assert "openai_prompt_cache_key" not in anthropic_settings
 
 
 class _FakeRepo:
@@ -393,6 +437,7 @@ async def test_current_time_and_deferral_in_real_run():
         return "secret"
 
     captured: dict[str, object] = {}
+    turns: list[list[object]] = []
 
     def model_fn(messages, info: AgentInfo) -> ModelResponse:
         captured["defer"] = {
@@ -403,6 +448,11 @@ async def test_current_time_and_deferral_in_real_run():
         parts = messages[-1].parts
         captured["last_text"] = " ".join(getattr(part, "content", "") for part in parts)
         captured["last_part"] = parts[-1]
+        turns.append(list(messages))
+        # First pass calls a tool, forcing a second model request in the same run
+        # so the time note's once-per-run behaviour is exercised.
+        if len(turns) == 1:
+            return ModelResponse(parts=[ToolCallPart("visible_tool", {})])
         return ModelResponse(parts=[TextPart("done")])
 
     conversation_id = uuid4()
@@ -421,12 +471,49 @@ async def test_current_time_and_deferral_in_real_run():
     # out of the prompt prefix until discovered; the core tool stays visible.
     assert captured["defer"]["visible_tool"] is False
     assert captured["defer"]["hidden_tool"] is True
-    # Current time rides as the trailing (system) message, not the system prompt.
-    assert "Current date and time:" in captured["last_text"]
-    last_part = captured["last_part"]
-    assert isinstance(last_part, SystemPromptPart)
-    assert last_part.content.startswith("<notes>")
-    assert last_part.content.endswith("</notes>")
+
+    # The time note rides as a USER part, never a SystemPromptPart: Anthropic
+    # hoists system parts to the front of the system prompt, which would put a
+    # per-turn value ahead of the whole cacheable prefix.
+    first_turn = turns[0]
+    note_parts = [
+        part
+        for message in first_turn
+        for part in getattr(message, "parts", [])
+        if isinstance(part, UserPromptPart) and str(part.content).startswith("<notes>")
+    ]
+    assert len(note_parts) == 1
+    assert str(note_parts[0].content).endswith("</notes>")
+    assert not any(
+        isinstance(part, SystemPromptPart)
+        and str(part.content).startswith("<notes>")
+        for message in first_turn
+        for part in getattr(message, "parts", [])
+    )
+
+    # The user's own message is the last thing the model reads; the note sits
+    # immediately before it.
+    request_parts = first_turn[-1].parts
+    user_texts = [
+        str(part.content)
+        for part in request_parts
+        if isinstance(part, UserPromptPart)
+    ]
+    assert user_texts[-1] == "hello"
+    assert user_texts[-2].startswith("<notes>")
+
+    # ...and it is added exactly once per run, not once per model request. The
+    # graph writes the capability's edit back into run state, so an unconditional
+    # append would accumulate a note per step.
+    assert len(turns) == 2
+    second_turn_notes = [
+        part
+        for message in turns[1]
+        for part in getattr(message, "parts", [])
+        if isinstance(part, UserPromptPart) and str(part.content).startswith("<notes>")
+    ]
+    assert len(second_turn_notes) == 1
+
     # Prompt-cache session affinity is applied to the request settings.
     assert captured["settings"].get("openai_user") == str(conversation_id)
 
@@ -571,7 +658,7 @@ async def test_pod_default_speech_capability_carries_its_prompt(monkeypatch):
     instructions = speech_caps[0].get_instructions()
     assert "Spoken replies" in instructions
     assert "Do not also write the same words" in instructions
-    assert "rewrite the transcript back to the user" in instructions
+    assert "Never echo it back" in instructions
 
 
 @pytest.mark.anyio

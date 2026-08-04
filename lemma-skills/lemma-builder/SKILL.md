@@ -61,8 +61,8 @@ lemma workflows init intake            # a valid FORM->END graph to extend
 lemma schedules init nightly           # schedules/nightly/nightly.json
 lemma surfaces init slack              # surfaces/slack/slack.json
 
-lemma agents grant triage tickets:read,write /knowledge:read app:gmail:use agent:helper:execute function:score_ticket:execute
-#   ^ merges into permissions.grants in place (keeps your JSONC comments): name:perms (table) | /path:perms (folder) | app:name:use | agent:name:execute | function:name:execute
+lemma agents grant triage tickets:read,write /knowledge:read connector:gmail:use agent:helper:execute function:score_ticket:execute
+#   ^ merges into permissions.grants in place (keeps your JSONC comments): name:perms (table) | /path:perms (folder) | connector:name:use | agent:name:execute | function:name:execute
 lemma agents schema                    # or `lemma schema agent` — print the example/shape for a resource type
 
 lemma pods create my-pod --with-starter   # create the pod AND scaffold+import a starter in one shot
@@ -109,12 +109,12 @@ my-pod/
 
 Build order follows dependencies: **tables → files → functions → agents → workflows → schedules → connectors/surfaces → app → seed**. Verify each layer with realistic data before adding the next.
 
-**Build for the hero moment, not just for correctness.** A pod that imports cleanly and passes its tests can still be plumbing nobody wants to open. Before building, name the one screenshottable "oh" — the agent doing real work on its own, behind an interface someone adopts (see `references/pod-design.md`). The **app (or surface) is usually the product** — design it like the thing people live in, not an afterthought tacked on last. And **seed the pod so it demos itself**: a `seed/seed.sh` of sample rows, files, and one completed run, so opening the app shows the hero moment immediately instead of an empty state. (Records and file contents don't round-trip through import — the seed script is how they land; record it in the README.)
+**Build for the hero moment, not just for correctness.** A pod that imports cleanly and passes its tests can still be plumbing nobody wants to open. Before building, name the one screenshottable "oh" — the agent doing real work on its own, behind an interface someone adopts (see `references/pod-design.md`). The **app (or surface) is usually the product** — design it like the thing people live in, not an afterthought tacked on last. And **seed the pod so it demos itself**: a `seed/seed.sh` of sample rows, files, and one completed run, so opening the app shows the hero moment immediately instead of an empty state. (Rows and file bytes *can* travel — `pods export --with-data --with-files`, `pods import --with-data --with-files` — but a `seed/seed.sh` is still the better demo path: it is re-runnable and readable. Record it in the README.)
 
 Three rules that bite everyone:
 
 1. **Zero access by default, and no destructive power without a grant or approval.** Agents and functions are created with NO access to anything — not tables, not files/folders, not connectors. Every resource they touch must be granted explicitly, either via `permissions.grants` in their bundle JSON (exported automatically, replaced on import) or `lemma functions|agents permissions replace <name> --file grants.json`. A named workload's grant is standalone authority (grant-first). `MISSING_WORKLOAD_RESOURCE_GRANT` at runtime means a grant is missing; `DESTRUCTIVE_ACTION_REQUIRES_APPROVAL` means a delete/manage action needs either an explicit destructive grant or a user's session approval. Full 403 decoder + the complete model in `references/authorization-model.md`.
-2. **Not everything bundles.** File contents and connectors (auth configs, accounts) are not part of import/export — set those up with CLI commands and record the steps in the pod's README. Surfaces and workload permissions do round-trip in bundles.
+2. **Not everything bundles.** Connectors (auth configs, accounts) are org/pod runtime state and never round-trip — set those up with CLI commands and record the steps in the pod's README. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask: `--with-files` / `--with-data` on both export and import.
 3. **Leave a runbook.** Every production-quality bundle should include a README with: purpose, required CLI context, non-bundled setup steps, required uploaded files, connector auth configs/accounts, verification payloads, and the final end-to-end smoke test.
 
 ## References
@@ -130,7 +130,7 @@ Read what the task needs:
 - `references/functions.md` — code contract, in-function SDK (`Pod.from_env()`), grants, testing.
 - `references/agents.md` — agent JSON, toolsets, instructions, agents/functions as tools (sub-agents), runtime profiles, testing.
 - `references/workflows.md` — every node type, expressions, human-in-the-loop patterns, run debugging.
-- `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; LEMMA vs COMPOSIO providers; delegated execution.
+- `references/connectors.md` — connectors → auth configs → accounts → operations/triggers; connector kinds (`package`/`composio`/`http`/`sql`/`mcp`); delegated execution.
 - `references/schedules-and-triggers.md` — TIME/DATASTORE/WEBHOOK triggers, event payloads, LLM event filtering.
 - `references/surfaces.md` — exposing a pod agent on Slack/Teams/Telegram/WhatsApp/Gmail/Outlook.
 - `references/apps.md` — app architecture, SDK/auth/data wiring, scaffold/dev/deploy, and components. Pair it with `lemma-app-design` for UX/visual direction and `lemma-app-qa` for systematic release testing.

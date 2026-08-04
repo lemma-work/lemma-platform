@@ -50,7 +50,7 @@ from app.modules.identity.infrastructure.models.organization_models import (
     OrganizationMember,
 )
 from app.modules.identity.infrastructure.models.user_models import User
-from app.modules.connectors.domain.connector import AuthProvider
+from app.modules.connectors.domain.connector import AuthProvider, provider_to_kind
 from app.modules.connectors.infrastructure.models.account import Account
 from app.modules.connectors.infrastructure.models.connector import Connector
 from app.modules.connectors.infrastructure.models.connector_trigger import (
@@ -317,27 +317,24 @@ async def _ensure_connector(
     provider: AuthProvider = AuthProvider.LEMMA,
 ) -> Connector:
     connector = await db_session.get(Connector, connector_id)
-    capability = {"provider": provider.value, "auth_scheme": "OAUTH2"}
+    # The install axis is `kinds` (post-#265); callers still speak AuthProvider,
+    # so map it here rather than at every call site.
+    kind = provider_to_kind(provider).value
+    spec: dict[str, object] = {"kind": kind, "auth_scheme": "OAUTH2"}
     if provider == AuthProvider.COMPOSIO:
-        capability["toolkit_slug"] = connector_id
+        spec["toolkit_slug"] = connector_id
     if connector is None:
         connector = Connector(
             id=connector_id,
             title=connector_id.title(),
             description=f"{connector_id} test app",
-            provider_capabilities=[capability],
+            kinds=[spec],
             is_active=True,
         )
         db_session.add(connector)
         await db_session.flush()
-    elif not any(
-        item.get("provider") == provider.value
-        for item in connector.provider_capabilities or []
-    ):
-        connector.provider_capabilities = [
-            *(connector.provider_capabilities or []),
-            capability,
-        ]
+    elif not any(item.get("kind") == kind for item in connector.kinds or []):
+        connector.kinds = [*(connector.kinds or []), spec]
         await db_session.flush()
     return connector
 

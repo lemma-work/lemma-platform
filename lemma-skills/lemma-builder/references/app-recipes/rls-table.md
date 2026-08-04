@@ -9,6 +9,46 @@ The app runs as the signed-in user (see `pod-model.md`). On an **RLS-on** table 
 hooks return **only that user's rows**; on a **shared** table they return the
 team's rows. You never filter by `user_id` — the backend scopes it.
 
+## A write can start agentic work — as the writer
+
+This is the reason RLS tables are worth reaching for in an app. When a
+**`DATASTORE`** schedule watches an RLS table, the run it starts belongs to the
+**owner of the row that changed**, not to whoever created the schedule
+(`datastore_event_handler.py`). So an app row insert becomes: *this user asked
+for this, and the work runs with exactly their reach.*
+
+```
+app writes a row (as the signed-in user)
+      → DATASTORE schedule fires, carrying that row's owner
+      → workflow/agent runs as that user, seeing only their RLS rows
+      → result lands in a table the app is already watching
+```
+
+The app side is just a write plus the live hooks below — no polling, no job
+status endpoint. What you have to get right is the trigger:
+
+- **The workflow's `start` block does not create the trigger.**
+  `start: {type: "DATASTORE_EVENT"}` is a declaration; firing needs a separate
+  **`Schedule`** row with `schedule_type: DATASTORE`, the `table_name`, and
+  `operations`. Create both.
+- **`operations` is mandatory on the schedule** (`["create"]`, `["update"]`, …).
+  It is optional on the workflow `start` model and defaults to "all" there —
+  that default does not carry over, and a schedule without it matches nothing.
+- **Creating one needs `datastore.table.update` on the watched table**, not just
+  record-write. A `POD_USER` who can add rows may still not be able to create the
+  trigger.
+- **On a shared (non-RLS) table there is no row owner**, so the run falls back to
+  the schedule's creator — every member's write runs as *that* person. If you
+  want per-user scoping, the table must be RLS-on.
+- **There is no loop guard.** An agent writing back into the *watched* table
+  re-fires the trigger. Write results to a **different** table.
+- **Grant the agent, not the node.** The workflow's AGENT node does not check
+  `agent.execute`; what decides whether the agent can write the result table is
+  the agent's own resource grants.
+
+The app then reads results with `useLiveRecords` on the results table, and rows
+appear as the workflow finishes.
+
 ## Read + filter + sort (hand-written hook)
 
 ```tsx
@@ -54,7 +94,7 @@ Two different things keep a list fresh — never a timer:
   deltas **in place** (no flicker, no refetch):
 
 ```tsx
-import { useLiveRecords } from "lemma-sdk/react";   // SDK ≥ 0.4.1
+import { useLiveRecords } from "lemma-sdk/react";
 
 const { records, isLoading, liveStatus } = useLiveRecords({
   client, podId: client.podId, tableName: "tickets",

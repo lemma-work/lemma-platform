@@ -58,6 +58,7 @@ from app.modules.agent.infrastructure.harnesses.streaming import CharStreamBuffe
 from app.modules.agent.services.runtime_model_factory import (
     require_pydantic_ai_model_from_runtime_profile,
 )
+from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text
 from app.modules.agent.tools.final_answer.final_answer_tool import FinalAgentResult
 from app.modules.agent.tools.tool_errors import AgentInputRequired
 from app.core.log.log import get_logger
@@ -932,18 +933,9 @@ class PydanticAIHarness:
         *,
         fallback: str | None = None,
     ) -> str:
-        if isinstance(data, str):
-            return data
-        if isinstance(data, dict):
-            for key in ("answer", "content", "message", "summary"):
-                value = data.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value
-            if data:
-                return json.dumps(data, indent=2, default=str)
-        if data is None:
-            return fallback or ""
-        return str(data)
+        # Shared with the Agent Host normalizer so identical structured output
+        # reads identically on a surface, whichever harness produced it.
+        return final_answer_text(data, fallback=fallback)
 
 
 def _preview(raw: str, *, limit: int = 160) -> str:
