@@ -26,7 +26,8 @@ from typing import Any, cast
 from uuid import UUID
 
 from jsonschema import Draft202012Validator
-from jsonschema.exceptions import ValidationError
+from jsonschema.exceptions import SchemaError, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from pydantic import TypeAdapter
 from pydantic_ai.tools import RunContext, Tool
 from pydantic_ai.toolsets import FunctionToolset
@@ -206,7 +207,9 @@ def _is_validatable_schema(schema: JsonObject | None) -> bool:
         return False
     try:
         Draft202012Validator.check_schema(schema)
-    except Exception:  # noqa: BLE001 - a bad stored schema must not break the run
+    except SchemaError:
+        # A stored schema we cannot compile means we cannot validate against it —
+        # which is a reason to skip validation, never to fail the run.
         logger.debug("agent.final_answer.unusable_output_schema.diagnostic")
         return False
     return True
@@ -248,7 +251,10 @@ async def _persist(
         await store_final_answer(
             uow_factory, agent_run_id=agent_run_id, record=record
         )
-    except Exception:  # noqa: BLE001 - see docstring
+    except SQLAlchemyError:
+        # See docstring: losing the authoritative copy is survivable (the event
+        # stream still carries the answer); turning a good final answer into a
+        # tool error is not.
         logger.debug("agent.final_answer.persist_failed.diagnostic", exc_info=True)
 
 

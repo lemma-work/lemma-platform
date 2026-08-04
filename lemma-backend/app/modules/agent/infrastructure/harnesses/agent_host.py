@@ -36,6 +36,7 @@ from app.modules.agent.domain.value_objects import (
     HarnessOptions,
     JsonObject,
 )
+from app.modules.agent.domain.prompts import load_agent_host_runtime_prompt
 from app.modules.agent.infrastructure.agent_host_channels import poke_host
 from app.modules.agent.infrastructure.agent_host_dispatch_repository import (
     AgentHostDispatchRepository,
@@ -76,7 +77,7 @@ from app.modules.agent.infrastructure.harnesses.agent_host_stream_reader import 
     StreamUnavailable,
 )
 from app.modules.agent.infrastructure.agent_host_final_answer import (
-    read_final_answer,
+    adopt_recorded_final_answer,
 )
 from app.modules.agent.infrastructure.harnesses.remote_payload import (
     mcp_payload,
@@ -99,22 +100,6 @@ DEFAULT_STREAM_BLOCK_MS = 1_000
 DEFAULT_LEASE_CHECK_SECONDS = 5.0
 DEFAULT_TERMINAL_EVENT_GRACE_SECONDS = 5.0
 
-_AGENT_HOST_RUNTIME_INSTRUCTIONS = (
-    "# Runtime\n"
-    "You are running through Lemma Agent Host. Use the Lemma MCP tools "
-    "(the lemma_* tools) for file and command execution; they run in the "
-    "conversation workspace. The provider process directory is private host "
-    "scratch space and must not be treated as the Lemma workspace.\n\n"
-    "# Native image generation\n"
-    "When running as Codex and the user asks to generate or edit an image, "
-    "use Codex's built-in `$imagegen` capability. Do not substitute Pillow, "
-    "SVG, canvas, Python, shell scripts, or an external image CLI unless the "
-    "user explicitly requests that implementation. Copy each final generated "
-    "image into the `.lemma-artifacts` directory in the provider scratch "
-    "workspace. Agent Host publishes files from that directory into the "
-    "conversation's pod files; do not call the Lemma CLI to upload a private "
-    "host path."
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,7 +310,9 @@ class RemoteHarness:
                 # The run reached a terminal state without a terminal event, so
                 # this is the only chance to pick up a final answer the tool
                 # recorded before the stream went quiet.
-                await self._adopt_recorded_final_answer(normalizer, agent_run_id)
+                await adopt_recorded_final_answer(
+                self.uow_factory, normalizer, agent_run_id=agent_run_id
+            )
                 for event in normalizer.finish_without_terminal(
                     state=outcome.terminal_state
                 ):
@@ -420,35 +407,11 @@ class RemoteHarness:
                     )
                 )
         if entry.type == AgentHostEventType.TERMINAL.value:
-            await self._adopt_recorded_final_answer(normalizer, agent_run_id)
+            await adopt_recorded_final_answer(
+                self.uow_factory, normalizer, agent_run_id=agent_run_id
+            )
         events.extend(normalizer.normalize(envelope, payload_override=payload_override))
         return events
-
-    async def _adopt_recorded_final_answer(
-        self,
-        normalizer: AgentHostEventNormalizer,
-        agent_run_id: UUID,
-    ) -> None:
-        """Prefer the answer the ``final_answer`` tool recorded for itself.
-
-        The stream path infers the answer from tool-call payloads, which is a
-        heuristic because ACP tool calls carry no tool name. This is the tool's
-        own record, so it wins.
-
-        Deliberately not called on the hard-failure paths (stream unavailable,
-        deadline): those abandon the run, and reporting a COMPLETED structured
-        answer for a run we gave up on would be a lie.
-        """
-        if not normalizer.structured_expected:
-            return
-        try:
-            record = await read_final_answer(
-                self.uow_factory, agent_run_id=agent_run_id
-            )
-        except Exception:  # noqa: BLE001 - the stream-inferred answer still stands
-            logger.debug("agent.agent_host.final_answer_read_failed.diagnostic")
-            return
-        normalizer.adopt_final_answer(record)
 
     async def _cancel_if_requested(
         self,
@@ -518,7 +481,7 @@ class RemoteHarness:
             options=options,
             agent_run_id=agent_run_id,
             harness_kind=self.kind,
-            runtime_instructions=_AGENT_HOST_RUNTIME_INSTRUCTIONS,
+            runtime_instructions=load_agent_host_runtime_prompt(),
         )
         prompt = _json_object(payload.get("prompt"))
         mcp = await mcp_payload(

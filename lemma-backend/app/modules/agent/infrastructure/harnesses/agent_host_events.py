@@ -10,8 +10,6 @@ single ordered lane, a chunk cannot arrive after the upsert that supersedes it.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -23,93 +21,30 @@ from app.modules.agent.domain.value_objects import (
     AgentEvent,
     AgentEventType,
     JsonObject,
-    JsonValue,
     MessageDraft,
 )
 from app.modules.agent.infrastructure.harnesses.streaming import TextStreamBuffer
 from app.modules.agent.infrastructure.harnesses.tool_returns import (
     missing_tool_return_events,
 )
+from app.modules.agent.infrastructure.harnesses.agent_host_tool_payload import (
+    bounded_tool_value,
+    first_present,
+    json_object,
+    tool_args,
+    tool_metadata,
+    tool_name_from_payload,
+)
+from app.modules.agent.infrastructure.harnesses.agent_host_final_answer_stream import (
+    final_answer_metadata,
+    final_answer_record,
+    infer_final_answer,
+)
 from app.modules.agent.tools.final_answer.final_answer_text import final_answer_text
 from app.modules.agent.tools.final_answer.final_answer_toolset import (
     FINAL_ANSWER_MARKER,
-    FINAL_ANSWER_TOOL_NAME,
 )
 from app.modules.usage.contracts import AgentRunUsage
-
-_FINAL_ANSWER_STATUSES = frozenset({"COMPLETED", "FAILED", "WAITING"})
-
-# A fenced block that IS the whole message, e.g. ```json\n{...}\n```
-_FENCED_JSON = re.compile(r"\A```(?:json)?\s*(?P<body>.*?)\s*```\Z", re.DOTALL)
-
-
-def _final_answer_record(value: object) -> JsonObject | None:
-    """Recognise a final-answer payload by the marker the tool stamps on it.
-
-    ACP tool-call events carry no tool name, so the marker — present in both the
-    text block and structuredContent of the MCP result — is what identifies our
-    tool's result whichever half an adapter echoes back.
-    """
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except (TypeError, ValueError):
-            return None
-    if isinstance(value, dict) and value.get(FINAL_ANSWER_MARKER) is True:
-        return dict(value)
-    return None
-
-
-def _final_answer_metadata(record: JsonObject) -> JsonObject:
-    """The message metadata a final answer contributes.
-
-    Mirrors what the in-process harness stamps, so ``RunMessageWriter`` reads
-    both harnesses' terminal messages the same way.
-    """
-    metadata: JsonObject = {
-        "structured_output": record.get("output"),
-        "final_answer_tool_name": FINAL_ANSWER_TOOL_NAME,
-    }
-    status = record.get("status")
-    if isinstance(status, str) and status.upper() in _FINAL_ANSWER_STATUSES:
-        metadata["final_answer_status"] = status.upper()
-    if record.get("error"):
-        metadata["final_answer_error"] = record["error"]
-    if record.get("schema_violation"):
-        metadata["final_answer_schema_violation"] = record["schema_violation"]
-    if record.get("inferred"):
-        # Makes "the tool path is failing on adapter X" visible in the data.
-        metadata["final_answer_inferred"] = True
-    return metadata
-
-
-def _whole_message_json(message: str) -> JsonObject | None:
-    """Parse the message iff the entire message is one JSON object."""
-    text = message.strip()
-    fenced = _FENCED_JSON.match(text)
-    if fenced is not None:
-        text = fenced.group("body").strip()
-    if not text.startswith("{") or not text.endswith("}"):
-        return None
-    try:
-        parsed = json.loads(text)
-    except (TypeError, ValueError):
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _matches_schema(schema: JsonObject | None, output: object) -> bool:
-    """Does an inferred output satisfy the agent's schema? No schema = accept."""
-    if not schema:
-        return True
-    try:
-        from jsonschema import Draft202012Validator
-
-        Draft202012Validator(schema).validate(output)
-    except Exception:  # noqa: BLE001 - a bad schema must not reject a good answer
-        return False
-    return True
-
 
 @dataclass(frozen=True, slots=True)
 class AgentHostEventEnvelope:
@@ -333,7 +268,7 @@ class AgentHostEventNormalizer:
             # a permission prompt flushes with final=False and must not burn it.
             record = self._final_answer or self._infer_final_answer(message)
             if record is not None:
-                metadata.update(_final_answer_metadata(record))
+                metadata.update(final_answer_metadata(record))
                 if self._final_answer_tool_call_id is not None:
                     metadata["tool_call_id"] = self._final_answer_tool_call_id
                 message = message or final_answer_text(
@@ -355,35 +290,12 @@ class AgentHostEventNormalizer:
     def _infer_final_answer(self, message: str) -> JsonObject | None:
         """Last resort: read the answer out of the agent's own final text.
 
-        Only for a run that owed a structured answer, and only when the *whole*
-        message is one JSON object (or one fenced json block that is the whole
-        message). Deliberately not a brace-slice of the text: that is what turns
-        "here's an example: {...}" into a fabricated final answer.
+        Gated on this run actually owing a structured answer — an ordinary chat
+        reply that happens to contain JSON is never scraped.
         """
         if not self.structured_expected or not message:
             return None
-        parsed = _whole_message_json(message)
-        if parsed is None:
-            return None
-
-        status = parsed.get("status")
-        if isinstance(status, str) and status.upper() in _FINAL_ANSWER_STATUSES:
-            output = parsed.get("output")
-            record: JsonObject = {
-                FINAL_ANSWER_MARKER: True,
-                "status": status.upper(),
-                "output": output,
-                "error": parsed.get("error"),
-            }
-        else:
-            # A bare object: treat it as the output, and invent no lifecycle
-            # status — let the terminal event decide whether the run succeeded.
-            record = {FINAL_ANSWER_MARKER: True, "output": parsed}
-
-        if not _matches_schema(self.output_schema, record.get("output")):
-            return None
-        record["inferred"] = True
-        return record
+        return infer_final_answer(message, output_schema=self.output_schema)
 
     # ------------------------------------------------------------- tool calls
 
@@ -394,7 +306,7 @@ class AgentHostEventNormalizer:
         payload: JsonObject,
         metadata: JsonObject,
     ) -> list[AgentEvent]:
-        tool_name = _tool_name(payload)
+        tool_name = tool_name_from_payload(payload)
         if object_id in self.tool_calls:
             return []
         self.tool_calls[object_id] = tool_name
@@ -405,8 +317,8 @@ class AgentHostEventNormalizer:
                 data=MessageDraft.of_tool_call(
                     tool_name=tool_name,
                     tool_call_id=object_id,
-                    tool_args=_tool_args(payload, tool_name),
-                    metadata=_tool_metadata(metadata, payload),
+                    tool_args=tool_args(payload, tool_name),
+                    metadata=tool_metadata(metadata, payload),
                 ),
                 agent_run_id=self.agent_run_id,
                 sequence=row.sequence,
@@ -427,22 +339,22 @@ class AgentHostEventNormalizer:
             or object_id in self.closed_tool_calls
         ):
             return []
-        tool_name = self.tool_calls.get(object_id, _tool_name(payload))
+        tool_name = self.tool_calls.get(object_id, tool_name_from_payload(payload))
         self.closed_tool_calls.add(object_id)
-        raw_result = _first_present(payload, "result", "rawOutput")
+        raw_result = first_present(payload, "result", "rawOutput")
         if status == "COMPLETED":
             # Read the RAW value, before bounding. `_bounded_tool_value` truncates
             # long strings and replaces anything past `_MAX_TOOL_VALUE_DEPTH` with
             # a placeholder — which would turn a valid structured answer into
             # something that still looks structured but is not.
-            record = _final_answer_record(raw_result) or _final_answer_record(
-                _first_present(payload, "arguments", "args", "rawInput")
+            record = final_answer_record(raw_result) or final_answer_record(
+                first_present(payload, "arguments", "args", "rawInput")
             )
             if record is None:
-                record = _final_answer_record(event_text(payload))
+                record = final_answer_record(event_text(payload))
             if record is not None:
                 self.adopt_final_answer(record, tool_call_id=object_id)
-        result = _bounded_tool_value(raw_result)
+        result = bounded_tool_value(raw_result)
         if status != "COMPLETED":
             result = {
                 "success": False,
@@ -456,7 +368,7 @@ class AgentHostEventNormalizer:
                     tool_name=tool_name,
                     tool_call_id=object_id,
                     tool_result=result,
-                    metadata=_tool_metadata(metadata, payload),
+                    metadata=tool_metadata(metadata, payload),
                 ),
                 agent_run_id=self.agent_run_id,
                 sequence=row.sequence,
@@ -482,7 +394,7 @@ class AgentHostEventNormalizer:
         payload: JsonObject,
         metadata: JsonObject,
     ) -> AgentEvent:
-        usage = _json_object(payload.get("usage")) or payload
+        usage = json_object(payload.get("usage")) or payload
         return AgentEvent(
             type=AgentEventType.USAGE,
             data=AgentRunUsage(
@@ -566,91 +478,6 @@ class AgentHostEventNormalizer:
         events.extend(self.close_outstanding(terminal))
         events.append(terminal)
         return events
-
-
-_MAX_TOOL_STRING_CHARACTERS = 4_096
-_MAX_TOOL_COLLECTION_ITEMS = 32
-_MAX_TOOL_VALUE_DEPTH = 4
-
-
-def _first_present(payload: JsonObject, *keys: str) -> object:
-    for key in keys:
-        if key in payload:
-            return payload[key]
-    return None
-
-
-def _tool_name(payload: JsonObject) -> str:
-    for key in ("name", "tool_name"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    kind = payload.get("kind")
-    if isinstance(kind, str) and kind.strip():
-        normalized = kind.strip().lower()
-        return "exec_command" if normalized == "execute" else normalized
-    title = payload.get("title")
-    if isinstance(title, str) and title.strip():
-        return title.strip()
-    return "tool"
-
-
-def _tool_metadata(metadata: JsonObject, payload: JsonObject) -> JsonObject:
-    result = dict(metadata)
-    for source, target in (("title", "tool_title"), ("kind", "tool_kind")):
-        value = payload.get(source)
-        if isinstance(value, str) and value.strip():
-            result[target] = value.strip()
-    return result
-
-
-def _tool_args(payload: JsonObject, tool_name: str) -> JsonValue:
-    value = _first_present(payload, "arguments", "args", "rawInput")
-    if tool_name == "exec_command" and isinstance(value, dict):
-        normalized = dict(value)
-        command = normalized.pop("command", None)
-        if "cmd" not in normalized and isinstance(command, str):
-            normalized["cmd"] = command
-        value = normalized
-    return _bounded_tool_value(value)
-
-
-def _bounded_tool_value(value: object, *, depth: int = 0) -> JsonValue:
-    if depth >= _MAX_TOOL_VALUE_DEPTH:
-        return {"omitted": "nested tool payload"}
-    if isinstance(value, str):
-        if len(value) <= _MAX_TOOL_STRING_CHARACTERS:
-            return value
-        return {
-            "omitted": "large tool payload",
-            "character_count": len(value),
-        }
-    if isinstance(value, dict):
-        items = list(value.items())
-        result = {
-            str(key): _bounded_tool_value(item, depth=depth + 1)
-            for key, item in items[:_MAX_TOOL_COLLECTION_ITEMS]
-        }
-        if len(items) > _MAX_TOOL_COLLECTION_ITEMS:
-            result["_omitted_item_count"] = len(items) - _MAX_TOOL_COLLECTION_ITEMS
-        return result
-    if isinstance(value, list):
-        result = [
-            _bounded_tool_value(item, depth=depth + 1)
-            for item in value[:_MAX_TOOL_COLLECTION_ITEMS]
-        ]
-        if len(value) > _MAX_TOOL_COLLECTION_ITEMS:
-            result.append(
-                {"omitted_item_count": len(value) - _MAX_TOOL_COLLECTION_ITEMS}
-            )
-        return result
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    return str(value)
-
-
-def _json_object(value: object) -> JsonObject:
-    return dict(value) if isinstance(value, dict) else {}
 
 
 def event_text(payload: JsonObject) -> str:

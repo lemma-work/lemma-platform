@@ -27,6 +27,7 @@ _SKILLS_PROMPT_PATH = _PROMPT_DIR / "skills.md"
 _WEB_SEARCH_PROMPT_PATH = _PROMPT_DIR / "web_search.md"
 _TODO_PROMPT_PATH = _PROMPT_DIR / "todo.md"
 _SPEECH_PROMPT_PATH = _PROMPT_DIR / "speech.md"
+_AGENT_HOST_RUNTIME_PROMPT_PATH = _PROMPT_DIR / "agent_host_runtime.md"
 
 # Per-toolset prompt fragments, in the order they should appear in the system
 # prompt. Only the visible/core toolsets that carry usage guidance are listed;
@@ -76,6 +77,11 @@ def load_todo_prompt() -> str:
 
 def load_speech_prompt() -> str:
     return _read_required_prompt(_SPEECH_PROMPT_PATH)
+
+
+def load_agent_host_runtime_prompt() -> str:
+    """Runtime guidance for a run driven through Agent Host (remote harness)."""
+    return _read_required_prompt(_AGENT_HOST_RUNTIME_PROMPT_PATH)
 
 
 def load_toolset_fragment(toolset: AgentToolset) -> str | None:

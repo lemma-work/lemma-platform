@@ -216,11 +216,6 @@ async def _seed_paused_interactions(
 
 
 async def _seed_gmail_connector(db_session) -> None:
-    from app.modules.connectors.domain.connector import (
-        AuthMethod,
-        AuthProvider,
-        LemmaProviderCapability,
-    )
     from app.modules.connectors.infrastructure.models.connector import Connector
     from app.modules.connectors.infrastructure.models.connector_operation import (
         ConnectorOperation,
@@ -230,12 +225,9 @@ async def _seed_gmail_connector(db_session) -> None:
         id="gmail",
         title="Gmail",
         description="Gmail connector",
-        provider_capabilities=[
-            LemmaProviderCapability(
-                provider=AuthProvider.LEMMA,
-                auth_scheme=AuthMethod.NOAUTH,
-            ).model_dump(mode="json")
-        ],
+        # Post-#265 the install axis is `kinds` (one KindSpec per way the
+        # connector can be installed), not the retired `provider_capabilities`.
+        kinds=[{"kind": "package", "auth_scheme": "NOAUTH"}],
         is_active=True,
     )
     operation = ConnectorOperation(

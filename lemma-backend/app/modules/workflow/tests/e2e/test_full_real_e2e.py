@@ -508,7 +508,7 @@ async def _seed_composio_trigger(db_session) -> None:
             Connector(
                 id="composio",
                 title="Composio",
-                provider_capabilities=[{"provider": "LEMMA", "auth_scheme": "OAUTH2"}],
+                kinds=[{"kind": "package", "auth_scheme": "OAUTH2"}],
                 is_active=True,
             )
         )
