@@ -27,7 +27,7 @@ from lemma_pod_bundle.normalize import _split_resource_permissions_payload
 
 from ..io import to_plain
 from ..payload import build_request
-from ..state import console
+from ..state import console, err_console
 
 # Grantee kinds and the pod-SDK resource that serves each. Both expose the same
 # `permissions(name)` / `replace_permissions(name, request)` pair.
@@ -118,12 +118,12 @@ def report_inline_permissions(
     if applied is None or getattr(state, "output", None) == "json":
         return
     if applied:
-        console.print(
+        err_console.print(
             f"[green]permissions[/green] {kind} [bold]{name}[/bold]: "
             f"replaced with {applied} grant(s)"
         )
     else:
-        console.print(
+        err_console.print(
             f"[yellow]permissions[/yellow] {kind} [bold]{name}[/bold]: "
             "replaced with an EMPTY grant list — it can no longer reach any "
             "table, folder, or connector."
@@ -131,7 +131,13 @@ def report_inline_permissions(
 
 
 def render_grants(kind: str, name: str, grants: list[dict[str, Any]]) -> None:
-    """Print a grant list the same way everywhere (bundle edit, add, remove)."""
+    """Print a grant list the same way everywhere (get, add, remove).
+
+    Always shows the permission ids. The generic detail renderer folded this to
+    "Grants 8 items — first: …", and even `--full` listed names without ids — so
+    the command the docs call the way to verify grants couldn't tell read from
+    read-write without re-fetching as JSON.
+    """
     if not grants:
         console.print(
             f"  [yellow]none[/yellow] — {kind} '{name}' has zero access to pod "
@@ -144,6 +150,27 @@ def render_grants(kind: str, name: str, grants: list[dict[str, Any]]) -> None:
             f"  {grant.get('resource_type')} {grant.get('resource_name')}: "
             f"{permission_ids}"
         )
+
+
+def emit_grants(state: Any, kind: str, name: str, payload: Any) -> None:
+    """Render `permissions get`'s response — the same view `add`/`remove` print.
+
+    The generic detail renderer folded this to "Grants 8 items — first: …", and
+    `--full` listed names without permission ids, so the command the docs call
+    the way to verify grants could not distinguish read from read-write.
+    """
+    from ..io import emit
+
+    grants = [
+        grant
+        for grant in (to_plain(payload).get("grants") or [])
+        if isinstance(grant, dict)
+    ]
+    if getattr(state, "output", None) == "json":
+        emit(state, {"grants": grants})
+        return
+    console.print(f"[bold]{kind} {name}[/bold] — {len(grants)} grant(s)")
+    render_grants(kind, name, grants)
 
 
 def parse_specs(specs: list[str]) -> list[dict[str, Any]]:

@@ -114,7 +114,7 @@ from lemma_sdk.openapi_client.models.workflow_create_request import WorkflowCrea
 from lemma_sdk.openapi_client.models.workflow_update_request import WorkflowUpdateRequest
 from ..cli_core.io import list_items, to_plain
 from ..cli_core.payload import build_request
-from ..cli_core.state import console
+from ..cli_core.state import err_console as console
 from .app_bundle import deploy_app_bundle
 from .enums import SURFACE_PLATFORMS
 from lemma_pod_bundle.limits import (

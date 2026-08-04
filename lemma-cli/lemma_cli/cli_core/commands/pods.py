@@ -23,7 +23,7 @@ from ..io import emit, format_columns, list_items, to_plain
 from ..payload import build_request
 from ..sdk import pod_client
 from ..select import select_from_items
-from ..state import console, fail, run_with_client, state_from_ctx
+from ..state import console, err_console, fail, run_with_client, state_from_ctx
 
 app = typer.Typer(
     help="Pod commands.",
@@ -261,7 +261,7 @@ def create_pod(
             scaffold = init_pod(target, name)
         except ScaffoldError as exc:
             raise typer.BadParameter(str(exc)) from exc
-        console.print(f"[green]starter[/green] scaffolded {len(scaffold.files)} files -> {target}")
+        err_console.print(f"[green]starter[/green] scaffolded {len(scaffold.files)} files -> {target}")
 
     result = run_with_client(
         ctx,
@@ -279,12 +279,22 @@ def create_pod(
     if result is None:
         return
     emit(state, result)
+    pod_id = str(to_plain(result).get("id") or "")
+
+    # A created pod is NOT the active pod, and `pods select` only affects the
+    # current shell — which for anything scripted (every bash call a fresh
+    # shell) means it does nothing at all. Without this, the next command writes
+    # into whatever pod was previously active, possibly someone else's.
+    if pod_id:
+        err_console.print(
+            f"[dim]this pod is not active yet — use[/dim] --pod {pod_id} "
+            f"[dim]on later commands, or[/dim] export LEMMA_POD_ID={pod_id}"
+        )
 
     if not want_starter or target is None:
         return
     from ...cli_app.pod_bundle import import_pod_bundle
 
-    pod_id = str(to_plain(result).get("id") or "")
     # Bind the scaffolded bundle to the new pod on the active server so later
     # `lemma` commands from that folder target it. Skipped under the env server.
     if pod_id and not state.server_read_only:
@@ -296,7 +306,7 @@ def create_pod(
             values["LEMMA_ORG_ID"] = org_id
         try:
             binding = write_server_env(target, state.server, values)
-            console.print(
+            err_console.print(
                 f"[green]bound[/green] {target} -> pod on server "
                 f"'{state.server}' ([dim]{binding}[/dim])"
             )
@@ -308,7 +318,7 @@ def create_pod(
             client, pod_id=pod_id, source_dir=target, upsert=True
         ),
     )
-    console.print(f"[green]starter[/green] imported into pod {pod_id}")
+    err_console.print(f"[green]starter[/green] imported into pod {pod_id}")
 
 
 @app.command("get")
@@ -710,7 +720,7 @@ def export_pod(
         from ...cli_app.scaffold import templatize_bundle
 
         root, changed = templatize_bundle(output_dir)
-        console.print(
+        err_console.print(
             f"[green]template[/green] stripped instance data from {changed} file(s) in {root}"
         )
 

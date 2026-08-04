@@ -77,6 +77,7 @@ def chat_once(
     title: str | None,
     show_header: bool = False,
     show_user_message: bool = False,
+    verbose: bool = False,
 ) -> None:
     state = state_from_ctx(ctx)
     pod_id = selected_pod(state, pod) or ""
@@ -104,7 +105,7 @@ def chat_once(
         response = pod_client(client, s, pod).conversations.send_stream(
             conversation_id, message
         )
-        render_chat_stream(state=s, response=response, agent=agent)
+        render_chat_stream(state=s, response=response, agent=agent, verbose=verbose)
         return True
 
     run_with_client(ctx, stream)

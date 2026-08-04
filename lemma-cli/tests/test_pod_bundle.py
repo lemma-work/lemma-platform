@@ -2662,7 +2662,7 @@ def test_import_drops_an_unresolved_pinned_account_grant(tmp_path: Path, capsys)
             ]
         }
     ]
-    assert "dropped 1 grant" in capsys.readouterr().out
+    assert "dropped 1 grant" in capsys.readouterr().err
 
 
 def _bare_pod_client():
@@ -2938,8 +2938,9 @@ def test_import_warns_when_an_empty_grant_list_revokes_live_access(tmp_path: Pat
 
     import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path)
 
-    # Rich wraps console output, so compare on collapsed whitespace.
-    out = " ".join(capsys.readouterr().out.split())
+    # Rich wraps console output, so compare on collapsed whitespace. Import
+    # progress and warnings are diagnostics: stderr, not stdout.
+    out = " ".join(capsys.readouterr().err.split())
     assert "revoking all 1 existing grant(s)" in out
     assert "Remove the `permissions` key to leave them alone" in out
 

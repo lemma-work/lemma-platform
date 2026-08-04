@@ -96,9 +96,11 @@ def test_build_request_warns_but_proceeds_for_ad_hoc_commands(capsys):
         {"name": "f", "code": "x", "permissions": {"grants": []}},
         context="function f",
     )
-    out = capsys.readouterr().out
-    assert "permissions" in out
-    assert "NOT" in out  # "were NOT sent"
+    # Warnings go to STDERR so stdout stays a clean, pipeable result.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "permissions" in captured.err
+    assert "NOT" in captured.err  # "were NOT sent"
     # The rest of the payload still goes through.
     assert request.to_dict() == {"name": "f", "code": "x"}
 
@@ -139,3 +141,63 @@ def test_read_json_rejects_empty_stdin(monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO("   "))
     with pytest.raises(typer.BadParameter, match="stdin was empty"):
         read_json("-", None)
+
+
+def test_json_output_stays_pipeable_when_a_warning_fires(tmp_path, monkeypatch):
+    """`--output json` was unusable: any advisory landed on stdout ahead of the
+    JSON, so every `| jq` and `json.load` on it failed. stdout is the result and
+    nothing else now."""
+    import json as _json
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from lemma_cli.cli_core.app import app
+    from lemma_cli.cli_core.commands import functions
+
+    class FakeFunctions:
+        def create(self, request):
+            return {"id": "fn-1", "name": "adder"}
+
+        def replace_permissions(self, name, request):
+            return {"function_name": name, **request.to_dict()}
+
+    class FakePod:
+        def __init__(self):
+            self.functions = FakeFunctions()
+
+    monkeypatch.setattr(
+        functions,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            SimpleNamespace(pod=lambda pod_id: FakePod()),
+            SimpleNamespace(
+                config={"_runtime": {"pod": "pod-1"}}, output="json", full=False
+            ),
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "--json",
+            "functions",
+            "create",
+            "--data",
+            _json.dumps(
+                {
+                    "name": "adder",
+                    "code": "x",
+                    "descriptoin": "typo that triggers a warning",
+                }
+            ),
+            "--pod",
+            "pod-1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    # The warning happened...
+    assert "descriptoin" in result.output
+    # ...and stdout is still nothing but the payload.
+    assert _json.loads(result.stdout) == {"id": "fn-1", "name": "adder"}

@@ -276,7 +276,7 @@ def test_functions_create_applies_inline_permissions(monkeypatch):
     assert "permissions" not in captured["create"]
     # ...and the grants land through the permissions endpoint instead.
     assert captured["permissions"] == ("maybe_rewrite_lesson", {"grants": _GRANTS})
-    assert "1 grant" in result.stdout
+    assert "1 grant" in result.output
 
 
 def test_functions_update_applies_inline_permissions(monkeypatch):
@@ -313,5 +313,5 @@ def test_functions_create_warns_on_an_unrecognized_field(monkeypatch):
     payload = json.dumps({"name": "plain", "code": "x", "descriptoin": "typo"})
     result = runner.invoke(app, ["functions", "create", "--data", payload, "--pod", "pod-1"])
 
-    assert result.exit_code == 0, result.stdout
-    assert "descriptoin" in result.stdout
+    assert result.exit_code == 0, result.output
+    assert "descriptoin" in result.output

@@ -14,6 +14,7 @@ from ..state import run_with_client, state_from_ctx
 from ._grants import (
     apply_inline_permissions,
     change_live_grants,
+    emit_grants,
     grants_from_options,
     replace_grants,
     report_inline_permissions,
@@ -159,14 +160,14 @@ def get_agent_permissions(
     agent: str = typer.Argument(...),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Show resource permissions for an agent."""
+    """Show an agent's resource grants, with their permission ids."""
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).agents.permissions(agent),
     )
     if result is not None:
-        emit(state, result)
+        emit_grants(state, "agent", agent, result)
 
 
 @permissions_app.command("replace")
@@ -299,6 +300,12 @@ def chat_agent(
     pod: str | None = typer.Option(None, "--pod"),
     conversation: str | None = typer.Option(None, "--conversation"),
     title: str | None = typer.Option(None, "--title"),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show the agent's whole stream, not just its answer.",
+    ),
 ) -> None:
     """Chat with an agent (interactive without a message)."""
     if message is None:
@@ -315,6 +322,7 @@ def chat_agent(
         title=title,
         show_header=True,
         show_user_message=True,
+        verbose=verbose,
     )
 
 
@@ -335,9 +343,20 @@ def run_agent(
     ),
     conversation: str | None = typer.Option(None, "--conversation"),
     title: str | None = typer.Option(None, "--title"),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show the agent's whole stream (reasoning, tool calls, usage), not just its answer.",
+    ),
 ) -> None:
-    """Run an agent with a message. Each run is a conversation; --no-wait
-    returns the conversation id, which `conversations` commands operate on."""
+    """Run an agent with a message and print its ANSWER.
+
+    Each run is a conversation; --no-wait returns the conversation id, which the
+    `conversations` commands operate on. Pass --verbose to watch the run's
+    interior, or --output json for {status, output, conversation_id}-shaped
+    events you can parse.
+    """
     if wait:
         chat_once(
             ctx,
@@ -348,6 +367,7 @@ def run_agent(
             title=title,
             show_header=True,
             show_user_message=True,
+            verbose=verbose,
         )
         return
 

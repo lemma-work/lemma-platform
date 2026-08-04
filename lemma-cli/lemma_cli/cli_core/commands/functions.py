@@ -16,6 +16,7 @@ from ..state import run_with_client, state_from_ctx
 from ._grants import (
     apply_inline_permissions,
     change_live_grants,
+    emit_grants,
     grants_from_options,
     replace_grants,
     report_inline_permissions,
@@ -163,14 +164,14 @@ def get_function_permissions(
     function: str = typer.Argument(...),
     pod: str | None = typer.Option(None, "--pod"),
 ) -> None:
-    """Show resource permissions for a function."""
+    """Show a function's resource grants, with their permission ids."""
     state = state_from_ctx(ctx)
     result = run_with_client(
         ctx,
         lambda client, s: pod_client(client, s, pod).functions.permissions(function),
     )
     if result is not None:
-        emit(state, result)
+        emit_grants(state, "function", function, result)
 
 
 @permissions_app.command("replace")

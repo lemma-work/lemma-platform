@@ -101,12 +101,13 @@ def render_chat_stream(
     state: CliState,
     response: Any,
     agent: str | None,
+    verbose: bool = False,
 ) -> None:
     if state.output == "json":
         emit_stream_events(state, response)
         return
 
-    renderer = ChatRenderer(agent=agent)
+    renderer = ChatRenderer(agent=agent, verbose=verbose)
     try:
         for event in iter_sse_events(response):
             renderer.handle(event)
@@ -115,13 +116,84 @@ def render_chat_stream(
         renderer.finish()
 
 
+def _json_object_at(text: str, start: int) -> tuple[dict[str, Any] | None, int]:
+    """Parse the JSON object beginning at ``text[start]``; returns (obj, end)."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                import json as _json
+
+                try:
+                    return _json.loads(text[start : index + 1]), index + 1
+                except ValueError:
+                    return None, index + 1
+    return None, len(text)
+
+
+def extract_final_result(text: str) -> Any:
+    """Pull an agent's answer out of a raw token transcript.
+
+    Some runtimes stream their whole interior as plain tokens — reasoning
+    paragraphs with literal ``{"tool_name": ...}`` blobs inline — and deliver the
+    answer as the last ``final_result`` call. Structured event suppression can't
+    help there, because none of it arrives as events. Find that call and return
+    its output; return None when the transcript has no such marker, so the caller
+    can fall back to printing what it got.
+    """
+    marker = '"final_result"'
+    cursor = text.rfind(marker)
+    while cursor != -1:
+        brace = text.rfind("{", 0, cursor)
+        while brace != -1:
+            payload, _end = _json_object_at(text, brace)
+            if isinstance(payload, dict) and payload.get("tool_name") == "final_result":
+                args = payload.get("args") or payload.get("arguments") or {}
+                if isinstance(args, dict):
+                    return args.get("output", args)
+                return args
+            brace = text.rfind("{", 0, brace)
+        cursor = text.rfind(marker, 0, cursor)
+    return None
+
+
 class ChatRenderer:
-    def __init__(self, *, agent: str | None) -> None:
+    """Renders an agent's stream.
+
+    By default only the ANSWER reaches the terminal. A run used to print its
+    whole interior — reasoning, every tool call, usage — around 4KB of transcript
+    for a three-sentence reply, with the real answer buried in the last
+    `final_result`. That is a token bill and a parsing problem for anything
+    driving the CLI. `--verbose` restores the full stream for watching a run.
+    """
+
+    def __init__(self, *, agent: str | None, verbose: bool = False) -> None:
         self.agent = agent or "pod agent"
+        self.verbose = verbose
         self.started_answer = False
         self.printed_tokens = False
         self.answer_line_open = False
         self.seen_terminal = False
+        # Some runtimes deliver the answer as a `final_result` tool call rather
+        # than as tokens. Hold it so `finish` can print it when nothing else did.
+        self.final_result: Any = None
+        self.buffered: list[str] = []
 
     def handle(self, event: StreamEvent) -> None:
         event_type = event.type.lower()
@@ -143,20 +215,59 @@ class ChatRenderer:
             self.seen_terminal = True
             return
         if event_type in {"completed", "stopped"}:
+            self.seen_terminal = True
+            # A plain "COMPLETED" adds nothing next to the answer itself, and in
+            # quiet mode it arrives BEFORE the answer (which can only be
+            # extracted once the stream ends), reading as though the run ended
+            # with no output. Keep it for --verbose and for a run that stopped.
+            if not self.verbose and event_type == "completed":
+                return
             self._end_answer_line()
             status = _status_text(event.data) or event_type
             style = "dim green" if event_type == "completed" else "dim yellow"
             console.print(f"[{style}]{status}[/{style}]")
-            self.seen_terminal = True
             return
         self._status(event.data)
 
     def finish(self) -> None:
+        if not self.printed_tokens:
+            payload = self.final_result
+            if payload is None and self.buffered:
+                payload = extract_final_result("".join(self.buffered))
+            if payload is not None:
+                self._render_final_result(payload)
+            elif self.buffered:
+                # No final_result marker — print what the agent said rather than
+                # swallowing it.
+                self._start_answer()
+                console.print(Text("".join(self.buffered).strip()))
+                self.printed_tokens = True
         self._end_answer_line()
         self.finished = True
 
+    def _render_final_result(self, payload: Any) -> None:
+        """Print a structured final result as the answer, not as a tool blob."""
+        self._start_answer()
+        if isinstance(payload, dict):
+            # Unwrap the common {"output": ...} envelope.
+            value = payload.get("output", payload)
+        else:
+            value = payload
+        if isinstance(value, (dict, list)):
+            import json as _json
+
+            console.print_json(_json.dumps(value, default=str))
+        else:
+            console.print(Text(str(value)))
+        self.printed_tokens = True
+
     def _token(self, token: str) -> None:
         if not token:
+            return
+        if not self.verbose:
+            # Hold it: the answer can only be separated from the reasoning once
+            # the stream has ended (see extract_final_result).
+            self.buffered.append(token)
             return
         self._start_answer()
         self.printed_tokens = True
@@ -207,7 +318,7 @@ class ChatRenderer:
             self._status(metadata)
 
     def _usage(self, data: Any) -> None:
-        if not isinstance(data, dict):
+        if not self.verbose or not isinstance(data, dict):
             return
         bits = []
         for key in ("input_tokens", "output_tokens", "tool_call_count"):
@@ -218,6 +329,8 @@ class ChatRenderer:
             self._status("usage: " + ", ".join(bits))
 
     def _status(self, data: Any) -> None:
+        if not self.verbose:
+            return
         text = _status_text(data)
         if not text:
             return
@@ -225,11 +338,19 @@ class ChatRenderer:
         console.print(f"[dim]{text}[/dim]")
 
     def _tool_call(self, message: dict[str, Any]) -> None:
-        self._end_answer_line()
         name = str(message.get("tool_name") or "tool")
+        if name == "final_result":
+            # The answer, arriving as a tool call. Keep it for `finish`.
+            self.final_result = message.get("args") or message.get("arguments")
+            return
+        if not self.verbose:
+            return
+        self._end_answer_line()
         console.print(f"[dim]> {name}[/dim]")
 
     def _tool_return(self, message: dict[str, Any]) -> None:
+        if not self.verbose:
+            return
         self._end_answer_line()
         name = str(message.get("tool_name") or "tool")
         console.print(f"[dim]< {name} returned[/dim]")

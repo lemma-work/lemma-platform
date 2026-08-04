@@ -8,7 +8,7 @@ from typing import Any
 
 import typer
 
-from .state import console
+from .state import err_console as console
 
 # `--data -` (and `--credentials-json -`, …) reads the payload from stdin, so an
 # agent can pipe one command's `--json` output straight into the next without a

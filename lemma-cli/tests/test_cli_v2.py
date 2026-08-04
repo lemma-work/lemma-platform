@@ -1123,7 +1123,9 @@ def test_chat_creates_agent_conversation_and_streams_message(monkeypatch):
     assert "Lemma chat" in result.stdout
     assert "You" in result.stdout
     assert "hello back" in result.stdout
-    assert "completed" in result.stdout
+    # A bare "completed" is dropped in the default (answer-only) mode — it adds
+    # nothing beside the answer. `--verbose` still prints it.
+    assert "completed" not in result.stdout
 
 
 def test_chat_can_use_default_pod_agent_with_message_option(monkeypatch):
@@ -3099,7 +3101,8 @@ def test_pod_create_with_starter_happy(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.stdout
     assert (target / "pod.json").exists()
     assert (target / "agents" / "hello" / "hello.json").exists()
-    assert "imported into pod pod_x" in result.stdout
+    # Scaffolding narration is a diagnostic (stderr); the pod payload owns stdout.
+    assert "imported into pod pod_x" in result.output
 
 
 def test_normalize_datastore_operations_all():

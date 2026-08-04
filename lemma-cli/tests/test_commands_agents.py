@@ -266,4 +266,4 @@ def test_agents_create_with_empty_grants_says_so(monkeypatch):
 
     assert result.exit_code == 0, result.stdout
     assert captured["permissions"] == ("mailer", {"grants": []})
-    assert "EMPTY" in result.stdout
+    assert "EMPTY" in result.output
