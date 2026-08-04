@@ -392,6 +392,78 @@ def doctor_pod(
         errors: list[str] = []
         warnings: list[str] = []
 
+        # Pod file tree, fetched once and shared by every folder-grant check.
+        def _norm(path: Any) -> str:
+            return "/" + "/".join(part for part in str(path or "").split("/") if part)
+
+        folders: set[str] = set()
+        documents: set[str] = set()
+
+        def walk_tree(node: dict) -> None:
+            for child in node.get("children") or []:
+                if not isinstance(child, dict):
+                    continue
+                path = _norm(child.get("path"))
+                if path == "/":
+                    continue
+                if str(child.get("kind") or "").upper() == "FOLDER":
+                    folders.add(path)
+                    walk_tree(child)
+                else:
+                    documents.add(path)
+
+        try:
+            tree = to_plain(pod_sdk.files.tree("/")).get("tree")
+            if isinstance(tree, dict):
+                walk_tree(tree)
+        except Exception as exc:  # noqa: BLE001 — surface, don't hide, a failed check
+            warnings.append(f"could not read the pod file tree: {exc}")
+
+        indexing_cache: dict[str, bool | None] = {}
+
+        def documents_under(prefix: str) -> list[str]:
+            root = _norm(prefix).rstrip("/") + "/"
+            return sorted(path for path in documents if path.startswith(root))
+
+        def is_indexed(path: str) -> bool | None:
+            """True/False, or None when the file's status can't be read."""
+            if path not in indexing_cache:
+                try:
+                    meta = to_plain(pod_sdk.files.get(path))
+                except Exception:  # noqa: BLE001 — unknown, not a finding
+                    indexing_cache[path] = None
+                else:
+                    indexing_cache[path] = bool(meta.get("search_enabled"))
+            return indexing_cache[path]
+
+        def check_folder_grant(kind: str, name: str, path: str) -> None:
+            """A folder grant used to produce an unconditional "verify it exists"
+            warning, which is noise the moment the folder does exist — and taught
+            people to stop reading doctor. Actually look."""
+            singular = kind[:-1]
+            target = _norm(path)
+            if target != "/" and target not in folders and not documents_under(target):
+                errors.append(
+                    f"{singular} '{name}' is granted on folder '{path}' which does "
+                    "not exist in this pod."
+                )
+                return
+            found = documents_under(target)
+            if not found:
+                return
+            # A granted knowledge folder whose documents are all unindexed answers
+            # every question with nothing. Export/import used to produce exactly
+            # this, and it is invisible without asking.
+            statuses = [is_indexed(doc) for doc in found[:25]]
+            known = [status for status in statuses if status is not None]
+            if known and not any(known):
+                warnings.append(
+                    f"{singular} '{name}' is granted on folder '{path}', but none "
+                    f"of its {len(known)} checked document(s) are indexed — "
+                    "searches there return nothing. Re-upload them, or check "
+                    "`lemma files stat <path>`."
+                )
+
         account_cache: dict[str, bool] = {}
 
         def account_reachable(account_id: str) -> bool:
@@ -437,8 +509,8 @@ def doctor_pod(
                         "Reconnect the account, or drop the grant to fall back to "
                         "the invoking user's own account."
                     )
-                elif rtype == "folder":
-                    warnings.append(f"{kind[:-1]} '{name}' grants folder '{rname}' — verify it exists / will be created.")
+                elif rtype in ("folder", "document"):
+                    check_folder_grant(kind, name, rname)
                 destructive = sorted(
                     p for p in (grant.get("permission_ids") or []) if p in DESTRUCTIVE_PERMISSION_IDS
                 )

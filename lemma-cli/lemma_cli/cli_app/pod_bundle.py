@@ -770,14 +770,29 @@ def _export_pod_files(
         target_path = files_root.joinpath(*relative_parts)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_bytes(content)
-        file_manifest.append(
-            {
-                "path": path,
-                "description": item.get("description"),
-                "visibility": item.get("visibility"),
-                "search_enabled": item.get("search_enabled"),
-            }
-        )
+        entry: dict[str, Any] = {
+            "path": path,
+            "description": item.get("description"),
+            "visibility": item.get("visibility"),
+        }
+        # The directory tree carries no `search_enabled` (DirectoryTreeNode has
+        # path/name/kind/visibility/children and nothing else), so reading it
+        # from the tree item recorded a null for every file — and the importer's
+        # `bool(entry.get("search_enabled", True))` then read that null as False,
+        # because the key was present. Every round-tripped document came back
+        # unindexed and the copied pod's search silently returned nothing. Ask
+        # the file itself; omit the key entirely when we can't, so the importer's
+        # default applies instead of a null.
+        if "search_enabled" in item:
+            entry["search_enabled"] = item["search_enabled"]
+        else:
+            try:
+                stat = to_plain(client.pod(pod_id).files.get(path))
+            except Exception:  # noqa: BLE001 — fall back to the import default
+                stat = {}
+            if stat.get("search_enabled") is not None:
+                entry["search_enabled"] = stat["search_enabled"]
+        file_manifest.append(entry)
         file_count += 1
 
     for _item_id, item in sorted(
@@ -1885,13 +1900,20 @@ def _upload_bundled_files(pod_sdk: Any, files_root: Path) -> list[str]:
         path_key = "/".join(relative_parts)
         full_path = "/" + path_key
 
+        # Index unless the manifest explicitly says not to. `get(key, True)`
+        # could never fire its default here: older exports wrote the key with a
+        # null value, so `bool(None)` disabled indexing on every file and the
+        # imported pod's search went quiet — with `doctor` still reporting ok.
+        search_enabled = entry.get("search_enabled")
+        search_enabled = True if search_enabled is None else bool(search_enabled)
+
         def _do_upload() -> None:
             pod_sdk.files.upload(
                 local_file,
                 directory_path=directory_path,
                 name=name,
                 description=entry.get("description"),
-                search_enabled=bool(entry.get("search_enabled", True)),
+                search_enabled=search_enabled,
                 visibility=entry.get("visibility"),
             )
 

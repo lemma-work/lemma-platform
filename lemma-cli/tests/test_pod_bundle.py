@@ -2942,3 +2942,154 @@ def test_import_warns_when_an_empty_grant_list_revokes_live_access(tmp_path: Pat
     out = " ".join(capsys.readouterr().out.split())
     assert "revoking all 1 existing grant(s)" in out
     assert "Remove the `permissions` key to leave them alone" in out
+
+
+# --------------------------------------------------------------------------- #
+# file round trip: indexing must survive export -> import
+# --------------------------------------------------------------------------- #
+def test_import_indexes_files_when_the_manifest_says_nothing(tmp_path: Path, capsys):
+    """A manifest entry with a null (or absent) `search_enabled` must still index.
+
+    Export used to read the flag off the directory tree, which has no such field,
+    so it wrote a null for every file. The importer's `bool(get(k, True))` then
+    read that null as False — the default could never fire — and every
+    round-tripped document came back unindexed. The copied pod's `files search`
+    returned nothing while `doctor` reported ok.
+    """
+    files_root = tmp_path / "files" / "knowledge"
+    files_root.mkdir(parents=True)
+    (files_root / ".folder.json").write_text(
+        json.dumps({"visibility": "POD"}), encoding="utf-8"
+    )
+    (files_root / "refund-policy.md").write_text("# Refunds\n", encoding="utf-8")
+    (tmp_path / "files" / ".files.json").write_text(
+        json.dumps(
+            {
+                "files": [
+                    # As written by the buggy exporter.
+                    {
+                        "path": "/knowledge/refund-policy.md",
+                        "description": None,
+                        "visibility": "POD",
+                        "search_enabled": None,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    uploads: list = []
+    client = _bare_pod_client()
+    client.files = SimpleNamespace(
+        tree=lambda pod_id, root_path="/", files_per_directory=20: {
+            "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+        },
+        create_folder=lambda pod_id, path, description=None, visibility=None: {
+            "path": path,
+            "kind": "FOLDER",
+        },
+        upload=lambda pod_id, **kwargs: uploads.append(kwargs)
+        or {"path": kwargs.get("name")},
+    )
+
+    import_pod_bundle(
+        client, pod_id="pod_1", source_dir=tmp_path, with_files=True
+    )
+
+    assert len(uploads) == 1
+    assert uploads[0]["search_enabled"] is True
+
+
+def test_import_honours_an_explicit_search_opt_out(tmp_path: Path):
+    """`--no-search` at upload time must still round-trip as "don't index"."""
+    files_root = tmp_path / "files" / "scratch"
+    files_root.mkdir(parents=True)
+    (files_root / ".folder.json").write_text(
+        json.dumps({"visibility": "POD"}), encoding="utf-8"
+    )
+    (files_root / "data.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (tmp_path / "files" / ".files.json").write_text(
+        json.dumps(
+            {
+                "files": [
+                    {
+                        "path": "/scratch/data.csv",
+                        "visibility": "POD",
+                        "search_enabled": False,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    uploads: list = []
+    client = _bare_pod_client()
+    client.files = SimpleNamespace(
+        tree=lambda pod_id, root_path="/", files_per_directory=20: {
+            "tree": {"path": "/", "name": "/", "kind": "FOLDER", "children": []}
+        },
+        create_folder=lambda pod_id, path, description=None, visibility=None: {
+            "path": path,
+            "kind": "FOLDER",
+        },
+        upload=lambda pod_id, **kwargs: uploads.append(kwargs)
+        or {"path": kwargs.get("name")},
+    )
+
+    import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path, with_files=True)
+
+    assert uploads[0]["search_enabled"] is False
+
+
+def test_export_reads_search_enabled_from_the_file_not_the_tree(tmp_path: Path):
+    """The tree has no `search_enabled`, so the exporter must ask the file."""
+    tree = {
+        "tree": {
+            "path": "/",
+            "name": "/",
+            "kind": "FOLDER",
+            "children": [
+                {
+                    "path": "/knowledge",
+                    "name": "knowledge",
+                    "kind": "FOLDER",
+                    "visibility": "POD",
+                    "children": [
+                        {
+                            "path": "/knowledge/policy.md",
+                            "name": "policy.md",
+                            "kind": "FILE",
+                            "visibility": "POD",
+                            "children": [],
+                        }
+                    ],
+                }
+            ],
+        }
+    }
+    client = FakeClient(
+        pods=SimpleNamespace(get=lambda pod_id: {"id": pod_id, "name": "kb"}),
+        tables=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        functions=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        agents=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        workflows=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        schedules=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        surfaces=SimpleNamespace(list=lambda pod_id, limit=100: {"items": []}),
+        apps=SimpleNamespace(list=lambda pod_id, limit=1000: {"items": []}),
+        files=SimpleNamespace(
+            tree=lambda pod_id, root_path="/", files_per_directory=20: tree,
+            download=lambda pod_id, path: b"# Policy\n",
+            get=lambda pod_id, path: {"path": path, "search_enabled": True},
+        ),
+    )
+
+    result = export_pod_bundle(
+        client, pod_id="pod_1", output_dir=tmp_path, with_files=True
+    )
+
+    manifest = json.loads(
+        (Path(result["path"]) / "files" / ".files.json").read_text(encoding="utf-8")
+    )
+    assert manifest["files"][0]["search_enabled"] is True

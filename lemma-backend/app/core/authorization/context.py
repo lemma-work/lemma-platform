@@ -183,6 +183,66 @@ class AuthorizationDecision:
     resource: ResourceRef | None = None
     matched_role_ids: tuple[UUID, ...] = ()
     matched_grant_ids: tuple[UUID, ...] = ()
+    # Human name of the denied resource ("customers", "/knowledge"), resolved on
+    # the denial path only. A workload denial that names just the permission id
+    # leaves the operator to guess which of the resources a function touches was
+    # the one it lacked — the fix instruction needs the name, not the verb.
+    resource_name: str | None = None
+
+
+# Grantee kind -> the CLI command that adds a grant to it. A denial is the moment
+# the operator needs the fix, and the fix is one command.
+_GRANT_COMMAND_BY_TYPE = {
+    "datastore_table": "<table>:read,write",
+    "folder": "<path>:read",
+    "document": "doc:<path>:read",
+    "function": "function:<name>:execute",
+    "agent": "agent:<name>:execute",
+    "workflow": "workflow:<name>:execute",
+    "connector": "connector:<name>:use",
+    "connector_account": "account:<id>:use",
+    "app": "app:<name>:read",
+    "schedule": "schedule:<name>:read",
+}
+
+
+def _denial_resource_details(decision: "AuthorizationDecision") -> dict[str, object]:
+    resource = decision.resource
+    if resource is None:
+        return {}
+    details: dict[str, object] = {"resource_type": resource.resource_type.value}
+    if decision.resource_name:
+        details["resource_name"] = decision.resource_name
+    return details
+
+
+def _denial_message(permission_id: str, decision: "AuthorizationDecision") -> str:
+    """Say what was denied AND on what.
+
+    "Missing permission datastore.table.read" is unactionable when the caller
+    touches several tables: it names the verb, never the noun. The docs have
+    always told operators the error names the resource, so make that true.
+    """
+    resource = decision.resource
+    if resource is None:
+        return f"Missing permission {permission_id}"
+    resource_type = resource.resource_type.value
+    target = f" on {resource_type}"
+    if decision.resource_name:
+        target += f" '{decision.resource_name}'"
+    message = f"Missing permission {permission_id}{target}"
+    if decision.reason_code == "MISSING_WORKLOAD_RESOURCE_GRANT":
+        spec = _GRANT_COMMAND_BY_TYPE.get(resource_type)
+        if spec and decision.resource_name:
+            spec = spec.replace("<table>", decision.resource_name)
+            spec = spec.replace("<path>", decision.resource_name)
+            spec = spec.replace("<name>", decision.resource_name)
+            spec = spec.replace("<id>", decision.resource_name)
+            message += (
+                f" — grant it with `lemma agents|functions permissions add "
+                f"<workload> {spec}`"
+            )
+    return message
 
 
 class AuthorizerProtocol(Protocol):
@@ -262,12 +322,16 @@ class Context:
                 status_code=401,
             )
         raise DomainError(
-            f"Missing permission {permission_id}",
+            _denial_message(permission_id, decision),
             code=decision.reason_code,
             status_code=403,
             # Structured so tool-error handlers can carry the denied permission
-            # into a request_approval payload (session approvals key on it).
-            details={"permission_ids": [permission_id]},
+            # into a request_approval payload (session approvals key on it), and
+            # so callers can act on the resource without parsing prose.
+            details={
+                "permission_ids": [permission_id],
+                **_denial_resource_details(decision),
+            },
         )
 
     async def require_all(
@@ -285,6 +349,7 @@ class Context:
         :meth:`require` re-checks don't re-authorize.
         """
         missing: list[str] = []
+        missing_ids: list[str] = []
         first_reason: str | None = None
         auth_required = False
         for permission_id, resource in requirements:
@@ -295,7 +360,15 @@ class Context:
                 auth_required = True
             elif first_reason is None:
                 first_reason = decision.reason_code
-            missing.append(permission_id)
+            # Name the resource here too — a multi-permission denial is exactly
+            # where "which one?" is hardest to answer.
+            label = permission_id
+            if decision.resource is not None:
+                label += f" on {decision.resource.resource_type.value}"
+                if decision.resource_name:
+                    label += f" '{decision.resource_name}'"
+            missing.append(label)
+            missing_ids.append(permission_id)
         if auth_required and not first_reason:
             raise DomainError(
                 "Authentication required",
@@ -307,7 +380,7 @@ class Context:
                 f"Missing permission(s): {', '.join(missing)}",
                 code=first_reason or "AUTH_REQUIRED",
                 status_code=403,
-                details={"permission_ids": list(missing)},
+                details={"permission_ids": list(missing_ids)},
             )
 
     async def accessible_resource_ids(
