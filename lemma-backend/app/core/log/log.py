@@ -74,6 +74,7 @@ _FOREIGN_LOGGER_PREFIXES = frozenset(
         "openai",
         "sqlalchemy",
         "streaq",
+        "urllib3",
         "uvicorn",
     }
 )
@@ -96,32 +97,55 @@ _INFO_NOISE_LOGGER_PREFIXES = (
     "streaq",
     "uvicorn.access",
 )
+_DEBUG_ONLY_NOISE_LOGGER_PREFIXES = (
+    # Unlike _INFO_NOISE_LOGGER_PREFIXES, these are never floored at INFO —
+    # their INFO-level output (login outcomes, scheduler faults) is
+    # legitimate in production. Only their sub-INFO chatter is pure protocol
+    # narration with no diagnostic value: SuperTokens logs internal
+    # getSession/middleware plumbing on every single request, the MCP SDK
+    # logs handler registration on every connection, filelock logs every
+    # acquire/release pair, and APScheduler logs every empty polling tick.
+    "apscheduler",
+    "com.supertokens",
+    "filelock",
+    "mcp",
+    "urllib3",
+)
+
+
+def _quiet_dependencies_enabled() -> bool:
+    return os.getenv("LOG_QUIET_DEPENDENCIES", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _dependency_floor_applies(configured_level: int, name: str) -> bool:
     """Whether a chatty dependency is held at WARNING.
 
-    At INFO, always: these libraries narrate every successful operation and the
-    console is for the application's own story.
+    At INFO, always for ``_INFO_NOISE_LOGGER_PREFIXES``: these libraries
+    narrate every successful operation and the console is for the
+    application's own story.
 
-    At DEBUG, only when ``LOG_QUIET_DEPENDENCIES`` is set. Asking for DEBUG
-    deliberately means "show me everything", and a developer debugging
-    SQLAlchemy itself must still be able to get it - so the default stays as it
-    was. `make dev` opts in, because SQLAlchemy alone emits a record per mapped
-    column at import: thousands of lines before the first request, which buries
-    the application logs the flag was turned on to read.
+    At DEBUG, only when ``LOG_QUIET_DEPENDENCIES`` is set, for both
+    ``_INFO_NOISE_LOGGER_PREFIXES`` and ``_DEBUG_ONLY_NOISE_LOGGER_PREFIXES``.
+    Asking for DEBUG deliberately means "show me everything", and a developer
+    debugging SQLAlchemy (or SuperTokens, or the scheduler) itself must still
+    be able to get it - so the default stays as it was. `make dev` opts in,
+    because SQLAlchemy alone emits a record per mapped column at import:
+    thousands of lines before the first request, which buries the
+    application logs the flag was turned on to read.
     """
-    if not name.startswith(_INFO_NOISE_LOGGER_PREFIXES):
+    if name.startswith(_INFO_NOISE_LOGGER_PREFIXES):
+        if configured_level == logging.INFO:
+            return True
+        if configured_level < logging.INFO:
+            return _quiet_dependencies_enabled()
         return False
-    if configured_level == logging.INFO:
-        return True
-    if configured_level < logging.INFO:
-        return os.getenv("LOG_QUIET_DEPENDENCIES", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+    if name.startswith(_DEBUG_ONLY_NOISE_LOGGER_PREFIXES):
+        return configured_level < logging.INFO and _quiet_dependencies_enabled()
     return False
 
 

@@ -493,3 +493,64 @@ def test_sqlalchemy_debug_remains_available_when_requested(
     logging.getLogger(logger_name).debug("SQLAlchemy debug detail")
 
     assert captured_stdout()[-1]["event"] == "SQLAlchemy debug detail"
+
+
+@pytest.mark.parametrize(
+    "logger_name",
+    (
+        "com.supertokens",
+        "mcp.server.lowlevel.server",
+        "filelock",
+        "apscheduler.scheduler",
+        "urllib3.connectionpool",
+    ),
+)
+def test_debug_only_noise_is_suppressed_when_quiet_dependencies_requested(
+    captured_stdout,
+    monkeypatch,
+    logger_name,
+) -> None:
+    monkeypatch.setenv("LOG_QUIET_DEPENDENCIES", "1")
+    setup_logging(
+        "development",
+        service_name="lemma-api",
+        json_logs=True,
+        log_level="DEBUG",
+    )
+    dependency_logger = logging.getLogger(logger_name)
+
+    dependency_logger.debug("routine protocol chatter")
+    dependency_logger.info("routine protocol chatter")
+    dependency_logger.warning("dependency warning")
+    get_logger("app.demo").info("service.started")
+
+    records = captured_stdout()
+    assert [record["event"] for record in records] == [
+        "dependency warning",
+        "service.started",
+    ]
+
+
+@pytest.mark.parametrize(
+    "logger_name",
+    (
+        "com.supertokens",
+        "mcp.server.lowlevel.server",
+        "filelock",
+        "apscheduler.scheduler",
+        "urllib3.connectionpool",
+    ),
+)
+def test_debug_only_noise_remains_available_by_default_at_debug(
+    captured_stdout,
+    logger_name,
+) -> None:
+    setup_logging(
+        "development",
+        service_name="lemma-api",
+        json_logs=True,
+        log_level="DEBUG",
+    )
+    logging.getLogger(logger_name).debug("routine protocol chatter")
+
+    assert captured_stdout()[-1]["event"] == "routine protocol chatter"

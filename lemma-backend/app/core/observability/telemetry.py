@@ -448,24 +448,25 @@ def _setup_llm_tracing(service_name: str) -> TracerProvider | None:
     provider.add_span_processor(
         BatchSpanProcessor(
             FilteringSpanExporter(
-                SanitizingSpanExporter(
-                    _build_span_exporter(
-                        endpoint,
-                        protocol=settings.llm_otel_exporter_otlp_protocol,
-                        headers=_llm_otlp_headers(),
-                    ),
-                    llm=True,
+                _build_span_exporter(
+                    endpoint,
+                    protocol=settings.llm_otel_exporter_otlp_protocol,
+                    headers=_llm_otlp_headers(),
                 ),
                 _is_llm_span,
             )
         )
     )
+    # Unlike the general pipeline, this one is opt-in, isolated, and exists
+    # specifically to let developers review what's sent to the LLM — so it
+    # carries full prompt/response content and skips SanitizingSpanExporter's
+    # attribute allowlist (which would truncate/strip it right back out).
     Agent.instrument_all(
         InstrumentationSettings(
             tracer_provider=provider,
             meter_provider=NoOpMeterProvider(),
             logger_provider=NoOpLoggerProvider(),
-            include_content=False,
+            include_content=True,
             include_binary_content=False,
             version=2,
             event_mode="attributes",

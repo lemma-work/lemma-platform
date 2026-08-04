@@ -7,6 +7,7 @@ SHELL := /bin/bash
 #   make dev           start infra + backend + frontend (hot-reload)
 #   make dev-public    same, with an ephemeral public Cloudflare API URL
 #   make dev RELOAD=1  same, with uvicorn --reload on the backend
+#   make dev OTEL=1 LLM_OTEL=1  same, with local HyperDX + Phoenix dashboards
 #   make agent-host    build, pair, and run the local Agent Host against make dev
 #   make stop          stop backend/frontend processes
 #   make stop-all      also stop infra containers
@@ -15,6 +16,7 @@ SHELL := /bin/bash
 # ──────────────────────────────────────────────────────────────────────────────
 
 .PHONY: help init dev dev-public agent-host verify-agent-host stop-agent-host stop stop-all logs otel-up otel-down otel-tail otel-smoke \
+        observability-up observability-down observability-open \
         _prepare-dev _start-public-api-tunnel _ensure-databases _ensure-agentbox-images \
         _ensure-native-connectors \
         test-dev-workflow \
@@ -30,7 +32,7 @@ RELOAD        ?= 0
 E2E_WORKERS   ?= 2
 MODULE        ?=
 OTEL          ?= 0
-OTEL_LOGS     ?= 0
+OTEL_LOGS     ?= 1
 LLM_OTEL      ?= 0
 
 BACKEND_DIR   := lemma-backend
@@ -94,28 +96,58 @@ DEV_JSON_LOGS_ENABLED ?= true
 # first request — which buries exactly that. Hold the chatty dependencies at
 # WARNING; set DEV_QUIET_DEPENDENCY_LOGS=0 when debugging one of them.
 DEV_QUIET_DEPENDENCY_LOGS ?= 1
-OTEL_DEBUG_GRPC_PORT  ?= 14317
-OTEL_DEBUG_LLM_GRPC_PORT ?= 15317
-OTEL_DEBUG_HEALTH_PORT ?= 14333
+# Debug Collector (used only by `make otel-smoke`, a fast CI-safe check that
+# signals reach a collector and LLM spans stay isolated — not for human
+# review). Numbered away from the real observability stack below so both can
+# run at once without a port clash.
+OTEL_DEBUG_GRPC_PORT     ?= 29317
+OTEL_DEBUG_HTTP_PORT     ?= 29318
+OTEL_DEBUG_LLM_GRPC_PORT ?= 29417
+OTEL_DEBUG_LLM_HTTP_PORT ?= 29418
+OTEL_DEBUG_HEALTH_PORT   ?= 29333
 
 OTEL_DEBUG_COMPOSE_ENV := \
 	OTEL_DEBUG_GRPC_PORT=$(OTEL_DEBUG_GRPC_PORT) \
+	OTEL_DEBUG_HTTP_PORT=$(OTEL_DEBUG_HTTP_PORT) \
 	OTEL_DEBUG_LLM_GRPC_PORT=$(OTEL_DEBUG_LLM_GRPC_PORT) \
+	OTEL_DEBUG_LLM_HTTP_PORT=$(OTEL_DEBUG_LLM_HTTP_PORT) \
 	OTEL_DEBUG_HEALTH_PORT=$(OTEL_DEBUG_HEALTH_PORT)
 
-OTEL_DEV_ENV := \
+# Real observability stack (`make observability-up`): HyperDX/ClickStack for
+# general API traces/metrics, Phoenix for LLM/OpenInference prompt review.
+# Port defaults mirror lemma-backend/docker-compose.observability.yml.
+HYPERDX_UI_PORT        ?= 8080
+HYPERDX_OTLP_HTTP_PORT ?= 14318
+HYPERDX_OTLP_GRPC_PORT ?= 14317
+PHOENIX_UI_PORT         ?= 16006
+PHOENIX_OTLP_GRPC_PORT  ?= 16317
+
+OBSERVABILITY_COMPOSE_ENV := \
+	HYPERDX_UI_PORT=$(HYPERDX_UI_PORT) \
+	HYPERDX_OTLP_HTTP_PORT=$(HYPERDX_OTLP_HTTP_PORT) \
+	HYPERDX_OTLP_GRPC_PORT=$(HYPERDX_OTLP_GRPC_PORT) \
+	PHOENIX_UI_PORT=$(PHOENIX_UI_PORT) \
+	PHOENIX_OTLP_GRPC_PORT=$(PHOENIX_OTLP_GRPC_PORT)
+
+# Ingestion key `observability-up` bootstraps from HyperDX and writes here;
+# read back lazily (recursive `=`, not `:=`) so it reflects the file at the
+# time `_run-backend` actually starts, not at Makefile parse time.
+HYPERDX_API_KEY_FILE := $(abspath $(DEV_LOG_DIR)/hyperdx-api-key)
+
+OTEL_DEV_ENV = \
 	OBSERVABILITY_ENABLED=$(if $(filter 1,$(OTEL)),true,false) \
-	OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(OTEL_DEBUG_GRPC_PORT) \
+	OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(HYPERDX_OTLP_GRPC_PORT) \
 	OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
+	OTEL_EXPORTER_OTLP_HEADERS=authorization=$(shell cat $(HYPERDX_API_KEY_FILE) 2>/dev/null) \
 	OTEL_TRACES_EXPORTER=otlp \
 	OTEL_METRICS_EXPORTER=otlp \
 	OTEL_LOGS_EXPORTER=$(if $(filter 1,$(OTEL_LOGS)),otlp,none) \
 	OTEL_TRACES_SAMPLER=always_on \
 	OTEL_METRIC_EXPORT_INTERVAL=5000
 
-LLM_OTEL_DEV_ENV := \
+LLM_OTEL_DEV_ENV = \
 	LLM_OTEL_ENABLED=$(if $(filter 1,$(LLM_OTEL)),true,false) \
-	LLM_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(OTEL_DEBUG_LLM_GRPC_PORT) \
+	LLM_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(PHOENIX_OTLP_GRPC_PORT) \
 	LLM_OTEL_EXPORTER_OTLP_PROTOCOL=grpc \
 	LLM_OTEL_TRACES_SAMPLER=always_on
 # Immutable-profile inputs used by the local Docker provider.
@@ -240,8 +272,12 @@ help:
 	@echo "    make stop               stop app and tunnel processes"
 	@echo "    make stop-all           also bring down infra containers"
 	@echo "    make logs               tail infrastructure container logs"
-	@echo "    make dev OTEL=1         enable local OTLP traces + metrics"
-	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation"
+	@echo "    make dev OTEL=1         send API traces + metrics + logs to a local HyperDX dashboard"
+	@echo "    make dev LLM_OTEL=1     send full LLM prompts/responses to a local Phoenix dashboard"
+	@echo "    make observability-up   start HyperDX + Phoenix without the rest of the dev stack"
+	@echo "    make observability-open open the HyperDX + Phoenix dashboards in a browser"
+	@echo "    make observability-down stop the observability stack"
+	@echo "    make otel-smoke         verify traces, metrics, logs, and LLM isolation (CI-safe, no dashboards)"
 	@echo ""
 	@echo "  Tests"
 	@echo "    make test-dev-workflow  test generated dev config and startup diagnostics"
@@ -598,7 +634,7 @@ _prepare-dev:
 	@$(MAKE) --no-print-directory _ensure-databases
 	@$(MAKE) --no-print-directory migrate
 	@$(MAKE) --no-print-directory _ensure-native-connectors
-	@if [ "$(OTEL)" = "1" ]; then $(MAKE) --no-print-directory otel-up; fi
+	@if [ "$(OTEL)" = "1" ] || [ "$(LLM_OTEL)" = "1" ]; then $(MAKE) --no-print-directory observability-up; fi
 
 _ensure-native-connectors:
 	@telegram_present=$$(cd $(BACKEND_DIR) && docker compose exec -T db \
@@ -779,6 +815,37 @@ stop-all: stop
 	@echo "→ Stopping infra containers…"
 	@cd $(BACKEND_DIR) && $(COMMON_DEV_ENV) docker compose down
 	@$(MAKE) --no-print-directory otel-down
+	@$(MAKE) --no-print-directory observability-down
+
+observability-up:
+	@echo "→ Starting HyperDX (ClickStack) + Phoenix observability stack…"
+	@cd $(BACKEND_DIR) && $(OBSERVABILITY_COMPOSE_ENV) docker compose -f docker-compose.observability.yml up -d --quiet-pull
+	@ready=0; for i in $$(seq 1 60); do \
+		if curl -fsS http://localhost:$(HYPERDX_UI_PORT)/api/health >/dev/null 2>&1; then \
+			ready=1; break; \
+		fi; \
+		sleep 1; \
+	done; [ "$$ready" = "1" ] || { echo "  ✗ HyperDX did not become ready"; exit 1; }
+	@mkdir -p $(DEV_LOG_DIR)
+	@cd $(BACKEND_DIR) && uv run python scripts/hyperdx_bootstrap.py \
+		--base-url http://localhost:$(HYPERDX_UI_PORT) > $(HYPERDX_API_KEY_FILE) || { \
+		echo "  ✗ HyperDX bootstrap failed"; rm -f $(HYPERDX_API_KEY_FILE); exit 1; \
+	}
+	@echo "  ✓ HyperDX  → http://localhost:$(HYPERDX_UI_PORT)  (general API traces/metrics)"
+	@echo "  ✓ Phoenix  → http://localhost:$(PHOENIX_UI_PORT)  (LLM prompts/responses)"
+
+observability-down:
+	@cd $(BACKEND_DIR) && docker compose -f docker-compose.observability.yml down >/dev/null 2>&1 || true
+	@rm -f $(HYPERDX_API_KEY_FILE)
+
+observability-open:
+	@case "$$(uname)" in \
+		Darwin) open http://localhost:$(HYPERDX_UI_PORT) http://localhost:$(PHOENIX_UI_PORT) ;; \
+		Linux) xdg-open http://localhost:$(HYPERDX_UI_PORT) >/dev/null 2>&1 & \
+			xdg-open http://localhost:$(PHOENIX_UI_PORT) >/dev/null 2>&1 & ;; \
+		*) echo "  HyperDX → http://localhost:$(HYPERDX_UI_PORT)"; \
+			echo "  Phoenix → http://localhost:$(PHOENIX_UI_PORT)" ;; \
+	esac
 
 otel-up:
 	@echo "→ Starting pinned OpenTelemetry debug Collector…"
@@ -805,8 +872,16 @@ otel-smoke: otel-down otel-up
 		echo "$$logs" | grep -q "lemma-otel-smoke"; \
 		echo "$$logs" | grep -q "lemma.observability.smoke"; \
 		echo "$$logs" | grep -q "smoke-model"; \
-		if echo "$$logs" | grep -q "CANARY"; then echo "  ✗ unsafe canary reached Collector"; exit 1; fi
-	@echo "  ✓ General traces/metrics/logs and isolated LLM traces reached Collector safely"
+		if echo "$$logs" | grep -qF "SELECT 'CANARY'"; then \
+			echo "  ✗ unsafe canary (db.statement) reached Collector via the general pipeline"; exit 1; \
+		fi; \
+		if echo "$$logs" | grep -qF "CANARY.invalid"; then \
+			echo "  ✗ unsafe canary (url.full) reached Collector via the general pipeline"; exit 1; \
+		fi; \
+		if ! echo "$$logs" | grep -qF "CANARY prompt"; then \
+			echo "  ✗ LLM pipeline did not carry prompt content (regression: content should ship when LLM_OTEL_ENABLED)"; exit 1; \
+		fi
+	@echo "  ✓ General pipeline stayed sanitized; isolated LLM pipeline carried full prompt content"
 
 logs:
 	@cd $(BACKEND_DIR) && docker compose logs -f
