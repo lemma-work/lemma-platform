@@ -125,6 +125,35 @@ export class ConnectorsService {
         });
     }
     /**
+     * Search Connector Operations Across Installs
+     * Search operations across every connector installed in the org. Each hit carries the `auth_config` to execute it against, so a caller that knows what it wants to do — but not which connector provides it — needs one request instead of one per install.
+     * @param organizationId
+     * @param query
+     * @param limit
+     * @returns OperationDiscoverResponse Successful Response
+     * @throws ApiError
+     */
+    public static connectorOperationSearch(
+        organizationId: string,
+        query?: (string | null),
+        limit: number = 100,
+    ): CancelablePromise<OperationDiscoverResponse> {
+        return __request(OpenAPI, {
+            method: 'GET',
+            url: '/organizations/{organization_id}/connector-operations',
+            path: {
+                'organization_id': organizationId,
+            },
+            query: {
+                'query': query,
+                'limit': limit,
+            },
+            errors: {
+                422: `Validation Error`,
+            },
+        });
+    }
+    /**
      * List Accounts
      * Get all connected accounts for the current user. Optionally filter by connector_id or connector_name
      * @param organizationId

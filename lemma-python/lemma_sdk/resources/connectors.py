@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..openapi_client.api.connectors import (
+    connector_operation_search,
     connector_get,
     connector_list,
     connector_operation_detail,
@@ -201,6 +202,21 @@ class ConnectorOperations:
 
     discover = search
     list = search
+
+    def search_all(
+        self, query: str | None = None, *, limit: int = 100
+    ) -> OperationDiscoverResponse:
+        """Search operations across EVERY install in the org, in one request.
+
+        Each hit carries the `auth_config` to execute it against, so a caller
+        that knows what it wants to do — but not which connector provides it —
+        no longer has to fan out one request per install."""
+        return self._parent._call(
+            connector_operation_search,
+            self._parent._org_uuid(),
+            query=query,
+            limit=limit,
+        )
 
     def get(self, auth_config: str, operation: str) -> OperationDetail:
         return self._parent._call(

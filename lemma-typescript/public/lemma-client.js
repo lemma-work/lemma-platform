@@ -11004,10 +11004,11 @@ var LemmaClient = (() => {
      * @param podId
      * @param pageToken
      * @param limit
+     * @param include Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-agent permissions endpoint once per row.
      * @returns AgentListResponse Successful Response
      * @throws ApiError
      */
-    static agentList(podId, pageToken, limit = 100) {
+    static agentList(podId, pageToken, limit = 100, include) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/agents",
@@ -11016,7 +11017,8 @@ var LemmaClient = (() => {
         },
         query: {
           "page_token": pageToken,
-          "limit": limit
+          "limit": limit,
+          "include": include
         },
         errors: {
           422: `Validation Error`
@@ -12362,10 +12364,11 @@ var LemmaClient = (() => {
      * @param podId
      * @param limit
      * @param pageToken
+     * @param include Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-function permissions endpoint once per row.
      * @returns FunctionListResponse Successful Response
      * @throws ApiError
      */
-    static functionList(podId, limit = 100, pageToken) {
+    static functionList(podId, limit = 100, pageToken, include) {
       return request(OpenAPI, {
         method: "GET",
         url: "/pods/{pod_id}/functions",
@@ -12374,7 +12377,8 @@ var LemmaClient = (() => {
         },
         query: {
           "limit": limit,
-          "page_token": pageToken
+          "page_token": pageToken,
+          "include": include
         },
         errors: {
           422: `Validation Error`
@@ -12772,6 +12776,31 @@ var LemmaClient = (() => {
         },
         query: {
           "kind": kind
+        },
+        errors: {
+          422: `Validation Error`
+        }
+      });
+    }
+    /**
+     * Search Connector Operations Across Installs
+     * Search operations across every connector installed in the org. Each hit carries the `auth_config` to execute it against, so a caller that knows what it wants to do — but not which connector provides it — needs one request instead of one per install.
+     * @param organizationId
+     * @param query
+     * @param limit
+     * @returns OperationDiscoverResponse Successful Response
+     * @throws ApiError
+     */
+    static connectorOperationSearch(organizationId, query, limit = 100) {
+      return request(OpenAPI, {
+        method: "GET",
+        url: "/organizations/{organization_id}/connector-operations",
+        path: {
+          "organization_id": organizationId
+        },
+        query: {
+          "query": query,
+          "limit": limit
         },
         errors: {
           422: `Validation Error`

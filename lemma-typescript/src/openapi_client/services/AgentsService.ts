@@ -20,6 +20,7 @@ export class AgentsService {
      * @param podId
      * @param pageToken
      * @param limit
+     * @param include Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-agent permissions endpoint once per row.
      * @returns AgentListResponse Successful Response
      * @throws ApiError
      */
@@ -27,6 +28,7 @@ export class AgentsService {
         podId: string,
         pageToken?: (string | null),
         limit: number = 100,
+        include?: Array<string>,
     ): CancelablePromise<AgentListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -37,6 +39,7 @@ export class AgentsService {
             query: {
                 'page_token': pageToken,
                 'limit': limit,
+                'include': include,
             },
             errors: {
                 422: `Validation Error`,

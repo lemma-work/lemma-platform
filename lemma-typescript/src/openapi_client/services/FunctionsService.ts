@@ -23,6 +23,7 @@ export class FunctionsService {
      * @param podId
      * @param limit
      * @param pageToken
+     * @param include Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query — without it, a caller that needs grants must call the per-function permissions endpoint once per row.
      * @returns FunctionListResponse Successful Response
      * @throws ApiError
      */
@@ -30,6 +31,7 @@ export class FunctionsService {
         podId: string,
         limit: number = 100,
         pageToken?: (string | null),
+        include?: Array<string>,
     ): CancelablePromise<FunctionListResponse> {
         return __request(OpenAPI, {
             method: 'GET',
@@ -40,6 +42,7 @@ export class FunctionsService {
             query: {
                 'limit': limit,
                 'page_token': pageToken,
+                'include': include,
             },
             errors: {
                 422: `Validation Error`,

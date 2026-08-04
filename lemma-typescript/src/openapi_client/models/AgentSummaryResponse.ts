@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { AgentResourcePermissionResponse } from './AgentResourcePermissionResponse.js';
 import type { AgentToolset } from './AgentToolset.js';
 /**
  * Lean agent shape for list responses.
@@ -14,6 +15,8 @@ export type AgentSummaryResponse = {
     allowed_actions?: Array<string>;
     created_at: string;
     description?: (string | null);
+    grants?: (Array<AgentResourcePermissionResponse> | null);
+    has_pinned_runtime?: boolean;
     icon_url?: (string | null);
     id: string;
     metadata?: (Record<string, any> | null);

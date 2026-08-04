@@ -20,6 +20,7 @@ export type WorkflowSummaryResponse = {
     mode?: WorkflowMode;
     name: string;
     node_count?: number;
+    node_targets?: Array<string>;
     node_types?: Array<string>;
     pod_id: string;
     updated_at?: (string | null);

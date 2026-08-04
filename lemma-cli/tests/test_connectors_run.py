@@ -94,6 +94,22 @@ def _fake_client(captured: dict):
         def get(self, auth_config, operation):
             return _OPERATIONS[operation]
 
+        def search_all(self, query=None, *, limit=100):
+            # The org-wide endpoint: ONE request, hits labelled with the install
+            # to execute them against.
+            captured["search_all"] = (query, limit)
+            hits = [
+                {
+                    "name": name,
+                    "description": op["description"],
+                    "auth_config": "workspace-gmail",
+                    "connector_id": "gmail",
+                }
+                for name, op in _OPERATIONS.items()
+                if not query or query.split()[0].lower() in op["description"].lower()
+            ]
+            return {"items": hits[:limit], "returned_count": len(hits[:limit])}
+
     class Accounts:
         def list(self, *, app=None, limit=100):
             return {"items": [{"id": "acct-9", "email": "me@example.com"}]}
@@ -243,12 +259,10 @@ def test_search_with_no_connector_searches_every_install(monkeypatch):
     assert "gmail_send_email" in names
     # Every hit says which install to pass on, so the result is directly usable.
     assert all(item["auth_config"] for item in payload["items"])
-    # It really did fan out across the installs rather than picking one.
-    assert {call[0] for call in captured["searches"]} == {
-        "workspace-gmail",
-        "legacy-gmail",
-        "team-slack",
-    }
+    # ONE request to the org-wide endpoint — no client-side fan-out. This used to
+    # issue one call per install, ten on a real org.
+    assert captured["search_all"] == ("send email", 5)
+    assert "searches" not in captured
 
 
 def test_search_with_a_named_connector_stays_one_request(monkeypatch):

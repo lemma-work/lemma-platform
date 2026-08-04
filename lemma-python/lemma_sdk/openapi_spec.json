@@ -2127,6 +2127,25 @@
             ],
             "title": "Description"
           },
+          "grants": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AgentResourcePermissionResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grants"
+          },
+          "has_pinned_runtime": {
+            "default": false,
+            "title": "Has Pinned Runtime",
+            "type": "boolean"
+          },
           "icon_url": {
             "anyOf": [
               {
@@ -7659,6 +7678,20 @@
             ],
             "title": "Description"
           },
+          "grants": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FunctionResourcePermissionResponse"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grants"
+          },
           "icon_url": {
             "anyOf": [
               {
@@ -8738,6 +8771,30 @@
       "OperationSummary": {
         "description": "Compact operation metadata for discovery flows.",
         "properties": {
+          "auth_config": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Install this operation belongs to (org-wide search only).",
+            "title": "Auth Config"
+          },
+          "connector_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Connector this operation belongs to (org-wide search only).",
+            "title": "Connector Id"
+          },
           "description": {
             "anyOf": [
               {
@@ -16110,6 +16167,13 @@
             "title": "Node Count",
             "type": "integer"
           },
+          "node_targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Node Targets",
+            "type": "array"
+          },
           "node_types": {
             "items": {
               "type": "string"
@@ -18742,6 +18806,85 @@
         }
       }
     },
+    "/organizations/{organization_id}/connector-operations": {
+      "get": {
+        "description": "Search operations across every connector installed in the org. Each hit carries the `auth_config` to execute it against, so a caller that knows what it wants to do \u2014 but not which connector provides it \u2014 needs one request instead of one per install.",
+        "operationId": "connector.operation.search",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "organization_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Organization Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Query"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationDiscoverResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Connector Operations Across Installs",
+        "tags": [
+          "Connectors"
+        ],
+        "x-lemma": {
+          "kind": "query",
+          "paginates": true,
+          "resource": "connector.operation",
+          "result": "collection",
+          "verb": "search"
+        }
+      }
+    },
     "/organizations/{organization_id}/connectors/accounts": {
       "get": {
         "description": "Get all connected accounts for the current user. Optionally filter by connector_id or connector_name",
@@ -20366,6 +20509,20 @@
               "minimum": 1,
               "title": "Limit",
               "type": "integer"
+            }
+          },
+          {
+            "description": "Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-agent permissions endpoint once per row.",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "description": "Extra data to embed. `permissions` attaches each agent's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-agent permissions endpoint once per row.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Include",
+              "type": "array"
             }
           }
         ],
@@ -25607,6 +25764,20 @@
                 }
               ],
               "title": "Page Token"
+            }
+          },
+          {
+            "description": "Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-function permissions endpoint once per row.",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "description": "Extra data to embed. `permissions` attaches each function's resource grants, resolved for the whole page in one query \u2014 without it, a caller that needs grants must call the per-function permissions endpoint once per row.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Include",
+              "type": "array"
             }
           }
         ],

@@ -42,6 +42,10 @@ DEFAULT_DESCRIBE_TREE_DEPTH = 2
 # It is not pod data and is identical in every pod, so it is noise here.
 SYSTEM_SKILLS_ROOT_PATH = "/skills"
 
+# Hard bound on name->id pod lookup. No CLI command should page an API an
+# unbounded number of times; 5 x 200 covers any realistic org.
+_MAX_POD_LOOKUP_PAGES = 5
+
 
 def _is_uuid(value: str) -> bool:
     import uuid
@@ -71,16 +75,26 @@ def resolve_pod_id(client, state, explicit: str | None = None) -> str:  # type: 
         return selector
 
     org_id = selected_org(state, required=False)
-    # Page through every pod so a name beyond the first page still resolves
-    # (and so ambiguity is detected across the full set, not just page one).
+    # Page through pods so a name beyond the first page still resolves (and so
+    # ambiguity is detected across the set, not just page one) — but BOUNDED. An
+    # unbounded `while True` makes one CLI command's cost depend on how many pods
+    # an org has; 5 pages of 200 covers a thousand, and past that a name lookup
+    # is the wrong tool anyway, so we say so instead of paging forever.
     items: list[dict] = []
     page_token: str | None = None
-    while True:
+    for _page in range(_MAX_POD_LOOKUP_PAGES):
         response = client.pods.list(org_id=org_id, limit=200, page_token=page_token)
         items.extend(list_items(response))
         page_token = str(to_plain(response).get("next_page_token") or "") or None
         if not page_token:
             break
+    else:
+        if page_token:
+            fail(
+                f"Too many pods to resolve '{selector}' by name (searched "
+                f"{len(items)}). Pass the pod id instead — `lemma pods list` "
+                "shows it."
+            )
     needle = selector.casefold()
     matches = [
         item
@@ -402,10 +416,19 @@ def doctor_pod(
 
         pod_sdk = pod_client(client, s, target)
         tables = {str(t.get("name")) for t in to_plain(list_items(pod_sdk.tables.list(limit=1000)))}
-        agent_items = to_plain(list_items(pod_sdk.agents.list(limit=1000)))
+        # `include=["permissions"]` attaches each row's grants, so the whole
+        # check costs one request per resource type rather than one per resource.
+        # This command used to make 19 requests on a two-agent pod.
+        agent_items = to_plain(
+            list_items(pod_sdk.agents.list(limit=1000, include=["permissions"]))
+        )
         agents = {str(a.get("name")) for a in agent_items}
-        functions = {str(f.get("name")) for f in to_plain(list_items(pod_sdk.functions.list(limit=1000)))}
-        workflows = {str(w.get("name")) for w in to_plain(list_items(pod_sdk.workflows.list(limit=1000)))}
+        function_items = to_plain(
+            list_items(pod_sdk.functions.list(limit=1000, include=["permissions"]))
+        )
+        functions = {str(f.get("name")) for f in function_items}
+        workflow_items = to_plain(list_items(pod_sdk.workflows.list(limit=1000)))
+        workflows = {str(w.get("name")) for w in workflow_items}
         schedules = to_plain(list_items(pod_sdk.schedules.list(limit=1000)))
 
         errors: list[str] = []
@@ -495,13 +518,22 @@ def doctor_pod(
                     account_cache[account_id] = True
             return account_cache[account_id]
 
-        def check_grants(kind: str, name: str) -> list[dict]:
-            try:
-                perms = to_plain(getattr(pod_sdk, kind).permissions(name))
-            except Exception as exc:  # noqa: BLE001 — surface, don't hide, a failed check
-                warnings.append(f"could not read permissions for {kind[:-1]} '{name}': {exc}")
-                return []
-            grants = [g for g in (perms.get("grants") or []) if isinstance(g, dict)]
+        def check_grants(kind: str, name: str, embedded: list | None) -> list[dict]:
+            # `embedded` is None only when the server didn't return grants for
+            # this row (an older API); fall back to the per-resource call then,
+            # so an upgrade isn't required to run doctor at all.
+            if embedded is None:
+                try:
+                    embedded = (
+                        to_plain(getattr(pod_sdk, kind).permissions(name)).get("grants")
+                        or []
+                    )
+                except Exception as exc:  # noqa: BLE001 — surface, don't hide, a failed check
+                    warnings.append(
+                        f"could not read permissions for {kind[:-1]} '{name}': {exc}"
+                    )
+                    return []
+            grants = [g for g in embedded if isinstance(g, dict)]
             # A workload with no grants isn't "fine by default" — it has zero
             # access and 403s the first time it touches anything. Say so here as
             # well as at import time, since a pod can also reach this state by a
@@ -542,7 +574,10 @@ def doctor_pod(
             return grants
 
         def agent_has_runtime(item: dict, name: str) -> bool:
-            # Prefer the list payload; only fetch the detail if it omits runtime.
+            # `has_pinned_runtime` is on the list payload now; only an older API
+            # (which omits it AND agent_runtime) costs a per-agent fetch.
+            if item.get("has_pinned_runtime") is not None:
+                return bool(item["has_pinned_runtime"])
             runtime = item.get("agent_runtime") or {}
             if runtime.get("profile_id"):
                 return True
@@ -554,7 +589,7 @@ def doctor_pod(
 
         for item in agent_items:
             name = str(item.get("name"))
-            grants = check_grants("agents", name)
+            grants = check_grants("agents", name, item.get("grants"))
             if name and not agent_has_runtime(item, name):
                 warnings.append(f"agent '{name}' has no pinned runtime — relies on the backend default (system:lemma).")
             toolsets = {str(t).upper() for t in (item.get("toolsets") or []) if isinstance(t, str)}
@@ -565,19 +600,33 @@ def doctor_pod(
                     f"agent '{name}' has the SUBAGENTS toolset but no agent grants — "
                     "self-spawn only; grant `agent:<other>:execute` to fan out."
                 )
-        for name in functions:
-            check_grants("functions", name)
+        for item in function_items:
+            check_grants("functions", str(item.get("name")), item.get("grants"))
 
-        for wname in workflows:
-            wf = to_plain(pod_sdk.workflows.get(wname))
-            for node in (wf.get("nodes") or []):
-                cfg = node.get("config") or {}
-                target_agent = cfg.get("agent_name")
-                target_fn = cfg.get("function_name")
-                if target_agent and target_agent not in agents:
-                    errors.append(f"workflow '{wname}' node '{node.get('id')}' targets missing agent '{target_agent}'.")
-                if target_fn and target_fn not in functions:
-                    errors.append(f"workflow '{wname}' node '{node.get('id')}' targets missing function '{target_fn}'.")
+        for item in workflow_items:
+            wname = str(item.get("name"))
+            # `node_targets` is derived on the list response ("agent:x" /
+            # "function:y"), which is all a wiring check needs. Fetching each
+            # workflow's full graph made doctor cost one request per workflow.
+            targets = item.get("node_targets")
+            if targets is None:
+                targets = [
+                    f"{kind}:{cfg[key]}"
+                    for node in (to_plain(pod_sdk.workflows.get(wname)).get("nodes") or [])
+                    for cfg in [node.get("config") or {}]
+                    for kind, key in (("agent", "agent_name"), ("function", "function_name"))
+                    if cfg.get(key)
+                ]
+            for entry in targets:
+                kind, _, target_name = str(entry).partition(":")
+                if kind == "agent" and target_name not in agents:
+                    errors.append(
+                        f"workflow '{wname}' targets missing agent '{target_name}'."
+                    )
+                if kind == "function" and target_name not in functions:
+                    errors.append(
+                        f"workflow '{wname}' targets missing function '{target_name}'."
+                    )
 
         for sched in schedules:
             sname = sched.get("name") or sched.get("id")

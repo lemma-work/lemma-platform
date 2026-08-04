@@ -30,12 +30,16 @@ triggers_app = typer.Typer(help="Connector trigger list and detail commands.")
 _AUTH_CONFIG_CACHE: dict[int, list[dict]] = {}
 
 
-def _auth_config_items(client: Any) -> list[dict]:
-    """Installed auth configs, or an empty list when they can't be listed.
+def _auth_config_items(client: Any) -> list[dict] | None:
+    """Installed auth configs, or None when they can't be listed at all.
 
-    A client that predates the auth-configs resource (or a listing that errors)
-    is not fatal: resolution falls back to using the caller's selector verbatim,
-    which is exactly what the CLI did before it could resolve connector ids.
+    The two must stay distinct. An EMPTY list means the org genuinely has no
+    connectors, so a lone positional can't be an install and is read as the
+    query. None means we couldn't ask (a client predating the auth-configs
+    resource, or a listing that errored) — there, the caller's selector is taken
+    at face value, which is what the CLI did before it could resolve connector
+    ids. Collapsing them routed `search "send email"` into a request for an
+    install literally named "send email".
     """
     key = id(client)
     if key in _AUTH_CONFIG_CACHE:
@@ -45,11 +49,11 @@ def _auth_config_items(client: Any) -> list[dict]:
     except Exception:  # noqa: BLE001 — resolution degrades, never blocks
         data = None
     if isinstance(data, list):
-        items = [item for item in data if isinstance(item, dict)]
+        items: list[dict] | None = [item for item in data if isinstance(item, dict)]
     elif isinstance(data, dict):
         items = [item for item in data.get("items", []) if isinstance(item, dict)]
     else:
-        items = []
+        items = None
     _AUTH_CONFIG_CACHE[key] = items
     return items
 
@@ -80,11 +84,13 @@ def _resolve_auth_config(client: Any, selector: str | None) -> str:
     the next command is obvious instead of requiring a separate discovery call.
     """
     items = _auth_config_items(client)
-    if not items:
-        # Nothing to resolve against. An explicit selector is still the caller's
-        # best guess — pass it through rather than refusing on our own ignorance.
+    if items is None:
+        # Couldn't ask. An explicit selector is the caller's best guess — pass it
+        # through rather than refusing on our own ignorance.
         if selector is not None:
             return selector
+        items = []
+    if not items:
         raise typer.BadParameter(
             "No connectors are installed in this organization. Install one with "
             "`lemma connectors auth-configs create <connector>`, then connect an "
@@ -142,10 +148,15 @@ def _looks_like_auth_config(client: Any, value: str) -> bool:
     tell a leading auth-config positional apart from a query/operation that was
     passed where the positional used to sit."""
     items = _auth_config_items(client)
-    if not items:
-        # Can't tell — keep the historical reading (leading positional is the
+    if items is None:
+        # Couldn't ask — keep the historical reading (leading positional is the
         # auth config) so nothing that worked before starts being misread.
         return True
+    if not items:
+        # Nothing installed: a lone positional can't be an install, so read it as
+        # the query/operation. Treating it as the target built URLs like
+        # `/connectors/send email/operations` and 404'd.
+        return False
     needle = value.strip().casefold()
     for item in items:
         if needle in {
@@ -686,37 +697,19 @@ def _with_input_schemas(client: Any, state: Any, auth_config: str, result: Any) 
 
 def _search_every_install(
     client: Any, state: Any, query: str | None, limit: int
-) -> dict[str, Any]:
+) -> Any:
     """Search operations across EVERY installed connector, best matches first.
 
-    Naming a connector is an extra round trip the caller often can't make: "which
-    operation sends an email?" is answerable without knowing that the install is
-    called `workspace-gmail`. Each hit is labelled with the `auth_config` to pass
-    to `execute`/`run`, so the answer is directly actionable.
+    Naming a connector is a round trip the caller often can't make: "which
+    operation sends an email?" is answerable without knowing the install is
+    called `workspace-gmail`. Each hit carries the `auth_config` to pass to
+    `execute`/`run`, so the answer is directly actionable.
 
-    Costs one request per install, so it is the fallback, not the default path —
-    naming a connector (or having only one) still takes exactly one.
+    ONE request. This used to fan out client-side — one call per install, ten on
+    a real org — which just moved the cost from the caller's step count into the
+    network. The server does the fan-out now, bounded and concurrent.
     """
-    hits: list[dict[str, Any]] = []
-    for item in _auth_config_items(client):
-        name = str(item.get("name") or item.get("id") or "")
-        if not name:
-            continue
-        try:
-            payload = to_plain(_search_operations(client, state, name, query, limit))
-        except Exception:  # noqa: BLE001 — one broken install must not sink the search
-            continue
-        for hit in payload.get("items") or []:
-            if isinstance(hit, dict):
-                hits.append(
-                    {
-                        **hit,
-                        "auth_config": name,
-                        "connector_id": item.get("connector_id") or payload.get("connector_id"),
-                    }
-                )
-    hits.sort(key=lambda hit: float(hit.get("relevance_score") or 0.0), reverse=True)
-    return {"items": hits[:limit], "returned_count": min(len(hits), limit)}
+    return client.connectors.operations.search_all(query, limit=limit)
 
 
 @operations_app.command("search")
@@ -760,11 +753,10 @@ def search_operations(
         )
         text = query or text
         include = with_schema if with_schema is not None else limit <= 5
-        if target is None and len(_auth_config_items(client)) > 1:
-            # No connector named and several installed: search them all rather
-            # than refusing. Schemas are skipped here — they are per-install and
-            # the hits span installs; `operations get <auth-config> <op>` or
-            # `connectors run` fetches the one you settle on.
+        if target is None:
+            # No connector named: one org-wide request. Schemas are skipped —
+            # they are per-install and the hits span installs; `operations get`
+            # or `connectors run` fetches the one you settle on.
             return _search_every_install(client, s, text, limit)
         resolved = _resolve_auth_config(client, target)
         result = _search_operations(client, s, resolved, text, limit)

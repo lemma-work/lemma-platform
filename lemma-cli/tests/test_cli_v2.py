@@ -2910,8 +2910,20 @@ def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None
             return {"items": [{"name": t} for t in tables]}
 
     class FakeAgents:
-        def list(self, *, limit=1000):
-            return {"items": agents}
+        def list(self, *, limit=1000, include=None):
+            # Mirrors the real API: `include=["permissions"]` embeds each row's
+            # grants so doctor doesn't call the per-agent endpoint at all.
+            if not include or "permissions" not in include:
+                return {"items": agents}
+            embedded = []
+            for agent in agents:
+                result = agent_perms.get(str(agent.get("name")))
+                if isinstance(result, Exception):
+                    # An older/erroring server omits grants; doctor falls back.
+                    embedded.append({**agent, "grants": None})
+                else:
+                    embedded.append({**agent, "grants": result or []})
+            return {"items": embedded}
 
         def permissions(self, name):
             result = agent_perms.get(name)
@@ -2923,7 +2935,7 @@ def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None
             return {"name": name, "agent_runtime": {"profile_id": "p"}}
 
     class FakeFunctions:
-        def list(self, *, limit=1000):
+        def list(self, *, limit=1000, include=None):
             return {"items": []}
 
         def permissions(self, name):
