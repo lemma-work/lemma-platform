@@ -214,7 +214,14 @@ echo "$DOCTOR" | grep -q "runtime:docker" || { echo "FAIL: doctor missing runtim
 
 echo "ALL CHECKS PASSED"
 """,
-        timeout=300,
+        # 300s was not enough, and hoisting the image pull out (_ensure_image)
+        # only removed part of the cost: this test also does an apt-get update
+        # plus curl/ca-certificates/python3, and install.sh then downloads uv and
+        # a whole Python toolchain. On a warm runner that is ~70s; on a cold one
+        # it is several minutes of pure network, and the run was being killed
+        # mid-download and reported as a failure of the install flow.
+        # A genuine hang is still bounded -- the job itself times out at 30m.
+        timeout=900,
     )
     assert result.returncode == 0, (
         f"Linux install.sh test failed (exit {result.returncode}):\n"
