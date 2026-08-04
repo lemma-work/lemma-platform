@@ -222,3 +222,62 @@ def test_schedule_create_connector_trigger_dispatches_api(monkeypatch):
     assert req["connector_trigger_id"] == "ct-123"
     assert req["schedule_type"] == "WEBHOOK"
     assert req["agent_name"] == "my-agent"
+
+
+def test_schedules_list_shows_the_target(monkeypatch):
+    """The list had an `Agent Id` column and nothing for workflows, so a
+    workflow-targeted schedule showed a blank target and you had to run
+    `schedules get` just to learn what it starts."""
+    from types import SimpleNamespace
+
+    from lemma_cli.cli_core.commands import schedules as schedules_mod
+
+    items = [
+        {"id": "s1", "name": "hourly-sweep", "agent_name": "support-triage"},
+        {"id": "s2", "name": "on-new-ticket", "workflow_name": "auto-triage"},
+    ]
+
+    class FakeSchedules:
+        def list(self, **kwargs):
+            return {"items": items}
+
+    monkeypatch.setattr(
+        schedules_mod,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            SimpleNamespace(pod=lambda pod_id: SimpleNamespace(schedules=FakeSchedules())),
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty", full=False),
+        ),
+    )
+
+    result = runner.invoke(app, ["schedules", "list", "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.output
+    assert "agent:support-triage" in result.stdout
+    assert "workflow:auto-triage" in result.stdout
+
+
+def test_schedules_list_json_is_untouched_by_the_target_column(monkeypatch):
+    """`--json` must stay the API payload, not a rendering convenience."""
+    import json
+    from types import SimpleNamespace
+
+    from lemma_cli.cli_core.commands import schedules as schedules_mod
+
+    class FakeSchedules:
+        def list(self, **kwargs):
+            return {"items": [{"id": "s2", "name": "x", "workflow_name": "w"}]}
+
+    monkeypatch.setattr(
+        schedules_mod,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            SimpleNamespace(pod=lambda pod_id: SimpleNamespace(schedules=FakeSchedules())),
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="json", full=False),
+        ),
+    )
+
+    result = runner.invoke(app, ["--json", "schedules", "list", "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.output
+    assert "target" not in json.loads(result.stdout)["items"][0]

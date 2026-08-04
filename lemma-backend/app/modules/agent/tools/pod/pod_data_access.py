@@ -89,3 +89,40 @@ async def pod_services(deps: BaseAgentContext) -> AsyncIterator[PodServices]:
             await uow.commit()
         finally:
             reset_current_context(token)
+
+
+# Columns the platform manages; naming them in a write hint would invite the
+# model to set them.
+_SYSTEM_COLUMN_NAMES = frozenset({"id", "created_at", "updated_at", "user_id"})
+
+
+async def writable_column_names(services: PodServices, table_name: str) -> list[str]:
+    """Column names an agent may actually set, for use in an error hint.
+
+    Reads the table the same unguarded way the rest of this module does: if the
+    table genuinely can't be read, that error names a realer problem than "data
+    was empty" and should surface.
+    """
+    table = await services.table.get_table(
+        services.ctx.pod_id, table_name, services.ctx
+    )
+    return [
+        str(column.name)
+        for column in (getattr(table, "columns", None) or [])
+        if str(getattr(column, "name", "")) not in _SYSTEM_COLUMN_NAMES
+    ]
+
+
+from app.modules.agent.tools.pod.models import PodWriteRecordRequest  # noqa: E402
+
+
+async def empty_data_error(
+    services: PodServices, request: PodWriteRecordRequest
+) -> str:
+    columns = await writable_column_names(services, request.table_name)
+    listed = f' Columns on "{request.table_name}": {", ".join(columns)}.' if columns else ""
+    return (
+        f"`data` must be a non-empty object of column->value for "
+        f'action=\'{request.action}\', e.g. {{"title": "..."}}. The payload was '
+        f"empty, so nothing was written.{listed}"
+    )

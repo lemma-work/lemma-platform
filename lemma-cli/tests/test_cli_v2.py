@@ -22,7 +22,7 @@ from lemma_cli.cli_core.commands import (
     pods,
     schedules,
     surfaces,
-    tools,
+    system,
     workflows,
 )
 from lemma_cli.cli_core.chat import iter_sse_events
@@ -106,8 +106,10 @@ def test_help_exposes_new_surface_only():
     assert "connectors" in result.stdout
     assert "orgs" in result.stdout
     assert "surfaces" in result.stdout
-    assert "tools" in result.stdout
     assert "servers" in result.stdout
+    # `tools` is retired: web-search left the CLI and report-feedback became the
+    # top-level `feedback` command.
+    assert "tools" not in result.stdout
     assert "ctx" not in result.stdout
     assert "│ use " not in result.stdout
     assert "assistant" not in result.stdout
@@ -2245,29 +2247,49 @@ def test_profile_update_dispatches_user_profile(monkeypatch):
     }
 
 
-def test_tools_run_web_search_dispatches_tool_api(monkeypatch):
+def test_feedback_dispatches_the_tool_api(monkeypatch):
+    """`lemma tools report-feedback` became top-level `lemma feedback`.
+
+    The `tools` group wrapped two unrelated commands behind a list/run sequence
+    that read to an agent like a namespace worth exploring. Reporting a problem
+    is a first-class action, so it is a first-class command.
+    """
     captured: dict[str, object] = {}
 
     class FakeTools:
-        def web_search(self, *, query, max_results):
-            captured["query"] = query
-            captured["max_results"] = max_results
+        def report_feedback(self, **kwargs):
+            captured.update(kwargs)
             return {"success": True}
 
     fake_client = SimpleNamespace(tools=FakeTools())
 
-    def fake_run_with_client(ctx, fn):
-        return fn(fake_client, SimpleNamespace(config={}))
-
-    monkeypatch.setattr(tools, "run_with_client", fake_run_with_client)
+    monkeypatch.setattr(
+        system,
+        "run_with_client",
+        lambda ctx, fn: fn(fake_client, SimpleNamespace(config={}, output="pretty")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "lemma_cli.cli_core.state.run_with_client",
+        lambda ctx, fn: fn(fake_client, SimpleNamespace(config={}, output="pretty")),
+    )
 
     result = runner.invoke(
         app,
-        ["tools", "run", "web-search", "--data", '{"query":"docs","max_results":2}'],
+        [
+            "feedback",
+            "--category", "cli",
+            "--subject", "import aborts mid-write",
+            "--issue-encountered", "dry-run passed, import died on step 12",
+            "--expected-behavior", "dry-run catches it",
+            "--actual-behavior", "422 with no file named",
+        ],
     )
 
-    assert result.exit_code == 0, result.stdout
-    assert captured == {"query": "docs", "max_results": 2}
+    assert result.exit_code == 0, result.output
+    assert captured["category"] == "cli"
+    assert captured["subject"] == "import aborts mid-write"
+    assert captured["suggested_next_steps"] is None
 
 
 def test_apps_init_rejects_non_empty_directory(tmp_path):
@@ -2888,8 +2910,20 @@ def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None
             return {"items": [{"name": t} for t in tables]}
 
     class FakeAgents:
-        def list(self, *, limit=1000):
-            return {"items": agents}
+        def list(self, *, limit=1000, include=None):
+            # Mirrors the real API: `include=["permissions"]` embeds each row's
+            # grants so doctor doesn't call the per-agent endpoint at all.
+            if not include or "permissions" not in include:
+                return {"items": agents}
+            embedded = []
+            for agent in agents:
+                result = agent_perms.get(str(agent.get("name")))
+                if isinstance(result, Exception):
+                    # An older/erroring server omits grants; doctor falls back.
+                    embedded.append({**agent, "grants": None})
+                else:
+                    embedded.append({**agent, "grants": result or []})
+            return {"items": embedded}
 
         def permissions(self, name):
             result = agent_perms.get(name)
@@ -2901,7 +2935,7 @@ def _doctor_client(*, tables, agents, agent_perms, surfaces=None, workflows=None
             return {"name": name, "agent_runtime": {"profile_id": "p"}}
 
     class FakeFunctions:
-        def list(self, *, limit=1000):
+        def list(self, *, limit=1000, include=None):
             return {"items": []}
 
         def permissions(self, name):
@@ -3353,6 +3387,32 @@ _FOLDER_GRANT = {
 }
 
 
+def test_doctor_accepts_pod_as_an_option_and_a_positional(monkeypatch):
+    """`pods doctor` was the one command that rejected `--pod`, while both skills
+    present it as universal."""
+    client = _doctor_client(
+        tables=["tickets"],
+        agents=[{"name": "triage", "agent_runtime": {"profile_id": "p1"}}],
+        agent_perms={
+            "triage": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "tickets",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+    )
+    _patch_run(monkeypatch, pods, client)
+
+    as_option = runner.invoke(app, ["pods", "doctor", "--pod", "pod-1"])
+    as_positional = runner.invoke(app, ["pods", "doctor", "pod-1"])
+
+    assert as_option.exit_code == 0, as_option.output
+    assert as_positional.exit_code == 0, as_positional.output
+    assert "No such option" not in as_option.output
+
+
 def test_doctor_is_quiet_for_a_folder_grant_that_resolves(monkeypatch):
     """The old check warned "verify it exists / will be created" for every folder
     grant, whether or not it existed. Two of four warnings on a healthy pod were
@@ -3402,3 +3462,30 @@ def test_doctor_flags_a_granted_folder_whose_documents_are_unindexed(monkeypatch
     out = " ".join(result.stdout.split())
     assert "are indexed" in out
     assert "searches there return nothing" in out
+
+
+def test_an_unreachable_server_is_one_line_not_a_traceback(capsys):
+    """A server that isn't running is an expected condition, not a crash. It used
+    to escape to Typer's rich traceback: ~360 lines whose only payload was the
+    last one, all of it landing in an agent's context."""
+    from lemma_sdk.errors import LemmaConnectionError
+
+    from lemma_cli.cli_core.errors import report_cli_error, set_dialed_base_url
+
+    set_dialed_base_url("http://localhost:8710")
+    handled = report_cli_error(LemmaConnectionError("[Errno 61] Connection refused"))
+    err = capsys.readouterr().err
+
+    assert handled
+    assert err.count("\n") == 1
+    assert "http://localhost:8710" in err
+    assert "lemma config show" in err
+
+
+def test_an_error_we_cannot_explain_is_left_to_traceback(capsys):
+    """The boundary must not swallow real bugs — anything that isn't a LemmaError
+    is re-raised so the traceback still shows it."""
+    from lemma_cli.cli_core.errors import report_cli_error
+
+    assert report_cli_error(ValueError("a genuine bug")) is False
+    assert capsys.readouterr().err == ""

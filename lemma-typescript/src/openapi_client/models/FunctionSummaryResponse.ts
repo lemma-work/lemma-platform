@@ -2,6 +2,7 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
+import type { FunctionResourcePermissionResponse } from './FunctionResourcePermissionResponse.js';
 import type { FunctionStatus } from './FunctionStatus.js';
 import type { FunctionType } from './FunctionType.js';
 import type { JsonObject } from './JsonObject.js';
@@ -18,6 +19,7 @@ export type FunctionSummaryResponse = {
     config?: (JsonObject | null);
     created_at: (string | null);
     description?: (string | null);
+    grants?: (Array<FunctionResourcePermissionResponse> | null);
     icon_url?: (string | null);
     id: string;
     name: string;

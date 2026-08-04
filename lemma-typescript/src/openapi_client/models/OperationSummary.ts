@@ -6,6 +6,14 @@
  * Compact operation metadata for discovery flows.
  */
 export type OperationSummary = {
+    /**
+     * Install this operation belongs to (org-wide search only).
+     */
+    auth_config?: (string | null);
+    /**
+     * Connector this operation belongs to (org-wide search only).
+     */
+    connector_id?: (string | null);
     description?: (string | null);
     name: string;
     /**

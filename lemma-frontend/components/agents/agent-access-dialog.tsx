@@ -132,6 +132,13 @@ const TOOL_COPY: Record<string, { label: string; description: string; icon: Lemm
         description: 'Look at images and screenshots in its workspace.',
         icon: ImageIcon,
     },
+    CONNECTORS: {
+        // This is the ability, not the list. Which apps it may reach is the
+        // Connectors category, and both are required to act in one.
+        label: 'Connected apps',
+        description: 'Call connected apps directly, without a sandbox. Pick which ones under Connectors.',
+        icon: Plugs,
+    },
 };
 
 /** Ordered so the abilities most agents want are decided first. */
@@ -146,6 +153,7 @@ const TOOL_ORDER: string[] = [
     'SPEECH',
     'SNOOZE',
     'VIEW_IMAGE',
+    'CONNECTORS',
 ];
 
 const EACH_PERSON_ACCOUNT = '__each_person__';

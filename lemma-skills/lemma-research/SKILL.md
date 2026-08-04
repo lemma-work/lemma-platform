@@ -141,11 +141,9 @@ a shared pod folder unless the task authorizes that audience.
 
 ### Web sources
 
-Use Lemma's verified search command for discovery:
-
-```bash
-lemma tools web-search "specific query with date or domain" --limit 10
-```
+Discover sources with your own web search — phrase the query specifically, with a
+date or a domain, rather than broadly. There is no CLI search command: search is a
+capability you already have, and the CLI's wrapper around it was removed.
 
 Open promising results and inspect the source itself. Use the browser for
 JavaScript-rendered pages, authentication, tables, or navigation. Preserve a

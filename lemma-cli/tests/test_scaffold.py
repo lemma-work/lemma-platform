@@ -711,3 +711,44 @@ def test_build_request_humanizes_missing_field():
         build_request(CreateAgentRequest, {"name": "x"})
     with pytest.raises(ValueError, match=r"\(agent triage\)"):
         build_request(CreateAgentRequest, {"name": "x"}, context="agent triage")
+
+
+def test_schedule_scaffold_teaches_the_config_key_the_server_accepts(tmp_path):
+    """The scaffold used to comment `{"datastore": "<table>"}`; the server wants
+    `table_name` and 422s. A real import followed the scaffold, passed
+    `--dry-run`, and died on the twelfth of twelve resources."""
+    from lemma_cli.cli_app.scaffold import init_resource
+
+    init_resource("schedule", "nightly", root=tmp_path)
+    text = (tmp_path / "schedules" / "nightly" / "nightly.json").read_text()
+
+    assert "table_name" in text
+    assert '"datastore":' not in text
+    # The alternative target is an agent, not a second workflow (copy-paste).
+    assert '"agent_name": "some-agent"' in text
+
+
+def test_schedule_scaffold_passes_the_importer_s_own_validation(tmp_path):
+    """Whatever `init` writes must survive the checks `pods import --dry-run`
+    runs — a scaffold that fails its own validator is worse than none."""
+    import json
+
+    from lemma_cli.cli_app.pod_bundle import _validate_schedule_config
+    from lemma_cli.cli_app.scaffold import init_resource
+    from lemma_pod_bundle.jsonc import loads_jsonc
+
+    init_resource("schedule", "nightly", root=tmp_path)
+    path = tmp_path / "schedules" / "nightly" / "nightly.json"
+    payload = loads_jsonc(path.read_text())
+
+    # As scaffolded (TIME + cron): clean.
+    assert _validate_schedule_config(payload, "nightly", str(path)) == []
+
+    # And the DATASTORE shape the comment now documents is clean too.
+    datastore = {
+        **payload,
+        "schedule_type": "DATASTORE",
+        "config": {"table_name": "tickets", "operations": ["INSERT"]},
+    }
+    assert _validate_schedule_config(datastore, "nightly", str(path)) == []
+    assert json.dumps(datastore)  # serializable, for good measure

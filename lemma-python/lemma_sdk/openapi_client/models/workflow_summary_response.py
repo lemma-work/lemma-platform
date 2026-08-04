@@ -34,6 +34,7 @@ class WorkflowSummaryResponse:
             is_active (bool | Unset):  Default: True.
             mode (WorkflowMode | Unset): Workflow schedule ownership mode.
             node_count (int | Unset):  Default: 0.
+            node_targets (list[str] | Unset):
             node_types (list[str] | Unset):
             updated_at (datetime.datetime | None | Unset):
             visibility (str | Unset):  Default: 'POD'.
@@ -49,6 +50,7 @@ class WorkflowSummaryResponse:
     is_active: bool | Unset = True
     mode: WorkflowMode | Unset = UNSET
     node_count: int | Unset = 0
+    node_targets: list[str] | Unset = UNSET
     node_types: list[str] | Unset = UNSET
     updated_at: datetime.datetime | None | Unset = UNSET
     visibility: str | Unset = "POD"
@@ -93,6 +95,10 @@ class WorkflowSummaryResponse:
 
         node_count = self.node_count
 
+        node_targets: list[str] | Unset = UNSET
+        if not isinstance(self.node_targets, Unset):
+            node_targets = self.node_targets
+
         node_types: list[str] | Unset = UNSET
         if not isinstance(self.node_types, Unset):
             node_types = self.node_types
@@ -130,6 +136,8 @@ class WorkflowSummaryResponse:
             field_dict["mode"] = mode
         if node_count is not UNSET:
             field_dict["node_count"] = node_count
+        if node_targets is not UNSET:
+            field_dict["node_targets"] = node_targets
         if node_types is not UNSET:
             field_dict["node_types"] = node_types
         if updated_at is not UNSET:
@@ -196,6 +204,8 @@ class WorkflowSummaryResponse:
 
         node_count = d.pop("node_count", UNSET)
 
+        node_targets = cast(list[str], d.pop("node_targets", UNSET))
+
         node_types = cast(list[str], d.pop("node_types", UNSET))
 
         def _parse_updated_at(data: object) -> datetime.datetime | None | Unset:
@@ -228,6 +238,7 @@ class WorkflowSummaryResponse:
             is_active=is_active,
             mode=mode,
             node_count=node_count,
+            node_targets=node_targets,
             node_types=node_types,
             updated_at=updated_at,
             visibility=visibility,

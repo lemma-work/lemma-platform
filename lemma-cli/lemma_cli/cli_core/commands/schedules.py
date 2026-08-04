@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import typer
 from lemma_sdk.openapi_client.models.create_schedule_request import CreateScheduleRequest
@@ -8,7 +9,7 @@ from lemma_sdk.openapi_client.models.update_schedule_request import UpdateSchedu
 
 from ...cli_app.enums import DATASTORE_OPERATIONS as _DATASTORE_OPERATIONS
 from ..confirm import confirm_destructive
-from ..io import emit
+from ..io import emit, list_items, to_plain
 from ..payload import build_request, read_json
 from ..sdk import pod_client
 from ..state import fail, run_with_client, state_from_ctx
@@ -81,8 +82,31 @@ def list_schedules(
             limit=limit,
         ),
     )
-    if result is not None:
+    if result is None:
+        return
+    if state.output == "json":
         emit(state, result)
+        return
+    # The list carried an `Agent Id` column and nothing for workflows, so a
+    # workflow-targeted schedule showed a blank target — `schedules get` had to
+    # be run just to learn what a schedule starts. Compute the target the same
+    # way `pods describe` does.
+    payload = to_plain(result)
+    items = [
+        {**item, "target": schedule_target(item)}
+        for item in list_items(payload)
+        if isinstance(item, dict)
+    ]
+    emit(state, {**payload, "items": items} if isinstance(payload, dict) else items)
+
+
+def schedule_target(schedule: dict[str, Any]) -> str:
+    """`agent:<name>` / `workflow:<name>` — a schedule starts exactly one."""
+    if schedule.get("agent_name"):
+        return f"agent:{schedule['agent_name']}"
+    if schedule.get("workflow_name"):
+        return f"workflow:{schedule['workflow_name']}"
+    return ""
 
 
 @app.command("get")

@@ -14,6 +14,9 @@ from ..models.function_type import FunctionType
 from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
+    from ..models.function_resource_permission_response import (
+        FunctionResourcePermissionResponse,
+    )
     from ..models.json_object import JsonObject
 
 
@@ -41,6 +44,7 @@ class FunctionSummaryResponse:
             code_path (None | str | Unset):
             config (JsonObject | None | Unset):
             description (None | str | Unset):
+            grants (list[FunctionResourcePermissionResponse] | None | Unset):
             icon_url (None | str | Unset):
             revision_hash (None | str | Unset):
             visibility (str | Unset):  Default: 'POD'.
@@ -58,6 +62,7 @@ class FunctionSummaryResponse:
     code_path: None | str | Unset = UNSET
     config: JsonObject | None | Unset = UNSET
     description: None | str | Unset = UNSET
+    grants: list[FunctionResourcePermissionResponse] | None | Unset = UNSET
     icon_url: None | str | Unset = UNSET
     revision_hash: None | str | Unset = UNSET
     visibility: str | Unset = "POD"
@@ -114,6 +119,18 @@ class FunctionSummaryResponse:
         else:
             description = self.description
 
+        grants: list[dict[str, Any]] | None | Unset
+        if isinstance(self.grants, Unset):
+            grants = UNSET
+        elif isinstance(self.grants, list):
+            grants = []
+            for grants_type_0_item_data in self.grants:
+                grants_type_0_item = grants_type_0_item_data.to_dict()
+                grants.append(grants_type_0_item)
+
+        else:
+            grants = self.grants
+
         icon_url: None | str | Unset
         if isinstance(self.icon_url, Unset):
             icon_url = UNSET
@@ -150,6 +167,8 @@ class FunctionSummaryResponse:
             field_dict["config"] = config
         if description is not UNSET:
             field_dict["description"] = description
+        if grants is not UNSET:
+            field_dict["grants"] = grants
         if icon_url is not UNSET:
             field_dict["icon_url"] = icon_url
         if revision_hash is not UNSET:
@@ -161,6 +180,9 @@ class FunctionSummaryResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.function_resource_permission_response import (
+            FunctionResourcePermissionResponse,
+        )
         from ..models.json_object import JsonObject
 
         d = dict(src_dict)
@@ -244,6 +266,32 @@ class FunctionSummaryResponse:
 
         description = _parse_description(d.pop("description", UNSET))
 
+        def _parse_grants(
+            data: object,
+        ) -> list[FunctionResourcePermissionResponse] | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, list):
+                    raise TypeError()
+                grants_type_0 = []
+                _grants_type_0 = data
+                for grants_type_0_item_data in _grants_type_0:
+                    grants_type_0_item = FunctionResourcePermissionResponse.from_dict(
+                        grants_type_0_item_data
+                    )
+
+                    grants_type_0.append(grants_type_0_item)
+
+                return grants_type_0
+            except TypeError, ValueError, AttributeError, KeyError:
+                pass
+            return cast(list[FunctionResourcePermissionResponse] | None | Unset, data)
+
+        grants = _parse_grants(d.pop("grants", UNSET))
+
         def _parse_icon_url(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -277,6 +325,7 @@ class FunctionSummaryResponse:
             code_path=code_path,
             config=config,
             description=description,
+            grants=grants,
             icon_url=icon_url,
             revision_hash=revision_hash,
             visibility=visibility,

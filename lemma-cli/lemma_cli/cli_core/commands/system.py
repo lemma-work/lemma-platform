@@ -188,44 +188,91 @@ def config_root(ctx: typer.Context) -> None:
         show(ctx)
 
 
+def _render_config(payload: dict[str, Any]) -> None:
+    """Print the resolved context, not just the server list.
+
+    Everything below was already computed and handed to `emit`, but the generic
+    renderer folded it away: the pretty view showed the configured server names
+    and `active server: X` and nothing else. That is the command you reach for
+    when commands are failing against the wrong server — the exact situation
+    where a dogfood session lost six commands to an unnoticed switch — so it has
+    to lead with what actually resolved.
+    """
+    from ..state import console
+
+    resolved = payload.get("resolved") or {}
+    project_env = payload.get("project_env") or {}
+    console.print(f"[bold]server[/bold]   {payload.get('server')}")
+    console.print(f"[dim]base url[/dim] {payload.get('base_url') or '(unset)'}")
+    console.print(f"[dim]org[/dim]      {resolved.get('org_id') or '(none)'}")
+    console.print(f"[dim]pod[/dim]      {resolved.get('pod_id') or '(none)'}")
+    auth = payload.get("auth") or {}
+    if auth.get("email"):
+        console.print(f"[dim]user[/dim]     {auth['email']}")
+    # `load_project_env` returns a summary dict even when it found nothing, so
+    # key off the path rather than the dict's truthiness — otherwise a pod with
+    # no project file reports "env file None".
+    env_path = project_env.get("path") if isinstance(project_env, dict) else None
+    if env_path:
+        applied = ", ".join(project_env.get("applied") or []) or "(nothing)"
+        console.print(f"[dim]env file[/dim] {env_path} -> applied {applied}")
+    else:
+        console.print("[dim]env file[/dim] (none found)")
+    overrides = {
+        key: value
+        for key, value in (payload.get("env") or {}).items()
+        if value and key != "LEMMA_TOKEN"
+    }
+    if overrides:
+        console.print(
+            "[dim]env vars[/dim] "
+            + ", ".join(f"{key}={value}" for key, value in sorted(overrides.items()))
+        )
+    console.print(
+        f"[dim]servers[/dim]  {', '.join(payload.get('servers') or [])}"
+    )
+    console.print(f"[dim]config[/dim]   {payload.get('path')}")
+
+
 @config_app.command("show")
 def show(ctx: typer.Context) -> None:
-    """Show the local CLI configuration."""
+    """Show the resolved CLI context: server, base URL, org, pod, and env files."""
     state = state_from_ctx(ctx)
     auth = (
         state.config.get("auth") if isinstance(state.config.get("auth"), dict) else {}
     )
-    emit(
-        state,
-        {
-            "path": str(state.config_path),
-            "server": state.server,
-            "active_server": state.server,
-            "servers": server_names(state.root_config or {})
-            if state.root_config is not None
-            else [DEFAULT_SERVER_NAME],
-            "base_url": state.config.get("base_url"),
-            "auth_url": state.config.get("auth_url"),
-            "token": mask_token(state.config.get("token")),
-            "defaults": state.config.get("defaults", {}),
-            "resolved": {
-                "org_id": selected_org(state, required=False),
-                "pod_id": selected_pod(state, required=False),
-                "conversation_id": selected_conversation(state, required=False),
-            },
-            "env": {
-                "LEMMA_ORG_ID": os.getenv("LEMMA_ORG_ID"),
-                "LEMMA_POD_ID": os.getenv("LEMMA_POD_ID"),
-                "LEMMA_CONVERSATION_ID": os.getenv("LEMMA_CONVERSATION_ID"),
-                "LEMMA_TOKEN": mask_token(os.getenv("LEMMA_TOKEN")),
-                "LEMMA_SERVER": os.getenv("LEMMA_SERVER"),
-            },
-            "project_env": state.project_env,
-            "auth": {"email": auth.get("email"), "user_id": auth.get("user_id")}
-            if auth
-            else None,
+    payload = {
+        "path": str(state.config_path),
+        "server": state.server,
+        "active_server": state.server,
+        "servers": server_names(state.root_config or {})
+        if state.root_config is not None
+        else [DEFAULT_SERVER_NAME],
+        "base_url": state.config.get("base_url"),
+        "auth_url": state.config.get("auth_url"),
+        "token": mask_token(state.config.get("token")),
+        "defaults": state.config.get("defaults", {}),
+        "resolved": {
+            "org_id": selected_org(state, required=False),
+            "pod_id": selected_pod(state, required=False),
+            "conversation_id": selected_conversation(state, required=False),
         },
-    )
+        "env": {
+            "LEMMA_ORG_ID": os.getenv("LEMMA_ORG_ID"),
+            "LEMMA_POD_ID": os.getenv("LEMMA_POD_ID"),
+            "LEMMA_CONVERSATION_ID": os.getenv("LEMMA_CONVERSATION_ID"),
+            "LEMMA_TOKEN": mask_token(os.getenv("LEMMA_TOKEN")),
+            "LEMMA_SERVER": os.getenv("LEMMA_SERVER"),
+        },
+        "project_env": state.project_env,
+        "auth": {"email": auth.get("email"), "user_id": auth.get("user_id")}
+        if auth
+        else None,
+    }
+    if state.output == "json":
+        emit(state, payload)
+        return
+    _render_config(payload)
 
 
 @config_app.command("set-default-pod")
@@ -542,6 +589,41 @@ def _fetch_server_api_version(state) -> tuple[str | None, str | None]:  # type: 
         return str(data.get("info", {}).get("version") or "") or None, None
     except Exception as exc:  # network/parse errors are diagnostics, not fatal
         return None, str(exc)
+
+
+def run_feedback(
+    ctx: typer.Context,
+    *,
+    category: str,
+    subject: str,
+    issue_encountered: str,
+    expected_behavior: str,
+    actual_behavior: str,
+    suggested_next_steps: str | None,
+) -> None:
+    """Send product feedback.
+
+    This was `lemma tools report-feedback`, behind a two-command `tools` group
+    that wrapped exactly two unrelated things and read like a namespace worth
+    exploring. Reporting a problem is a first-class action, so it is a
+    first-class command.
+    """
+    from ..state import run_with_client
+
+    state = state_from_ctx(ctx)
+    result = run_with_client(
+        ctx,
+        lambda client, _s: client.tools.report_feedback(
+            category=category,
+            subject=subject,
+            issue_encountered=issue_encountered,
+            expected_behavior=expected_behavior,
+            actual_behavior=actual_behavior,
+            suggested_next_steps=suggested_next_steps,
+        ),
+    )
+    if result is not None:
+        emit(state, result)
 
 
 def run_version(ctx: typer.Context) -> None:

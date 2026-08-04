@@ -352,6 +352,13 @@ def _export_table_data(
         )
 
 
+def _has_seed_data(resource_dir: Path) -> bool:
+    """True when a table dir carries a `data.{csv,jsonl,json}` file to seed from."""
+    return any(
+        (resource_dir / name).is_file() for name in _TABLE_DATA_CANDIDATES
+    )
+
+
 def _import_table_data(pod_sdk: Any, table_name: str, resource_dir: Path) -> int:
     """Seed a table from a bundled ``data.{csv,jsonl,json}`` file via bulk create.
     Returns the number of rows sent (0 when there is no data file)."""
@@ -2216,6 +2223,19 @@ def import_pod_bundle(
             continue
         if not upsert:
             raise ValueError(f"Table already exists and --no-upsert was requested: {table_name}")
+
+        # `--with-data` seeds new tables only, so the natural sequence — import
+        # the structure, then re-import with data — seeds nothing, and used to
+        # say nothing either. Name the table and the way out rather than letting
+        # someone conclude the rows arrived.
+        if with_data and _has_seed_data(resource_dir):
+            console.print(
+                f"[yellow]warning[/yellow] table '{table_name}': skipped the data "
+                "seed (the table already exists; --with-data seeds new tables "
+                f"only). Load it with `lemma records import {table_name} "
+                f"{resource_dir / TABLE_DATA_FILE}`."
+            )
+            summary["tables"].append(f"data-skipped:{table_name}")
 
         _progress_start("table", table_name, "updating")
         full_existing = to_plain(pod_sdk.tables.get(table_name))

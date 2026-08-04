@@ -30,7 +30,11 @@ from app.modules.agent.tools.pod.models import (
     SearchFilesRequest,
     ViewDocumentPagesRequest,
 )
-from app.modules.agent.tools.pod.pod_data_access import PodServices, pod_services
+from app.modules.agent.tools.pod.pod_data_access import (
+    PodServices,
+    empty_data_error,
+    pod_services,
+)
 from app.modules.agent.tools.tool_errors import approval_error_result
 from app.modules.datastore.contracts import (
     DatastoreConflictError,
@@ -229,13 +233,13 @@ async def pod_write_record(
             # Guard against silent blank-row writes: an empty/all-null `data`
             # (a frequent failure on smaller models) used to pass the `is None`
             # check and create a row of only system columns. Reject it instead.
+            # Naming the table's real columns is what makes the retry land: a
+            # model that sent `{}` once tends to send it again (a dogfood run
+            # burned three identical retries), and "must be non-empty" doesn't
+            # say what to put there.
             return {
                 "success": False,
-                "error": (
-                    f"`data` must be a non-empty object of column->value for "
-                    f'action=\'{request.action}\', e.g. {{"title": "..."}}. The '
-                    "payload was empty, so nothing was written."
-                ),
+                "error": await empty_data_error(services, request),
             }
         if request.action in ("update", "delete") and not request.record_id:
             return {

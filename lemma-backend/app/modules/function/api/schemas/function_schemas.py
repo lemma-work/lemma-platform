@@ -160,6 +160,11 @@ class FunctionSummaryResponse(BaseModel):
     created_at: datetime | None
     updated_at: datetime | None
     allowed_actions: list[str] = Field(default_factory=list)
+    # Populated only for `?include=permissions`. None means "not requested"; an
+    # empty list means "holds no grants" — a zero-grant workload is the most
+    # common reason a fresh pod 403s, so those must be distinguishable. Costs
+    # ONE extra query for the whole page, not one per function.
+    grants: list[FunctionResourcePermissionResponse] | None = None
 
 
 class FunctionListResponse(BaseModel):

@@ -95,6 +95,7 @@ run `uv run python scripts/generate_route_inventory.py`.
 | GET | `/connectors/connect-requests/oauth/callback` | `connector.oauth.callback` | OAuth Callback |
 | GET | `/connectors/{connector_id}` | `connector.get` | Get Connector |
 | GET | `/connectors/{connector_id}/skill` | `connector.skill.get` | Get Connector Skill |
+| GET | `/organizations/{organization_id}/connector-operations` | `connector.operation.search` | Search Connector Operations Across Installs |
 | GET | `/organizations/{organization_id}/connectors/accounts` | `connector.account.list` | List Accounts |
 | GET | `/organizations/{organization_id}/connectors/accounts/{account_id}` | `connector.account.get` | Get Account |
 | GET | `/organizations/{organization_id}/connectors/auth-configs` | `connector.auth_config.list` | List Auth Configs |

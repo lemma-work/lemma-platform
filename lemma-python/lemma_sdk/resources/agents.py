@@ -23,8 +23,15 @@ from .base import BoundResource
 
 
 class PodAgents(BoundResource):
-    def list(self, *, limit: int = 100) -> AgentListResponse:
-        return self._call(agent_list, self._pod_uuid(), limit=limit)
+    def list(
+        self, *, limit: int = 100, include: list[str] | None = None
+    ) -> AgentListResponse:
+        """List agents. Pass ``include=["permissions"]`` to get each agent's
+        grants in the same request — the server resolves them for the whole page
+        in one query, instead of a per-agent permissions call each."""
+        return self._call(
+            agent_list, self._pod_uuid(), limit=limit, include=include or []
+        )
 
     def run(
         self,

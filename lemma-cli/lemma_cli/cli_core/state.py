@@ -12,6 +12,8 @@ from rich.console import Console
 from lemma_sdk.auth import refresh_cli_session
 from lemma_sdk.errors import LemmaAPIError
 
+from .errors import set_dialed_base_url
+
 if TYPE_CHECKING:
     # The Lemma client pulls in the full resource/model tree; import it only when
     # a command actually opens a session (see client_session), not at CLI startup.
@@ -165,8 +167,12 @@ def client_session(state: CliState) -> Iterator[Lemma]:
     use_env = state.server_source == "env"
     defaults = state.config.get("defaults") if isinstance(state.config.get("defaults"), dict) else {}
     runtime = state.config.get("_runtime") if isinstance(state.config.get("_runtime"), dict) else {}
+    base_url = resolve_base_url(state.base_url, state.config, use_env=use_env)
+    # Remember what we dialed, so the error boundary in app.main() can name the
+    # server in a connection failure. state.base_url is only the raw override.
+    set_dialed_base_url(base_url)
     with Lemma(
-        base_url=resolve_base_url(state.base_url, state.config, use_env=use_env),
+        base_url=base_url,
         token=resolve_token(state.token, state.config, use_env=use_env),
         org_id=runtime.get("org") or defaults.get("org_id"),
         pod_id=runtime.get("pod") or defaults.get("pod_id"),

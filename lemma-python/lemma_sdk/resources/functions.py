@@ -30,8 +30,15 @@ from .base import BoundResource, as_uuid, compact
 
 
 class PodFunctions(BoundResource):
-    def list(self, *, limit: int = 100) -> FunctionListResponse:
-        return self._call(function_list, self._pod_uuid(), limit=limit)
+    def list(
+        self, *, limit: int = 100, include: list[str] | None = None
+    ) -> FunctionListResponse:
+        """List functions. Pass ``include=["permissions"]`` to get each
+        function's grants in the same request — one query for the whole page,
+        rather than a per-function permissions call each."""
+        return self._call(
+            function_list, self._pod_uuid(), limit=limit, include=include or []
+        )
 
     def create(self, request: CreateFunctionRequest) -> FunctionDetailResponse:
         return self._call(function_create, self._pod_uuid(), body=request)

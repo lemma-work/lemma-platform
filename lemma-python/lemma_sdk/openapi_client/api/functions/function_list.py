@@ -17,6 +17,7 @@ def _get_kwargs(
     *,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    include: list[str] | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -29,6 +30,12 @@ def _get_kwargs(
     else:
         json_page_token = page_token
     params["page_token"] = json_page_token
+
+    json_include: list[str] | Unset = UNSET
+    if not isinstance(include, Unset):
+        json_include = include
+
+    params["include"] = json_include
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -79,6 +86,7 @@ def sync_detailed(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    include: list[str] | Unset = UNSET,
 ) -> Response[ErrorResponse | FunctionListResponse]:
     """List Functions
 
@@ -88,6 +96,9 @@ def sync_detailed(
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        include (list[str] | Unset): Extra data to embed. `permissions` attaches each function's
+            resource grants, resolved for the whole page in one query — without it, a caller that
+            needs grants must call the per-function permissions endpoint once per row.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -101,6 +112,7 @@ def sync_detailed(
         pod_id=pod_id,
         limit=limit,
         page_token=page_token,
+        include=include,
     )
 
     response = client.get_httpx_client().request(
@@ -116,6 +128,7 @@ def sync(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    include: list[str] | Unset = UNSET,
 ) -> ErrorResponse | FunctionListResponse | None:
     """List Functions
 
@@ -125,6 +138,9 @@ def sync(
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        include (list[str] | Unset): Extra data to embed. `permissions` attaches each function's
+            resource grants, resolved for the whole page in one query — without it, a caller that
+            needs grants must call the per-function permissions endpoint once per row.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -139,6 +155,7 @@ def sync(
         client=client,
         limit=limit,
         page_token=page_token,
+        include=include,
     ).parsed
 
 
@@ -148,6 +165,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    include: list[str] | Unset = UNSET,
 ) -> Response[ErrorResponse | FunctionListResponse]:
     """List Functions
 
@@ -157,6 +175,9 @@ async def asyncio_detailed(
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        include (list[str] | Unset): Extra data to embed. `permissions` attaches each function's
+            resource grants, resolved for the whole page in one query — without it, a caller that
+            needs grants must call the per-function permissions endpoint once per row.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -170,6 +191,7 @@ async def asyncio_detailed(
         pod_id=pod_id,
         limit=limit,
         page_token=page_token,
+        include=include,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -183,6 +205,7 @@ async def asyncio(
     client: AuthenticatedClient | Client,
     limit: int | Unset = 100,
     page_token: None | str | Unset = UNSET,
+    include: list[str] | Unset = UNSET,
 ) -> ErrorResponse | FunctionListResponse | None:
     """List Functions
 
@@ -192,6 +215,9 @@ async def asyncio(
         pod_id (UUID):
         limit (int | Unset):  Default: 100.
         page_token (None | str | Unset):
+        include (list[str] | Unset): Extra data to embed. `permissions` attaches each function's
+            resource grants, resolved for the whole page in one query — without it, a caller that
+            needs grants must call the per-function permissions endpoint once per row.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -207,5 +233,6 @@ async def asyncio(
             client=client,
             limit=limit,
             page_token=page_token,
+            include=include,
         )
     ).parsed

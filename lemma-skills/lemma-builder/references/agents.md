@@ -92,7 +92,7 @@ Grant only the toolsets the job needs:
 | `USER_INTERACTION` | ask multiple-choice questions (`ask_user`), show resources/files/tables/widgets (`display_resource`), and gate sensitive actions behind approval (`request_approval`) — behaviors & schemas in `agent-tools.md` |
 | `SPEECH` | speak replies and transcribe voice notes (`say` / `listen`) — see `agent-tools.md` |
 | `SUBAGENTS` | async sub-agent orchestration — spawn/await/list child conversations, including another instance of itself (see *Agents & Functions as Tools*) |
-| `CONNECTORS` | call third-party APIs through the org's connector installs — `list_connectors`, then `search_connector_operations` / `describe_connector_operation` to find and inspect one, then `run_connector_operation`. Deferred: an org with a few MCP servers can expose thousands of operations, so the agent discovers them via `search_tools` rather than carrying them in every prompt |
+| `CONNECTORS` | call third-party APIs through the org's connector installs, without a sandbox. **Deferred**: an org with a couple of MCP servers can expose thousands of operations, so these tools are not in the prompt prefix — the agent finds them with `search_tools` first. Then `search_connector_operations` (leave `auth_config` unset to search **every** install — each hit names the one to run it against) and `run_connector_operation`; `describe_connector_operation` only if you want the full input schema up front, `list_connectors` only to see what is installed. Needs a `connector:<name>:use` grant per app — the toolset alone grants nothing |
 | `TODO` | a task list (`write_todos`) for planning multi-step work — conversation-scoped scratch for the agent, not pod state. Skip it for single-step requests |
 | `SNOOZE` | suspend the current turn and resume it later after a delay (`snooze`), capped at 24h. Opt-in: waking replays the whole conversation, so grant it only to agents whose work genuinely has a gap in the middle |
 
@@ -223,7 +223,7 @@ complementary mechanisms:
 | Grant the parent agent… | Tool it gains | Tool name | A call does |
 | --- | --- | --- | --- |
 | `function.execute` on `resource_type: "function"` | that function | `function_<name>` | Runs the function (args = the function's input schema). `API` returns its result inline; `JOB` is awaited, then returns its result. `function.execute` implies `function.read`, so this one grant covers both discovery and execution. The function runs under **its own** grants — you do **not** mirror them onto the parent (see the callout). |
-| `agent.execute` on `resource_type: "agent"` | that agent | `agent_<name>` | Spawns a real, persisted **child conversation** (linked via `parent_id`/`parent_run_id`), runs it, and returns its output. Schema-flexible (see below): args = the child's `input_schema` if set, else a single `input` string; result = the child's `output_schema` dict if set, else a plain string. |
+| `agent.execute` on `resource_type: "agent"` | that agent | `agent_<name>` | Spawns a real, persisted **child conversation** (linked via `parent_id`/`parent_run_id`), runs it, and returns its output. Children are NOT in the default listing, which is root-only — read them with `lemma conversations list --parent-id <parent-conversation-id>`. Schema-flexible (see below): args = the child's `input_schema` if set, else a single `input` string; result = the child's `output_schema` dict if set, else a plain string. |
 
 In a bundle these are ordinary name-based grants on the **parent** agent:
 
@@ -367,6 +367,7 @@ lemma agents run triage-agent "..." --no-wait                 # start detached; 
 
 # Each agent run IS a conversation. `conversations` is the run surface:
 lemma conversations list --agent triage-agent   # this agent's runs
+lemma conversations list --parent-id <id>       # the child conversations it spawned
 lemma conversations get <conversation-id>        # run state + messages
 lemma conversations send <conversation-id> "..." # continue the run
 lemma conversations stream <conversation-id>     # attach to an in-flight run

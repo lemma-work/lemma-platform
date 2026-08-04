@@ -294,7 +294,7 @@ lemma connectors connect-requests create <connector> --auth-config-id <id>
 lemma connectors operations search|list|get|details|execute [<auth-config-or-connector>] [...]
 lemma connectors triggers list|get [<auth-config-or-connector>] [...]
 lemma surfaces list|get|upsert|enable|disable|setup|channels|available-channels|delete   # keyed by PLATFORM (slack, gmail, …)
-lemma tools list|web-search|report-feedback
+lemma feedback --category … --subject … --issue-encountered … --expected-behavior … --actual-behavior …
 
 # apps
 lemma apps list|get|init|create|update|deploy|delete

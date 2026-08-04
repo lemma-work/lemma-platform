@@ -97,6 +97,9 @@ class WorkflowSummaryEntity(BaseModel):
     visibility: str = "POD"
     node_count: int = 0
     node_types: list[str] = Field(default_factory=list)
+    # "agent:<name>" / "function:<name>" per targeting node — what a wiring
+    # check needs, without shipping (or re-fetching) the whole graph.
+    node_targets: list[str] = Field(default_factory=list)
     allowed_actions: list[str] = Field(default_factory=list)
     created_at: datetime | None = None
     updated_at: datetime | None = None

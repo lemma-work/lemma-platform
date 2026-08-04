@@ -3094,3 +3094,60 @@ def test_export_reads_search_enabled_from_the_file_not_the_tree(tmp_path: Path):
         (Path(result["path"]) / "files" / ".files.json").read_text(encoding="utf-8")
     )
     assert manifest["files"][0]["search_enabled"] is True
+
+
+def test_with_data_says_when_it_skips_an_existing_table(tmp_path: Path, capsys):
+    """`--with-data` seeds new tables only. The natural sequence — import the
+    structure, then re-import with data — therefore seeds nothing, and used to
+    say nothing, so `select count(*)` came back 0 with no hint why."""
+    resource_dir = tmp_path / "tables" / "tickets"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "tickets.json").write_text(
+        json.dumps(
+            {"name": "tickets", "columns": [{"name": "title", "type": "TEXT"}]}
+        ),
+        encoding="utf-8",
+    )
+    (resource_dir / "data.csv").write_text("title\nfirst\n", encoding="utf-8")
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": [{"name": "tickets"}]},
+        get=lambda pod_id, name: {
+            "name": name,
+            "columns": [{"name": "title", "type": "TEXT"}],
+            "enable_rls": False,
+        },
+        update=lambda pod_id, name, payload: {"name": name},
+        bulk_create=lambda pod_id, name, rows, upsert=False: pytest.fail(
+            "must not seed an existing table"
+        ),
+    )
+
+    result = import_pod_bundle(
+        client, pod_id="pod_1", source_dir=tmp_path, with_data=True
+    )
+
+    out = " ".join(capsys.readouterr().err.split())
+    assert "skipped the data seed" in out
+    assert "lemma records import tickets" in out
+    assert "data-skipped:tickets" in result["summary"]["tables"]
+
+
+def test_with_data_is_quiet_when_a_table_has_no_seed_file(tmp_path: Path, capsys):
+    resource_dir = tmp_path / "tables" / "tickets"
+    resource_dir.mkdir(parents=True)
+    (resource_dir / "tickets.json").write_text(
+        json.dumps({"name": "tickets", "columns": []}), encoding="utf-8"
+    )
+
+    client = _bare_pod_client()
+    client.tables = SimpleNamespace(
+        list=lambda pod_id, limit=1000: {"items": [{"name": "tickets"}]},
+        get=lambda pod_id, name: {"name": name, "columns": [], "enable_rls": False},
+        update=lambda pod_id, name, payload: {"name": name},
+    )
+
+    import_pod_bundle(client, pod_id="pod_1", source_dir=tmp_path, with_data=True)
+
+    assert "skipped the data seed" not in capsys.readouterr().err

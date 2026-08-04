@@ -196,6 +196,21 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
         node_types = sorted(
             {n.get("type") for n in raw_nodes if isinstance(n, dict) and n.get("type")}
         )
+        # `agent:<name>` / `function:<name>` for every node that targets one.
+        # Checking a pod's wiring needs exactly this and nothing else about the
+        # graph, and fetching each workflow in full to get it made a whole-pod
+        # health check cost one request per workflow.
+        node_targets = sorted(
+            {
+                f"{kind}:{config[key]}"
+                for n in raw_nodes
+                if isinstance(n, dict)
+                for config in [n.get("config") or {}]
+                if isinstance(config, dict)
+                for kind, key in (("agent", "agent_name"), ("function", "function_name"))
+                if config.get(key)
+            }
+        )
         return WorkflowSummaryEntity(
             id=model.id,
             pod_id=model.pod_id,
@@ -208,6 +223,7 @@ class SqlAlchemyWorkflowRepository(WorkflowRepository):
             visibility=model.visibility,
             node_count=len(raw_nodes),
             node_types=node_types,
+            node_targets=node_targets,
             allowed_actions=list(allowed_actions),
             created_at=model.created_at,
             updated_at=model.updated_at,
