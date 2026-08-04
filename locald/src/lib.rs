@@ -6,6 +6,7 @@ pub mod native_host_pack;
 pub mod network;
 pub mod operator_config;
 pub mod paths;
+pub mod port_reservation;
 pub mod protocol;
 pub mod provider_probe;
 pub mod sharing;
