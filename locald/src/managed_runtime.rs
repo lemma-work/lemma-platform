@@ -724,7 +724,28 @@ mod tests {
         server.join().unwrap();
         drop(client);
         drop(forwarder);
-        assert!(TcpListener::bind(local).is_ok());
+        // A forwarder that leaked its listener never gives the port back, so
+        // waiting distinguishes the regression from the coincidence. The
+        // coincidence is real: `local` is an ephemeral number the OS may hand
+        // to another test in this binary in the instant after the forwarder
+        // lets go, and that stranger is gone again in about a millisecond.
+        if let Err(error) = rebind_within(local, Duration::from_secs(5)) {
+            panic!("forwarder did not release {local} within 5s: {error}");
+        }
+    }
+
+    fn rebind_within(address: SocketAddr, patience: Duration) -> io::Result<TcpListener> {
+        let deadline = Instant::now() + patience;
+        loop {
+            let error = match TcpListener::bind(address) {
+                Ok(listener) => return Ok(listener),
+                Err(error) => error,
+            };
+            if Instant::now() >= deadline {
+                return Err(error);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

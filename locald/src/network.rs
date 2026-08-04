@@ -1,13 +1,13 @@
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::{Ipv4Addr, TcpListener};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
 use crate::paths::LocalPaths;
+use crate::port_reservation::PortReservation;
 
 const NETWORK_SCHEMA_VERSION: u64 = 1;
 const MIN_DYNAMIC_PORT: u16 = 49_152;
@@ -47,15 +47,57 @@ pub fn load_or_allocate(paths: &LocalPaths) -> io::Result<NetworkPorts> {
     let path = paths.root.join("network.json");
     if let Ok(raw) = fs::read(&path) {
         if let Ok(existing) = serde_json::from_slice::<NetworkPorts>(&raw) {
-            if existing.valid() && ports_available(existing) {
-                return Ok(existing);
+            if existing.valid() {
+                // Reserving is how the remembered pair is tested: claiming both
+                // at once answers a question a pair of separate probes cannot,
+                // and a reservation never listens, so a client still pointed at
+                // the old address is refused here rather than accepted by a
+                // socket that is about to disappear.
+                if let Some(reserved) = reserve_pair(existing) {
+                    reserved.release();
+                    return Ok(existing);
+                }
             }
         }
     }
 
-    let ports = allocate_ports()?;
+    let (ports, reserved) = allocate_ports()?;
+    // Hold both ports until the record naming them is durable. The services
+    // that finally bind them are child processes started later — sometimes in a
+    // later run entirely — so no reservation can reach all the way to their
+    // bind; what it can do is stop a second locald racing this one from being
+    // handed the very pair this call is about to write down and return.
     write_private_atomic(&path, &serde_json::to_vec_pretty(&ports)?)?;
+    reserved.release();
     Ok(ports)
+}
+
+struct ReservedPair {
+    frontend: PortReservation,
+    backend: PortReservation,
+}
+
+impl ReservedPair {
+    fn release(self) {
+        self.frontend.release();
+        self.backend.release();
+    }
+
+    /// Turn the frontend claim into a live listener and give the backend back.
+    #[cfg(test)]
+    fn occupy_frontend(self) -> io::Result<std::net::TcpListener> {
+        self.backend.release();
+        self.frontend.listen()
+    }
+}
+
+/// Take the remembered pair back, or report that someone else owns one of them.
+fn reserve_pair(ports: NetworkPorts) -> Option<ReservedPair> {
+    // Claim both before judging either: a port that is tested and let go says
+    // nothing about whether the pair is still ours by the time we answer.
+    let frontend = PortReservation::at_loopback_port(ports.frontend_port).ok()?;
+    let backend = PortReservation::at_loopback_port(ports.backend_port).ok()?;
+    Some(ReservedPair { frontend, backend })
 }
 
 fn override_ports() -> io::Result<Option<NetworkPorts>> {
@@ -104,36 +146,34 @@ fn parse_override(name: &str, value: &str) -> io::Result<u16> {
         })
 }
 
-fn allocate_ports() -> io::Result<NetworkPorts> {
+fn allocate_ports() -> io::Result<(NetworkPorts, ReservedPair)> {
     for _ in 0..64 {
         // Keep both reservations alive until the pair is complete so the OS
-        // cannot return the same ephemeral port twice.
-        let frontend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-        let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
-        let frontend_port = frontend.local_addr()?.port();
-        let backend_port = backend.local_addr()?.port();
+        // cannot return the same ephemeral port twice, and hand them out with
+        // the numbers so the caller decides when the claim ends.
+        let frontend = PortReservation::ephemeral()?;
+        let backend = PortReservation::ephemeral()?;
+        let frontend_port = frontend.port();
+        let backend_port = backend.port();
         if frontend_port >= MIN_DYNAMIC_PORT
             && backend_port >= MIN_DYNAMIC_PORT
             && frontend_port != backend_port
         {
-            return Ok(NetworkPorts {
-                schema_version: NETWORK_SCHEMA_VERSION,
-                frontend_port,
-                backend_port,
-                allocated_at_ms: now_ms(),
-            });
+            return Ok((
+                NetworkPorts {
+                    schema_version: NETWORK_SCHEMA_VERSION,
+                    frontend_port,
+                    backend_port,
+                    allocated_at_ms: now_ms(),
+                },
+                ReservedPair { frontend, backend },
+            ));
         }
     }
     Err(io::Error::new(
         io::ErrorKind::AddrNotAvailable,
         "could not allocate high local ports for Lemma",
     ))
-}
-
-fn ports_available(ports: NetworkPorts) -> bool {
-    let frontend = TcpListener::bind((Ipv4Addr::LOCALHOST, ports.frontend_port));
-    let backend = TcpListener::bind((Ipv4Addr::LOCALHOST, ports.backend_port));
-    frontend.is_ok() && backend.is_ok()
 }
 
 fn write_private_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
@@ -205,32 +245,62 @@ fn now_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{Ipv4Addr, TcpListener};
     use tempfile::tempdir;
 
     #[test]
+    fn a_fresh_allocation_still_owns_its_ports_while_it_is_being_recorded() {
+        let (ports, _reserved) = allocate_ports().unwrap();
+
+        // The gap between choosing the numbers and recording them is exactly
+        // where a bare pair of numbers can be stolen, so nothing may bind here.
+        // What happens after the release is deliberately not asserted: that
+        // instant belongs to whoever asks the OS for a port next.
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, ports.frontend_port)).is_err());
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, ports.backend_port)).is_err());
+    }
+
+    #[test]
     fn allocated_ports_are_high_distinct_and_persistent() {
-        let root = tempdir().unwrap();
-        let paths = LocalPaths::new(root.path().join("locald"));
-        paths.ensure().unwrap();
+        // Persistence is only observable while the recorded ports stay free,
+        // and the ports are unheld between the two calls by construction: the
+        // first call has to let go before it can return numbers. If something
+        // else on the machine takes one in that gap, rotating is the correct
+        // answer rather than the answer under test, so the scenario is retried.
+        // Code that genuinely failed to reuse its record would fail every
+        // attempt.
+        const ATTEMPTS: usize = 8;
+        for attempt in 1..=ATTEMPTS {
+            let root = tempdir().unwrap();
+            let paths = LocalPaths::new(root.path().join("locald"));
+            paths.ensure().unwrap();
 
-        let first = load_or_allocate(&paths).unwrap();
-        let second = load_or_allocate(&paths).unwrap();
+            let first = load_or_allocate(&paths).unwrap();
+            let second = load_or_allocate(&paths).unwrap();
 
-        assert!(first.frontend_port >= MIN_DYNAMIC_PORT);
-        assert!(first.backend_port >= MIN_DYNAMIC_PORT);
-        assert_ne!(first.frontend_port, first.backend_port);
-        assert_eq!(first, second);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(paths.root.join("network.json"))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
+            assert!(first.frontend_port >= MIN_DYNAMIC_PORT);
+            assert!(first.backend_port >= MIN_DYNAMIC_PORT);
+            assert_ne!(first.frontend_port, first.backend_port);
+            if first != second {
+                assert!(
+                    attempt < ATTEMPTS,
+                    "load_or_allocate never reused its persisted record in {ATTEMPTS} attempts"
+                );
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    fs::metadata(paths.root.join("network.json"))
+                        .unwrap()
+                        .permissions()
+                        .mode()
+                        & 0o777,
+                    0o600
+                );
+            }
+            return;
         }
     }
 
@@ -239,8 +309,17 @@ mod tests {
         let root = tempdir().unwrap();
         let paths = LocalPaths::new(root.path().join("locald"));
         paths.ensure().unwrap();
-        let first = load_or_allocate(&paths).unwrap();
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, first.frontend_port)).unwrap();
+        // Record a pair and let an unrelated owner take the frontend port, all
+        // without the port being free for an instant: allocating and then
+        // re-binding the number would leave this test racing the rest of the
+        // binary for the very port it is trying to prove is occupied.
+        let (first, reserved) = allocate_ports().unwrap();
+        write_private_atomic(
+            &paths.root.join("network.json"),
+            &serde_json::to_vec_pretty(&first).unwrap(),
+        )
+        .unwrap();
+        let listener = reserved.occupy_frontend().unwrap();
 
         let second = load_or_allocate(&paths).unwrap();
 
