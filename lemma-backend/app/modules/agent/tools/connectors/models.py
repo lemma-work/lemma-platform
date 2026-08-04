@@ -8,8 +8,18 @@ from app.modules.agent.domain.value_objects import JsonObject
 
 
 class SearchConnectorOperationsRequest(BaseModel):
-    auth_config: str = Field(
-        description="Installed connector to search, by its auth-config name."
+    # Optional on purpose. Requiring it made every task start with
+    # list_connectors and a guess about which install does email -- and the
+    # guess is wrong whenever an org has both Gmail and Outlook installed.
+    # Omitting it searches every install and each hit carries the auth_config
+    # to run it against, so "send an email" is search then run.
+    auth_config: str | None = Field(
+        default=None,
+        description=(
+            "Installed connector to search, by its auth-config name. Omit to "
+            "search every connector installed in the organization -- prefer "
+            "that when you know the task but not which install provides it."
+        ),
     )
     query: str | None = Field(
         default=None, description="Free text to rank operations by; omit to list."

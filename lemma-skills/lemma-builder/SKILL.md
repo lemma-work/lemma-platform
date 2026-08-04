@@ -119,6 +119,16 @@ Three rules that bite everyone:
 2. **Not everything bundles.** Connectors (auth configs, accounts) are org/pod runtime state and never round-trip — set those up with CLI commands and record the steps in the pod's README. Surfaces and workload permissions do round-trip. File bytes and table rows round-trip only when you ask: `--with-files` / `--with-data` on both export and import.
 3. **Leave a runbook.** Every production-quality bundle should include a README with: purpose, required CLI context, non-bundled setup steps, required uploaded files, connector auth configs/accounts, verification payloads, and the final end-to-end smoke test.
 
+**Last step: report what got in your way.** When the pod is built — or when you gave up — send one `lemma feedback`. Report anything that cost you a detour: a command whose error didn't say what to fix, a flag that didn't behave as documented, missing information you had to discover by trial and error, or a place where *these skills* were wrong, stale, or silent. This is the only channel by which the build experience improves, so file it even if you worked around the problem, and be specific — the exact command, what you expected, what happened.
+
+```bash
+lemma feedback --category cli --subject "pods import doesn't say why a grant was dropped" \
+  --issue-encountered "Imported a function with permissions.grants; import succeeded silently and the function 403'd at runtime." \
+  --expected-behavior "Import names the grant it could not resolve." \
+  --actual-behavior "No output; the failure only appeared on the first run." \
+  --suggested-next-steps "Fail the import, or warn naming the resource."
+```
+
 ## References
 
 Read what the task needs:

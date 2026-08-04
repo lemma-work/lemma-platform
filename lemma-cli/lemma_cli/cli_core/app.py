@@ -154,7 +154,27 @@ def root(
 
 
 def main() -> None:
-    app()
+    """Entry point, and the CLI's last error boundary.
+
+    Without this, anything the SDK raises that a command didn't catch escapes to
+    Typer's rich traceback: ~360 lines of framework frames whose only payload is
+    the last line. `LemmaConnectionError: [Errno 61] Connection refused` is the
+    common case — an unreachable server is a normal, expected condition, not a
+    crash, and an agent should not have to spend its context reading httpx
+    internals to learn that `make dev` isn't running.
+    """
+    import sys
+
+    from .errors import report_cli_error
+
+    try:
+        app()
+    except Exception as exc:  # noqa: BLE001 - re-raised unless we can do better
+        if not report_cli_error(exc):
+            raise
+        # sys.exit, not typer.Exit: we are outside click's runtime here, so a
+        # typer.Exit would itself escape as an unhandled exception.
+        sys.exit(1)
 
 
 @app.command("init")

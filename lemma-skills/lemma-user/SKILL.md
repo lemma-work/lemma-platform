@@ -249,12 +249,43 @@ builder gave it.
 
 ## Connectors
 
-Hit a CLI, skill, or platform problem worth reporting? One command:
+Two ways in, and which one you have depends on how the agent was granted:
 
-```bash
-lemma feedback --category cli --subject "…" \
-  --issue-encountered "…" --expected-behavior "…" --actual-behavior "…"
+- **Direct tools** (the `CONNECTORS` toolset) — in-process, no sandbox. These
+  are *deferred*: they are not in your prompt prefix, so reach them with
+  `search_tools` first, then `search_connector_operations` and
+  `run_connector_operation`. Prefer this when you have it — no shell involved.
+- **The CLI** (`lemma connectors …`, needs the workspace toolset) — same
+  operations through a sandbox round trip. Use it when you are driving a shell
+  anyway, or when you need the discovery views below.
+
+Either way the authorization is identical: a `connector:<name>:use` grant per
+app, executed through the invoking user's connected account. Having the toolset
+is not having access to any particular app.
+
+### As direct tools
+
+Once `search_tools` has surfaced them: leave `auth_config` unset and search by
+what you want to do — the search spans every installed connector and each hit
+names the `auth_config` to run it against, so you never have to guess which
+install does email:
+
+```text
+search_connector_operations {"query": "send an email"}
+  -> [{auth_config: "workspace-gmail", operation: "gmail_send_email", relevance_score: …}, …]
+
+run_connector_operation {"auth_config": "workspace-gmail",
+                         "operation": "gmail_send_email",
+                         "arguments": {"recipient_email": "a@b.com", "subject": "Hi", "body": "…"}}
 ```
+
+Wrong arguments come back as `invalid_arguments` **with the operation's
+input_schema attached** — correct and retry, don't go fetch the schema
+separately. Pass `auth_config` on search only to narrow to one install;
+`describe_connector_operation` only when you want the full schema up front;
+`output_path` on run to land a file result in the pod.
+
+### From the CLI
 
 Third-party connector operations — **`run` does the whole thing in one call**:
 it resolves the connector, picks the operation, and executes. Still never guess a
@@ -329,6 +360,18 @@ a connect request and hand the link to the user:
 - **Workflow stuck.** `runs get <run-id>` → `active_wait` shows what it's blocked
   on; `step_history` shows the failing node, its input, and error. A human wait
   needs `runs submit-form`.
+
+## Report what got in your way
+
+Hit a CLI, skill, or platform problem worth reporting — a confusing error, a
+flag that didn't do what it says, information you had to discover by trial and
+error, or something these skills got wrong? One command, and it is the only way
+any of that gets fixed:
+
+```bash
+lemma feedback --category cli --subject "…" \
+  --issue-encountered "…" --expected-behavior "…" --actual-behavior "…"
+```
 
 ## See also
 

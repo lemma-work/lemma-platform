@@ -2601,12 +2601,20 @@
   {
     "tool_name": "search_connector_operations",
     "toolset": "CONNECTORS",
-    "description": "Find operations on an installed connector, ranked by relevance.\n\nStart here rather than guessing an operation name: an install can expose\nhundreds of operations, and the names are provider-specific.",
+    "description": "Find operations by what they do, ranked by relevance.\n\nStart here rather than guessing an operation name: an install can expose\nhundreds of operations, and the names are provider-specific. Leave\n`auth_config` unset to search every installed connector at once -- each hit\nnames the `auth_config` to run it against, so you do not need to know which\ninstall provides a capability before searching for it.",
     "input_schema": {
       "properties": {
         "auth_config": {
-          "description": "Installed connector to search, by its auth-config name.",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Installed connector to search, by its auth-config name. Omit to search every connector installed in the organization -- prefer that when you know the task but not which install provides it."
         },
         "query": {
           "anyOf": [
@@ -2627,9 +2635,6 @@
           "type": "integer"
         }
       },
-      "required": [
-        "auth_config"
-      ],
       "title": "SearchConnectorOperationsRequest",
       "type": "object"
     },

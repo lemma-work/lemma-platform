@@ -3462,3 +3462,30 @@ def test_doctor_flags_a_granted_folder_whose_documents_are_unindexed(monkeypatch
     out = " ".join(result.stdout.split())
     assert "are indexed" in out
     assert "searches there return nothing" in out
+
+
+def test_an_unreachable_server_is_one_line_not_a_traceback(capsys):
+    """A server that isn't running is an expected condition, not a crash. It used
+    to escape to Typer's rich traceback: ~360 lines whose only payload was the
+    last one, all of it landing in an agent's context."""
+    from lemma_sdk.errors import LemmaConnectionError
+
+    from lemma_cli.cli_core.errors import report_cli_error, set_dialed_base_url
+
+    set_dialed_base_url("http://localhost:8710")
+    handled = report_cli_error(LemmaConnectionError("[Errno 61] Connection refused"))
+    err = capsys.readouterr().err
+
+    assert handled
+    assert err.count("\n") == 1
+    assert "http://localhost:8710" in err
+    assert "lemma config show" in err
+
+
+def test_an_error_we_cannot_explain_is_left_to_traceback(capsys):
+    """The boundary must not swallow real bugs — anything that isn't a LemmaError
+    is re-raised so the traceback still shows it."""
+    from lemma_cli.cli_core.errors import report_cli_error
+
+    assert report_cli_error(ValueError("a genuine bug")) is False
+    assert capsys.readouterr().err == ""

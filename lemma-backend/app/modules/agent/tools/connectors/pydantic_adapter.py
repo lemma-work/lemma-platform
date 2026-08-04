@@ -33,6 +33,9 @@ from app.modules.agent.tools.connectors.models import (
     SearchConnectorOperationsRequest,
 )
 from app.modules.agent.tools.context import BaseAgentContext
+from app.modules.connectors.services.connector_operation_search import (
+    search_across_auth_configs,
+)
 
 _MAX_VIOLATIONS = 10
 
@@ -93,10 +96,13 @@ async def list_connectors(ctx: RunContext[BaseAgentContext]) -> dict[str, Any]:
 async def search_connector_operations(
     ctx: RunContext[BaseAgentContext], request: SearchConnectorOperationsRequest
 ) -> dict[str, Any]:
-    """Find operations on an installed connector, ranked by relevance.
+    """Find operations by what they do, ranked by relevance.
 
     Start here rather than guessing an operation name: an install can expose
-    hundreds of operations, and the names are provider-specific.
+    hundreds of operations, and the names are provider-specific. Leave
+    `auth_config` unset to search every installed connector at once -- each hit
+    names the `auth_config` to run it against, so you do not need to know which
+    install provides a capability before searching for it.
     """
     deps = ctx.deps
     if deps.org_id is None:
@@ -104,13 +110,22 @@ async def search_connector_operations(
 
     async with connector_services(deps) as services:
         try:
-            found = await services.operations.discover_operations_for_auth_config(
-                user_id=deps.user_id,
-                organization_id=deps.org_id,
-                auth_config_name=request.auth_config,
-                query=request.query,
-                limit=request.limit,
-            )
+            if request.auth_config:
+                found = await services.operations.discover_operations_for_auth_config(
+                    user_id=deps.user_id,
+                    organization_id=deps.org_id,
+                    auth_config_name=request.auth_config,
+                    query=request.query,
+                    limit=request.limit,
+                )
+            else:
+                found = await search_across_auth_configs(
+                    services.operations,
+                    user_id=deps.user_id,
+                    organization_id=deps.org_id,
+                    query=request.query,
+                    limit=request.limit,
+                )
         except DomainError as exc:
             return _error(exc.code or "connector_error", str(exc))
     return to_json_value(found)
