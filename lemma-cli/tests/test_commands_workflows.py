@@ -179,3 +179,39 @@ def test_workflows_runs_list_dispatches_api(monkeypatch):
     assert result.exit_code == 0, result.stdout
     assert "run-1" in result.stdout
     assert fake_wf._calls.get("runs_list", {}).get("workflow") == "my-wf"
+
+
+def test_runs_waiting_says_what_its_queue_covers(monkeypatch):
+    """"Nothing is waiting on you." was read as "nothing is waiting".
+
+    A run parked on a FORM with no assignee is submittable by any member with
+    execute access but belongs to no one's queue, so it never appears here — and
+    `lemma-user` sends you to this command when a workflow is stuck. The empty
+    case has to state its own scope, or it convinces you the run is fine.
+    """
+    from types import SimpleNamespace
+
+    from lemma_cli.cli_core.commands import workflows as workflows_mod
+
+    class FakeWorkflows:
+        def list_my_waits(self, *, limit=100):
+            return {"items": []}
+
+    monkeypatch.setattr(
+        workflows_mod,
+        "run_with_client",
+        lambda ctx, fn: fn(
+            SimpleNamespace(pod=lambda pod_id: SimpleNamespace(workflows=FakeWorkflows())),
+            SimpleNamespace(config={"_runtime": {"pod": "pod-1"}}, output="pretty", full=False),
+        ),
+    )
+
+    result = runner.invoke(app, ["workflows", "runs", "waiting", "--pod", "pod-1"])
+
+    assert result.exit_code == 0, result.output
+    out = " ".join(result.stdout.split())
+    assert "assigned to you" in out
+    # It points at where the answer actually lives.
+    assert "runs get" in out
+    # And no longer implies the pod has nothing parked.
+    assert "Nothing is waiting on you." not in out

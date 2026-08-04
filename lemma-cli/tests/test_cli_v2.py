@@ -3387,6 +3387,32 @@ _FOLDER_GRANT = {
 }
 
 
+def test_doctor_accepts_pod_as_an_option_and_a_positional(monkeypatch):
+    """`pods doctor` was the one command that rejected `--pod`, while both skills
+    present it as universal."""
+    client = _doctor_client(
+        tables=["tickets"],
+        agents=[{"name": "triage", "agent_runtime": {"profile_id": "p1"}}],
+        agent_perms={
+            "triage": [
+                {
+                    "resource_type": "datastore_table",
+                    "resource_name": "tickets",
+                    "permission_ids": ["datastore.table.read"],
+                }
+            ]
+        },
+    )
+    _patch_run(monkeypatch, pods, client)
+
+    as_option = runner.invoke(app, ["pods", "doctor", "--pod", "pod-1"])
+    as_positional = runner.invoke(app, ["pods", "doctor", "pod-1"])
+
+    assert as_option.exit_code == 0, as_option.output
+    assert as_positional.exit_code == 0, as_positional.output
+    assert "No such option" not in as_option.output
+
+
 def test_doctor_is_quiet_for_a_folder_grant_that_resolves(monkeypatch):
     """The old check warned "verify it exists / will be created" for every folder
     grant, whether or not it existed. Two of four warnings on a healthy pod were
