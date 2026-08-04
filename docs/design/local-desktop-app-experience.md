@@ -113,8 +113,8 @@ And if connecting invalidates the window before `ready` arrives, the resume
 worker hands it the splash, which is the surface that reports the restart it is
 waiting for.
 
-**Services boot alongside each other.** The cold path — what you pay after
-**Quit and stop Lemma** — spawned a service, waited for it to pass its *full*
+**Services boot alongside each other.** The cold path — what you pay after a
+quit — spawned a service, waited for it to pass its *full*
 health gate, and only then spawned the next. Measured on a real install:
 
 ```text

@@ -111,8 +111,10 @@ container sockets, PostgreSQL, Redis, SuperTokens, or fixed ports.
 - During install/start no misleading Start/Open/Create Account control appears.
 - Stop application preserves warm infrastructure.
 - Stop all releases the VM/WSL resources.
-- Quit leaves the durable desired state running.
-- Quit and stop Lemma stops everything before exit.
+- Closing the window leaves the durable desired state running, with the tray as
+  the way back.
+- Quit stops everything before exit, and says what that stops when anything is
+  running to stop.
 - A stable workspace is not navigated back to the installer for transient
   component recovery.
 

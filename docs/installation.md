@@ -151,27 +151,36 @@ calls, and webhook callbacks. Published pod apps stay local-only because their
 current routes require wildcard subdomains. PostgreSQL, Redis, SuperTokens, the
 private runtime and model endpoints are never exposed.
 
-Closing to the tray keeps sharing active. Full Quit, a Desktop disconnect,
+Closing to the tray keeps sharing active. Quitting, a Desktop disconnect,
 network-interface loss, or tunnel exit stops sharing. LAN/Public mode never
 resumes automatically.
 
 ## Lifecycle and tray behavior
 
-Closing the window hides Lemma to the tray so workers and schedules keep
-running.
+There are two ways to leave, and they mean different things.
+
+**Close the window** hides Lemma to the tray. Everything keeps running:
+schedules fire, the Agent Host answers, and any shared link stays up. The tray
+icon remains as the way back.
+
+**Quit Lemma** (⌘Q) stops the local server and then exits. Because that ends
+schedules, stops the agents on this computer, and closes any shared link, Lemma
+says so first and names what is running; a quit with nothing running asks
+nothing. Pods, files, and data stay on this Mac.
+
+Everything else is repair, and lives in the tray under **Troubleshoot**:
 
 | Action | Result |
 | --- | --- |
 | **Open Lemma** | Shows the workspace. |
-| **Start Services** | Starts or reconciles the current desired state. |
-| **Restart Services** | Restarts the backend and frontend without deleting data. |
-| **Stop Services** | Stops the backend and frontend but leaves infrastructure warm. |
-| **Stop Services and Infra** | Stops application processes and the private runtime. |
-| **Quit Lemma** | Closes Desktop while the durable daemon and desired services continue. |
-| **Quit and stop Lemma** | Stops all application/private-runtime resources, then exits. |
+| **Start Lemma** | Starts or reconciles the current desired state. |
+| **Restart Lemma** | Restarts the backend and frontend without deleting data. |
+| **Stop Lemma** | Stops the backend and frontend but leaves the private runtime warm. |
+| **Stop the local server** | Stops application processes and the private runtime. |
 
-Only explicit full stop releases all guest memory. A transient component
-restart after Ready does not bounce the workspace back to the installer.
+Only a full stop releases all guest memory, which is why quitting performs one.
+A transient component restart after Ready does not bounce the workspace back to
+the installer.
 
 ## URLs and ports
 
@@ -287,9 +296,9 @@ read-only. Volatile OS state uses tmpfs; PostgreSQL, Redis, SuperTokens,
 containerd, and AgentBox workspaces use the separate data disk. Updates replace
 the immutable release and preserve data.
 
-Removing the app does not silently remove user data. Quit and stop Lemma,
-back up anything important, remove the application, and only then remove the
-platform state directory if a destructive reset is intended.
+Removing the app does not silently remove user data. Quit Lemma, back up
+anything important, remove the application, and only then remove the platform
+state directory if a destructive reset is intended.
 
 ## Test an unreleased pull request
 

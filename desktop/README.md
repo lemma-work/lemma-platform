@@ -23,8 +23,14 @@ sandboxes. There is no user-facing Docker/Podman dependency and no Kreuzberg
 container. PDF/document conversion runs in the backend.
 
 Closing every window hides Desktop to the tray. The daemon and desired services
-survive shell exit so schedules continue. **Quit and stop Lemma** performs a
-full stop before exit.
+survive shell exit so schedules continue. **Quit Lemma** (⌘Q) performs a full
+stop before exit, after naming what is running — closing the window is the way
+to leave without stopping anything, so quitting does not need to be the other
+one too.
+
+Every exit route funnels through `RunEvent::ExitRequested`, including Dock →
+Quit and the app's own `exit` after a confirmed stop. `Shell::quit_confirmed` is
+what keeps that from re-arming the prompt against the exit it just authorised.
 
 Because the stack outlives the shell, a relaunch is usually a reconcile rather
 than a start. Desktop records the serving workspace and its runtime generation,
@@ -197,9 +203,9 @@ and AgentBox images.
 ## Clean macOS acceptance test
 
 Use a disposable test machine where possible. For an intentionally destructive
-local reset, first select **Quit and stop Lemma**, remove the test app, then
-remove `~/Library/Application Support/Lemma`. Never make a release repair
-delete that directory.
+local reset, first **Quit Lemma**, remove the test app, then remove
+`~/Library/Application Support/Lemma`. Never make a release repair delete that
+directory.
 
 Acceptance flow:
 
@@ -251,15 +257,20 @@ Acceptance flow:
     item names a service. The tray's first line must report the stack's real
     state, and everything operational must sit under **Troubleshoot**.
 15. Close the window; verify schedules, the Agent Host, and active sharing
-    remain available from the tray. Full Quit must stop sharing and the Agent
-    Host before exiting, and must take its window off screen immediately rather
-    than leaving a black one while it does.
+    remain available from the tray. Then press ⌘Q with sharing on, the Agent
+    Host paired, and the stack up: the prompt must name all three, offer closing
+    the window as the alternative, and say data stays on this Mac. Cancel, and
+    confirm nothing stopped. Quit again and confirm it stops everything, takes
+    its window off screen immediately rather than leaving a black one, and that
+    Dock → Quit is asked in the same way. With the stack stopped, no Agent Host
+    and no shared link, ⌘Q must exit without asking anything.
 16. Restart and confirm ports and data persist, but LAN/Public mode does not
     resume automatically. The restart must reopen the pod you were last on with
     no installer splash; check **Diagnostics → Launch timing** and confirm the
     trace says `resume: hit` and reaches the window in well under a second.
 17. Inspect every Diagnostics source and exercise runtime repair.
-18. Use **Quit and stop Lemma** and confirm the VM also releases its memory.
+18. Quit and confirm the VM also releases its memory — `ps` must show no
+    `lemma-vz`, and Activity Monitor no multi-GB helper, once the app is gone.
 
 Also test with blocked Hugging Face access, a failed OCI registry/DNS request,
 and unrelated listeners occupying persisted ports.

@@ -16,6 +16,11 @@ tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "unst
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-deep-link = "2"
+# Quit has to be able to ask before it stops the stack, and it has to be able to
+# ask when there is no webview to ask in: ⌘Q from the tray with every window
+# hidden is the ordinary case. An OS-drawn alert is the only surface that
+# survives that, so this is used from Rust only and needs no capability entry.
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 interprocess = "2.4"
