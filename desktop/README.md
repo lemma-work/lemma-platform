@@ -86,6 +86,39 @@ Build Desktop sidecars:
 desktop/scripts/build-sidecar.sh
 ```
 
+### Signing a local build you intend to actually use
+
+The sidecar script signs with a Developer ID when the machine has one and falls
+back to ad-hoc otherwise, saying which it chose. Set `APPLE_SIGNING_IDENTITY` to
+override it — including to `-` to force ad-hoc, which is what CI does for builds
+that are deliberately untrusted.
+
+Export the same identity when bundling, because the bundler re-signs the
+sidecars it copies in:
+
+```bash
+export APPLE_SIGNING_IDENTITY="Developer ID Application: NAME (TEAMID)"
+```
+
+Without it an otherwise Developer ID build ends up with an ad-hoc daemon, and
+that has a user-visible cost rather than just a Gatekeeper one. locald keeps the
+operator's secrets in the OS credential vault, which ties each stored item to
+the code identity of whoever created it. An ad-hoc designated requirement is a
+bare `cdhash`, so every rebuild is a new program as far as the vault is
+concerned and the user is asked to re-authorise access on the next launch. A
+Developer ID requirement names `work.lemma.locald` and the team instead — the
+identifier being fixed by the `Info.plist` that `locald/build.rs` links into the
+binary — and survives rebuilds.
+
+Verify with:
+
+```bash
+codesign -d -r- desktop/binaries/lemma-locald-aarch64-apple-darwin
+```
+
+A `designated => cdhash H"..."` line means the vault will re-prompt. A line
+naming `identifier "work.lemma.locald"` means it will not.
+
 To run Desktop local mode against the code you are editing:
 
 ```bash

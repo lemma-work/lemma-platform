@@ -488,10 +488,18 @@ impl OperatorConfigStore {
             "SECRET_ENCRYPTION_KEYSET".into(),
             self.secret_encryption_keyset(&config.install_id)?,
         );
-        let secret_presence = self.secret_presence(&config)?;
+        // One lookup, used for both the readiness flag and the provider key
+        // below. `secret_presence` would answer the same question by reading
+        // every secret this install has, and each of those is a separate vault
+        // access on the daemon's start path.
+        let ai_api_key = self.vault.get(&config.install_id, "ai.api_key")?;
         environment.insert(
             "LEMMA_LOCAL_AI_READY".into(),
-            (readiness(&config, &secret_presence)["ai"] == "ready").to_string(),
+            ai_ready(
+                &config,
+                ai_api_key.as_deref().is_some_and(|value| !value.is_empty()),
+            )
+            .to_string(),
         );
         match config.ai.protocol.as_str() {
             "openai_compat" => {
@@ -511,9 +519,8 @@ impl OperatorConfigStore {
                         config.ai.vision_models.join(","),
                     );
                 }
-                let api_key = self
-                    .vault
-                    .get(&config.install_id, "ai.api_key")?
+                let api_key = ai_api_key
+                    .clone()
                     .or_else(|| local_no_auth(&config.ai.base_url).then(|| "lemma-local".into()));
                 if let Some(api_key) = api_key {
                     environment.insert("LEMMA_OPENAI_API_KEY".into(), api_key);
@@ -533,7 +540,7 @@ impl OperatorConfigStore {
                     "LEMMA_ANTHROPIC_MODEL_NAMES".into(),
                     config.ai.models.join(","),
                 );
-                if let Some(api_key) = self.vault.get(&config.install_id, "ai.api_key")? {
+                if let Some(api_key) = ai_api_key.clone() {
                     environment.insert("LEMMA_ANTHROPIC_API_KEY".into(), api_key);
                 }
             }
@@ -786,12 +793,22 @@ fn snapshot_value(config: OperatorConfig, secret_presence: BTreeMap<String, bool
     })
 }
 
-fn readiness(config: &OperatorConfig, secrets: &BTreeMap<String, bool>) -> Value {
-    let ai_ready = config.ai.protocol != "unconfigured"
+/// Whether the AI profile is usable, given only whether its key is stored.
+///
+/// Split out from `readiness` so a caller that needs this one answer can pay for
+/// the one secret it rests on. Reading the whole presence map to reach it means
+/// a vault round trip per configured secret, and on macOS each stored item
+/// carries its own access control — so the discarded lookups are not merely
+/// wasted, they are a queue of authorisation prompts.
+fn ai_ready(config: &OperatorConfig, api_key_present: bool) -> bool {
+    config.ai.protocol != "unconfigured"
         && !config.ai.default_model.is_empty()
         && config.ai.last_validated_at_unix_ms.is_some()
-        && (local_no_auth(&config.ai.base_url)
-            || secrets.get("ai.api_key").copied().unwrap_or(false));
+        && (local_no_auth(&config.ai.base_url) || api_key_present)
+}
+
+fn readiness(config: &OperatorConfig, secrets: &BTreeMap<String, bool>) -> Value {
+    let ai_ready = ai_ready(config, secrets.get("ai.api_key").copied().unwrap_or(false));
     json!({
         "ai": if ai_ready { "ready" } else { "needs_setup" },
         "integrations": if config.integrations.composio_enabled
@@ -1030,6 +1047,39 @@ mod tests {
         }
     }
 
+    /// A vault that remembers what was asked of it, and in what order.
+    #[derive(Default)]
+    struct CountingVault {
+        inner: MemoryVault,
+        reads: Mutex<Vec<String>>,
+    }
+
+    impl CountingVault {
+        fn reads_of(&self, name: &str) -> usize {
+            self.reads
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|read| *read == name)
+                .count()
+        }
+    }
+
+    impl SecretVault for CountingVault {
+        fn get(&self, install_id: &str, name: &str) -> io::Result<Option<String>> {
+            self.reads.lock().unwrap().push(name.to_owned());
+            self.inner.get(install_id, name)
+        }
+
+        fn set(&self, install_id: &str, name: &str, value: &str) -> io::Result<()> {
+            self.inner.set(install_id, name, value)
+        }
+
+        fn delete(&self, install_id: &str, name: &str) -> io::Result<()> {
+            self.inner.delete(install_id, name)
+        }
+    }
+
     struct FixedModelProviderProbe;
 
     impl ModelProviderProbe for FixedModelProviderProbe {
@@ -1193,6 +1243,57 @@ mod tests {
         assert!(!fs::read_to_string(root.path().join("operator.json"))
             .unwrap()
             .contains("secret-key"));
+    }
+
+    #[test]
+    fn rendering_the_backend_environment_reads_each_secret_at_most_once() {
+        // On macOS every stored secret carries its own access control, and the
+        // vault answers one item at a time. A second read of the same secret is
+        // therefore not a wasted function call, it is a second authorisation
+        // prompt in front of someone who is trying to open the app. This once
+        // cost every configured secret twice over: `secret_presence` walked all
+        // sixteen names to decide a single readiness boolean, and the loop that
+        // renders the environment then read the same items again.
+        let root = tempdir().unwrap();
+        let vault = Arc::new(CountingVault::default());
+        let store =
+            OperatorConfigStore::load_with_vault(root.path().join("operator.json"), vault.clone())
+                .unwrap();
+        let mut config: OperatorConfig =
+            serde_json::from_value(store.snapshot().unwrap()["config"].clone()).unwrap();
+        config.ai = AiProfile {
+            protocol: "openai_compat".into(),
+            base_url: "https://api.openai.com/v1".into(),
+            default_model: "gpt-test".into(),
+            models: vec!["gpt-test".into()],
+            vision_models: vec![],
+            ..Default::default()
+        };
+        store
+            .apply(ApplyOperatorConfig {
+                config,
+                secrets: BTreeMap::from([
+                    ("ai.api_key".into(), Some("secret-key".into())),
+                    ("surfaces.slack_bot_token".into(), Some("xoxb-test".into())),
+                ]),
+            })
+            .unwrap();
+
+        vault.reads.lock().unwrap().clear();
+        let environment = store.backend_environment().unwrap();
+
+        // Still renders everything the backend depends on.
+        assert_eq!(environment["LEMMA_OPENAI_API_KEY"], "secret-key");
+        assert_eq!(environment["SLACK_BOT_TOKEN"], "xoxb-test");
+        assert_eq!(environment["LEMMA_LOCAL_AI_READY"], "true");
+
+        for name in SECRET_NAMES {
+            assert!(
+                vault.reads_of(name) <= 1,
+                "{name} was read {} times while rendering the backend environment",
+                vault.reads_of(name)
+            );
+        }
     }
 
     #[test]
