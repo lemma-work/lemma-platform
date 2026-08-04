@@ -50,6 +50,17 @@ export function isDesktopAgentHostAvailable(): boolean {
     return invoker() !== null && Boolean(window.__LEMMA_DESKTOP__);
 }
 
+/**
+ * The same question without the polling.
+ *
+ * A page that only needs to know "app or browser?" — to choose between showing
+ * this machine and offering the download — should not also start a 3s poll that
+ * forks the sidecar to read its journal.
+ */
+export function useIsDesktopShell(): boolean {
+    return useSyncExternalStore(subscribeShellBridge, isDesktopAgentHostAvailable, () => false);
+}
+
 // locald answers the shell on its event stream, not as a return value, so each
 // call asks for a fresh reading and returns the newest one already in hand. A
 // poll is therefore up to one interval behind, which is why the card triggers

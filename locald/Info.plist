@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Linked into the daemon's __TEXT,__info_plist section by build.rs, which is the
+  only way a bare Mach-O can carry a fixed code-signing identifier.
+
+  This is not cosmetic. locald keeps the operator's secrets in the OS credential
+  vault, and macOS ties each stored item's access control to the code identity of
+  the program that created it. Given no identifier, codesign derives one from the
+  binary's own contents -- so every rebuild presents itself as a different
+  program and the user is asked to authorise access again. CFBundleIdentifier
+  here is what makes the identity outlive the bytes, including through the
+  re-signing Tauri does when it bundles the daemon as a sidecar.
+-->
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>work.lemma.locald</string>
+  <key>CFBundleName</key>
+  <string>lemma-locald</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+</dict>
+</plist>

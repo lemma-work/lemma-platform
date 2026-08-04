@@ -76,8 +76,14 @@ impl Daemon {
         let host_processes = host_manifest
             .map(|path| HostProcessManager::load(&path, paths.root.join("logs")))
             .transpose()?;
+        // Nothing here may read the operator's secrets. Everything in `new` runs
+        // before `serve` binds the control socket, and a credential vault is
+        // entitled to stop and ask the user for authorisation first — which would
+        // hold the socket hostage while the desktop shell polls for eight seconds
+        // and then gives up with "could not connect to lemma-locald", leaving a
+        // blank window sitting behind a dialog nobody has answered yet. The
+        // backend environment is primed by `prime_backend_environment` instead.
         if let Some(manager) = host_processes.as_ref() {
-            manager.set_backend_environment(operator_config.backend_environment()?);
             if let Some((frontend_port, backend_port)) = manager.application_ports() {
                 // LAN/Public desired state is deliberately not persisted.
                 // Every daemon launch starts from the private canonical origin.
@@ -139,6 +145,7 @@ impl Daemon {
     pub fn serve(self: Arc<Self>) -> io::Result<()> {
         let listener = create_listener(&self.paths)?;
         self.write_daemon_log("locald listening")?;
+        self.prime_backend_environment();
         self.start_host_status_monitor();
         self.start_agent_host_monitor();
 
@@ -156,6 +163,35 @@ impl Daemon {
             }
         }
         Ok(())
+    }
+
+    /// Fill in the backend environment once the control socket is already up.
+    ///
+    /// Reading the operator's secrets can block on an OS credential-vault prompt,
+    /// which is why this cannot happen during `Daemon::new`. Off the accept path
+    /// the cost is invisible: the shell connects, the workspace renders, and the
+    /// prompt — if there is one — arrives over a window that already works.
+    ///
+    /// Failure here is deliberately not fatal. Every caller that starts host
+    /// processes rebuilds the environment first and surfaces its own error, so a
+    /// vault the user dismissed costs a log line rather than the daemon.
+    fn prime_backend_environment(self: &Arc<Self>) {
+        if self.host_processes.is_none() {
+            return;
+        }
+        let daemon = Arc::clone(self);
+        thread::spawn(move || {
+            let Some(manager) = daemon.host_processes.as_ref() else {
+                return;
+            };
+            match daemon.backend_environment() {
+                Ok(environment) => manager.set_backend_environment(environment),
+                Err(error) => {
+                    let _ = daemon
+                        .write_daemon_log(&format!("backend environment unavailable: {error}"));
+                }
+            }
+        });
     }
 
     fn start_agent_host_monitor(self: &Arc<Self>) {

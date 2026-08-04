@@ -12,6 +12,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     const fixed: MetadataRoute.Sitemap = [
         { url: base, changeFrequency: 'weekly', priority: 1 },
         { url: `${base}/templates`, changeFrequency: 'weekly', priority: 0.9 },
+        { url: `${base}/download`, changeFrequency: 'weekly', priority: 0.9 },
         { url: `${base}/docs`, changeFrequency: 'weekly', priority: 0.8 },
     ];
     const docs: MetadataRoute.Sitemap = docsPages

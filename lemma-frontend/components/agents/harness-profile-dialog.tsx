@@ -310,7 +310,7 @@ export function HarnessProfileDialog({
                         loading={pending}
                         loadingLabel={isEdit ? 'Saving' : 'Adding'}
                     >
-                        {isEdit ? 'Save changes' : 'Add to chat models'}
+                        {isEdit ? 'Save changes' : 'Add to models'}
                     </Button>
                 </DialogFooter>
             </DialogContent>

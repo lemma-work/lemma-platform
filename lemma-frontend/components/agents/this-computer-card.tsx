@@ -28,7 +28,29 @@ type Tone = 'ok' | 'warn' | 'muted';
 // What the machine can actually do right now, which is not the same question as
 // whether a process is alive: an unpaired host and one that cannot reach the
 // workspace are both running, and neither will pick up a run.
-function describe(status: ThisComputerStatus): { label: string; detail: string; tone: Tone } {
+//
+// A missing status is a state too, and used to be rendered as nothing at all.
+// In a hosted workspace the first poll is the one that has to start locald, so
+// "nothing yet" is the normal opening state and a failure there — no daemon, a
+// build without the sidecar — left an empty space where the only way to connect
+// this computer should have been.
+export function describe(
+    status: ThisComputerStatus | null,
+    error: string | null,
+): { label: string; detail: string; tone: Tone } {
+    if (!status) {
+        return error
+            ? {
+                  label: 'Unavailable',
+                  detail: error,
+                  tone: 'warn',
+              }
+            : {
+                  label: 'Checking',
+                  detail: 'Asking this computer which agents it can run.',
+                  tone: 'muted',
+              };
+    }
     if (!status.available) {
         return {
             label: 'Not available',
@@ -94,7 +116,7 @@ export function ThisComputerCard({
     onHostIdChange?: (hostId: string | null) => void;
     onPaired?: () => void;
 }) {
-    const { isDesktop, status, refetch } = useThisComputer();
+    const { isDesktop, status, error, refetch } = useThisComputer();
     const createPairing = useCreateAgentHostPairing();
     const [displayName, setDisplayName] = useState('This computer');
     const [busy, setBusy] = useState<string | null>(null);
@@ -108,9 +130,11 @@ export function ThisComputerCard({
         onHostIdChange?.(hostId);
     }, [hostId, onHostIdChange]);
 
-    if (!isDesktop || !status) return null;
+    // Outside the desktop app there is no "this computer" to speak of; the
+    // section falls back to the download card instead.
+    if (!isDesktop) return null;
 
-    const state = describe(status);
+    const state = describe(status, error);
 
     const run = async (action: string, work: () => Promise<unknown>, success?: string) => {
         setBusy(action);
@@ -158,7 +182,7 @@ export function ThisComputerCard({
         ).finally(() => setConfirmDisconnect(false));
     };
 
-    const uptime = formatUptime(status.uptime_seconds);
+    const uptime = formatUptime(status?.uptime_seconds ?? null);
 
     return (
         <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--surface-1)] p-4">
@@ -171,14 +195,28 @@ export function ThisComputerCard({
                         <span className="text-sm font-medium text-[var(--text-primary)]">This computer</span>
                         <StatusDot tone={state.tone} />
                         <span className="text-xs text-[var(--text-secondary)]">{state.label}</span>
-                        {uptime && status.running ? (
+                        {uptime && status?.running ? (
                             <span className="text-xs text-[var(--text-tertiary)]">· {uptime}</span>
                         ) : null}
                     </div>
                     <p className="mt-1 text-sm text-[var(--text-tertiary)]">{state.detail}</p>
                 </div>
 
-                {status.available && status.paired ? (
+                {!status && error ? (
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="gap-1.5"
+                        loading={busy === 'retry'}
+                        onClick={() => void run('retry', () => refetch())}
+                    >
+                        <RefreshCw className="size-3.5" />
+                        Try again
+                    </Button>
+                ) : null}
+
+                {status?.available && status.paired ? (
                     <Button
                         type="button"
                         variant={status.running ? 'quiet' : 'primary'}
@@ -198,7 +236,7 @@ export function ThisComputerCard({
                 ) : null}
             </div>
 
-            {status.available && !status.paired ? (
+            {status?.available && !status.paired ? (
                 <div className="mt-3 flex flex-wrap items-end gap-2">
                     <Input
                         value={displayName}
@@ -218,7 +256,7 @@ export function ThisComputerCard({
                 </div>
             ) : null}
 
-            {status.paired ? (
+            {status?.paired ? (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                     <Button
                         type="button"
@@ -268,7 +306,7 @@ export function ThisComputerCard({
                 </div>
             ) : null}
 
-            {status.running && (target?.pending_events ?? 0) > 0 ? (
+            {status?.running && (target?.pending_events ?? 0) > 0 ? (
                 <p className="mt-2 text-xs text-[var(--text-tertiary)]">
                     {target?.pending_events} update{target?.pending_events === 1 ? '' : 's'} waiting to
                     reach this workspace.
