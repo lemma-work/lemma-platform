@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import logging
 
+from openinference.semconv.trace import OpenInferenceSpanKindValues, SpanAttributes
 import pytest
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
@@ -277,7 +278,7 @@ def test_exporter_drops_only_fastapi_asgi_internal_spans() -> None:
     ]
 
 
-def test_llm_pipeline_disables_content_and_uses_dedicated_provider(
+def test_llm_pipeline_enables_content_and_uses_dedicated_provider(
     monkeypatch,
 ) -> None:
     configured = _settings(
@@ -301,13 +302,50 @@ def test_llm_pipeline_disables_content_and_uses_dedicated_provider(
         assert provider is not None
         assert len(captured) == 1
         instrumentation = captured[0]
-        assert instrumentation.include_content is False
+        assert instrumentation.include_content is True
         assert instrumentation.include_binary_content is False
         assert instrumentation.tracer.resource is provider.resource
         assert instrumentation.event_mode == "attributes"
     finally:
         if provider is not None:
             provider.shutdown()
+
+
+def test_llm_pipeline_exports_full_content_without_sanitization(monkeypatch) -> None:
+    """The LLM pipeline is opt-in and isolated specifically to let developers
+    review real prompts/responses, so — unlike the general pipeline — it must
+    not run spans through SanitizingSpanExporter's allowlist/truncation."""
+    configured = _settings(
+        llm_otel_enabled=True,
+        llm_otel_exporter_otlp_endpoint="http://phoenix:4317",
+        llm_otel_traces_sampler="always_on",
+    )
+    monkeypatch.setattr(telemetry, "_get_settings", lambda: configured)
+    capture = _CaptureExporter()
+    monkeypatch.setattr(
+        telemetry, "_build_span_exporter", lambda *args, **kwargs: capture
+    )
+    monkeypatch.setattr(
+        telemetry.Agent, "instrument_all", lambda instrumentation_settings: None
+    )
+    provider = telemetry._setup_llm_tracing("lemma-test")
+    assert provider is not None
+    try:
+        long_prompt = "You are a helpful assistant. " * 20
+        assert len(long_prompt) > 256
+        tracer = provider.get_tracer("test")
+        with tracer.start_as_current_span("llm.call") as span:
+            span.set_attribute(
+                SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                OpenInferenceSpanKindValues.LLM.value,
+            )
+            span.set_attribute(SpanAttributes.INPUT_VALUE, long_prompt)
+        assert provider.force_flush()
+        assert len(capture.spans) == 1
+        exported_value = capture.spans[0].attributes[SpanAttributes.INPUT_VALUE]
+        assert exported_value == long_prompt
+    finally:
+        provider.shutdown()
 
 
 def test_otel_log_handler_constructs_only_bounded_records(monkeypatch) -> None:

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "clickstack": {
+      "type": "http",
+      "url": "http://localhost:8080/api/mcp",
+      "headers": {
+        "Authorization": "Bearer ${CLICKSTACK_ACCESS_KEY}"
+      }
+    }
+  }
+}
