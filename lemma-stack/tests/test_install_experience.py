@@ -77,6 +77,33 @@ def docker_available() -> bool:
     return result.returncode == 0
 
 
+@functools.cache
+def _ensure_image(image: str) -> None:
+    """Pull ``image`` once, OUTSIDE any test's timeout.
+
+    ``docker run`` pulls a missing image implicitly, which put a cold download
+    inside the per-test budget: on a runner with the image already cached the
+    whole suite finished in ~53s, and on one without it the first container test
+    spent its entire 300s pulling and timed out. The timeout is meant to bound
+    the test, not the network — so do the pull here, where a slow download shows
+    up as a slow (not failed) run.
+    """
+    present = subprocess.run(
+        ["docker", "image", "inspect", image],
+        capture_output=True,
+        check=False,
+    )
+    if present.returncode == 0:
+        return
+    subprocess.run(
+        ["docker", "pull", "--quiet", image],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=600,
+    )
+
+
 def run_in_container(
     image: str,
     script: str,
@@ -85,6 +112,7 @@ def run_in_container(
     writable: bool = True,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
+    _ensure_image(image)
     mount_mode = "" if writable else ":ro"
     cmd = [
         "docker",
